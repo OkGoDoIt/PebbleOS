@@ -182,15 +182,24 @@ void voice_endpoint_protocol_msg_callback(CommSession *session, const uint8_t* d
 
 void voice_endpoint_setup_session(VoiceEndpointSessionType session_type,
     AudioEndpointSessionId session_id, AudioTransferInfoSpeex *info, Uuid *app_uuid) {
+  voice_endpoint_setup_session_with_intent(session_type, session_id, info, app_uuid,
+      VoiceEndpointSessionIntentDefault);
+}
+
+void voice_endpoint_setup_session_with_intent(VoiceEndpointSessionType session_type,
+    AudioEndpointSessionId session_id, AudioTransferInfoSpeex *info, Uuid *app_uuid,
+    VoiceEndpointSessionIntent session_intent) {
 
   CommSession *comm_session = comm_session_get_system_session();
   comm_session_set_responsiveness(comm_session, BtConsumerPpVoiceEndpoint, ResponseTimeMin,
                                   MIN_LATENCY_MODE_TIMEOUT_VOICE_SECS);
 
-  // We're only sending one attribute now: the speex audio transfer info packet
+  const bool include_session_intent =
+      (session_intent != VoiceEndpointSessionIntentDefault);
   size_t size = sizeof(SessionSetupMsg) + sizeof(GenericAttribute) +
                 sizeof(AudioTransferInfoSpeex) +
-                (app_uuid ? (sizeof(Uuid) + sizeof(GenericAttribute)) : 0);
+                (app_uuid ? (sizeof(Uuid) + sizeof(GenericAttribute)) : 0) +
+                (include_session_intent ? (sizeof(uint8_t) + sizeof(GenericAttribute)) : 0);
   SessionSetupMsg *msg = kernel_malloc_check(size);
   *msg = (SessionSetupMsg) {
     .msg_id = MsgIdSessionSetup,
@@ -210,6 +219,13 @@ void voice_endpoint_setup_session(VoiceEndpointSessionType session_type,
 
     // add app UUID attribute
     attr = generic_attribute_add_attribute(attr, VEAttributeIdAppUuid, app_uuid, sizeof(Uuid));
+  }
+
+  if (include_session_intent) {
+    msg->attr_list.num_attributes += 1;
+    uint8_t intent_value = (uint8_t)session_intent;
+    attr = generic_attribute_add_attribute(attr, VEAttributeIdSessionIntent, &intent_value,
+        sizeof(intent_value));
   }
 
   attr = generic_attribute_add_attribute(attr, VEAttributeIdAudioTransferInfoSpeex, info,

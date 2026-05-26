@@ -27,4 +27,7 @@ void voice_window_set_confirmation_enabled(VoiceWindow *voice_window, bool enabl
 
 void voice_window_set_error_enabled(VoiceWindow *voice_window, bool enabled);
 
+void voice_window_set_session_intent(VoiceWindow *voice_window,
+                                     VoiceEndpointSessionIntent session_intent);
+
 void voice_window_reset(VoiceWindow *voice_window);

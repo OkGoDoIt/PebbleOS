@@ -24,6 +24,7 @@ typedef enum {
   VEAttributeIdAppUuid = 0x03,
   VEAttributeIdReminder = 0x04,
   VEAttributeIdTimestamp = 0x05,
+  VEAttributeIdSessionIntent = 0x06,
 } VEAttributeId;
 
 // Sent and received by watch. Result is only sent by phone.

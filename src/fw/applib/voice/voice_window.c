@@ -513,6 +513,7 @@ static void prv_voice_event_handler(PebbleEvent *e, void *context) {
 static void prv_start_dictation(VoiceUiData *data) {
   VOICE_LOG("Start dictation session");
   PBL_ASSERTN(data->session_id == VOICE_SESSION_ID_INVALID);
+  sys_voice_set_next_session_intent(data->session_intent);
   data->session_id = sys_voice_start_dictation(data->session_type);
   if (data->session_id == VOICE_SESSION_ID_INVALID) {
     PBL_LOG_ERR("Dictation session failed to start");
@@ -1337,9 +1338,18 @@ VoiceWindow *voice_window_create(char *buffer, size_t buffer_size,
     .message = buffer,
     .buffer_size = buffer_size,
     .session_type = session_type,
+    .session_intent = VoiceEndpointSessionIntentDefault,
   };
 
   return data;
+}
+
+void voice_window_set_session_intent(VoiceWindow *voice_window,
+                                     VoiceEndpointSessionIntent session_intent) {
+  if (!voice_window) {
+    return;
+  }
+  voice_window->session_intent = session_intent;
 }
 
 void voice_window_destroy(VoiceWindow *voice_window) {

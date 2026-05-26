@@ -30,6 +30,7 @@ static VoiceEndpointResult s_session_result;
 static Transcription *s_transcription = NULL;
 static AudioEndpointSessionId s_session_id;
 static bool s_app_initiated;
+static bool s_include_session_intent;
 static Uuid s_app_uuid;
 static uint8_t s_num_attributes;
 static char* s_reminder_str = NULL;
@@ -97,6 +98,7 @@ void test_voice_endpoint__initialize(void) {
   s_session_id = AUDIO_ENDPOINT_SESSION_INVALID_ID;
 
   s_app_initiated = false;
+  s_include_session_intent = false;
   s_app_uuid = UUID_INVALID;
 
   s_timestamp = 0;
@@ -127,7 +129,9 @@ static void prv_test_session_setup_msg(uint16_t endpoint_id, const uint8_t* data
 
   size_t expected_len = sizeof(SessionSetupMsg) + sizeof(GenericAttribute) +
                         sizeof(AudioTransferInfoSpeex) +
-                        (s_app_initiated ? (sizeof(GenericAttribute) + sizeof(Uuid)) : 0);
+                        (s_app_initiated ? (sizeof(GenericAttribute) + sizeof(Uuid)) : 0) +
+                        (s_include_session_intent ?
+                            (sizeof(GenericAttribute) + sizeof(uint8_t)) : 0);
   cl_assert_equal_i(length, expected_len);
 
   SessionSetupMsg *msg = (SessionSetupMsg *)data;
@@ -139,7 +143,7 @@ static void prv_test_session_setup_msg(uint16_t endpoint_id, const uint8_t* data
   bool app_initiated = msg->flags.app_initiated != 0;
   cl_assert_equal_b(app_initiated, s_app_initiated);
 
-  if (!app_initiated) {
+  if (!app_initiated && !s_include_session_intent) {
     uint8_t expected_attr_data[] = {
       0x01,  // attribute id - attribute info speex
       0x1D, 0x00,  // attribute length
@@ -150,6 +154,21 @@ static void prv_test_session_setup_msg(uint16_t endpoint_id, const uint8_t* data
       0x40, 0x01,
     };
 
+    cl_assert_equal_m(msg->attr_list.attributes, expected_attr_data, sizeof(expected_attr_data));
+  } else if (s_include_session_intent) {
+    uint8_t expected_attr_data[] = {
+      0x06,  // attribute id - session intent
+      0x01, 0x00,  // attribute length
+      VoiceEndpointSessionIntentIndexMemo,
+
+      0x01,  // attribute id - attribute info speex
+      0x1D, 0x00,  // attribute length
+      '1', '.', '2', 'r', 'c', '1', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0x80, 0x3e, 0x00, 0x00,
+      0x00, 0x32,
+      0x04,
+      0x40, 0x01,
+    };
     cl_assert_equal_m(msg->attr_list.attributes, expected_attr_data, sizeof(expected_attr_data));
   } else {
     uint8_t expected_attr_data[] = {
@@ -200,6 +219,27 @@ void test_voice_endpoint__send_session_setup(void) {
   s_app_initiated = false;
   voice_endpoint_setup_session(VoiceEndpointSessionTypeNLP, s_session_id, &transfer_info,
       NULL);
+  fake_comm_session_process_send_next();
+}
+
+void test_voice_endpoint__send_session_setup_index_memo_intent(void) {
+  fake_transport_set_sent_cb(s_transport, prv_test_session_setup_msg);
+
+  AudioTransferInfoSpeex transfer_info = (AudioTransferInfoSpeex) {
+    .sample_rate = 16000,
+    .bit_rate = 12800,
+    .frame_size = 320,
+    .bitstream_version = 4
+  };
+  strncat(transfer_info.version, "1.2rc1", sizeof(transfer_info.version));
+
+  s_session_type = VoiceEndpointSessionTypeDictation;
+  s_session_id = 3;
+  s_num_attributes = 2;
+  s_app_initiated = false;
+  s_include_session_intent = true;
+  voice_endpoint_setup_session_with_intent(VoiceEndpointSessionTypeDictation, s_session_id,
+      &transfer_info, NULL, VoiceEndpointSessionIntentIndexMemo);
   fake_comm_session_process_send_next();
 }
 

@@ -59,6 +59,9 @@ typedef AudioEndpointSessionId VoiceSessionId;
 //! \ref VOICE_SESSION_ID_INVALID otherwise
 VoiceSessionId voice_start_dictation(VoiceEndpointSessionType session_type);
 
+//! Set the session intent attribute for the next dictation session started on this task.
+void voice_set_next_session_intent(VoiceEndpointSessionIntent session_intent);
+
 //! Call after a ready event has been received to end the audio streaming session and await the
 //! dictation response. A VoiceEvent will be created and sent to the subscriber when one of the
 //! following events occur:
@@ -108,6 +111,7 @@ void voice_handle_nlp_result(VoiceEndpointResult result, AudioEndpointSessionId 
 // Syscalls
 
 VoiceSessionId sys_voice_start_dictation(VoiceEndpointSessionType session_type);
+void sys_voice_set_next_session_intent(VoiceEndpointSessionIntent session_intent);
 void sys_voice_stop_dictation(VoiceSessionId session_id);
 void sys_voice_cancel_dictation(VoiceSessionId session_id);
 

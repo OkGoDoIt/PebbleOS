@@ -155,6 +155,16 @@ void dictation_session_enable_error_dialogs(DictationSession *session, bool is_e
 #endif
 }
 
+void dictation_session_set_session_intent(DictationSession *session,
+                                          VoiceEndpointSessionIntent session_intent) {
+#ifdef CONFIG_MIC
+  if (!session || session->in_progress) {
+    return;
+  }
+  voice_window_set_session_intent(session->voice_window, session_intent);
+#endif
+}
+
 DictationSessionStatus dictation_session_start(DictationSession *session) {
 #ifdef CONFIG_MIC
   if (!session || session->in_progress) {

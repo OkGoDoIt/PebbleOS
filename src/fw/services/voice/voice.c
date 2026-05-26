@@ -17,6 +17,7 @@
 #include "pbl/services/voice/transcription.h"
 #include "pbl/services/voice/voice_speex.h"
 #include "pbl/services/voice_endpoint.h"
+#include "pbl/services/voice_endpoint_private.h"
 #include "syscall/syscall_internal.h"
 #include "system/logging.h"
 #include "system/passert.h"
@@ -52,6 +53,7 @@ static PebbleMutex* s_lock = NULL;
 // Handle requests from apps
 static bool s_from_app;
 static Uuid s_app_uuid;
+static VoiceEndpointSessionIntent s_next_session_intent = VoiceEndpointSessionIntentDefault;
 
 static AudioEndpointSessionId s_session_id = AUDIO_ENDPOINT_SESSION_INVALID_ID;
 static TimerID s_timeout = TIMER_INVALID_ID;
@@ -345,6 +347,10 @@ void voice_init(void) {
   // Speex encoder is now initialized lazily when a dictation session starts
 }
 
+void voice_set_next_session_intent(VoiceEndpointSessionIntent session_intent) {
+  s_next_session_intent = session_intent;
+}
+
 // This will kick off a dictation session. After the setup session message is sent via the
 // voice control endpoint, we wait for a session ready response via the
 // voice_handle_session_setup_result call or a session setup timeout occurs (timer callback
@@ -408,10 +414,13 @@ VoiceSessionId voice_start_dictation(VoiceEndpointSessionType session_type) {
   VOICE_LOG("Audio endpoint transfer setup complete with session_id=%d", s_session_id);
 
 
+  VoiceEndpointSessionIntent session_intent = s_next_session_intent;
+  s_next_session_intent = VoiceEndpointSessionIntentDefault;
+
   PBL_LOG_INFO("Send session setup message. Session type: %d", session_type);
   VOICE_LOG("Calling voice_endpoint_setup_session");
-  voice_endpoint_setup_session(session_type, s_session_id, &transfer_info,
-      s_from_app ? &s_app_uuid : NULL);
+  voice_endpoint_setup_session_with_intent(session_type, s_session_id, &transfer_info,
+      s_from_app ? &s_app_uuid : NULL, session_intent);
 
   if (s_timeout == TIMER_INVALID_ID) {
     s_timeout = new_timer_create();
@@ -713,6 +722,10 @@ DEFINE_SYSCALL(VoiceSessionId, sys_voice_start_dictation, VoiceEndpointSessionTy
     return AUDIO_ENDPOINT_SESSION_INVALID_ID;
   }
   return voice_start_dictation(session_type);
+}
+
+DEFINE_SYSCALL(void, sys_voice_set_next_session_intent, VoiceEndpointSessionIntent session_intent) {
+  voice_set_next_session_intent(session_intent);
 }
 
 DEFINE_SYSCALL(void, sys_voice_stop_dictation, VoiceSessionId session_id) {

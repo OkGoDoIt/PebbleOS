@@ -19,6 +19,7 @@
 #include "applib/ui/dialogs/expandable_dialog.h"
 #include "applib/ui/kino/kino_layer.h"
 #include "applib/voice/dictation_session.h"
+#include "pbl/services/voice_endpoint_private.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -86,6 +87,7 @@ typedef struct VoiceUiData {
 
   VoiceSessionId session_id;
   VoiceEndpointSessionType session_type;
+  VoiceEndpointSessionIntent session_intent;
 } VoiceUiData;
 
 void voice_window_lose_focus(VoiceWindow *voice_window);

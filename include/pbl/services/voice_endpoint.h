@@ -29,6 +29,11 @@ typedef enum {
   VoiceEndpointResultFailInvalidMessage = 0x06,
 } VoiceEndpointResult;
 
+typedef enum {
+  VoiceEndpointSessionIntentDefault = 0x00,
+  VoiceEndpointSessionIntentIndexMemo = 0x01,
+} VoiceEndpointSessionIntent;
+
 // Sent before Speex encoded data
 typedef struct PACKED {
   char version[20];
@@ -41,3 +46,7 @@ typedef struct PACKED {
 //! Called by the voice service to set up a dictation or command recognition session
 void voice_endpoint_setup_session(VoiceEndpointSessionType session_type,
     AudioEndpointSessionId session_id, AudioTransferInfoSpeex *info, Uuid *app_uuid);
+
+void voice_endpoint_setup_session_with_intent(VoiceEndpointSessionType session_type,
+    AudioEndpointSessionId session_id, AudioTransferInfoSpeex *info, Uuid *app_uuid,
+    VoiceEndpointSessionIntent session_intent);

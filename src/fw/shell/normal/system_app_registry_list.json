@@ -684,6 +684,11 @@
       ]
     },
     {
+      "id": -100,
+      "enum": "INDEX_MEMO",
+      "md_fn": "index_memo_get_app_info"
+    },
+    {
       "id": -92,
       "enum": "QUIET_TIME_TOGGLE",
       "md_fn": "quiet_time_toggle_get_app_info"
