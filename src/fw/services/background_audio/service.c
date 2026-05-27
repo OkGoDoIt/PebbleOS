@@ -422,8 +422,9 @@ void background_audio_pause_for_conflict(void) {
     return;
   }
 
-  background_audio_spool_record_gap(s_next_sequence, 0, s_next_sample_index,
+  background_audio_spool_record_gap(s_next_sequence, 1, s_next_sample_index,
                                     BackgroundAudioGapReasonMicConflict);
+  prv_send_pending_gap_locked();
   prv_send_stream_stop_locked(BackgroundAudioStopReasonPolicy);
   prv_stop_mic_and_speex_locked();
   prv_set_state_locked(BackgroundAudioStatePausedForConflict);
