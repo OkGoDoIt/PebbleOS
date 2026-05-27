@@ -3,8 +3,9 @@
 
 #include "clar.h"
 
-#include "src/fw/services/background_audio/spool.h"
+#include "../../../src/fw/services/background_audio/spool.h"
 #include "pbl/services/background_audio_private.h"
+#include "stubs_passert.h"
 
 void test_background_audio_spool__initialize(void) {
   background_audio_spool_init();
