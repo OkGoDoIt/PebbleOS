@@ -1,0 +1,13 @@
+# SPDX-Copyright-Text: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+bld.stlib(
+    use=['fw_includes'],
+    source=[
+        'protocol.c',
+        'spool.c',
+        'service.c',
+    ],
+    target='services_background_audio',
+)
+bld.env.SERVICES.append('services_background_audio')

@@ -36,6 +36,7 @@ typedef struct PACKED {
       bool continue_fw_install_across_disconnect_support: 1;
       bool blob_db_version_support: 1;
       bool settings_sync_support: 1;  // Phone supports Settings BlobDB sync
+      bool background_audio_streaming_support: 1;
     };
     uint64_t flags;
   };

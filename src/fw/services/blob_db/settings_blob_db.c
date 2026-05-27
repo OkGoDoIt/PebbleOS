@@ -38,6 +38,7 @@ static bool s_sync_callback_pending = false;
 static const char *s_syncable_settings[] = {
   // Clock preferences
   "clock24h",
+  "backgroundAudioEnabled",
   "timezoneSource",
   "automaticTimezoneID",
 

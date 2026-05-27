@@ -110,6 +110,9 @@ static uint32_t s_backlight_ambient_threshold = 0; // default set from board con
 #define PREF_KEY_STATIONARY "stationaryMode"
 static bool s_stationary_mode_enabled = true;
 
+#define PREF_KEY_BACKGROUND_AUDIO_ENABLED "backgroundAudioEnabled"
+static bool s_background_audio_enabled = false;
+
 #define PREF_KEY_DEFAULT_WORKER "workerId"
 static Uuid s_default_worker = UUID_INVALID_INIT;
 
@@ -430,6 +433,18 @@ static bool prv_set_s_display_orientation_left(bool *left) {
 
 static bool prv_set_s_stationary_mode_enabled(bool *enabled) {
   s_stationary_mode_enabled = *enabled;
+  return true;
+}
+
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+#include "pbl/services/background_audio.h"
+#endif
+
+static bool prv_set_s_background_audio_enabled(bool *enabled) {
+  s_background_audio_enabled = *enabled;
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+  background_audio_apply_enabled(*enabled);
+#endif
   return true;
 }
 
@@ -1240,6 +1255,14 @@ bool shell_prefs_get_stationary_enabled(void) {
 
 void shell_prefs_set_stationary_enabled(bool enabled) {
   prv_pref_set(PREF_KEY_STATIONARY, &enabled, sizeof(enabled));
+}
+
+bool shell_prefs_get_background_audio_enabled(void) {
+  return s_background_audio_enabled;
+}
+
+void shell_prefs_set_background_audio_enabled(bool enabled) {
+  prv_pref_set(PREF_KEY_BACKGROUND_AUDIO_ENABLED, &enabled, sizeof(enabled));
 }
 
 AppInstallId worker_preferences_get_default_worker(void) {

@@ -30,6 +30,8 @@ if bld.env.CONFIG_SERVICE_APP_OUTBOX_SERVICE:
     bld.recurse('app_outbox_service')
 if bld.env.CONFIG_SERVICE_AUDIO_ENDPOINT:
     bld.recurse('audio_endpoint')
+if bld.env.CONFIG_SERVICE_BACKGROUND_AUDIO:
+    bld.recurse('background_audio')
 if bld.env.CONFIG_SERVICE_BATTERY:
     bld.recurse('battery')
 if bld.env.CONFIG_SERVICE_BLOB_DB:

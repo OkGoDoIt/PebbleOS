@@ -249,6 +249,14 @@ def build(ctx):
         test_sources_ant_glob = "test_audio_endpoint.c")
 
     clar(ctx,
+        defines=["PLATFORM_SNOWY", "CONFIG_SERVICE_BACKGROUND_AUDIO"],
+        sources_ant_glob = " ".join([
+            " src/fw/services/background_audio/protocol.c",
+            " src/fw/services/background_audio/spool.c",
+        ]),
+        test_sources_ant_glob = "test_background_audio_protocol.c test_background_audio_spool.c")
+
+    clar(ctx,
         sources_ant_glob = " ".join([
             " src/fw/services/voice/transcription.c"]),
         test_sources_ant_glob = "test_transcription.c")

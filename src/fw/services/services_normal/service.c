@@ -37,6 +37,10 @@
 #include "pbl/services/weather/weather_service.h"
 #include "pbl/services/runlevel_impl.h"
 
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+#include "pbl/services/background_audio.h"
+#endif
+
 #ifdef CONFIG_ORIENTATION_MANAGER
 #include "pbl/services/orientation_manager.h"
 #endif
@@ -127,6 +131,9 @@ void services_normal_init(void) {
 
 #ifdef CONFIG_MIC
   voice_init();
+#endif
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+  background_audio_init();
 #endif
 
   app_glance_service_init();

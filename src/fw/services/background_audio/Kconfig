@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config SERVICE_BACKGROUND_AUDIO
+    bool "Background audio lifelogging"
+    default y if SERVICE_VOICE && SERVICE_AUDIO_ENDPOINT
+    depends on SERVICE_VOICE && SERVICE_AUDIO_ENDPOINT && MIC
+    help
+      Continuous watch microphone streaming to the connected phone over the
+      private audio endpoint. Requires voice/Speex and audio endpoint services.

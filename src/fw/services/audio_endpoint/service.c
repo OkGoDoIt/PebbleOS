@@ -4,6 +4,10 @@
 #include "pbl/services/audio_endpoint.h"
 #include "pbl/services/audio_endpoint_private.h"
 
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+#include "pbl/services/background_audio.h"
+#endif
+
 #include "comm/bt_lock.h"
 #include "pbl/services/comm_session/session_send_buffer.h"
 #include "pbl/services/new_timer/new_timer.h"
@@ -53,6 +57,17 @@ static void prv_session_deinit(bool call_stop_handler) {
 }
 
 void audio_endpoint_protocol_msg_callback(CommSession *session, const uint8_t* data, size_t size) {
+  if (!data || size == 0) {
+    return;
+  }
+
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+  if (data[0] >= 0x10 && data[0] <= 0x15) {
+    background_audio_handle_inbound_msg(data, size);
+    return;
+  }
+#endif
+
   MsgId msg_id = data[0];
   if (size >= sizeof(StopTransferMsg) && msg_id == MsgIdStopTransfer) {
     StopTransferMsg *msg = (StopTransferMsg *)data;

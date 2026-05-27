@@ -18,6 +18,10 @@
 #include "pbl/services/voice/voice_speex.h"
 #include "pbl/services/voice_endpoint.h"
 #include "pbl/services/voice_endpoint_private.h"
+
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+#include "pbl/services/background_audio.h"
+#endif
 #include "syscall/syscall_internal.h"
 #include "system/logging.h"
 #include "system/passert.h"
@@ -163,6 +167,9 @@ static void prv_cancel_early_session(void) {
 static void prv_reset(void) {
   s_state = SessionState_Idle;
   s_session_id = AUDIO_ENDPOINT_SESSION_INVALID_ID;
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+  background_audio_resume_after_conflict();
+#endif
 }
 
 static void prv_cancel_session(void) {
@@ -357,6 +364,9 @@ void voice_set_next_session_intent(VoiceEndpointSessionIntent session_intent) {
 // prv_session_setup_timeout)
 VoiceSessionId voice_start_dictation(VoiceEndpointSessionType session_type) {
   VOICE_LOG("voice_start_dictation called with session_type: %d", session_type);
+#ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
+  background_audio_pause_for_conflict();
+#endif
   mutex_lock(s_lock);
 
   // Lazily initialize Speex encoder to avoid baseline memory usage when voice not used
