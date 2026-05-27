@@ -21,6 +21,7 @@
 #include "system/logging.h"
 #include "system/passert.h"
 #include "pbl/services/system_task.h"
+#include "util/time/time.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -40,6 +41,9 @@ static uint32_t s_last_checkpoint_sequence;
 static TimerID s_drain_timer = TIMER_INVALID_ID;
 static EventServiceInfo s_connection_event_info;
 static EventServiceInfo s_capabilities_event_info;
+static bool s_mic_owned_by_background_audio;
+static uint32_t s_conflict_pause_started_ms;
+static bool s_receiver_pause_requested;
 
 static uint32_t s_captured_frames;
 static uint32_t s_sent_frames;
@@ -49,6 +53,10 @@ static uint32_t s_gap_count;
 static void prv_schedule_drain(void);
 static void prv_set_state_locked(BackgroundAudioState state);
 static void background_audio_mic_data_handler(int16_t *samples, size_t sample_count, void *context);
+
+static uint32_t prv_uptime_ms(void) {
+  return time_get_uptime_seconds() * 1000;
+}
 
 static bool prv_phone_supports_background_audio(void) {
   PebbleProtocolCapabilities capabilities;
@@ -119,9 +127,10 @@ static bool prv_send_pending_gap_locked(void) {
 }
 
 static void prv_stop_mic_and_speex_locked(void) {
-  if (mic_is_running(MIC)) {
+  if (s_mic_owned_by_background_audio && mic_is_running(MIC)) {
     mic_stop(MIC);
   }
+  s_mic_owned_by_background_audio = false;
   if (voice_speex_is_initialized()) {
     voice_speex_deinit();
   }
@@ -139,12 +148,15 @@ static bool prv_start_mic_locked(void) {
     return false;
   }
 
-  if (!mic_start(MIC, background_audio_mic_data_handler, NULL, frame_buffer, frame_size_samples)) {
-    if (!mic_is_running(MIC)) {
-      voice_speex_deinit();
-      return false;
-    }
+  if (s_mic_owned_by_background_audio && mic_is_running(MIC)) {
+    return true;
   }
+
+  if (!mic_start(MIC, background_audio_mic_data_handler, NULL, frame_buffer, frame_size_samples)) {
+    voice_speex_deinit();
+    return false;
+  }
+  s_mic_owned_by_background_audio = true;
   return true;
 }
 
@@ -205,9 +217,14 @@ static void prv_update_enabled_state_locked(void) {
     prv_set_state_locked(BackgroundAudioStateDisabled);
     return;
   }
-  if (!background_audio_is_supported()) {
+  if (!background_audio_is_device_supported()) {
     prv_stop_recording_locked(BackgroundAudioStopReasonPolicy);
     prv_set_state_locked(BackgroundAudioStateEnabledIdle);
+    return;
+  }
+  if (s_receiver_pause_requested) {
+    prv_stop_recording_locked(BackgroundAudioStopReasonPolicy);
+    prv_set_state_locked(BackgroundAudioStatePausedForPolicy);
     return;
   }
   if (s_state == BackgroundAudioStateDisabled) {
@@ -385,7 +402,18 @@ void background_audio_init(void) {
 }
 
 bool background_audio_is_supported(void) {
+  return background_audio_is_device_supported();
+}
+
+bool background_audio_is_device_supported(void) {
   return true;
+}
+
+bool background_audio_is_phone_supported(void) {
+  mutex_lock(s_lock);
+  const bool supported = prv_phone_supports_background_audio();
+  mutex_unlock(s_lock);
+  return supported;
 }
 
 bool background_audio_is_enabled(void) {
@@ -422,9 +450,7 @@ void background_audio_pause_for_conflict(void) {
     return;
   }
 
-  background_audio_spool_record_gap(s_next_sequence, 1, s_next_sample_index,
-                                    BackgroundAudioGapReasonMicConflict);
-  prv_send_pending_gap_locked();
+  s_conflict_pause_started_ms = prv_uptime_ms();
   prv_send_stream_stop_locked(BackgroundAudioStopReasonPolicy);
   prv_stop_mic_and_speex_locked();
   prv_set_state_locked(BackgroundAudioStatePausedForConflict);
@@ -438,13 +464,34 @@ void background_audio_resume_after_conflict(void) {
     mutex_unlock(s_lock);
     return;
   }
+  uint32_t elapsed_ms = prv_uptime_ms() - s_conflict_pause_started_ms;
+  uint32_t missing_frames = elapsed_ms / BACKGROUND_AUDIO_DEFAULT_FRAME_DURATION_MS;
+  if (missing_frames == 0) {
+    missing_frames = 1;
+  }
   prv_enter_recording_locked();
+  if (s_state == BackgroundAudioStateRecordingStreaming ||
+      s_state == BackgroundAudioStateRecordingBuffering) {
+    background_audio_spool_record_gap(s_next_sequence, missing_frames,
+                                      s_next_sample_index,
+                                      BackgroundAudioGapReasonMicConflict);
+  }
   mutex_unlock(s_lock);
+  prv_schedule_drain();
 }
 
 void background_audio_handle_comm_session_changed(void) {
   mutex_lock(s_lock);
   if (!s_enabled_pref) {
+    mutex_unlock(s_lock);
+    return;
+  }
+  if (s_receiver_pause_requested) {
+    if (s_state == BackgroundAudioStateRecordingStreaming ||
+        s_state == BackgroundAudioStateRecordingBuffering) {
+      prv_stop_recording_locked(BackgroundAudioStopReasonPolicy);
+    }
+    prv_set_state_locked(BackgroundAudioStatePausedForPolicy);
     mutex_unlock(s_lock);
     return;
   }
@@ -471,6 +518,19 @@ void background_audio_handle_inbound_msg(const uint8_t *data, size_t size) {
   mutex_lock(s_lock);
   if (checkpoint.stream_id == s_stream_id) {
     s_last_checkpoint_sequence = checkpoint.highest_contiguous_sequence_persisted;
+    const bool pause_requested =
+        (checkpoint.receiver_flags & BACKGROUND_AUDIO_RECEIVER_FLAG_PAUSE_REQUESTED) ||
+        (checkpoint.receiver_flags & BACKGROUND_AUDIO_RECEIVER_FLAG_LOW_STORAGE);
+    if (pause_requested && !s_receiver_pause_requested) {
+      s_receiver_pause_requested = true;
+      prv_stop_recording_locked(BackgroundAudioStopReasonPolicy);
+      prv_set_state_locked(BackgroundAudioStatePausedForPolicy);
+    } else if (!pause_requested && s_receiver_pause_requested) {
+      s_receiver_pause_requested = false;
+      if (s_enabled_pref && s_state == BackgroundAudioStatePausedForPolicy) {
+        prv_enter_recording_locked();
+      }
+    }
   }
   mutex_unlock(s_lock);
 }

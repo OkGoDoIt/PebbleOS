@@ -13,6 +13,7 @@
 #include "pbl/services/comm_session/protocol.h"
 #include "pbl/services/comm_session/session.h"
 #include "pbl/services/comm_session/session_remote_version.h"
+#include "pbl/services/background_audio.h"
 #include "pbl/services/i18n/i18n.h"
 #include "pbl/services/activity/insights_settings.h"
 #include "shell/system_app_ids.auto.h"
@@ -141,7 +142,8 @@ static void prv_send_watch_versions(CommSession *session) {
   versions_msg.capabilities.custom_vibe_pattern_support = 1;
   versions_msg.capabilities.blob_db_version_support = 1;
 #ifdef CONFIG_SERVICE_BACKGROUND_AUDIO
-  versions_msg.capabilities.background_audio_streaming_support = 1;
+  versions_msg.capabilities.background_audio_streaming_support =
+      background_audio_is_device_supported();
 #endif
   bt_local_id_copy_address(&versions_msg.device_address);
 

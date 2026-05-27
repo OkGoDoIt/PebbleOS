@@ -21,6 +21,8 @@ typedef enum {
 
 void background_audio_init(void);
 bool background_audio_is_supported(void);
+bool background_audio_is_device_supported(void);
+bool background_audio_is_phone_supported(void);
 bool background_audio_is_enabled(void);
 void background_audio_set_enabled(bool enabled);
 void background_audio_apply_enabled(bool enabled);
