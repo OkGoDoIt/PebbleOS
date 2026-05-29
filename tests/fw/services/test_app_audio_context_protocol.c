@@ -43,3 +43,23 @@ void test_app_audio_context_protocol__transcript_request_contains_common_header(
   cl_assert_equal_i(msg.before_seconds, 60);
   cl_assert_equal_i(msg.after_seconds, 5);
 }
+
+void test_app_audio_context_protocol__transcript_payload_limit_is_bluetooth_safe(void) {
+  cl_assert(APP_AUDIO_CONTEXT_MAX_TRANSCRIPT_PAYLOAD_BYTES > 0);
+  cl_assert(APP_AUDIO_CONTEXT_MAX_TRANSCRIPT_PAYLOAD_BYTES <= 3500);
+}
+
+void test_app_audio_context_protocol__prompt_response_has_common_header(void) {
+  AppAudioContextPromptResponseMsg msg = {
+    .header = {
+      .command_id = AppAudioContextMsgIdPromptResponse,
+      .protocol_version = APP_AUDIO_CONTEXT_PROTOCOL_VERSION,
+      .request_id = 77,
+    },
+    .result = 1,
+  };
+
+  cl_assert_equal_i(msg.header.command_id, AppAudioContextMsgIdPromptResponse);
+  cl_assert_equal_i(msg.header.request_id, 77);
+  cl_assert_equal_i(msg.result, 1);
+}

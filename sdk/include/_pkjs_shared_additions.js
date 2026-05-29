@@ -43,7 +43,12 @@
         var cb = callbacks[id];
         delete callbacks[id];
         if (cb) {
-          cb.resolve(JSON.parse(payloadJson));
+          var payload = JSON.parse(payloadJson);
+          if (payload.availability && payload.message) {
+            cb.reject(payload);
+          } else {
+            cb.resolve(payload);
+          }
         }
       },
       _event: function(subscriptionId, payloadJson) {
@@ -72,6 +77,9 @@
       requestEnable: function() {
         return request('requestEnable');
       },
+      getTriggerInfo: function() {
+        return request('triggerInfo');
+      },
       requestPermission: function(permissions) {
         return request('requestPermission', permissions || []);
       },
@@ -85,6 +93,28 @@
         return request('subscribeTranscript', options || {}).then(function(result) {
           events[result.subscriptionId] = function(event) {
             handler(event.segment);
+          };
+          return function() {
+            delete events[result.subscriptionId];
+            _PebbleAudioContext.unsubscribe(result.subscriptionId);
+          };
+        });
+      },
+      onStatus: function(handler) {
+        return request('subscribeStatus').then(function(result) {
+          events[result.subscriptionId] = function(event) {
+            handler(event.status);
+          };
+          return function() {
+            delete events[result.subscriptionId];
+            _PebbleAudioContext.unsubscribe(result.subscriptionId);
+          };
+        });
+      },
+      onRawAudio: function(options, handler) {
+        return request('subscribeRawAudio', options || {}).then(function(result) {
+          events[result.subscriptionId] = function(event) {
+            handler(event);
           };
           return function() {
             delete events[result.subscriptionId];

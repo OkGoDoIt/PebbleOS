@@ -5,6 +5,7 @@
 
 #include "kernel/events.h"
 #include "kernel/pbl_malloc.h"
+#include "drivers/rtc.h"
 #include "pbl/services/comm_session/session.h"
 #include "process_management/app_manager.h"
 #include "system/logging.h"
@@ -13,6 +14,8 @@
 #include <string.h>
 
 #define APP_AUDIO_CONTEXT_MAX_PENDING (4)
+#define APP_AUDIO_CONTEXT_PENDING_TIMEOUT_SECONDS (30)
+#define APP_AUDIO_CONTEXT_MAX_WINDOW_SECONDS (UINT16_MAX)
 
 typedef enum {
   PendingKindNone = 0,
@@ -25,12 +28,18 @@ typedef struct {
   bool active;
   uint16_t request_id;
   PendingKind kind;
+  time_t started_at;
 } PendingRequest;
 
 static PendingRequest s_pending[APP_AUDIO_CONTEXT_MAX_PENDING];
 static uint16_t s_next_request_id = 1;
 static AudioContextStatus s_cached_status;
 static AudioContextAvailability s_cached_availability = AudioContextAvailabilityUnsupportedPhone;
+static uint16_t s_reassembly_request_id;
+static uint16_t s_reassembly_expected_parts;
+static uint16_t s_reassembly_next_part;
+static uint8_t *s_reassembly_payload;
+static size_t s_reassembly_length;
 
 static Uuid prv_current_app_uuid(void) {
   return app_manager_get_current_app_md()->uuid;
@@ -67,9 +76,17 @@ static PendingRequest *prv_find_pending(uint16_t request_id) {
 }
 
 static bool prv_track_pending(uint16_t request_id, PendingKind kind) {
+  const time_t now = rtc_get_time();
+  for (size_t i = 0; i < ARRAY_LENGTH(s_pending); ++i) {
+    if (s_pending[i].active &&
+        (now - s_pending[i].started_at) > APP_AUDIO_CONTEXT_PENDING_TIMEOUT_SECONDS) {
+      s_pending[i] = (PendingRequest) {};
+    }
+  }
   PendingRequest *existing = prv_find_pending(request_id);
   if (existing) {
     existing->kind = kind;
+    existing->started_at = now;
     return true;
   }
   for (size_t i = 0; i < ARRAY_LENGTH(s_pending); ++i) {
@@ -78,6 +95,7 @@ static bool prv_track_pending(uint16_t request_id, PendingKind kind) {
         .active = true,
         .request_id = request_id,
         .kind = kind,
+        .started_at = now,
       };
       return true;
     }
@@ -90,6 +108,17 @@ static void prv_clear_pending(uint16_t request_id) {
   if (pending) {
     *pending = (PendingRequest) {};
   }
+}
+
+static void prv_clear_reassembly(void) {
+  if (s_reassembly_payload) {
+    kernel_free(s_reassembly_payload);
+  }
+  s_reassembly_request_id = 0;
+  s_reassembly_expected_parts = 0;
+  s_reassembly_next_part = 0;
+  s_reassembly_payload = NULL;
+  s_reassembly_length = 0;
 }
 
 static AudioContextAvailability prv_error_to_availability(uint8_t error_code) {
@@ -166,9 +195,37 @@ static void prv_handle_transcript_response(const uint8_t *data, size_t size) {
   if (size < header_size + msg->payload_length) {
     return;
   }
-  prv_put_event(msg->header.request_id, msg->status, NULL, data + header_size,
-                msg->payload_length);
-  if (msg->part_index + 1 >= msg->part_count) {
+  if (msg->part_count <= 1) {
+    prv_put_event(msg->header.request_id, msg->status, NULL, data + header_size,
+                  msg->payload_length);
+    prv_clear_pending(msg->header.request_id);
+    return;
+  }
+  if ((s_reassembly_request_id != msg->header.request_id) || (msg->part_index == 0)) {
+    prv_clear_reassembly();
+    s_reassembly_request_id = msg->header.request_id;
+    s_reassembly_expected_parts = msg->part_count;
+  }
+  if ((msg->part_index != s_reassembly_next_part) ||
+      (msg->part_count != s_reassembly_expected_parts)) {
+    prv_clear_reassembly();
+    prv_clear_pending(msg->header.request_id);
+    return;
+  }
+  uint8_t *payload = kernel_realloc(s_reassembly_payload, s_reassembly_length + msg->payload_length);
+  if (!payload) {
+    prv_clear_reassembly();
+    prv_clear_pending(msg->header.request_id);
+    return;
+  }
+  s_reassembly_payload = payload;
+  memcpy(s_reassembly_payload + s_reassembly_length, data + header_size, msg->payload_length);
+  s_reassembly_length += msg->payload_length;
+  s_reassembly_next_part++;
+  if (s_reassembly_next_part >= s_reassembly_expected_parts) {
+    prv_put_event(msg->header.request_id, msg->status, NULL, s_reassembly_payload,
+                  s_reassembly_length);
+    prv_clear_reassembly();
     prv_clear_pending(msg->header.request_id);
   }
 }
@@ -198,6 +255,7 @@ static void prv_handle_error_response(const uint8_t *data, size_t size) {
 
 void app_audio_context_init(void) {
   memset(s_pending, 0, sizeof(s_pending));
+  prv_clear_reassembly();
   s_cached_status = (AudioContextStatus) {
     .availability = AudioContextAvailabilityUnsupportedPhone,
   };
@@ -221,8 +279,14 @@ uint16_t app_audio_context_next_request_id(void) {
 bool app_audio_context_request_status(uint16_t request_id) {
   AppAudioContextHeader msg;
   prv_fill_header(&msg, AppAudioContextMsgIdStatusRequest, request_id);
-  return prv_track_pending(request_id, PendingKindStatus) &&
-         prv_send_packet((const uint8_t *)&msg, sizeof(msg));
+  if (!prv_track_pending(request_id, PendingKindStatus)) {
+    return false;
+  }
+  if (!prv_send_packet((const uint8_t *)&msg, sizeof(msg))) {
+    prv_clear_pending(request_id);
+    return false;
+  }
+  return true;
 }
 
 bool app_audio_context_request_enable(uint16_t request_id) {
@@ -259,13 +323,21 @@ bool app_audio_context_request_permission(uint16_t request_id, AudioContextPermi
 bool app_audio_context_request_recent_transcript(uint16_t request_id, uint32_t before_seconds,
                                                  uint32_t after_seconds) {
   AppAudioContextTranscriptRequestMsg msg = {
-    .before_seconds = before_seconds,
-    .after_seconds = after_seconds,
+    .before_seconds = before_seconds > APP_AUDIO_CONTEXT_MAX_WINDOW_SECONDS ?
+        APP_AUDIO_CONTEXT_MAX_WINDOW_SECONDS : before_seconds,
+    .after_seconds = after_seconds > APP_AUDIO_CONTEXT_MAX_WINDOW_SECONDS ?
+        APP_AUDIO_CONTEXT_MAX_WINDOW_SECONDS : after_seconds,
     .history = 0,
   };
   prv_fill_header(&msg.header, AppAudioContextMsgIdTranscriptRequest, request_id);
-  return prv_track_pending(request_id, PendingKindTranscript) &&
-         prv_send_packet((const uint8_t *)&msg, sizeof(msg));
+  if (!prv_track_pending(request_id, PendingKindTranscript)) {
+    return false;
+  }
+  if (!prv_send_packet((const uint8_t *)&msg, sizeof(msg))) {
+    prv_clear_pending(request_id);
+    return false;
+  }
+  return true;
 }
 
 bool app_audio_context_request_transcript_history(uint16_t request_id, time_t start_time,
@@ -276,8 +348,14 @@ bool app_audio_context_request_transcript_history(uint16_t request_id, time_t st
     .history = 1,
   };
   prv_fill_header(&msg.header, AppAudioContextMsgIdTranscriptRequest, request_id);
-  return prv_track_pending(request_id, PendingKindTranscript) &&
-         prv_send_packet((const uint8_t *)&msg, sizeof(msg));
+  if (!prv_track_pending(request_id, PendingKindTranscript)) {
+    return false;
+  }
+  if (!prv_send_packet((const uint8_t *)&msg, sizeof(msg))) {
+    prv_clear_pending(request_id);
+    return false;
+  }
+  return true;
 }
 
 bool app_audio_context_subscribe_transcript(uint16_t request_id) {
@@ -285,14 +363,23 @@ bool app_audio_context_subscribe_transcript(uint16_t request_id) {
     .include_partial = 1,
   };
   prv_fill_header(&msg.header, AppAudioContextMsgIdSubscribeRequest, request_id);
-  return prv_track_pending(request_id, PendingKindSubscription) &&
-         prv_send_packet((const uint8_t *)&msg, sizeof(msg));
+  if (!prv_track_pending(request_id, PendingKindSubscription)) {
+    return false;
+  }
+  if (!prv_send_packet((const uint8_t *)&msg, sizeof(msg))) {
+    prv_clear_pending(request_id);
+    return false;
+  }
+  return true;
 }
 
 void app_audio_context_cancel(uint16_t request_id) {
   AppAudioContextCancelRequestMsg msg;
   prv_fill_header(&msg.header, AppAudioContextMsgIdCancelRequest, request_id);
   prv_send_packet((const uint8_t *)&msg, sizeof(msg));
+  if (s_reassembly_request_id == request_id) {
+    prv_clear_reassembly();
+  }
   prv_clear_pending(request_id);
 }
 

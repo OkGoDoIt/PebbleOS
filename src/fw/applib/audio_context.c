@@ -3,7 +3,11 @@
 #include "audio_context.h"
 
 #include "applib/event_service_client.h"
+#include "drivers/rtc.h"
 #include "pbl/services/app_audio_context.h"
+
+#include <stdlib.h>
+#include <string.h>
 
 typedef enum {
   PendingCallbackNone = 0,
@@ -27,6 +31,7 @@ static EventServiceInfo s_event_info;
 static bool s_event_subscribed;
 static PendingCallback s_pending[4];
 static uint16_t s_subscription_request_id;
+static time_t s_audio_context_launch_time;
 
 static void prv_subscribe_if_needed(void);
 
@@ -80,6 +85,58 @@ static void prv_clear_pending(uint16_t request_id) {
   }
 }
 
+static const char *prv_json_value_after_key(const char *json, const char *key) {
+  const char *key_pos = strstr(json, key);
+  if (!key_pos) {
+    return NULL;
+  }
+  const char *value = strchr(key_pos + strlen(key), ':');
+  return value ? value + 1 : NULL;
+}
+
+static time_t prv_json_time_seconds(const char *json, const char *key) {
+  const char *value = prv_json_value_after_key(json, key);
+  if (!value) {
+    return 0;
+  }
+  return (time_t)(strtoul(value, NULL, 10) / 1000);
+}
+
+static uint32_t prv_json_uint(const char *json, const char *key) {
+  const char *value = prv_json_value_after_key(json, key);
+  if (!value) {
+    return 0;
+  }
+  return (uint32_t)strtoul(value, NULL, 10);
+}
+
+static const char *prv_json_string_in_place(char *json, const char *key) {
+  char *value = (char *)prv_json_value_after_key(json, key);
+  if (!value) {
+    return "";
+  }
+  while (*value == ' ' || *value == '"') {
+    value++;
+  }
+  char *end = value;
+  while (*end && *end != '"') {
+    end++;
+  }
+  *end = '\0';
+  return value;
+}
+
+static AudioContextTranscript prv_transcript_from_payload(char *payload) {
+  AudioContextTranscript transcript = {
+    .start_time = prv_json_time_seconds(payload, "\"startedAtEpochMs\""),
+    .end_time = prv_json_time_seconds(payload, "\"endedAtEpochMs\""),
+    .gap_count = prv_json_uint(payload, "\"gapCount\""),
+    .flags = 0,
+    .text = prv_json_string_in_place(payload, "\"text\""),
+  };
+  return transcript;
+}
+
 static void prv_handle_audio_context_event(PebbleEvent *e, void *context) {
   (void)context;
   PebbleAudioContextEventData *data = e->audio_context.data;
@@ -98,9 +155,7 @@ static void prv_handle_audio_context_event(PebbleEvent *e, void *context) {
   if ((pending->kind == PendingCallbackTranscript ||
        pending->kind == PendingCallbackSubscription) &&
       pending->callback.transcript) {
-    AudioContextTranscript transcript = {
-      .text = data->text,
-    };
+    AudioContextTranscript transcript = prv_transcript_from_payload(data->text);
     pending->callback.transcript(data->result, &transcript, pending->context);
     if (pending->kind == PendingCallbackTranscript) {
       prv_clear_pending(data->request_id);
@@ -188,12 +243,15 @@ bool audio_context_get_trigger_info(AudioContextTriggerInfo *info_out) {
   if (!info_out) {
     return false;
   }
+  if (s_audio_context_launch_time == 0) {
+    s_audio_context_launch_time = rtc_get_time();
+  }
   *info_out = (AudioContextTriggerInfo) {
     .launch_reason = app_launch_reason(),
     .launch_button = app_launch_button(),
     .source = AudioContextTriggerSourceWatch,
     .source_action = 0,
-    .trigger_time = 0,
+    .trigger_time = s_audio_context_launch_time,
     .args = app_launch_get_args(),
   };
   return true;
