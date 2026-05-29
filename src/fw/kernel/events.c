@@ -353,6 +353,9 @@ void **event_get_buffer(PebbleEvent *event) {
     case PEBBLE_VOICE_SERVICE_EVENT:
       return (void **)&event->voice_service.data;
 
+    case PEBBLE_AUDIO_CONTEXT_EVENT:
+      return (void **)&event->audio_context.data;
+
     case PEBBLE_REMINDER_EVENT:
       return (void **)&event->reminder.reminder_id;
 

@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config SERVICE_APP_AUDIO_CONTEXT
+    bool "App audio context endpoint"
+    default y if SERVICE_COMM_SESSION
+    depends on SERVICE_COMM_SESSION
+    help
+      Private watch app endpoint for permissioned audio context SDK requests.

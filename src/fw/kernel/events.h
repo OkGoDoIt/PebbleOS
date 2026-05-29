@@ -7,6 +7,7 @@
 #include "applib/app_launch_button.h"
 #include "applib/app_launch_reason.h"
 #include "applib/app_outbox.h"
+#include "applib/audio_context.h"
 #include "applib/bluetooth/ble_client.h"
 #include "applib/health_service.h"
 #include "applib/plugin_service.h"
@@ -129,6 +130,7 @@ typedef enum {
   PEBBLE_PREF_CHANGE_EVENT,
   PEBBLE_SPEAKER_EVENT,
   PEBBLE_BACKLIGHT_EVENT,
+  PEBBLE_AUDIO_CONTEXT_EVENT,
 
   PEBBLE_NUM_EVENTS
 } PebbleEventType;
@@ -501,6 +503,17 @@ typedef struct PACKED { // 1 byte
   bool is_on;
 } PebbleBacklightEvent;
 
+typedef struct {
+  uint16_t request_id;
+  AudioContextAvailability result;
+  AudioContextStatus status;
+  char text[];
+} PebbleAudioContextEventData;
+
+typedef struct PACKED {
+  PebbleAudioContextEventData *data;
+} PebbleAudioContextEvent;
+
 typedef enum {
   VoiceEventTypeSessionSetup,
   VoiceEventTypeSessionResult,
@@ -811,6 +824,7 @@ typedef struct PACKED {
     PebblePrefChangeEvent pref_change;
     PebbleSpeakerEvent speaker;
     PebbleBacklightEvent backlight;
+    PebbleAudioContextEvent audio_context;
   };
   PebbleTaskBitset task_mask;  // 1 == filter out, 0 == leave in
   // NOTE: we put this 8 bit field at the end so that we can pack this structure and still keep the

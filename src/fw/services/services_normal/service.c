@@ -13,6 +13,7 @@
 #include "pbl/services/activity/activity.h"
 #include "pbl/services/alarms/alarm.h"
 #include "pbl/services/app_cache.h"
+#include "pbl/services/app_audio_context.h"
 #include "pbl/services/app_fetch_endpoint.h"
 #include "pbl/services/app_glances/app_glance_service.h"
 #include "pbl/services/blob_db/api.h"
@@ -104,6 +105,7 @@ void services_normal_init(void) {
   wakeup_init();
 
   app_order_storage_init();
+  app_audio_context_init();
 
   // Check if time is valid before initializing activity
   if (prv_is_time_valid_for_activity_init()) {

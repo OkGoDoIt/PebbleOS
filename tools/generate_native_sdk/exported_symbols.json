@@ -25,6 +25,7 @@
     "fw/applib/app_light.h",
     "fw/applib/applib_resource.h",
     "fw/applib/app_logging.h",
+    "fw/applib/audio_context.h",
     "fw/applib/app_message/app_message.h",
     "fw/applib/app_sync/app_sync.h",
     "fw/applib/app_watch_info.h",

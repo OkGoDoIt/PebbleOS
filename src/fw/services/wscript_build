@@ -28,6 +28,8 @@ if bld.env.CONFIG_SERVICE_APP_ORDER_ENDPOINT:
     bld.recurse('app_order_endpoint')
 if bld.env.CONFIG_SERVICE_APP_OUTBOX_SERVICE:
     bld.recurse('app_outbox_service')
+if bld.env.CONFIG_SERVICE_APP_AUDIO_CONTEXT:
+    bld.recurse('app_audio_context')
 if bld.env.CONFIG_SERVICE_AUDIO_ENDPOINT:
     bld.recurse('audio_endpoint')
 if bld.env.CONFIG_SERVICE_BACKGROUND_AUDIO:
