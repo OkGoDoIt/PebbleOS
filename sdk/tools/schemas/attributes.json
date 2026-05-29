@@ -11,7 +11,17 @@
   },
   "capabilities": {
     "type": "array",
-    "items": { "enum": ["location", "configurable", "health"] },
+    "items": {
+      "enum": [
+        "location",
+        "configurable",
+        "health",
+        "audio_status",
+        "audio_transcript",
+        "audio_history",
+        "audio_raw"
+      ]
+    },
     "uniqueItems": true
   },
   "messageKeys": {

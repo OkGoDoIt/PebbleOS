@@ -4,7 +4,7 @@
               "You should also make sure you are obeying our API design guidelines:",
               "https://pebbletechnology.atlassian.net/wiki/display/DEV/SDK+API+Design+Guidelines"
             ],
-  "revision" : "101",
+  "revision" : "102",
   "version" : "2.0",
   "files": [
     "fw/drivers/ambient_light.h",
@@ -25,7 +25,6 @@
     "fw/applib/app_light.h",
     "fw/applib/applib_resource.h",
     "fw/applib/app_logging.h",
-    "fw/applib/audio_context.h",
     "fw/applib/app_message/app_message.h",
     "fw/applib/app_sync/app_sync.h",
     "fw/applib/app_watch_info.h",
@@ -51,6 +50,7 @@
     "fw/applib/app_wakeup.h",
     "fw/applib/app_exit_reason.h",
     "fw/applib/app_launch_reason.h",
+    "fw/applib/audio_context.h",
     "fw/applib/cpu_cache.h",
     "fw/applib/health_service.h",
     "fw/applib/moddable/moddable.h",
@@ -1842,6 +1842,74 @@
               "name": "launch_get_args",
               "implName": "app_launch_get_args",
               "addedRevision": "38"
+            }
+          ]
+        }, {
+          "type": "group",
+          "name": "Audio Context",
+          "appOnly": true,
+          "addedRevision": "102",
+          "exports": [
+            {
+              "type": "type",
+              "name": "AudioContextAvailability"
+            }, {
+              "type": "type",
+              "name": "AudioContextPermission"
+            }, {
+              "type": "type",
+              "name": "AudioContextStatus"
+            }, {
+              "type": "type",
+              "name": "AudioContextTranscript"
+            }, {
+              "type": "type",
+              "name": "AudioContextTriggerSource"
+            }, {
+              "type": "type",
+              "name": "AudioContextTriggerInfo"
+            }, {
+              "type": "type",
+              "name": "AudioContextStatusCallback"
+            }, {
+              "type": "type",
+              "name": "AudioContextTranscriptCallback"
+            }, {
+              "type": "function",
+              "name": "audio_context_get_cached_status",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_request_status",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_request_enable",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_request_permission",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_request_recent_transcript",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_request_transcript_history",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_get_trigger_info",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_subscribe_transcript",
+              "addedRevision": "102"
+            }, {
+              "type": "function",
+              "name": "audio_context_unsubscribe",
+              "addedRevision": "102"
             }
           ]
         },

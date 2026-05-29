@@ -33,4 +33,66 @@
     });
   }
 
+  if (typeof _PebbleAudioContext !== 'undefined' && !p.audioContext) {
+    var callbacks = {};
+    var events = {};
+    var nextId = 1;
+
+    window._PebbleAudioContextCB = {
+      _resultSuccess: function(id, payloadJson) {
+        var cb = callbacks[id];
+        delete callbacks[id];
+        if (cb) {
+          cb.resolve(JSON.parse(payloadJson));
+        }
+      },
+      _event: function(subscriptionId, payloadJson) {
+        if (events[subscriptionId]) {
+          events[subscriptionId](JSON.parse(payloadJson));
+        }
+      }
+    };
+
+    function request(method, arg) {
+      return new Promise(function(resolve, reject) {
+        var id = '' + nextId++;
+        callbacks[id] = { resolve: resolve, reject: reject };
+        if (arg === undefined) {
+          _PebbleAudioContext[method](id);
+        } else {
+          _PebbleAudioContext[method](id, JSON.stringify(arg));
+        }
+      });
+    }
+
+    p.audioContext = {
+      getStatus: function() {
+        return request('getStatus');
+      },
+      requestEnable: function() {
+        return request('requestEnable');
+      },
+      requestPermission: function(permissions) {
+        return request('requestPermission', permissions || []);
+      },
+      recentTranscript: function(options) {
+        return request('recentTranscript', options || {});
+      },
+      transcriptHistory: function(options) {
+        return request('transcriptHistory', options || {});
+      },
+      onTranscript: function(options, handler) {
+        return request('subscribeTranscript', options || {}).then(function(result) {
+          events[result.subscriptionId] = function(event) {
+            handler(event.segment);
+          };
+          return function() {
+            delete events[result.subscriptionId];
+            _PebbleAudioContext.unsubscribe(result.subscriptionId);
+          };
+        });
+      }
+    };
+  }
+
 })(Pebble);

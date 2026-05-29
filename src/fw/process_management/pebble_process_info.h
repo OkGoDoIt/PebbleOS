@@ -166,7 +166,7 @@ typedef enum {
 // sdk.major:0x5 .minor:0x62 -- Add backlight_service_subscribe/unsubscribe for backlight on/off events (rev 101)
 
 #define PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR 0x5
-#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x62
+#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x63
 
 // The first SDK to ship with 2.x APIs
 #define PROCESS_INFO_FIRST_2X_SDK_VERSION_MAJOR 0x4
