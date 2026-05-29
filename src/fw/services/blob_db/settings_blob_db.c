@@ -92,6 +92,7 @@ static const char *s_syncable_settings[] = {
   // Timeline preferences
   "timelineQuickViewEnabled",
   "timelineQuickViewBeforeTimeMin",
+  "timelineQuickViewWatchfaceFit",
   "timelineSettingsOpened",
 
   // Activity preferences
