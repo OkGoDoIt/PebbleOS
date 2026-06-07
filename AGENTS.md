@@ -57,7 +57,10 @@ together — the firmware build alone won't surface it to apps:
    `src/fw/syscall/syscall_<area>.c`.
 2. **Register the symbol** in
    `tools/generate_native_sdk/exported_symbols.json` under the matching
-   group, with an `addedRevision` matching the new SDK revision.
+   group, with an `addedRevision` matching the new SDK revision. Also
+   update the file's top-level `revision` field. If upstream has already
+   used the next revision number, choose the next unused revision rather
+   than reusing an existing one.
 3. **Bump the SDK revision** in
    `src/fw/process_management/pebble_process_info.h`: increment
    `PROCESS_INFO_CURRENT_SDK_VERSION_MINOR` and add a `// sdk.major:0xN
