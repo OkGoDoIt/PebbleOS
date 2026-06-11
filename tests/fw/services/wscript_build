@@ -248,6 +248,11 @@ clar(ctx,
 
 clar(ctx,
     sources_ant_glob = " ".join([
+        " src/fw/services/audio_companion/protocol.c"]),
+    test_sources_ant_glob = "test_audio_companion_protocol.c")
+
+clar(ctx,
+    sources_ant_glob = " ".join([
         " src/fw/services/voice/transcription.c"]),
     test_sources_ant_glob = "test_transcription.c")
 

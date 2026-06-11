@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config SERVICE_AUDIO_COMPANION
+    bool "Audio companion background streaming"
+    depends on MIC && SERVICE_VOICE
+    help
+      Background microphone streaming to an authorized third-party audio
+      companion app over a dedicated watch-hosted GATT service. The
+      transport requires a NimBLE Bluetooth backend; on other backends the
+      service compiles but stays inert.
+
+if SERVICE_AUDIO_COMPANION
+
+config AUDIO_COMPANION_SPOOL_MIN_BYTES
+    int "Audio companion spool floor (bytes)"
+    default 8192
+    help
+      The spool may always grow to at least this many bytes of encoded
+      audio, regardless of heap pressure.
+
+config AUDIO_COMPANION_SPOOL_MAX_BYTES
+    int "Audio companion spool ceiling (bytes)"
+    default 65536
+    help
+      Hard upper bound on spool memory.
+
+config AUDIO_COMPANION_SPOOL_HEAP_RESERVE_BYTES
+    int "Kernel heap headroom the spool must always leave free"
+    default 32768
+    help
+      The spool only grows while at least this much kernel heap stays
+      free, and sheds chunks when free heap drops below it.
+
+config AUDIO_COMPANION_LOW_BATTERY_PERCENT
+    int "Pause streaming below this battery percent"
+    default 20
+
+endif # SERVICE_AUDIO_COMPANION

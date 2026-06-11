@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+
+bld.stlib(
+    use=['fw_includes'],
+    source=bld.path.ant_glob('*.c'),
+    target='services_audio_companion',
+)
+bld.env.SERVICES.append('services_audio_companion')
