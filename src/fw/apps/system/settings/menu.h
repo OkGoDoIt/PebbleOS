@@ -13,6 +13,9 @@
 
 typedef enum {
   SettingsMenuItemBluetooth = 0,
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  SettingsMenuItemAudioCompanion,
+#endif
   SettingsMenuItemNotifications,
   SettingsMenuItemVibrations,
   SettingsMenuItemQuietTime,

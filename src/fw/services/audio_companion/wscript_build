@@ -7,6 +7,7 @@ if not bld.env.CONFIG_BT_FW_NIMBLE:
     # NimBLE builds already compile tinycrypt; other BT backends need SHA-256
     # for the receiver registry.
     sources.append(bld.srcnode.find_node(tinycrypt_dir + '/src/sha256.c'))
+    sources.append(bld.srcnode.find_node(tinycrypt_dir + '/src/utils.c'))
 
 bld.stlib(
     use=['fw_includes'],

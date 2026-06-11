@@ -2,6 +2,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "activity_tracker.h"
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include "audio_companion.h"
+#endif
 #include "bluetooth.h"
 #include "display.h"
 #include "menu.h"
@@ -25,6 +28,9 @@
 
 static const SettingsModuleGetMetadata s_submodule_registry[] = {
   [SettingsMenuItemBluetooth]     = settings_bluetooth_get_info,
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  [SettingsMenuItemAudioCompanion] = settings_audio_companion_get_info,
+#endif
   [SettingsMenuItemNotifications] = settings_notifications_get_info,
   [SettingsMenuItemVibrations]    = settings_vibe_patterns_get_info,
   [SettingsMenuItemQuietTime]     = settings_quiet_time_get_info,

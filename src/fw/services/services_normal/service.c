@@ -45,6 +45,7 @@
 #include "pbl/services/voice/voice.h"
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
 #include "pbl/services/audio_companion.h"
+#include "popups/audio_companion_consent_ui.h"
 #endif
 
 #include "util/size.h"
@@ -133,6 +134,7 @@ void services_normal_init(void) {
 #endif
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
   audio_companion_init();
+  audio_companion_consent_ui_init();
 #endif
 
   app_glance_service_init();
