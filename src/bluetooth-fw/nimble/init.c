@@ -4,6 +4,7 @@
 #include "gh3x2x_tuning_service.h"
 
 #include <FreeRTOS.h>
+#include <bluetooth/audio_companion_service.h>
 #include <bluetooth/init.h>
 #include <comm/bt_lock.h>
 #include <host/ble_hs.h>
@@ -148,6 +149,10 @@ bool bt_driver_start(BTDriverConfig *config) {
 
 #ifdef CONFIG_GH3X2X_TUNING_SERVICE_ENABLED
   gh3x2x_tuning_service_init();
+#endif
+
+#ifdef CONFIG_AUDIO_COMPANION_SERVICE_ENABLED
+  bt_driver_audio_companion_service_init();
 #endif
 
   ble_hs_sched_start();

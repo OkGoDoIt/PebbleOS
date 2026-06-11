@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <bluetooth/audio_companion_service.h>
 #include <bluetooth/bonding_sync.h>
 #include <bluetooth/bt_driver_advert.h>
 #include <bluetooth/gatt.h>
@@ -120,6 +121,10 @@ static void prv_handle_connection_event(struct ble_gap_event *event) {
 }
 
 static void prv_handle_disconnection_event(struct ble_gap_event *event) {
+#ifdef CONFIG_AUDIO_COMPANION_SERVICE_ENABLED
+  bt_driver_audio_companion_handle_disconnect(event->disconnect.conn.conn_handle);
+#endif
+
   GattDeviceDisconnectionEvent gatt_event;
   nimble_addr_to_pebble_addr(&event->disconnect.conn.peer_id_addr, &gatt_event.dev_address);
   bt_driver_cb_gatt_handle_disconnect(&gatt_event);
@@ -251,6 +256,11 @@ static void prv_handle_subscription_event(struct ble_gap_event *event) {
             event->subscribe.conn_handle, event->subscribe.attr_handle,
             event->subscribe.prev_notify, event->subscribe.cur_notify,
             event->subscribe.prev_indicate, event->subscribe.cur_indicate);
+#ifdef CONFIG_AUDIO_COMPANION_SERVICE_ENABLED
+  bt_driver_audio_companion_handle_subscribe(event->subscribe.conn_handle,
+                                             event->subscribe.attr_handle,
+                                             event->subscribe.cur_notify);
+#endif
 }
 
 static void prv_handle_notification_rx_event(struct ble_gap_event *event) {

@@ -33,4 +33,12 @@ config GH3X2X_TUNING_SERVICE_ENABLED
       Build the GH3X2X heart-rate sensor tuning GATT service, used to
       tune the sensor over BLE. Off by default.
 
+config AUDIO_COMPANION_SERVICE_ENABLED
+    bool "Audio Companion GATT service"
+    depends on BT_FW_NIMBLE
+    help
+      Build the dedicated watch-hosted Audio Companion GATT service used by
+      custom firmware to stream background microphone audio to a separate
+      third-party mobile app.
+
 endmenu

@@ -757,7 +757,7 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
         break;
       }
-      PBL_LOG_DBG("Audio receiver health: battery %u%%, app state %u, queue %" PRIu32,
+      PBL_LOG_DBG("Audio receiver health: battery %u pct, app state %u, queue %" PRIu32,
                   msg->receiver_health.battery_pct, msg->receiver_health.app_state,
                   msg->receiver_health.queue_depth_frames);
       prv_send_ack_locked(msg->receiver_health.request_token, AudioCompanionAckStatusOk);

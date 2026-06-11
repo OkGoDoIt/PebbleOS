@@ -43,6 +43,9 @@
 
 #include "pbl/services/activity/activity.h"
 #include "pbl/services/voice/voice.h"
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include "pbl/services/audio_companion.h"
+#endif
 
 #include "util/size.h"
 
@@ -127,6 +130,9 @@ void services_normal_init(void) {
 
 #ifdef CONFIG_MIC
   voice_init();
+#endif
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  audio_companion_init();
 #endif
 
   app_glance_service_init();

@@ -26,6 +26,13 @@ bool bt_driver_audio_companion_notify_control(const uint8_t *data, size_t length
 uint16_t bt_driver_audio_companion_get_effective_mtu(void);
 //! @}
 
+//! NimBLE GAP event hooks, called from the backend's central event dispatcher.
+//! @{
+void bt_driver_audio_companion_handle_subscribe(uint16_t conn_handle, uint16_t attr_handle,
+                                                bool notify_enabled);
+void bt_driver_audio_companion_handle_disconnect(uint16_t conn_handle);
+//! @}
+
 //! Implemented by the OS service (src/fw/services/audio_companion/audio_companion.c).
 //! Called from the BT host task; implementations immediately hand off to the
 //! system task except audio_companion_fill_info, which is synchronous.

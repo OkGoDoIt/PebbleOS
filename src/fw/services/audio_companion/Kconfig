@@ -3,6 +3,7 @@
 config SERVICE_AUDIO_COMPANION
     bool "Audio companion background streaming"
     depends on MIC && SERVICE_VOICE
+    select AUDIO_COMPANION_SERVICE_ENABLED if BT_FW_NIMBLE
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service. The

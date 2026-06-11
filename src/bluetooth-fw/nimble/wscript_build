@@ -1,6 +1,8 @@
 excludes = []
 if not bld.env.CONFIG_GH3X2X_TUNING_SERVICE_ENABLED:
     excludes.extend(['gh3x2x_tuning_service.c'])
+if not bld.env.CONFIG_AUDIO_COMPANION_SERVICE_ENABLED:
+    excludes.extend(['audio_companion_service.c'])
 
 driver_source = bld.path.ant_glob(['*.c'], excl=excludes)
 
