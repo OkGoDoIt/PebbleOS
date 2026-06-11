@@ -1,8 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
+tinycrypt_dir = 'third_party/nimble/mynewt-nimble/ext/tinycrypt'
+
+sources = bld.path.ant_glob('*.c')
+if not bld.env.CONFIG_BT_FW_NIMBLE:
+    # NimBLE builds already compile tinycrypt; other BT backends need SHA-256
+    # for the receiver registry.
+    sources.append(bld.srcnode.find_node(tinycrypt_dir + '/src/sha256.c'))
+
 bld.stlib(
     use=['fw_includes'],
-    source=bld.path.ant_glob('*.c'),
+    includes=[bld.srcnode.find_node(tinycrypt_dir + '/include').abspath()],
+    source=sources,
     target='services_audio_companion',
 )
 bld.env.SERVICES.append('services_audio_companion')
