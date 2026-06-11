@@ -205,6 +205,12 @@ void shell_prefs_set_vibe_log_info_enabled(bool enabled);
 bool shell_prefs_get_settings_dbs_compacted_v1(void);
 void shell_prefs_set_settings_dbs_compacted_v1(bool done);
 
+// Local-only opt-in for the watch-hosted Audio Companion service. This pref is
+// intentionally not synced through Settings BlobDB; the official phone app must
+// not learn about or control background audio.
+bool shell_prefs_get_audio_companion_enabled(void);
+void shell_prefs_set_audio_companion_enabled(bool enabled);
+
 #ifdef CONFIG_APP_SCALING
 // Legacy app rendering mode - whether to use bezel or scaling for legacy apps
 typedef enum LegacyAppRenderMode {

@@ -235,6 +235,7 @@ static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFa
 #define PREF_KEY_ACCEL_SHAKE_LOG_INFO "accelShakeLogInfo"
 #define PREF_KEY_VIBE_LOG_INFO "vibeLogInfo"
 #define PREF_KEY_SETTINGS_DBS_COMPACTED_V1 "settingsDbsCompactedV1"
+#define PREF_KEY_AUDIO_COMPANION_ENABLED "audioCompanionEnabled"
 #ifdef CONFIG_APP_SCALING
 #define PREF_KEY_LEGACY_APP_RENDER_MODE "legacyAppRenderMode"
 #endif
@@ -243,6 +244,7 @@ static bool s_coredump_on_request_enabled = false;
 static bool s_accel_shake_log_info_enabled = false;
 static bool s_vibe_log_info_enabled = false;
 static bool s_settings_dbs_compacted_v1 = false;
+static bool s_audio_companion_enabled = false;
 #ifdef CONFIG_APP_SCALING
 static uint8_t s_legacy_app_render_mode = 1; // Default to scaled mode
 #endif
@@ -694,6 +696,11 @@ static bool prv_set_s_vibe_log_info_enabled(bool *enabled) {
 
 static bool prv_set_s_settings_dbs_compacted_v1(bool *done) {
   s_settings_dbs_compacted_v1 = *done;
+  return true;
+}
+
+static bool prv_set_s_audio_companion_enabled(bool *enabled) {
+  s_audio_companion_enabled = *enabled;
   return true;
 }
 
@@ -1851,6 +1858,14 @@ bool shell_prefs_get_settings_dbs_compacted_v1(void) {
 
 void shell_prefs_set_settings_dbs_compacted_v1(bool done) {
   prv_pref_set(PREF_KEY_SETTINGS_DBS_COMPACTED_V1, &done, sizeof(done));
+}
+
+bool shell_prefs_get_audio_companion_enabled(void) {
+  return s_audio_companion_enabled;
+}
+
+void shell_prefs_set_audio_companion_enabled(bool enabled) {
+  prv_pref_set(PREF_KEY_AUDIO_COMPANION_ENABLED, &enabled, sizeof(enabled));
 }
 
 #ifdef CONFIG_APP_SCALING
