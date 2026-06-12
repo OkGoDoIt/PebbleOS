@@ -32,6 +32,7 @@ typedef enum {
   BtConsumerTimelineActionMenu,
   BtConsumerPRF,
   BtConsumerPebblePairingServiceRemoteDevice,
+  BtConsumerAudioCompanion,
   BtConsumerUnitTests, // For unit testing
   NumBtConsumer,
 } BtConsumer;

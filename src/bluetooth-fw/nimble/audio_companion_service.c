@@ -3,6 +3,7 @@
 #include <bluetooth/audio_companion_service.h>
 
 #include <host/ble_att.h>
+#include <host/ble_gap.h>
 #include <host/ble_gatt.h>
 #include <host/ble_hs.h>
 #include <host/ble_uuid.h>
@@ -10,6 +11,11 @@
 #include <pbl/services/audio_companion_private.h>
 #include <system/logging.h>
 #include <system/passert.h>
+
+#include "comm/ble/gap_le_connection.h"
+#include "comm/bt_conn_mgr.h"
+#include "comm/bt_lock.h"
+#include "nimble_type_conversions.h"
 
 PBL_LOG_MODULE_DECLARE(bt, CONFIG_BT_LOG_LEVEL);
 
@@ -144,6 +150,29 @@ uint16_t bt_driver_audio_companion_get_effective_mtu(void) {
     return 0;
   }
   return ble_att_mtu(s_conn_handle);
+}
+
+void bt_driver_audio_companion_set_response_time(ResponseTimeState state,
+                                                 uint16_t max_period_secs) {
+  if (s_conn_handle == AUDIO_COMPANION_INVALID_CONN_HANDLE) {
+    return;
+  }
+
+  struct ble_gap_conn_desc desc;
+  if (ble_gap_conn_find(s_conn_handle, &desc) != 0) {
+    return;
+  }
+
+  BTDeviceInternal device;
+  nimble_addr_to_pebble_device(&desc.peer_id_addr, &device);
+
+  bt_lock();
+  GAPLEConnection *connection = gap_le_connection_by_device(&device);
+  if (connection) {
+    conn_mgr_set_ble_conn_response_time(connection, BtConsumerAudioCompanion, state,
+                                      max_period_secs);
+  }
+  bt_unlock();
 }
 
 void bt_driver_audio_companion_handle_subscribe(uint16_t conn_handle, uint16_t attr_handle,

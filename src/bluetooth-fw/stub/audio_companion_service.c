@@ -17,6 +17,10 @@ uint16_t bt_driver_audio_companion_get_effective_mtu(void) {
   return 0;
 }
 
+void bt_driver_audio_companion_set_response_time(ResponseTimeState state,
+                                                 uint16_t max_period_secs) {
+}
+
 void bt_driver_audio_companion_handle_subscribe(uint16_t conn_handle, uint16_t attr_handle,
                                                 bool notify_enabled) {
 }

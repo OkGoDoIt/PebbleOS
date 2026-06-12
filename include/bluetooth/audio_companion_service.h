@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <bluetooth/responsiveness.h>
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -24,6 +26,8 @@ bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length);
 bool bt_driver_audio_companion_notify_control(const uint8_t *data, size_t length);
 //! Effective ATT MTU of the subscribed connection (0 if none).
 uint16_t bt_driver_audio_companion_get_effective_mtu(void);
+//! Request a BLE connection interval profile for the subscribed Audio Companion link.
+void bt_driver_audio_companion_set_response_time(ResponseTimeState state, uint16_t max_period_secs);
 //! @}
 
 //! NimBLE GAP event hooks, called from the backend's central event dispatcher.

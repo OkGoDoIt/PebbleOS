@@ -7,6 +7,7 @@
 
 #include "applib/event_service_client.h"
 #include "bluetooth/audio_companion_service.h"
+#include "comm/bt_conn_mgr.h"
 #include "board/board.h"
 #include "drivers/mic.h"
 #include "drivers/rtc.h"
@@ -131,12 +132,21 @@ static void prv_send_state_changed_locked(void) {
   prv_notify_control_locked(buf, len);
 }
 
+static void prv_update_ble_responsiveness_locked(void) {
+  if (s_state == AudioCompanionServiceStateStreaming) {
+    bt_driver_audio_companion_set_response_time(ResponseTimeMiddle, MAX_PERIOD_RUN_FOREVER);
+  } else {
+    bt_driver_audio_companion_set_response_time(ResponseTimeMax, 0);
+  }
+}
+
 static void prv_set_state_locked(AudioCompanionServiceState state) {
   if (s_state == state) {
     return;
   }
   PBL_LOG_DBG("Audio companion state %u -> %u", (unsigned)s_state, (unsigned)state);
   s_state = state;
+  prv_update_ble_responsiveness_locked();
   prv_send_state_changed_locked();
 }
 
