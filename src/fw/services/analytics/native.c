@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <string.h>
+#include <stddef.h>
 
 #include "console/prompt.h"
 #include "drivers/rtc.h"
@@ -18,6 +19,7 @@
 #include "util/uuid.h"
 
 #define NATIVE_HEARTBEAT_RECORD_VERSION 1
+#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 507
 
 /* Heartbeat record logged to DLS */
 struct PACKED native_heartbeat_record {
@@ -62,6 +64,34 @@ _Static_assert(
 #undef PBL_ANALYTICS_METRIC_DEFINE_STRING
     ,
     "native_heartbeat_record must be packed (no padding)");
+
+/* Keep the raw DLS payload compatible with the official app/backend decoder. */
+_Static_assert(sizeof(struct native_heartbeat_record) == NATIVE_HEARTBEAT_RECORD_WIRE_SIZE,
+               "native_heartbeat_record wire size changed");
+_Static_assert(offsetof(struct native_heartbeat_record, version) == 0,
+               "native_heartbeat_record version offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, timestamp) == 1,
+               "native_heartbeat_record timestamp offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, build_id) == 9,
+               "native_heartbeat_record build_id offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct) == 94,
+               "native_heartbeat_record battery_soc_pct offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_scale) == 98,
+               "native_heartbeat_record battery_soc_pct scale offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_drop) == 100,
+               "native_heartbeat_record battery_soc_pct_drop offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_voltage) == 106,
+               "native_heartbeat_record battery_voltage offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_tte_s) == 118,
+               "native_heartbeat_record battery_tte_s offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_time_ms) == 314,
+               "native_heartbeat_record watchface_time_ms offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_name) == 318,
+               "native_heartbeat_record watchface_name offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_uuid) == 351,
+               "native_heartbeat_record watchface_uuid offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) == 503,
+               "native_heartbeat_record final metric offset changed");
 
 /* Type-specific internal index enums (dense, no gaps) */
 

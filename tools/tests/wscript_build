@@ -1,6 +1,18 @@
+import sys
+
+analytics_schema_test = bld.path.find_node('test_analytics_heartbeat_schema.py')
+analytics_schema_deps = [
+    analytics_schema_test,
+    bld.path.find_node('../analytics_heartbeat_schema.py'),
+    bld.path.find_node('../../include/pbl/services/analytics/analytics.def'),
+]
+bld(rule="{} {}".format(sys.executable, analytics_schema_test.abspath()),
+    source=analytics_schema_deps)
+
 if not bld.env.PYTHON_TOOL_TESTS_DISABLED:
     tests = bld.path.ant_glob('test_*.py')
-    bld(rule="python -m unittest discover -s {} -p 'test_*.py'".format(bld.path.abspath()),
+    bld(rule="{} -m unittest discover -s {} -p 'test_*.py'".format(sys.executable,
+                                                                    bld.path.abspath()),
         source=tests)
 
 # vim:filetype=python
