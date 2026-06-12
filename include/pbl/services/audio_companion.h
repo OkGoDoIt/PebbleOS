@@ -50,6 +50,9 @@ void audio_companion_mic_conflict_end(void);
 //! on-watch prompt; with no handler registered, consent requests are denied
 //! (fail closed). The handler must eventually call
 //! audio_companion_handle_consent_response (a 60 s timeout declines).
+//! Invoked on the system task with the service lock held: implementations
+//! must defer UI work to KernelMain and must not call
+//! audio_companion_handle_consent_response() synchronously.
 typedef void (*AudioCompanionConsentHandler)(const char *receiver_name);
 void audio_companion_set_consent_handler(AudioCompanionConsentHandler handler);
 void audio_companion_handle_consent_response(bool granted);

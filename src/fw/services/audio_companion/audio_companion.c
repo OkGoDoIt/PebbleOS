@@ -279,9 +279,11 @@ static bool prv_start_capture_locked(void) {
   }
   if (!mic_start(MIC, prv_mic_data_handler, NULL, frame_buffer, frame_samples)) {
     // Mic already owned by someone else (e.g. dictation): treat as conflict.
+    PBL_LOG_WRN("Audio companion: mic unavailable; treating as conflict");
     voice_speex_deinit();
     return false;
   }
+  PBL_LOG_INFO("Audio companion: capture started");
   s_owns_mic = true;
   s_capture_parked = false;
   return true;
@@ -296,6 +298,7 @@ static void prv_stop_capture_locked(void) {
     if (voice_speex_is_initialized()) {
       voice_speex_deinit();
     }
+    PBL_LOG_INFO("Audio companion: capture stopped");
   }
 }
 
@@ -403,6 +406,7 @@ static void prv_send_stream_start_locked(void) {
   uint8_t buf[sizeof(AudioCompanionStreamStartMsg)];
   const size_t len = audio_companion_protocol_build_stream_start(buf, sizeof(buf), &params);
   if (bt_driver_audio_companion_notify_data(buf, len)) {
+    PBL_LOG_INFO("Audio companion stream start sent (stream_id=%" PRIu32 ")", s_stream_id);
     s_need_stream_start = false;
   } else {
     s_send_backpressure_events++;
@@ -672,6 +676,7 @@ static void prv_handle_auth_request_locked(const AudioCompanionAuthRequest *req)
 
   switch (audio_companion_auth_evaluate(req->receiver_id)) {
     case AudioCompanionAuthEvalMatch:
+      PBL_LOG_INFO("Audio companion auth: receiver match, session authorized");
       s_session.authorized = true;
       memcpy(s_session.receiver_id, req->receiver_id, sizeof(s_session.receiver_id));
       s_session.granted_proto_version = granted;
@@ -707,6 +712,10 @@ static void prv_handle_auth_request_locked(const AudioCompanionAuthRequest *req)
         s_consent_timer = new_timer_create();
       }
       new_timer_start(s_consent_timer, CONSENT_TIMEOUT_MS, prv_consent_timer_cb, NULL, 0);
+      PBL_LOG_INFO("Audio companion auth: no receiver bound; requesting user consent");
+      // NOTE: invoked on the system task with s_lock held. Handlers must defer
+      // any UI work to KernelMain and must not call back into this service
+      // synchronously.
       s_consent_handler(s_consent.name);
       break;
   }
@@ -722,6 +731,7 @@ void audio_companion_handle_consent_response(bool granted) {
   if (s_consent_timer != TIMER_INVALID_ID) {
     new_timer_stop(s_consent_timer);
   }
+  PBL_LOG_INFO("Audio companion consent response: %s", granted ? "granted" : "declined");
 
   const uint8_t token = s_consent.request_token;
   if (granted && audio_companion_auth_store_receiver(s_consent.receiver_id, s_consent.name)) {
@@ -847,6 +857,8 @@ static void prv_control_write_system_task_cb(void *data) {
       prv_handle_control_msg_locked(&msg);
       break;
     case AudioCompanionParseResultMalformed:
+      PBL_LOG_WRN("Audio companion: malformed control write (%u bytes)",
+                  (unsigned)work->length);
       prv_send_error_locked(AudioCompanionErrorCodeMalformed, 0);
       break;
     case AudioCompanionParseResultUnknown:
@@ -874,6 +886,8 @@ static void prv_subscription_system_task_cb(void *data) {
   mutex_lock(s_lock);
   s_session.data_subscribed = (packed & 1) != 0;
   s_session.control_subscribed = (packed & 2) != 0;
+  PBL_LOG_INFO("Audio companion subscriptions: data=%u control=%u",
+               (unsigned)s_session.data_subscribed, (unsigned)s_session.control_subscribed);
   if (prv_session_ready_locked()) {
     s_offline_baseline_dropped = 0;
     if (s_stream_active) {
@@ -898,6 +912,7 @@ void audio_companion_handle_subscription_change(bool data_subscribed,
 
 static void prv_disconnect_system_task_cb(void *data) {
   mutex_lock(s_lock);
+  PBL_LOG_INFO("Audio companion: receiver disconnected; session reset");
   s_session.authorized = false;
   s_session.data_subscribed = false;
   s_session.control_subscribed = false;
@@ -951,6 +966,8 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   };
   *length_in_out = audio_companion_protocol_build_info(buf, *length_in_out, &info);
   mutex_unlock(s_lock);
+  PBL_LOG_INFO("Audio companion info read (state=%u flags=0x%02x)", info.service_state,
+               info.flags);
 }
 
 // ---- Mic arbitration (called from the voice service) ----
