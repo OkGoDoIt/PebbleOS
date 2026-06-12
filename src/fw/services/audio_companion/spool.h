@@ -11,7 +11,8 @@
 //! in a FIFO of dynamically allocated chunks. The spool grows toward
 //! CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES while kernel heap headroom allows,
 //! is always allowed to reach CONFIG_AUDIO_COMPANION_SPOOL_MIN_BYTES, and
-//! drops the oldest frames (recording an explicit gap) when it cannot grow.
+//! drops the oldest frames (recording an explicit gap) when it cannot grow or
+//! when heap pressure makes already-allocated optional chunks unsafe to keep.
 //!
 //! Two cursors: the *drain* cursor tracks the next frame to notify to the
 //! receiver; the *trim* point tracks frames released by receiver checkpoints.
@@ -75,6 +76,10 @@ void audio_companion_spool_record_gap(uint32_t first_missing_sequence,
                                       uint64_t first_missing_sample_index, uint8_t reason);
 bool audio_companion_spool_take_pending_gap(AudioCompanionSpoolPendingGap *gap_out);
 bool audio_companion_spool_has_pending_gap(void);
+
+//! Enforce the heap-reserve policy against already-allocated optional chunks.
+//! This may drop the oldest retained audio down to the configured floor.
+void audio_companion_spool_apply_pressure_policy(void);
 
 uint32_t audio_companion_spool_frames_pending_send(void);
 void audio_companion_spool_get_stats(AudioCompanionSpoolStats *stats_out);

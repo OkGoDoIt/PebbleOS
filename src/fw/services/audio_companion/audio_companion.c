@@ -500,6 +500,7 @@ static bool prv_send_data_batch_locked(void) {
 }
 
 static void prv_drain_locked(void) {
+  audio_companion_spool_apply_pressure_policy();
   if (!prv_session_ready_locked() || !s_stream_active) {
     return;
   }
@@ -584,6 +585,7 @@ static void prv_reevaluate_locked(void) {
   if (!s_initialized) {
     return;
   }
+  audio_companion_spool_apply_pressure_policy();
 
   if (!s_enabled) {
     prv_stop_capture_locked();
@@ -769,6 +771,7 @@ static void prv_handle_checkpoint_locked(const AudioCompanionCheckpointMsg *chec
     return;
   }
   audio_companion_spool_trim_through(checkpoint->highest_contiguous_sequence_persisted);
+  audio_companion_spool_apply_pressure_policy();
 
   const bool pause_requested =
       (checkpoint->receiver_flags & (AUDIO_COMPANION_RECEIVER_FLAG_PAUSE_REQUESTED |

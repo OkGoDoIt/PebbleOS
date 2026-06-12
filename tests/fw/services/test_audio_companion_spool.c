@@ -15,11 +15,14 @@
 // Spool geometry used below: chunks are 4096-byte allocations holding packed
 // records of (14-byte header + payload). With 50-byte payloads each record is
 // 64 bytes, so one chunk holds 63 frames. CONFIG defaults in host tests are
-// min 8192 (2 chunks), max 65536 (16 chunks), reserve 32768.
+// min 8192 (2 chunks), max 131072 (32 chunks), reserve 32768.
 
 #define TEST_PAYLOAD_LEN (50)
 #define FRAMES_PER_CHUNK (63)
-#define MAX_CHUNKS (16)
+#define SPOOL_FLOOR_BYTES (8192)
+#define SPOOL_CEILING_BYTES (131072)
+#define SPOOL_HEAP_RESERVE_BYTES (32768)
+#define MAX_CHUNKS (32)
 
 #define DATA_HEADER_SIZE (sizeof(AudioCompanionStreamDataHeader))
 
@@ -156,7 +159,7 @@ void test_audio_companion_spool__overflow_drops_oldest_and_merges_gap(void) {
 
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
-  cl_assert(stats.current_bytes <= 8192);
+  cl_assert(stats.current_bytes <= SPOOL_FLOOR_BYTES);
   cl_assert(stats.dropped_overflow_frames >= 74);
 
   AudioCompanionSpoolPendingGap gap;
@@ -179,21 +182,38 @@ void test_audio_companion_spool__overflow_drops_oldest_and_merges_gap(void) {
   cl_assert_equal_i(first_seq, 200);
 }
 
-void test_audio_companion_spool__grows_only_with_heap_headroom(void) {
+void test_audio_companion_spool__trims_optional_chunks_under_heap_pressure(void) {
   // Plenty of heap: the spool may grow past the floor toward the ceiling.
   audio_companion_spool_test_set_heap_free_bytes(UINT32_MAX);
   prv_push_range(0, FRAMES_PER_CHUNK * 4);
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
-  cl_assert(stats.current_bytes > 8192);
+  cl_assert(stats.current_bytes > SPOOL_FLOOR_BYTES);
   cl_assert_equal_i(stats.dropped_overflow_frames, 0);
 
-  // Heap pressure: growth stops, pushes recycle the oldest chunk instead.
-  audio_companion_spool_test_set_heap_free_bytes(0);
-  const uint32_t bytes_before = stats.current_bytes;
+  // Heap pressure: the next spool touch releases optional chunks back to the
+  // floor before accepting new audio.
+  audio_companion_spool_test_set_heap_free_bytes(SPOOL_HEAP_RESERVE_BYTES - 1);
   prv_push_range(FRAMES_PER_CHUNK * 4, FRAMES_PER_CHUNK * 2);
   audio_companion_spool_get_stats(&stats);
-  cl_assert_equal_i(stats.current_bytes, bytes_before);
+  cl_assert(stats.current_bytes <= SPOOL_FLOOR_BYTES);
+  cl_assert(stats.dropped_overflow_frames > 0);
+  cl_assert(audio_companion_spool_has_pending_gap());
+}
+
+void test_audio_companion_spool__pressure_policy_can_trim_without_push(void) {
+  audio_companion_spool_test_set_heap_free_bytes(UINT32_MAX);
+  prv_push_range(0, FRAMES_PER_CHUNK * 5);
+
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert(stats.current_bytes > SPOOL_FLOOR_BYTES);
+
+  audio_companion_spool_test_set_heap_free_bytes(SPOOL_HEAP_RESERVE_BYTES - 1);
+  audio_companion_spool_apply_pressure_policy();
+
+  audio_companion_spool_get_stats(&stats);
+  cl_assert(stats.current_bytes <= SPOOL_FLOOR_BYTES);
   cl_assert(stats.dropped_overflow_frames > 0);
   cl_assert(audio_companion_spool_has_pending_gap());
 }
@@ -203,8 +223,8 @@ void test_audio_companion_spool__never_exceeds_ceiling(void) {
   prv_push_range(0, FRAMES_PER_CHUNK * (MAX_CHUNKS + 4));
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
-  cl_assert(stats.current_bytes <= 65536);
-  cl_assert(stats.high_water_bytes <= 65536);
+  cl_assert(stats.current_bytes <= SPOOL_CEILING_BYTES);
+  cl_assert(stats.high_water_bytes <= SPOOL_CEILING_BYTES);
   cl_assert(stats.dropped_overflow_frames > 0);
 }
 

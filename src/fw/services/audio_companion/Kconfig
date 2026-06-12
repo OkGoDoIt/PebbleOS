@@ -21,16 +21,19 @@ config AUDIO_COMPANION_SPOOL_MIN_BYTES
 
 config AUDIO_COMPANION_SPOOL_MAX_BYTES
     int "Audio companion spool ceiling (bytes)"
-    default 65536
+    default 131072
     help
-      Hard upper bound on spool memory.
+      Hard upper bound on opportunistic spool memory. The spool may grow toward
+      this ceiling only while the kernel heap reserve below is still available;
+      on tighter devices the effective capacity is lower.
 
 config AUDIO_COMPANION_SPOOL_HEAP_RESERVE_BYTES
     int "Kernel heap headroom the spool must always leave free"
     default 32768
     help
-      The spool only grows while at least this much kernel heap stays
-      free, and sheds chunks when free heap drops below it.
+      The spool only grows while at least this much kernel heap stays free after
+      another chunk-sized allocation, and sheds optional chunks when free heap
+      drops below it.
 
 config AUDIO_COMPANION_LOW_BATTERY_PERCENT
     int "Pause streaming below this battery percent"

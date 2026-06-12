@@ -19,7 +19,7 @@
 #define CONFIG_AUDIO_COMPANION_SPOOL_MIN_BYTES 8192
 #endif
 #ifndef CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES
-#define CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES 65536
+#define CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES 131072
 #endif
 #ifndef CONFIG_AUDIO_COMPANION_SPOOL_HEAP_RESERVE_BYTES
 #define CONFIG_AUDIO_COMPANION_SPOOL_HEAP_RESERVE_BYTES 32768
@@ -164,6 +164,30 @@ static void prv_append_chunk(SpoolChunk *chunk) {
   }
 }
 
+static bool prv_release_oldest_chunk(void) {
+  SpoolChunk *released = prv_drop_oldest_chunk();
+  if (!released) {
+    return false;
+  }
+  kernel_free(released);
+  PBL_ASSERTN(s_current_bytes >= SPOOL_CHUNK_BYTES);
+  s_current_bytes -= SPOOL_CHUNK_BYTES;
+  return true;
+}
+
+static bool prv_has_optional_chunk(void) {
+  return s_current_bytes > CONFIG_AUDIO_COMPANION_SPOOL_MIN_BYTES;
+}
+
+void audio_companion_spool_apply_pressure_policy(void) {
+  while (prv_has_optional_chunk() &&
+         prv_heap_free_bytes() < CONFIG_AUDIO_COMPANION_SPOOL_HEAP_RESERVE_BYTES) {
+    if (!prv_release_oldest_chunk()) {
+      break;
+    }
+  }
+}
+
 //! Get a chunk with room for a new record: grow if policy allows, otherwise
 //! recycle the oldest chunk (recording an overflow gap).
 static SpoolChunk *prv_get_writable_tail(size_t needed_bytes) {
@@ -229,6 +253,7 @@ bool audio_companion_spool_push(uint32_t sequence, uint64_t sample_index,
                                 const uint8_t *payload, uint16_t length) {
   PBL_ASSERTN(payload != NULL);
   PBL_ASSERTN(length > 0 && length <= AUDIO_COMPANION_MAX_ENCODED_FRAME_BYTES);
+  audio_companion_spool_apply_pressure_policy();
 
   const size_t needed = sizeof(SpoolRecordHeader) + length;
   SpoolChunk *chunk = prv_get_writable_tail(needed);
