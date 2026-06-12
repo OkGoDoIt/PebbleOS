@@ -25,6 +25,7 @@ void audio_companion_test_reset(void);
 
 #define MAX_CAPTURED_NOTIFICATIONS (32)
 #define MAX_CAPTURED_NOTIFICATION_BYTES (512)
+#define TEST_MAX_PERIOD_RUN_FOREVER ((uint16_t)(~0))
 
 typedef struct {
   size_t length;
@@ -38,6 +39,8 @@ static uint32_t s_data_count;
 static uint16_t s_effective_mtu;
 static bool s_notify_data_succeeds;
 static bool s_notify_control_succeeds;
+static ResponseTimeState s_response_time_state;
+static uint16_t s_response_time_period_secs;
 
 static bool s_pref_enabled;
 static BatteryChargeState s_battery_state;
@@ -94,6 +97,8 @@ uint16_t bt_driver_audio_companion_get_effective_mtu(void) {
 
 void bt_driver_audio_companion_set_response_time(ResponseTimeState state,
                                                  uint16_t max_period_secs) {
+  s_response_time_state = state;
+  s_response_time_period_secs = max_period_secs;
 }
 
 void bt_driver_audio_companion_service_init(void) {
@@ -333,6 +338,8 @@ void test_audio_companion__initialize(void) {
   s_effective_mtu = 256;
   s_notify_data_succeeds = true;
   s_notify_control_succeeds = true;
+  s_response_time_state = ResponseTimeMax;
+  s_response_time_period_secs = 0;
   s_pref_enabled = false;
   s_battery_state = (BatteryChargeState){ .charge_percent = 80 };
   s_uptime_seconds = 100;
@@ -418,6 +425,39 @@ void test_audio_companion__checkpoint_trims_durable_frames(void) {
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
   cl_assert_equal_i(stats.frames_queued, 0);
+}
+
+void test_audio_companion__reconnect_uses_short_catch_up_burst(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_period_secs, TEST_MAX_PERIOD_RUN_FOREVER);
+
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateIdle);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+
+  prv_feed_frames(4);
+  s_data_count = 0;
+
+  prv_subscribe(false, true);
+  prv_authenticate();
+  prv_subscribe(true, true);
+
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMin);
+  cl_assert_equal_i(s_response_time_period_secs, MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS);
+
+  stub_new_timer_invoke(1);
+  fake_system_task_callbacks_invoke_pending();
+
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStart));
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData));
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_period_secs, TEST_MAX_PERIOD_RUN_FOREVER);
 }
 
 void test_audio_companion__pause_resume_records_explicit_gap(void) {

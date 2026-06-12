@@ -78,6 +78,8 @@ static uint32_t s_stream_id;
 static uint32_t s_next_sequence;
 static uint64_t s_next_sample_index;
 static TimerID s_drain_timer = TIMER_INVALID_ID;
+static TimerID s_catch_up_timer = TIMER_INVALID_ID;
+static bool s_catch_up_burst;
 static bool s_capture_parked;          //!< capture stopped after offline overflow
 static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause began
 static uint8_t s_pending_resume_gap_reason;
@@ -132,17 +134,59 @@ static void prv_send_state_changed_locked(void) {
   prv_notify_control_locked(buf, len);
 }
 
+static void prv_cancel_catch_up_burst_locked(void) {
+  if (s_catch_up_burst) {
+    s_catch_up_burst = false;
+    if (s_catch_up_timer != TIMER_INVALID_ID) {
+      new_timer_stop(s_catch_up_timer);
+    }
+  }
+}
+
 static void prv_update_ble_responsiveness_locked(void) {
-  if (s_state == AudioCompanionServiceStateStreaming) {
+  if (s_state == AudioCompanionServiceStateStreaming && s_catch_up_burst) {
+    bt_driver_audio_companion_set_response_time(ResponseTimeMin,
+                                                MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS);
+  } else if (s_state == AudioCompanionServiceStateStreaming) {
     bt_driver_audio_companion_set_response_time(ResponseTimeMiddle, MAX_PERIOD_RUN_FOREVER);
   } else {
     bt_driver_audio_companion_set_response_time(ResponseTimeMax, 0);
   }
 }
 
+static void prv_end_catch_up_burst_system_task_cb(void *data) {
+  mutex_lock(s_lock);
+  s_catch_up_burst = false;
+  if (s_catch_up_timer != TIMER_INVALID_ID) {
+    new_timer_stop(s_catch_up_timer);
+  }
+  prv_update_ble_responsiveness_locked();
+  mutex_unlock(s_lock);
+}
+
+static void prv_catch_up_timer_cb(void *data) {
+  system_task_add_callback(prv_end_catch_up_burst_system_task_cb, NULL);
+}
+
+static void prv_begin_catch_up_burst_locked(void) {
+  if (s_catch_up_burst) {
+    return;
+  }
+  s_catch_up_burst = true;
+  prv_update_ble_responsiveness_locked();
+  if (s_catch_up_timer == TIMER_INVALID_ID) {
+    s_catch_up_timer = new_timer_create();
+  }
+  new_timer_start(s_catch_up_timer, MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS * 1000,
+                  prv_catch_up_timer_cb, NULL, 0);
+}
+
 static void prv_set_state_locked(AudioCompanionServiceState state) {
   if (s_state == state) {
     return;
+  }
+  if (state != AudioCompanionServiceStateStreaming) {
+    prv_cancel_catch_up_burst_locked();
   }
   PBL_LOG_DBG("Audio companion state %u -> %u", (unsigned)s_state, (unsigned)state);
   s_state = state;
@@ -468,6 +512,13 @@ static void prv_drain_locked(void) {
     if (!prv_send_data_batch_locked()) {
       break;
     }
+  }
+  if (s_catch_up_burst && audio_companion_spool_frames_pending_send() == 0) {
+    s_catch_up_burst = false;
+    if (s_catch_up_timer != TIMER_INVALID_ID) {
+      new_timer_stop(s_catch_up_timer);
+    }
+    prv_update_ble_responsiveness_locked();
   }
 }
 
@@ -829,6 +880,7 @@ static void prv_subscription_system_task_cb(void *data) {
       // Reconnect mid-stream: re-announce and resend unacknowledged frames.
       s_need_stream_start = true;
       audio_companion_spool_rewind_unsent();
+      prv_begin_catch_up_burst_locked();
     }
   }
   prv_reevaluate_locked();
@@ -1057,6 +1109,8 @@ void audio_companion_test_reset(void) {
   s_next_sequence = 0;
   s_next_sample_index = 0;
   s_drain_timer = TIMER_INVALID_ID;
+  s_catch_up_timer = TIMER_INVALID_ID;
+  s_catch_up_burst = false;
   s_capture_parked = false;
   s_pause_started_ms = 0;
   s_pending_resume_gap_reason = 0;
