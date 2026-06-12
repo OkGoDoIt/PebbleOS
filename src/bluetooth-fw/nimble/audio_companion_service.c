@@ -81,6 +81,11 @@ static int prv_access_control(uint16_t conn_handle, uint16_t attr_handle,
   return 0;
 }
 
+static int prv_access_notify_only(uint16_t conn_handle, uint16_t attr_handle,
+                                  struct ble_gatt_access_ctxt *ctxt, void *arg) {
+  return BLE_ATT_ERR_UNLIKELY;
+}
+
 static const struct ble_gatt_svc_def s_audio_companion_svcs[] = {
   {
     .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -100,6 +105,7 @@ static const struct ble_gatt_svc_def s_audio_companion_svcs[] = {
       {
         .uuid = &s_audio_companion_data_uuid.u,
         .val_handle = &s_data_attr_handle,
+        .access_cb = prv_access_notify_only,
         .flags = BLE_GATT_CHR_F_NOTIFY,
       },
       { 0 },
@@ -131,9 +137,15 @@ static bool prv_notify(uint16_t attr_handle, bool subscribed, const uint8_t *dat
 
 void bt_driver_audio_companion_service_init(void) {
   int rc = ble_gatts_count_cfg(s_audio_companion_svcs);
-  PBL_ASSERTN(rc == 0);
+  if (rc != 0) {
+    PBL_LOG_ERR("Audio companion GATT count failed: 0x%04x", (uint16_t)rc);
+    return;
+  }
+
   rc = ble_gatts_add_svcs(s_audio_companion_svcs);
-  PBL_ASSERTN(rc == 0);
+  if (rc != 0) {
+    PBL_LOG_ERR("Audio companion GATT add failed: 0x%04x", (uint16_t)rc);
+  }
 }
 
 bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length) {
