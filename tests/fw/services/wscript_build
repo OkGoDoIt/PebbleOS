@@ -286,6 +286,41 @@ clar(ctx,
     test_sources_ant_glob = "test_audio_companion.c",
     override_includes = ['dummy_board'])
 
+# Real-Speex golden bitstream test: compiles the vendored fixed-point encoder/decoder for the
+# host with the same defines as third_party/speex/wscript_build so the bitstream matches the
+# watch byte-for-byte.
+speex_test_sources = " ".join(
+    "third_party/speex/speex/libspeex/" + f for f in [
+        "bits.c", "cb_search.c", "exc_10_16_table.c", "exc_10_32_table.c",
+        "exc_20_32_table.c", "exc_5_256_table.c", "exc_5_64_table.c", "exc_8_128_table.c",
+        "filters.c", "gain_table.c", "gain_table_lbr.c", "hexc_10_32_table.c",
+        "hexc_table.c", "high_lsp_tables.c", "kiss_fft.c", "kiss_fftr.c", "lpc.c", "lsp.c",
+        "lsp_tables_nb.c", "ltp.c", "modes.c", "modes_wb.c", "nb_celp.c", "quant_lsp.c",
+        "sb_celp.c", "smallft.c", "speex.c", "speex_callbacks.c", "speex_header.c",
+        "stereo.c", "vbr.c", "vorbis_psy.c", "vq.c", "window.c",
+    ])
+
+clar(ctx,
+    sources_ant_glob = speex_test_sources,
+    test_sources_ant_glob = "test_audio_companion_speex.c",
+    defines = [
+        "HAVE_CONFIG_H",
+        "OS_SUPPORT_CUSTOM",
+        "FIXED_POINT",
+        "DISABLE_FLOAT_API",
+        "DISABLE_VBR",
+        "DISABLE_WARNINGS",
+        "DISABLE_NOTIFICATIONS",
+        "NB_ENC_STACK=(2000*sizeof(spx_sig_t))",
+        "NB_DEC_STACK=(1500*sizeof(spx_sig_t))",
+    ],
+    add_includes = [
+        "third_party/speex",
+        "third_party/speex/speex/include",
+        "third_party/speex/speex/libspeex",
+    ],
+    override_includes = ['dummy_board'])
+
 clar(ctx,
     sources_ant_glob = " ".join([
         " src/fw/services/voice/transcription.c"]),
