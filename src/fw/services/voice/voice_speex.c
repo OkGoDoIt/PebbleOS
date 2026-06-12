@@ -117,11 +117,27 @@ bool voice_speex_init(void) {
 
   // Allocate frame buffer (16-bit samples, multiplied by channel count for stereo)
   s_encoder.frame_buffer_size = s_encoder.frame_size * sizeof(int16_t) * s_encoder.channels;
-  s_encoder.frame_buffer = (uint8_t *)kernel_malloc_check(s_encoder.frame_buffer_size);
+  s_encoder.frame_buffer = kernel_malloc(s_encoder.frame_buffer_size);
 
   // Allocate encoded buffer
   s_encoder.encoded_buffer_size = SPEEX_ENCODED_BUFFER_SIZE;
-  s_encoder.encoded_buffer = kernel_malloc_check(s_encoder.encoded_buffer_size);
+  s_encoder.encoded_buffer = kernel_malloc(s_encoder.encoded_buffer_size);
+
+  if (!s_encoder.frame_buffer || !s_encoder.encoded_buffer) {
+    VOICE_SPEEX_LOG("ERROR: Failed to allocate Speex buffers (%u + %u bytes)",
+                    (unsigned)s_encoder.frame_buffer_size,
+                    (unsigned)s_encoder.encoded_buffer_size);
+    if (s_encoder.frame_buffer) {
+      kernel_free(s_encoder.frame_buffer);
+    }
+    if (s_encoder.encoded_buffer) {
+      kernel_free(s_encoder.encoded_buffer);
+    }
+    speex_bits_destroy(&s_encoder.bits);
+    speex_encoder_destroy(s_encoder.enc_state);
+    memset(&s_encoder, 0, sizeof(s_encoder));
+    return false;
+  }
 
   s_encoder.initialized = true;
 

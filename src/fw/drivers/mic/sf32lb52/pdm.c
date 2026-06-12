@@ -348,7 +348,15 @@ bool mic_start(const MicDevice *this, MicDataHandlerCB data_handler, void *conte
   // destroying dirty bytes in lines shared with neighboring allocations.
   const size_t cache_align = dcache_line_size();
   state->raw_dma_buffer = kernel_malloc(hpdm->RxXferSize + cache_align - 1U);
-  PBL_ASSERT(state->raw_dma_buffer, "Can not allocate buffer");
+  if (!state->raw_dma_buffer) {
+    unsigned int used, free_bytes, max_free;
+    heap_calc_totals(kernel_heap_get(), &used, &free_bytes, &max_free);
+    PBL_LOG_ERR("Failed to allocate PDM DMA buffer (%u B, max_free %u B)",
+                (unsigned)(hpdm->RxXferSize + cache_align - 1U), max_free);
+    prv_free_buffers(state);
+    mutex_unlock_recursive(state->mutex);
+    return false;
+  }
   hpdm->pRxBuffPtr = (uint8_t *)(((uintptr_t)state->raw_dma_buffer + cache_align - 1U) &
                                  ~(uintptr_t)(cache_align - 1U));
 
