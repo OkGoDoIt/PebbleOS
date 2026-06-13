@@ -87,6 +87,12 @@ typedef enum {
 } AudioCompanionStopReason;
 
 typedef enum {
+  AudioCompanionPauseReasonLowStorage = 0x01,
+  AudioCompanionPauseReasonUser = 0x02,
+  AudioCompanionPauseReasonPolicy = 0x03,
+} AudioCompanionPauseReason;
+
+typedef enum {
   AudioCompanionAuthStatusOk = 0,
   AudioCompanionAuthStatusPendingUserConsent = 1,
   AudioCompanionAuthStatusDeniedMismatch = 2,

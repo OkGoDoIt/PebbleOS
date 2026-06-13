@@ -258,11 +258,11 @@ static void prv_build_checkpoint(uint8_t *buf, size_t *length_out, uint8_t token
   *length_out = sizeof(checkpoint);
 }
 
-static void prv_build_pause(uint8_t *buf, size_t *length_out, uint8_t token) {
+static void prv_build_pause(uint8_t *buf, size_t *length_out, uint8_t token, uint8_t reason) {
   const AudioCompanionPauseRequestMsg pause = {
     .msg_id = AudioCompanionCtrlMsgIdPauseRequest,
     .request_token = token,
-    .reason = 3,
+    .reason = reason,
   };
   memcpy(buf, &pause, sizeof(pause));
   *length_out = sizeof(pause);
@@ -469,7 +469,7 @@ void test_audio_companion__pause_resume_records_explicit_gap(void) {
 
   uint8_t buf[sizeof(AudioCompanionPauseRequestMsg)];
   size_t length = 0;
-  prv_build_pause(buf, &length, 0x30);
+  prv_build_pause(buf, &length, 0x30, AudioCompanionPauseReasonPolicy);
   prv_send_control(buf, length);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPolicy);
   cl_assert(!s_mic_running);
@@ -503,4 +503,81 @@ void test_audio_companion__forget_receiver_stops_and_revokes(void) {
   cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStop));
   const CapturedNotification *revoked = prv_last_control_msg(AudioCompanionCtrlMsgIdRevoked);
   cl_assert(revoked);
+}
+
+void test_audio_companion__user_pause_ends_stream_and_restart_is_fresh(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStart));
+  const uint32_t first_stream_id = prv_current_stream_id();
+
+  // An explicit user stop ends the stream and pauses capture.
+  uint8_t buf[sizeof(AudioCompanionPauseRequestMsg)];
+  size_t length = 0;
+  prv_build_pause(buf, &length, 0x40, AudioCompanionPauseReasonUser);
+  prv_send_control(buf, length);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPolicy);
+  cl_assert(!s_mic_running);
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStop));
+
+  // Resume starts a brand new stream, not a replay of the pre-stop one.
+  s_data_count = 0;
+  prv_build_resume(buf, &length, 0x41);
+  prv_send_control(buf, length);
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+  const uint32_t second_stream_id = prv_current_stream_id();
+  cl_assert(second_stream_id != first_stream_id);
+}
+
+void test_audio_companion__disconnect_clears_policy_pause(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // A policy pause keeps the stream but stops capture.
+  uint8_t buf[sizeof(AudioCompanionPauseRequestMsg)];
+  size_t length = 0;
+  prv_build_pause(buf, &length, 0x50, AudioCompanionPauseReasonPolicy);
+  prv_send_control(buf, length);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPolicy);
+
+  // The receiver drops the link. The pause must not strand the watch: it falls back to Idle.
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateIdle);
+
+  // Reconnecting resumes streaming instead of staying stuck in PausedPolicy.
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
+void test_audio_companion__liveness_watchdog_stops_silent_stream(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);  // first drain sends STREAM_START + data
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+  const uint32_t stream_id = prv_current_stream_id();
+
+  // No control traffic for longer than the liveness timeout (15 s). The receiver is presumed
+  // gone even though the watch never saw a BLE disconnect (shared-link / crashed app).
+  s_uptime_seconds += 16;
+  prv_feed_frames(8);  // a drain cycle runs the liveness check and trips it
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
+  cl_assert(!s_mic_running);
+
+  // A control message proves the receiver is back; streaming resumes.
+  uint8_t buf[sizeof(AudioCompanionCheckpointMsg)];
+  size_t length = 0;
+  prv_build_checkpoint(buf, &length, 0x60, stream_id, 0);
+  prv_send_control(buf, length);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
 }

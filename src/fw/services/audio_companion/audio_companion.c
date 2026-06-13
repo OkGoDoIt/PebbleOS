@@ -39,6 +39,11 @@
 
 #define DRAIN_PERIOD_MS (150)
 #define DRAIN_PUSH_THRESHOLD_FRAMES (8)
+//! Stop capturing if a streaming session goes this long with no control message from the
+//! receiver. The phone checkpoints every ~0.5-2 s while receiving, so a long silence means the
+//! app is gone even when the watch never saw a BLE disconnect (e.g. the receiver shares the link
+//! with the official app and only dropped its own GATT connection).
+#define RECEIVER_LIVENESS_TIMEOUT_MS (15 * 1000)
 #define CONSENT_TIMEOUT_MS (AUDIO_COMPANION_CONSENT_TIMEOUT_SECONDS * 1000)
 #define LOW_BATTERY_RESUME_HYSTERESIS_PCT (5)
 //! Alert when this many frames have been lost since the last alert (30 s of audio).
@@ -83,6 +88,8 @@ static bool s_catch_up_burst;
 static bool s_capture_parked;          //!< capture stopped after offline overflow
 static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause began
 static uint8_t s_pending_resume_gap_reason;
+static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control message received
+static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 
 // Policy inputs
 static bool s_mic_conflict_active;
@@ -117,7 +124,14 @@ static uint64_t prv_wall_clock_ms(void) {
 }
 
 static bool prv_session_ready_locked(void) {
-  return s_session.authorized && s_session.data_subscribed;
+  return s_session.authorized && s_session.data_subscribed && !s_receiver_presumed_gone;
+}
+
+//! Mark the receiver as alive: called whenever a control message or a fresh subscription
+//! arrives. Clears a tripped liveness watchdog.
+static void prv_note_receiver_activity_locked(void) {
+  s_last_receiver_activity_ms = prv_uptime_ms();
+  s_receiver_presumed_gone = false;
 }
 
 static void prv_notify_control_locked(const uint8_t *data, size_t length) {
@@ -499,7 +513,26 @@ static bool prv_send_data_batch_locked(void) {
   return true;
 }
 
+//! Stop capturing when a streaming session has heard nothing from the receiver for too long.
+//! Runs off the drain timer (active only while streaming). Catches the case where the receiver
+//! vanished without the watch seeing a BLE disconnect, so the mic would otherwise run forever.
+static void prv_check_receiver_liveness_locked(void) {
+  if (s_state != AudioCompanionServiceStateStreaming || s_receiver_presumed_gone) {
+    return;
+  }
+  if ((prv_uptime_ms() - s_last_receiver_activity_ms) < RECEIVER_LIVENESS_TIMEOUT_MS) {
+    return;
+  }
+  PBL_LOG_WRN("Audio companion: no receiver activity for %ums; presuming receiver gone",
+              (unsigned)RECEIVER_LIVENESS_TIMEOUT_MS);
+  s_receiver_presumed_gone = true;
+  prv_stop_capture_locked();
+  prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
+  prv_reevaluate_locked();  // session no longer ready -> AuthorizedIdle, drain timer stops
+}
+
 static void prv_drain_locked(void) {
+  prv_check_receiver_liveness_locked();
   audio_companion_spool_apply_pressure_policy();
   if (!prv_session_ready_locked() || !s_stream_active) {
     return;
@@ -563,9 +596,11 @@ static void prv_begin_stream_locked(void) {
   s_next_sample_index = 0;
   s_offline_baseline_dropped = 0;
   s_alert_baseline_dropped = 0;
+  s_pending_resume_gap_reason = 0;  // a fresh stream carries no pending gap
   audio_companion_spool_reset();
   s_stream_active = true;
   s_need_stream_start = true;
+  prv_note_receiver_activity_locked();  // arm the liveness watchdog from stream start
 }
 
 static void prv_end_stream_locked(uint8_t stop_reason) {
@@ -810,10 +845,14 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         break;
       }
       prv_send_ack_locked(msg->pause_request.request_token, AudioCompanionAckStatusOk);
-      if (!s_receiver_pause_requested) {
-        s_receiver_pause_requested = true;
-        prv_reevaluate_locked();
+      if (msg->pause_request.reason == AudioCompanionPauseReasonUser) {
+        // Explicit user stop: end the stream so the next resume opens a fresh segment instead
+        // of replaying the pre-stop spool. Policy/low-storage pauses keep the stream so a
+        // transient pause resumes the same recording.
+        prv_end_stream_locked(AudioCompanionStopReasonUserDisabled);
       }
+      s_receiver_pause_requested = true;
+      prv_reevaluate_locked();
       break;
     case AudioCompanionCtrlMsgIdResumeRequest:
       if (!s_session.authorized) {
@@ -856,9 +895,16 @@ static void prv_control_write_system_task_cb(void *data) {
 
   mutex_lock(s_lock);
   switch (result) {
-    case AudioCompanionParseResultOk:
+    case AudioCompanionParseResultOk: {
+      const bool was_presumed_gone = s_receiver_presumed_gone;
+      prv_note_receiver_activity_locked();
       prv_handle_control_msg_locked(&msg);
+      if (was_presumed_gone) {
+        // Receiver came back after the liveness watchdog tripped; resume streaming.
+        prv_reevaluate_locked();
+      }
       break;
+    }
     case AudioCompanionParseResultMalformed:
       PBL_LOG_WRN("Audio companion: malformed control write (%u bytes)",
                   (unsigned)work->length);
@@ -891,6 +937,9 @@ static void prv_subscription_system_task_cb(void *data) {
   s_session.control_subscribed = (packed & 2) != 0;
   PBL_LOG_INFO("Audio companion subscriptions: data=%u control=%u",
                (unsigned)s_session.data_subscribed, (unsigned)s_session.control_subscribed);
+  if (s_session.data_subscribed || s_session.control_subscribed) {
+    prv_note_receiver_activity_locked();  // a (re)subscribe is proof the receiver is present
+  }
   if (prv_session_ready_locked()) {
     s_offline_baseline_dropped = 0;
     if (s_stream_active) {
@@ -920,6 +969,11 @@ static void prv_disconnect_system_task_cb(void *data) {
   s_session.data_subscribed = false;
   s_session.control_subscribed = false;
   memset(s_session.receiver_id, 0, sizeof(s_session.receiver_id));
+  // The policy pause is the receiver's session-scoped request; clear it so the watch is never
+  // stranded in PausedPolicy once the receiver is gone. The phone re-asserts pause on reconnect
+  // if it still wants one (declarative reconcile on the app side).
+  s_receiver_pause_requested = false;
+  s_receiver_presumed_gone = false;
   if (s_consent.pending) {
     s_consent.pending = false;
     if (s_consent_timer != TIMER_INVALID_ID) {
@@ -1134,6 +1188,8 @@ void audio_companion_test_reset(void) {
   s_capture_parked = false;
   s_pause_started_ms = 0;
   s_pending_resume_gap_reason = 0;
+  s_last_receiver_activity_ms = 0;
+  s_receiver_presumed_gone = false;
   s_mic_conflict_active = false;
   s_receiver_pause_requested = false;
   s_low_battery = false;
