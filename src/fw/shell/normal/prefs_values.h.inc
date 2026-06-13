@@ -59,6 +59,10 @@
   PREFS_MACRO(PREF_KEY_VIBE_LOG_INFO, s_vibe_log_info_enabled)
   PREFS_MACRO(PREF_KEY_SETTINGS_DBS_COMPACTED_V1, s_settings_dbs_compacted_v1)
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_ENABLED, s_audio_companion_enabled)
+  PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_PAUSE_STATIONARY,
+              s_audio_companion_pause_stationary_enabled)
+  PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_PAUSE_LOW_POWER,
+              s_audio_companion_pause_low_power_enabled)
 #ifdef CONFIG_APP_SCALING
   PREFS_MACRO(PREF_KEY_LEGACY_APP_RENDER_MODE, s_legacy_app_render_mode)
 #endif

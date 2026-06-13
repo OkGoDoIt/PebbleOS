@@ -61,6 +61,7 @@ typedef enum {
   AudioCompanionServiceStatePausedPolicy = 5,
   AudioCompanionServiceStatePausedLowBattery = 6,
   AudioCompanionServiceStateError = 7,
+  AudioCompanionServiceStatePausedPowerSave = 8,
 } AudioCompanionServiceState;
 
 typedef enum {
@@ -77,6 +78,7 @@ typedef enum {
   AudioCompanionGapReasonLowBattery = 0x04,
   AudioCompanionGapReasonCodecError = 0x05,
   AudioCompanionGapReasonTransportReset = 0x06,
+  AudioCompanionGapReasonPowerSave = 0x07,
 } AudioCompanionGapReason;
 
 typedef enum {

@@ -178,6 +178,11 @@ static const uint8_t s_fx_revoked_user[] = {
   0x42, 0x01,
 };
 
+// Service paused while the watch is saving power
+static const uint8_t s_fx_state_changed_power_save[] = {
+  0x44, 0x08,
+};
+
 // Service entered streaming state
 static const uint8_t s_fx_state_changed_streaming[] = {
   0x44, 0x03,
@@ -323,6 +328,13 @@ static const uint8_t s_fx_stream_gap_mic_conflict[] = {
   0x00, 0x00,
 };
 
+// Gap with reason power_save
+static const uint8_t s_fx_stream_gap_power_save[] = {
+  0x82, 0x01, 0x00, 0xed, 0x5e, 0x8f, 0x13, 0x00, 0x00, 0xfa, 0x00, 0x00,
+  0x00, 0xc0, 0x72, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xfa, 0x00,
+  0x00, 0x00,
+};
+
 // Gap with reason spool_overflow
 static const uint8_t s_fx_stream_gap_spool_overflow[] = {
   0x82, 0x01, 0x00, 0xed, 0x5e, 0x89, 0x13, 0x00, 0x00, 0xfa, 0x00, 0x00,
@@ -397,6 +409,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "receiver_health", FixtureChannelControlIn, FixtureExpectParse, s_fx_receiver_health, 8 },
   { "resume_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_resume_request, 2 },
   { "revoked_user", FixtureChannelControlOut, FixtureExpectParse, s_fx_revoked_user, 2 },
+  { "state_changed_power_save", FixtureChannelControlOut, FixtureExpectParse, s_fx_state_changed_power_save, 2 },
   { "state_changed_streaming", FixtureChannelControlOut, FixtureExpectParse, s_fx_state_changed_streaming, 2 },
   { "stream_data_1frame", FixtureChannelData, FixtureExpectParse, s_fx_stream_data_1frame, 47 },
   { "stream_data_32frames", FixtureChannelData, FixtureExpectParse, s_fx_stream_data_32frames, 212 },
@@ -409,6 +422,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "stream_gap_codec_error", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_codec_error, 26 },
   { "stream_gap_low_battery", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_low_battery, 26 },
   { "stream_gap_mic_conflict", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_mic_conflict, 26 },
+  { "stream_gap_power_save", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_power_save, 26 },
   { "stream_gap_spool_overflow", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_spool_overflow, 26 },
   { "stream_gap_transport_reset", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_transport_reset, 26 },
   { "stream_gap_unknown_count", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_unknown_count, 26 },

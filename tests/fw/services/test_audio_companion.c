@@ -47,6 +47,8 @@ static BatteryChargeState s_battery_state;
 static uint32_t s_uptime_seconds;
 static time_t s_rtc_time;
 static uint16_t s_rtc_ms;
+static bool s_pref_pause_stationary;
+static bool s_pref_pause_low_power;
 
 static AudioCompanionAuthEval s_auth_eval;
 static bool s_auth_receiver_exists;
@@ -137,6 +139,22 @@ bool shell_prefs_get_audio_companion_enabled(void) {
 
 void shell_prefs_set_audio_companion_enabled(bool enabled) {
   s_pref_enabled = enabled;
+}
+
+bool shell_prefs_get_audio_companion_pause_stationary_enabled(void) {
+  return s_pref_pause_stationary;
+}
+
+void shell_prefs_set_audio_companion_pause_stationary_enabled(bool enabled) {
+  s_pref_pause_stationary = enabled;
+}
+
+bool shell_prefs_get_audio_companion_pause_low_power_enabled(void) {
+  return s_pref_pause_low_power;
+}
+
+void shell_prefs_set_audio_companion_pause_low_power_enabled(bool enabled) {
+  s_pref_pause_low_power = enabled;
 }
 
 void audio_companion_auth_init(void) {
@@ -345,6 +363,8 @@ void test_audio_companion__initialize(void) {
   s_uptime_seconds = 100;
   s_rtc_time = 1000;
   s_rtc_ms = 123;
+  s_pref_pause_stationary = true;
+  s_pref_pause_low_power = true;
   s_auth_eval = AudioCompanionAuthEvalMatch;
   s_auth_receiver_exists = true;
   s_auth_store_succeeds = true;
@@ -582,4 +602,57 @@ void test_audio_companion__liveness_watchdog_stops_silent_stream(void) {
   prv_send_control(buf, length);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
+}
+
+void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(1);
+  s_data_count = 0;
+
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(stub_new_timer_get_next(), TIMER_INVALID_ID);
+
+  s_uptime_seconds += 3;
+  audio_companion_set_runlevel(RunLevel_Normal);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+
+  prv_feed_frames(8);
+  const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
+  cl_assert(gap);
+  AudioCompanionStreamGapMsg gap_msg;
+  memcpy(&gap_msg, gap->data, sizeof(gap_msg));
+  cl_assert_equal_i(gap_msg.reason, AudioCompanionGapReasonPowerSave);
+  cl_assert(gap_msg.missing_frame_count >= 1);
+}
+
+void test_audio_companion__stationary_pause_can_be_disabled(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_pause_stationary_enabled(false);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+}
+
+void test_audio_companion__low_power_pause_can_be_disabled_separately(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_pause_stationary_enabled(true);
+  audio_companion_set_pause_low_power_enabled(false);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  audio_companion_set_runlevel(RunLevel_LowPower);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
 }

@@ -183,4 +183,7 @@ void services_normal_set_runlevel(RunLevel runlevel) {
     struct ServiceRunLevelSetting *service = &s_runlevel_settings[i];
     service->set_enable_fn(((1 << runlevel) & service->enable_mask) != 0);
   }
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  audio_companion_set_runlevel(runlevel);
+#endif
 }

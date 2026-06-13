@@ -3,6 +3,7 @@
 #pragma once
 
 #include "pbl/services/audio_companion_private.h"
+#include "pbl/services/runlevel.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -34,6 +35,14 @@ bool audio_companion_is_enabled(void);
 void audio_companion_set_enabled(bool enabled);
 //! Applies an already-persisted pref value (called from prefs restore).
 void audio_companion_apply_enabled(bool enabled);
+//! Runtime power policy gate from the runlevel system. This does not change
+//! the user's persisted Background Audio preference.
+void audio_companion_set_runlevel(RunLevel runlevel);
+
+bool audio_companion_get_pause_stationary_enabled(void);
+void audio_companion_set_pause_stationary_enabled(bool enabled);
+bool audio_companion_get_pause_low_power_enabled(void);
+void audio_companion_set_pause_low_power_enabled(bool enabled);
 
 AudioCompanionServiceState audio_companion_get_state(void);
 void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out);

@@ -247,12 +247,13 @@ Service states (Info `service_state`, `STATE_CHANGED`):
 | 5 | paused-policy (receiver requested pause / low storage) |
 | 6 | paused-low-battery |
 | 7 | error |
+| 8 | paused-power-save (watch stationary / low-power policy) |
 
 Codec ids: `0x01` Speex wideband, `0x02` PCM16 debug, `0x03` Opus (reserved), `0x04` LC3
 (reserved).
 
 Gap reasons: `0x01` spool overflow, `0x02` mic conflict, `0x03` user disabled,
-`0x04` low battery, `0x05` codec error, `0x06` transport reset.
+`0x04` low battery, `0x05` codec error, `0x06` transport reset, `0x07` power save.
 
 Stop reasons: `0x01` user disabled, `0x02` policy, `0x03` error, `0x04` shutdown.
 

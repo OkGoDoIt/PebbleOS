@@ -21,6 +21,8 @@
 
 typedef enum {
   AudioCompanionSettingsToggle,
+  AudioCompanionSettingsPauseStationary,
+  AudioCompanionSettingsPauseLowPower,
   AudioCompanionSettingsReceiver,
   AudioCompanionSettingsDiagnostics,
   AudioCompanionSettingsCount,
@@ -46,6 +48,8 @@ static const char *prv_state_name(AudioCompanionServiceState state) {
       return i18n_noop("Paused");
     case AudioCompanionServiceStatePausedLowBattery:
       return i18n_noop("Low Battery");
+    case AudioCompanionServiceStatePausedPowerSave:
+      return i18n_noop("Power Save");
     case AudioCompanionServiceStateError:
       return i18n_noop("Error");
     default:
@@ -128,6 +132,16 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       title = i18n_noop("Background Audio");
       subtitle = audio_companion_is_enabled() ? i18n_noop("On") : i18n_noop("Off");
       break;
+    case AudioCompanionSettingsPauseStationary:
+      title = i18n_noop("Pause Stationary");
+      subtitle = audio_companion_get_pause_stationary_enabled() ? i18n_noop("On")
+                                                                : i18n_noop("Off");
+      break;
+    case AudioCompanionSettingsPauseLowPower:
+      title = i18n_noop("Pause Low Power");
+      subtitle = audio_companion_get_pause_low_power_enabled() ? i18n_noop("On")
+                                                              : i18n_noop("Off");
+      break;
     case AudioCompanionSettingsReceiver:
       title = i18n_noop("Receiver");
       subtitle = audio_companion_get_receiver_name(receiver_name, sizeof(receiver_name)) ?
@@ -150,6 +164,18 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
   switch ((AudioCompanionSettingsItem)row) {
     case AudioCompanionSettingsToggle:
       audio_companion_set_enabled(!audio_companion_is_enabled());
+      settings_menu_reload_data(SettingsMenuItemAudioCompanion);
+      settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
+      break;
+    case AudioCompanionSettingsPauseStationary:
+      audio_companion_set_pause_stationary_enabled(
+          !audio_companion_get_pause_stationary_enabled());
+      settings_menu_reload_data(SettingsMenuItemAudioCompanion);
+      settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
+      break;
+    case AudioCompanionSettingsPauseLowPower:
+      audio_companion_set_pause_low_power_enabled(
+          !audio_companion_get_pause_low_power_enabled());
       settings_menu_reload_data(SettingsMenuItemAudioCompanion);
       settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
       break;

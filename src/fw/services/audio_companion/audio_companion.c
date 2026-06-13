@@ -16,6 +16,7 @@
 #include "os/mutex.h"
 #include "pbl/services/battery/battery_state.h"
 #include "pbl/services/new_timer/new_timer.h"
+#include "pbl/services/runlevel.h"
 #include "pbl/services/system_task.h"
 #include "pbl/services/voice/voice_speex.h"
 #include "shell/prefs.h"
@@ -95,6 +96,9 @@ static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat ses
 static bool s_mic_conflict_active;
 static bool s_receiver_pause_requested;
 static bool s_low_battery;
+static bool s_pause_stationary_enabled;
+static bool s_pause_low_power_enabled;
+static RunLevel s_runlevel = RunLevel_Normal;
 static bool s_error;
 
 // Diagnostics
@@ -125,6 +129,11 @@ static uint64_t prv_wall_clock_ms(void) {
 
 static bool prv_session_ready_locked(void) {
   return s_session.authorized && s_session.data_subscribed && !s_receiver_presumed_gone;
+}
+
+static bool prv_power_save_active_locked(void) {
+  return ((s_runlevel == RunLevel_Stationary && s_pause_stationary_enabled) ||
+          (s_runlevel == RunLevel_LowPower && s_pause_low_power_enabled));
 }
 
 //! Mark the receiver as alive: called whenever a control message or a fresh subscription
@@ -664,6 +673,16 @@ static void prv_reevaluate_locked(void) {
     return;
   }
 
+  if (prv_power_save_active_locked()) {
+    if (s_owns_mic) {
+      prv_stop_capture_locked();
+      prv_begin_gap_pause_locked(AudioCompanionGapReasonPowerSave);
+    }
+    prv_stop_drain_timer_locked();
+    prv_set_state_locked(AudioCompanionServiceStatePausedPowerSave);
+    return;
+  }
+
   if (prv_session_ready_locked()) {
     if (!s_stream_active) {
       prv_begin_stream_locked();
@@ -1086,6 +1105,10 @@ void audio_companion_init(void) {
   mutex_lock(s_lock);
   s_initialized = true;
   s_enabled = shell_prefs_get_audio_companion_enabled();
+  s_pause_stationary_enabled =
+      shell_prefs_get_audio_companion_pause_stationary_enabled();
+  s_pause_low_power_enabled =
+      shell_prefs_get_audio_companion_pause_low_power_enabled();
   const BatteryChargeState charge = battery_get_charge_state();
   s_low_battery = charge.charge_percent < CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT;
   prv_reevaluate_locked();
@@ -1117,6 +1140,52 @@ void audio_companion_apply_enabled(bool enabled) {
 void audio_companion_set_enabled(bool enabled) {
   shell_prefs_set_audio_companion_enabled(enabled);
   audio_companion_apply_enabled(enabled);
+}
+
+void audio_companion_set_runlevel(RunLevel runlevel) {
+  if (!s_initialized) {
+    return;
+  }
+  mutex_lock(s_lock);
+  if (s_runlevel != runlevel) {
+    s_runlevel = runlevel;
+    prv_reevaluate_locked();
+  }
+  mutex_unlock(s_lock);
+}
+
+bool audio_companion_get_pause_stationary_enabled(void) {
+  mutex_lock(s_lock);
+  const bool enabled = s_pause_stationary_enabled;
+  mutex_unlock(s_lock);
+  return enabled;
+}
+
+void audio_companion_set_pause_stationary_enabled(bool enabled) {
+  shell_prefs_set_audio_companion_pause_stationary_enabled(enabled);
+  mutex_lock(s_lock);
+  if (s_pause_stationary_enabled != enabled) {
+    s_pause_stationary_enabled = enabled;
+    prv_reevaluate_locked();
+  }
+  mutex_unlock(s_lock);
+}
+
+bool audio_companion_get_pause_low_power_enabled(void) {
+  mutex_lock(s_lock);
+  const bool enabled = s_pause_low_power_enabled;
+  mutex_unlock(s_lock);
+  return enabled;
+}
+
+void audio_companion_set_pause_low_power_enabled(bool enabled) {
+  shell_prefs_set_audio_companion_pause_low_power_enabled(enabled);
+  mutex_lock(s_lock);
+  if (s_pause_low_power_enabled != enabled) {
+    s_pause_low_power_enabled = enabled;
+    prv_reevaluate_locked();
+  }
+  mutex_unlock(s_lock);
 }
 
 AudioCompanionServiceState audio_companion_get_state(void) {
@@ -1196,6 +1265,9 @@ void audio_companion_test_reset(void) {
   s_mic_conflict_active = false;
   s_receiver_pause_requested = false;
   s_low_battery = false;
+  s_pause_stationary_enabled = false;
+  s_pause_low_power_enabled = false;
+  s_runlevel = RunLevel_Normal;
   s_error = false;
   s_captured_frames = 0;
   s_sent_frames = 0;

@@ -243,6 +243,10 @@ void test_audio_companion_protocol__build_control_out(void) {
                                                      AudioCompanionServiceStateStreaming);
   prv_assert_builder_matches("state_changed_streaming", buf, len);
 
+  len = audio_companion_protocol_build_state_changed(buf, sizeof(buf),
+                                                     AudioCompanionServiceStatePausedPowerSave);
+  prv_assert_builder_matches("state_changed_power_save", buf, len);
+
   len = audio_companion_protocol_build_error(buf, sizeof(buf),
                                              AudioCompanionErrorCodeMalformed, 0);
   prv_assert_builder_matches("error_malformed", buf, len);
@@ -331,6 +335,7 @@ void test_audio_companion_protocol__build_stream_gap(void) {
     { "stream_gap_low_battery", AudioCompanionGapReasonLowBattery },
     { "stream_gap_codec_error", AudioCompanionGapReasonCodecError },
     { "stream_gap_transport_reset", AudioCompanionGapReasonTransportReset },
+    { "stream_gap_power_save", AudioCompanionGapReasonPowerSave },
   };
   uint8_t buf[64];
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
