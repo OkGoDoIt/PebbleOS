@@ -214,6 +214,8 @@ bool shell_prefs_get_audio_companion_pause_stationary_enabled(void);
 void shell_prefs_set_audio_companion_pause_stationary_enabled(bool enabled);
 bool shell_prefs_get_audio_companion_pause_low_power_enabled(void);
 void shell_prefs_set_audio_companion_pause_low_power_enabled(bool enabled);
+bool shell_prefs_get_audio_companion_silence_suppression_enabled(void);
+void shell_prefs_set_audio_companion_silence_suppression_enabled(bool enabled);
 
 #ifdef CONFIG_APP_SCALING
 // Legacy app rendering mode - whether to use bezel or scaling for legacy apps

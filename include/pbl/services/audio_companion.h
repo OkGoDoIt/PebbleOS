@@ -23,6 +23,7 @@ typedef struct {
   uint32_t gap_records;
   uint32_t dropped_overflow_frames;
   uint32_t mic_conflicts;
+  uint32_t suppressed_silence_frames;
   uint32_t spool_bytes;
   uint32_t spool_high_water_bytes;
   uint32_t loss_alerts_posted;
@@ -43,6 +44,8 @@ bool audio_companion_get_pause_stationary_enabled(void);
 void audio_companion_set_pause_stationary_enabled(bool enabled);
 bool audio_companion_get_pause_low_power_enabled(void);
 void audio_companion_set_pause_low_power_enabled(bool enabled);
+bool audio_companion_get_silence_suppression_enabled(void);
+void audio_companion_set_silence_suppression_enabled(bool enabled);
 
 AudioCompanionServiceState audio_companion_get_state(void);
 void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out);

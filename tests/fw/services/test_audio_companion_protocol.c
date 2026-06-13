@@ -336,6 +336,7 @@ void test_audio_companion_protocol__build_stream_gap(void) {
     { "stream_gap_codec_error", AudioCompanionGapReasonCodecError },
     { "stream_gap_transport_reset", AudioCompanionGapReasonTransportReset },
     { "stream_gap_power_save", AudioCompanionGapReasonPowerSave },
+    { "stream_gap_silence_suppressed", AudioCompanionGapReasonSilenceSuppressed },
   };
   uint8_t buf[64];
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {

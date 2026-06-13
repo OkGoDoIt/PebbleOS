@@ -50,6 +50,11 @@
 //! Alert when this many frames have been lost since the last alert (30 s of audio).
 #define LOSS_ALERT_THRESHOLD_FRAMES (30 * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 #define LOSS_ALERT_MIN_INTERVAL_SECONDS (6 * 60 * 60)
+//! Lightweight silence suppression uses mean absolute PCM level before Speex's gain stage.
+//! Thresholds are intentionally low and hysteretic to avoid clipping quiet speech.
+#define SILENCE_ENTER_AVG_ABS_THRESHOLD (96)
+#define SILENCE_EXIT_AVG_ABS_THRESHOLD (180)
+#define SILENCE_ENTER_FRAMES (3 * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 
 typedef struct {
   bool data_subscribed;
@@ -98,6 +103,7 @@ static bool s_receiver_pause_requested;
 static bool s_low_battery;
 static bool s_pause_stationary_enabled;
 static bool s_pause_low_power_enabled;
+static bool s_silence_suppression_enabled;
 static RunLevel s_runlevel = RunLevel_Normal;
 static bool s_error;
 
@@ -106,15 +112,24 @@ static uint32_t s_captured_frames;
 static uint32_t s_sent_frames;
 static uint32_t s_send_backpressure_events;
 static uint32_t s_mic_conflicts;
+static uint32_t s_suppressed_silence_frames;
 static uint32_t s_loss_alerts_posted;
 static uint32_t s_alert_baseline_dropped;
 static uint32_t s_last_alert_uptime_s;
 static uint32_t s_offline_baseline_dropped;
+static uint32_t s_silence_candidate_frames;
+static bool s_silence_suppressing;
+static uint32_t s_silence_gap_frames;
+static uint32_t s_silence_gap_first_sequence;
+static uint64_t s_silence_gap_first_sample_index;
 
 static EventServiceInfo s_battery_event_info;
 
 static void prv_reevaluate_locked(void);
 static void prv_drain_system_task_cb(void *data);
+static void prv_start_drain_timer_locked(void);
+static void prv_stop_drain_timer_locked(void);
+static void prv_update_ble_responsiveness_locked(void);
 
 // ---- Small helpers ----
 
@@ -134,6 +149,83 @@ static bool prv_session_ready_locked(void) {
 static bool prv_power_save_active_locked(void) {
   return ((s_runlevel == RunLevel_Stationary && s_pause_stationary_enabled) ||
           (s_runlevel == RunLevel_LowPower && s_pause_low_power_enabled));
+}
+
+static void prv_reset_silence_suppression_locked(void) {
+  const bool was_suppressing = s_silence_suppressing;
+  s_silence_candidate_frames = 0;
+  s_silence_suppressing = false;
+  s_silence_gap_frames = 0;
+  s_silence_gap_first_sequence = 0;
+  s_silence_gap_first_sample_index = 0;
+  if (was_suppressing) {
+    prv_update_ble_responsiveness_locked();
+  }
+}
+
+static void prv_record_silence_gap_locked(void) {
+  if (!s_silence_suppressing || s_silence_gap_frames == 0) {
+    prv_reset_silence_suppression_locked();
+    return;
+  }
+  audio_companion_spool_record_gap(s_silence_gap_first_sequence, s_silence_gap_frames,
+                                   s_silence_gap_first_sample_index,
+                                   AudioCompanionGapReasonSilenceSuppressed);
+  // Suppressed silence intentionally has no receiver traffic. Re-arm liveness when traffic
+  // resumes so the receiver gets a fresh window to persist and checkpoint the next notification.
+  s_last_receiver_activity_ms = prv_uptime_ms();
+  prv_reset_silence_suppression_locked();
+}
+
+static uint32_t prv_mean_abs_pcm(const int16_t *samples, size_t sample_count) {
+  uint32_t sum = 0;
+  for (size_t i = 0; i < sample_count; i++) {
+    const int32_t sample = samples[i];
+    sum += (sample < 0) ? (uint32_t)-sample : (uint32_t)sample;
+  }
+  return sample_count ? (sum / sample_count) : 0;
+}
+
+static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sample_count,
+                                              bool *out_schedule_drain) {
+  if (!s_silence_suppression_enabled) {
+    if (s_silence_suppressing && out_schedule_drain) {
+      *out_schedule_drain = true;
+    }
+    prv_record_silence_gap_locked();
+    return false;
+  }
+
+  const uint32_t mean_abs = prv_mean_abs_pcm(samples, sample_count);
+  if (s_silence_suppressing) {
+    if (mean_abs >= SILENCE_EXIT_AVG_ABS_THRESHOLD) {
+      prv_record_silence_gap_locked();
+      if (out_schedule_drain) {
+        *out_schedule_drain = true;
+      }
+      return false;
+    }
+  } else if (mean_abs < SILENCE_ENTER_AVG_ABS_THRESHOLD) {
+    s_silence_candidate_frames++;
+    if (s_silence_candidate_frames <= SILENCE_ENTER_FRAMES) {
+      return false;
+    }
+    s_silence_suppressing = true;
+    s_silence_gap_frames = 0;
+    s_silence_gap_first_sequence = s_next_sequence;
+    s_silence_gap_first_sample_index = s_next_sample_index;
+    prv_update_ble_responsiveness_locked();
+  } else {
+    s_silence_candidate_frames = 0;
+    return false;
+  }
+
+  s_next_sequence++;
+  s_next_sample_index += sample_count;
+  s_captured_frames++;
+  s_suppressed_silence_frames++;
+  s_silence_gap_frames++;
+  return true;
 }
 
 //! Mark the receiver as alive: called whenever a control message or a fresh subscription
@@ -170,7 +262,7 @@ static void prv_update_ble_responsiveness_locked(void) {
   if (s_state == AudioCompanionServiceStateStreaming && s_catch_up_burst) {
     bt_driver_audio_companion_set_response_time(ResponseTimeMin,
                                                 MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS);
-  } else if (s_state == AudioCompanionServiceStateStreaming) {
+  } else if (s_state == AudioCompanionServiceStateStreaming && !s_silence_suppressing) {
     bt_driver_audio_companion_set_response_time(ResponseTimeMiddle, MAX_PERIOD_RUN_FOREVER);
   } else {
     bt_driver_audio_companion_set_response_time(ResponseTimeMax, 0);
@@ -375,6 +467,15 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
     return;
   }
 
+  bool schedule_drain = false;
+  if (prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain)) {
+    mutex_unlock(s_lock);
+    if (schedule_drain) {
+      system_task_add_callback(prv_drain_system_task_cb, NULL);
+    }
+    return;
+  }
+
   uint8_t encoded[AUDIO_COMPANION_MAX_ENCODED_FRAME_BYTES];
   const int encoded_bytes = voice_speex_encode_frame(samples, encoded, sizeof(encoded));
   if (encoded_bytes <= 0) {
@@ -388,7 +489,6 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   s_captured_frames++;
   audio_companion_spool_push(sequence, sample_index, encoded, (uint16_t)encoded_bytes);
 
-  bool schedule_drain = false;
   bool schedule_park = false;
   if (prv_session_ready_locked()) {
     schedule_drain =
@@ -398,6 +498,9 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
     AudioCompanionSpoolStats stats;
     audio_companion_spool_get_stats(&stats);
     schedule_park = stats.dropped_overflow_frames > s_offline_baseline_dropped;
+  }
+  if (schedule_drain && prv_session_ready_locked()) {
+    prv_start_drain_timer_locked();
   }
   prv_maybe_alert_loss_locked();
   mutex_unlock(s_lock);
@@ -526,7 +629,8 @@ static bool prv_send_data_batch_locked(void) {
 //! Runs off the drain timer (active only while streaming). Catches the case where the receiver
 //! vanished without the watch seeing a BLE disconnect, so the mic would otherwise run forever.
 static void prv_check_receiver_liveness_locked(void) {
-  if (s_state != AudioCompanionServiceStateStreaming || s_receiver_presumed_gone) {
+  if (s_state != AudioCompanionServiceStateStreaming || s_receiver_presumed_gone ||
+      s_silence_suppressing) {
     return;
   }
   if ((prv_uptime_ms() - s_last_receiver_activity_ms) < RECEIVER_LIVENESS_TIMEOUT_MS) {
@@ -567,6 +671,10 @@ static void prv_drain_locked(void) {
     }
     prv_update_ble_responsiveness_locked();
   }
+  if (s_silence_suppressing && audio_companion_spool_frames_pending_send() == 0 &&
+      !audio_companion_spool_has_pending_gap()) {
+    prv_stop_drain_timer_locked();
+  }
 }
 
 static void prv_drain_system_task_cb(void *data) {
@@ -606,6 +714,7 @@ static void prv_begin_stream_locked(void) {
   s_offline_baseline_dropped = 0;
   s_alert_baseline_dropped = 0;
   s_pending_resume_gap_reason = 0;  // a fresh stream carries no pending gap
+  prv_reset_silence_suppression_locked();
   audio_companion_spool_reset();
   s_stream_active = true;
   s_need_stream_start = true;
@@ -616,10 +725,15 @@ static void prv_end_stream_locked(uint8_t stop_reason) {
   if (!s_stream_active) {
     return;
   }
+  prv_record_silence_gap_locked();
+  if (prv_session_ready_locked() && !s_need_stream_start) {
+    prv_send_pending_gap_locked();
+  }
   prv_send_stream_stop_locked(stop_reason);
   s_stream_active = false;
   s_need_stream_start = false;
   s_pending_resume_gap_reason = 0;
+  prv_reset_silence_suppression_locked();
   audio_companion_spool_reset();
 }
 
@@ -655,6 +769,7 @@ static void prv_reevaluate_locked(void) {
 
   if (s_low_battery) {
     if (s_owns_mic) {
+      prv_record_silence_gap_locked();
       prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonLowBattery);
     }
@@ -665,6 +780,7 @@ static void prv_reevaluate_locked(void) {
 
   if (s_receiver_pause_requested) {
     if (s_owns_mic) {
+      prv_record_silence_gap_locked();
       prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonUserDisabled);
     }
@@ -675,6 +791,7 @@ static void prv_reevaluate_locked(void) {
 
   if (prv_power_save_active_locked()) {
     if (s_owns_mic) {
+      prv_record_silence_gap_locked();
       prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonPowerSave);
     }
@@ -709,6 +826,7 @@ static void prv_reevaluate_locked(void) {
                              : AudioCompanionServiceStateIdle);
     return;
   }
+  prv_record_silence_gap_locked();
   prv_stop_capture_locked();
   prv_set_state_locked(s_session.authorized ? AudioCompanionServiceStateAuthorizedIdle
                                             : AudioCompanionServiceStateIdle);
@@ -1057,6 +1175,7 @@ void audio_companion_mic_conflict_begin(void) {
   }
   mutex_lock(s_lock);
   if (s_owns_mic) {
+    prv_record_silence_gap_locked();
     prv_stop_capture_locked();
     prv_begin_gap_pause_locked(AudioCompanionGapReasonMicConflict);
     s_mic_conflicts++;
@@ -1109,6 +1228,8 @@ void audio_companion_init(void) {
       shell_prefs_get_audio_companion_pause_stationary_enabled();
   s_pause_low_power_enabled =
       shell_prefs_get_audio_companion_pause_low_power_enabled();
+  s_silence_suppression_enabled =
+      shell_prefs_get_audio_companion_silence_suppression_enabled();
   const BatteryChargeState charge = battery_get_charge_state();
   s_low_battery = charge.charge_percent < CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT;
   prv_reevaluate_locked();
@@ -1188,6 +1309,28 @@ void audio_companion_set_pause_low_power_enabled(bool enabled) {
   mutex_unlock(s_lock);
 }
 
+bool audio_companion_get_silence_suppression_enabled(void) {
+  mutex_lock(s_lock);
+  const bool enabled = s_silence_suppression_enabled;
+  mutex_unlock(s_lock);
+  return enabled;
+}
+
+void audio_companion_set_silence_suppression_enabled(bool enabled) {
+  shell_prefs_set_audio_companion_silence_suppression_enabled(enabled);
+  mutex_lock(s_lock);
+  if (s_silence_suppression_enabled != enabled) {
+    if (!enabled) {
+      prv_record_silence_gap_locked();
+      if (prv_session_ready_locked()) {
+        prv_start_drain_timer_locked();
+      }
+    }
+    s_silence_suppression_enabled = enabled;
+  }
+  mutex_unlock(s_lock);
+}
+
 AudioCompanionServiceState audio_companion_get_state(void) {
   mutex_lock(s_lock);
   const AudioCompanionServiceState state = s_state;
@@ -1210,6 +1353,7 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
     .gap_records = stats.gap_records,
     .dropped_overflow_frames = stats.dropped_overflow_frames,
     .mic_conflicts = s_mic_conflicts,
+    .suppressed_silence_frames = s_suppressed_silence_frames,
     .spool_bytes = stats.current_bytes,
     .spool_high_water_bytes = stats.high_water_bytes,
     .loss_alerts_posted = s_loss_alerts_posted,
@@ -1267,16 +1411,19 @@ void audio_companion_test_reset(void) {
   s_low_battery = false;
   s_pause_stationary_enabled = false;
   s_pause_low_power_enabled = false;
+  s_silence_suppression_enabled = false;
   s_runlevel = RunLevel_Normal;
   s_error = false;
   s_captured_frames = 0;
   s_sent_frames = 0;
   s_send_backpressure_events = 0;
   s_mic_conflicts = 0;
+  s_suppressed_silence_frames = 0;
   s_loss_alerts_posted = 0;
   s_alert_baseline_dropped = 0;
   s_last_alert_uptime_s = 0;
   s_offline_baseline_dropped = 0;
+  prv_reset_silence_suppression_locked();
   memset(&s_battery_event_info, 0, sizeof(s_battery_event_info));
 }
 #endif

@@ -49,6 +49,7 @@ static time_t s_rtc_time;
 static uint16_t s_rtc_ms;
 static bool s_pref_pause_stationary;
 static bool s_pref_pause_low_power;
+static bool s_pref_silence_suppression;
 
 static AudioCompanionAuthEval s_auth_eval;
 static bool s_auth_receiver_exists;
@@ -155,6 +156,14 @@ bool shell_prefs_get_audio_companion_pause_low_power_enabled(void) {
 
 void shell_prefs_set_audio_companion_pause_low_power_enabled(bool enabled) {
   s_pref_pause_low_power = enabled;
+}
+
+bool shell_prefs_get_audio_companion_silence_suppression_enabled(void) {
+  return s_pref_silence_suppression;
+}
+
+void shell_prefs_set_audio_companion_silence_suppression_enabled(bool enabled) {
+  s_pref_silence_suppression = enabled;
 }
 
 void audio_companion_auth_init(void) {
@@ -312,14 +321,28 @@ static void prv_authenticate(void) {
   prv_send_control(buf, length);
 }
 
-static void prv_feed_frame(void) {
+static void prv_feed_frame_with_sample(int16_t sample) {
   cl_assert(s_mic_handler);
+  for (size_t i = 0; i < AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES; i++) {
+    s_voice_frame_buffer[i] = sample;
+  }
   s_mic_handler(s_voice_frame_buffer, AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES, s_mic_context);
+}
+
+static void prv_feed_frame(void) {
+  prv_feed_frame_with_sample(500);
 }
 
 static void prv_feed_frames(uint32_t count) {
   for (uint32_t i = 0; i < count; i++) {
     prv_feed_frame();
+  }
+  fake_system_task_callbacks_invoke_pending();
+}
+
+static void prv_feed_silence_frames(uint32_t count) {
+  for (uint32_t i = 0; i < count; i++) {
+    prv_feed_frame_with_sample(0);
   }
   fake_system_task_callbacks_invoke_pending();
 }
@@ -365,6 +388,7 @@ void test_audio_companion__initialize(void) {
   s_rtc_ms = 123;
   s_pref_pause_stationary = true;
   s_pref_pause_low_power = true;
+  s_pref_silence_suppression = false;
   s_auth_eval = AudioCompanionAuthEvalMatch;
   s_auth_receiver_exists = true;
   s_auth_store_succeeds = true;
@@ -655,4 +679,48 @@ void test_audio_companion__low_power_pause_can_be_disabled_separately(void) {
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
+}
+
+void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_suppression_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  // First quiet seconds are intentionally retained so quiet speech is not clipped.
+  prv_feed_silence_frames(155);
+  const uint8_t encoded_before_resume = s_encoded_counter;
+  cl_assert(encoded_before_resume > 0);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+
+  // Once suppression is active, more quiet frames should not create recurring BLE updates.
+  s_data_count = 0;
+  prv_feed_silence_frames(50);
+  cl_assert_equal_i(s_data_count, 0);
+  cl_assert_equal_i(s_encoded_counter, encoded_before_resume);
+
+  // Meaningful audio resumes: emit one explicit silence gap, then encode/send the loud frame.
+  prv_feed_frame_with_sample(800);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_encoded_counter > encoded_before_resume);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+
+  const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
+  cl_assert(gap);
+  AudioCompanionStreamGapMsg gap_msg;
+  memcpy(&gap_msg, gap->data, sizeof(gap_msg));
+  cl_assert_equal_i(gap_msg.reason, AudioCompanionGapReasonSilenceSuppressed);
+  cl_assert(gap_msg.missing_frame_count >= 50);
+}
+
+void test_audio_companion__silence_suppression_can_be_disabled(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_suppression_enabled(false);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  prv_feed_silence_frames(170);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(s_encoded_counter, 170);
 }

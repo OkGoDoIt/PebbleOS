@@ -79,6 +79,7 @@ typedef enum {
   AudioCompanionGapReasonCodecError = 0x05,
   AudioCompanionGapReasonTransportReset = 0x06,
   AudioCompanionGapReasonPowerSave = 0x07,
+  AudioCompanionGapReasonSilenceSuppressed = 0x08,
 } AudioCompanionGapReason;
 
 typedef enum {

@@ -63,6 +63,8 @@
               s_audio_companion_pause_stationary_enabled)
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_PAUSE_LOW_POWER,
               s_audio_companion_pause_low_power_enabled)
+  PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION,
+              s_audio_companion_silence_suppression_enabled)
 #ifdef CONFIG_APP_SCALING
   PREFS_MACRO(PREF_KEY_LEGACY_APP_RENDER_MODE, s_legacy_app_render_mode)
 #endif

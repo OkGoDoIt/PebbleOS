@@ -26,6 +26,7 @@
 #endif
 
 #define SPOOL_CHUNK_BYTES (4096)
+#define MAX_PENDING_GAPS (8)
 
 typedef struct PACKED {
   uint32_t sequence;
@@ -48,7 +49,8 @@ static SpoolChunk *s_head;
 static SpoolChunk *s_tail;
 static SpoolChunk *s_drain_chunk;
 static uint16_t s_drain_offset;
-static AudioCompanionSpoolPendingGap s_pending_gap;
+static AudioCompanionSpoolPendingGap s_pending_gaps[MAX_PENDING_GAPS];
+static uint8_t s_pending_gap_count;
 static uint32_t s_pushed_frames;
 static uint32_t s_dropped_overflow_frames;
 static uint32_t s_gap_records;
@@ -83,8 +85,20 @@ static uint16_t prv_record_size(const SpoolRecordHeader *header) {
 
 static void prv_merge_gap(uint32_t first_missing_sequence, uint32_t missing_frame_count,
                           uint64_t first_missing_sample_index, uint8_t reason) {
-  if (!s_pending_gap.valid) {
-    s_pending_gap = (AudioCompanionSpoolPendingGap){
+  if (missing_frame_count == 0) {
+    return;
+  }
+  if (s_pending_gap_count > 0) {
+    AudioCompanionSpoolPendingGap *last = &s_pending_gaps[s_pending_gap_count - 1];
+    const bool contiguous =
+        (last->first_missing_sequence + last->missing_frame_count) == first_missing_sequence;
+    if (last->reason == reason && contiguous) {
+      last->missing_frame_count += missing_frame_count;
+      return;
+    }
+  }
+  if (s_pending_gap_count < MAX_PENDING_GAPS) {
+    s_pending_gaps[s_pending_gap_count++] = (AudioCompanionSpoolPendingGap){
       .valid = true,
       .first_missing_sequence = first_missing_sequence,
       .missing_frame_count = missing_frame_count,
@@ -92,9 +106,12 @@ static void prv_merge_gap(uint32_t first_missing_sequence, uint32_t missing_fram
       .reason = reason,
     };
     s_gap_records++;
-  } else {
-    s_pending_gap.missing_frame_count += missing_frame_count;
+    return;
   }
+
+  // Backpressure can temporarily prevent gap notifications. If many distinct gaps queue up,
+  // preserve ordering and account the time by extending the newest record instead of losing it.
+  s_pending_gaps[MAX_PENDING_GAPS - 1].missing_frame_count += missing_frame_count;
 }
 
 //! Detach the oldest chunk, account its untrimmed frames as an overflow gap.
@@ -239,7 +256,8 @@ void audio_companion_spool_reset(void) {
   s_tail = NULL;
   s_drain_chunk = NULL;
   s_drain_offset = 0;
-  memset(&s_pending_gap, 0, sizeof(s_pending_gap));
+  memset(s_pending_gaps, 0, sizeof(s_pending_gaps));
+  s_pending_gap_count = 0;
   s_pushed_frames = 0;
   s_dropped_overflow_frames = 0;
   s_gap_records = 0;
@@ -400,15 +418,20 @@ void audio_companion_spool_record_gap(uint32_t first_missing_sequence,
 }
 
 bool audio_companion_spool_take_pending_gap(AudioCompanionSpoolPendingGap *gap_out) {
-  if (!gap_out || !s_pending_gap.valid) {
+  if (!gap_out || s_pending_gap_count == 0) {
     return false;
   }
-  *gap_out = s_pending_gap;
-  memset(&s_pending_gap, 0, sizeof(s_pending_gap));
+  *gap_out = s_pending_gaps[0];
+  if (s_pending_gap_count > 1) {
+    memmove(&s_pending_gaps[0], &s_pending_gaps[1],
+            (s_pending_gap_count - 1) * sizeof(s_pending_gaps[0]));
+  }
+  s_pending_gap_count--;
+  memset(&s_pending_gaps[s_pending_gap_count], 0, sizeof(s_pending_gaps[0]));
   return true;
 }
 
-bool audio_companion_spool_has_pending_gap(void) { return s_pending_gap.valid; }
+bool audio_companion_spool_has_pending_gap(void) { return s_pending_gap_count > 0; }
 
 uint32_t audio_companion_spool_frames_pending_send(void) { return s_frames_unsent; }
 

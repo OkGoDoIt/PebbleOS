@@ -182,6 +182,26 @@ void test_audio_companion_spool__overflow_drops_oldest_and_merges_gap(void) {
   cl_assert_equal_i(first_seq, 200);
 }
 
+void test_audio_companion_spool__pending_gaps_do_not_merge_different_reasons(void) {
+  audio_companion_spool_record_gap(10, 5, prv_sample_index(10),
+                                   AudioCompanionGapReasonSilenceSuppressed);
+  audio_companion_spool_record_gap(15, 2, prv_sample_index(15),
+                                   AudioCompanionGapReasonMicConflict);
+
+  AudioCompanionSpoolPendingGap gap;
+  cl_assert(audio_companion_spool_take_pending_gap(&gap));
+  cl_assert_equal_i(gap.reason, AudioCompanionGapReasonSilenceSuppressed);
+  cl_assert_equal_i(gap.first_missing_sequence, 10);
+  cl_assert_equal_i(gap.missing_frame_count, 5);
+
+  cl_assert(audio_companion_spool_take_pending_gap(&gap));
+  cl_assert_equal_i(gap.reason, AudioCompanionGapReasonMicConflict);
+  cl_assert_equal_i(gap.first_missing_sequence, 15);
+  cl_assert_equal_i(gap.missing_frame_count, 2);
+
+  cl_assert(!audio_companion_spool_has_pending_gap());
+}
+
 void test_audio_companion_spool__trims_optional_chunks_under_heap_pressure(void) {
   // Plenty of heap: the spool may grow past the floor toward the ceiling.
   audio_companion_spool_test_set_heap_free_bytes(UINT32_MAX);

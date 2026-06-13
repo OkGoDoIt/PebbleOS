@@ -335,6 +335,13 @@ static const uint8_t s_fx_stream_gap_power_save[] = {
   0x00, 0x00,
 };
 
+// Gap with reason silence_suppressed
+static const uint8_t s_fx_stream_gap_silence_suppressed[] = {
+  0x82, 0x01, 0x00, 0xed, 0x5e, 0x90, 0x13, 0x00, 0x00, 0xfa, 0x00, 0x00,
+  0x00, 0x00, 0x74, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0xfa, 0x00,
+  0x00, 0x00,
+};
+
 // Gap with reason spool_overflow
 static const uint8_t s_fx_stream_gap_spool_overflow[] = {
   0x82, 0x01, 0x00, 0xed, 0x5e, 0x89, 0x13, 0x00, 0x00, 0xfa, 0x00, 0x00,
@@ -423,6 +430,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "stream_gap_low_battery", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_low_battery, 26 },
   { "stream_gap_mic_conflict", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_mic_conflict, 26 },
   { "stream_gap_power_save", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_power_save, 26 },
+  { "stream_gap_silence_suppressed", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_silence_suppressed, 26 },
   { "stream_gap_spool_overflow", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_spool_overflow, 26 },
   { "stream_gap_transport_reset", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_transport_reset, 26 },
   { "stream_gap_unknown_count", FixtureChannelData, FixtureExpectParse, s_fx_stream_gap_unknown_count, 26 },

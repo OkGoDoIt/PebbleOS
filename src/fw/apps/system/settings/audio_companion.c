@@ -23,6 +23,7 @@ typedef enum {
   AudioCompanionSettingsToggle,
   AudioCompanionSettingsPauseStationary,
   AudioCompanionSettingsPauseLowPower,
+  AudioCompanionSettingsSuppressSilence,
   AudioCompanionSettingsReceiver,
   AudioCompanionSettingsDiagnostics,
   AudioCompanionSettingsCount,
@@ -142,6 +143,11 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       subtitle = audio_companion_get_pause_low_power_enabled() ? i18n_noop("On")
                                                               : i18n_noop("Off");
       break;
+    case AudioCompanionSettingsSuppressSilence:
+      title = i18n_noop("Suppress Silence");
+      subtitle = audio_companion_get_silence_suppression_enabled() ? i18n_noop("On")
+                                                                   : i18n_noop("Off");
+      break;
     case AudioCompanionSettingsReceiver:
       title = i18n_noop("Receiver");
       subtitle = audio_companion_get_receiver_name(receiver_name, sizeof(receiver_name)) ?
@@ -176,6 +182,12 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
     case AudioCompanionSettingsPauseLowPower:
       audio_companion_set_pause_low_power_enabled(
           !audio_companion_get_pause_low_power_enabled());
+      settings_menu_reload_data(SettingsMenuItemAudioCompanion);
+      settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
+      break;
+    case AudioCompanionSettingsSuppressSilence:
+      audio_companion_set_silence_suppression_enabled(
+          !audio_companion_get_silence_suppression_enabled());
       settings_menu_reload_data(SettingsMenuItemAudioCompanion);
       settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
       break;
