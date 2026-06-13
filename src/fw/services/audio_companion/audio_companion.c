@@ -639,6 +639,7 @@ static void prv_reevaluate_locked(void) {
 
   if (s_mic_conflict_active) {
     // Capture was already stopped in mic_conflict_begin.
+    prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
     return;
   }
@@ -648,6 +649,7 @@ static void prv_reevaluate_locked(void) {
       prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonLowBattery);
     }
+    prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedLowBattery);
     return;
   }
@@ -657,6 +659,7 @@ static void prv_reevaluate_locked(void) {
       prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonUserDisabled);
     }
+    prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedPolicy);
     return;
   }

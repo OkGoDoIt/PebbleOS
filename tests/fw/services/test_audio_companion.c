@@ -473,12 +473,14 @@ void test_audio_companion__pause_resume_records_explicit_gap(void) {
   prv_send_control(buf, length);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPolicy);
   cl_assert(!s_mic_running);
+  cl_assert_equal_i(stub_new_timer_get_next(), TIMER_INVALID_ID);
 
   s_uptime_seconds += 2;
   prv_build_resume(buf, &length, 0x31);
   prv_send_control(buf, length);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
+  cl_assert(stub_new_timer_get_next() != TIMER_INVALID_ID);
 
   prv_feed_frames(8);
   const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
