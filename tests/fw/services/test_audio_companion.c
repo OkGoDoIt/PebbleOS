@@ -713,6 +713,21 @@ void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes
   cl_assert(gap_msg.missing_frame_count >= 50);
 }
 
+void test_audio_companion__prefs_loaded_restores_settings_after_boot(void) {
+  // setUp ran audio_companion_init() with silence suppression off, mirroring the boot order where
+  // the service initializes before the shell prefs file is loaded.
+  cl_assert_equal_b(audio_companion_get_silence_suppression_enabled(), false);
+
+  // The prefs file loads later carrying the user's persisted choices; the reload hook must apply
+  // them so a reboot does not revert to compile-time defaults.
+  s_pref_silence_suppression = true;
+  s_pref_pause_stationary = false;
+  audio_companion_handle_prefs_loaded();
+
+  cl_assert_equal_b(audio_companion_get_silence_suppression_enabled(), true);
+  cl_assert_equal_b(audio_companion_get_pause_stationary_enabled(), false);
+}
+
 void test_audio_companion__silence_suppression_can_be_disabled(void) {
   audio_companion_set_enabled(true);
   audio_companion_set_silence_suppression_enabled(false);

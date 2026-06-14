@@ -31,6 +31,10 @@ typedef struct {
 
 void audio_companion_init(void);
 
+//! Re-reads the persisted settings once the shell prefs file has loaded. audio_companion_init()
+//! runs before that load, so this restores the user's settings after a (re)boot.
+void audio_companion_handle_prefs_loaded(void);
+
 bool audio_companion_is_enabled(void);
 //! Persists the pref and applies it to the running service.
 void audio_companion_set_enabled(bool enabled);

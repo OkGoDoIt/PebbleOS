@@ -1242,6 +1242,23 @@ void audio_companion_init(void) {
   event_service_client_subscribe(&s_battery_event_info);
 }
 
+void audio_companion_handle_prefs_loaded(void) {
+  // The settings live in the shell prefs file, which shell_prefs_init() loads only after this
+  // service has already initialized at boot. So audio_companion_init() above necessarily reads
+  // compile-time defaults. Re-read the settings here, once the prefs are actually loaded, so a
+  // reboot (which connection resets can trigger) restores the user's choices instead of defaults.
+  if (!s_initialized) {
+    return;
+  }
+  mutex_lock(s_lock);
+  s_enabled = shell_prefs_get_audio_companion_enabled();
+  s_pause_stationary_enabled = shell_prefs_get_audio_companion_pause_stationary_enabled();
+  s_pause_low_power_enabled = shell_prefs_get_audio_companion_pause_low_power_enabled();
+  s_silence_suppression_enabled = shell_prefs_get_audio_companion_silence_suppression_enabled();
+  prv_reevaluate_locked();
+  mutex_unlock(s_lock);
+}
+
 bool audio_companion_is_enabled(void) {
   mutex_lock(s_lock);
   const bool enabled = s_enabled;

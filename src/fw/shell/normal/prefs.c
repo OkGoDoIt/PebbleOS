@@ -21,6 +21,7 @@
 #include "process_management/app_install_manager.h"
 #include "process_management/process_manager.h"
 #include "pbl/services/accel_manager.h"
+#include "pbl/services/audio_companion.h"
 #include "pbl/services/touch/touch.h"
 #include "pbl/services/powermode_service.h"
 #include "pbl/services/hrm/hrm_manager.h"
@@ -250,7 +251,7 @@ static bool s_settings_dbs_compacted_v1 = false;
 static bool s_audio_companion_enabled = false;
 static bool s_audio_companion_pause_stationary_enabled = true;
 static bool s_audio_companion_pause_low_power_enabled = true;
-static bool s_audio_companion_silence_suppression_enabled = false;
+static bool s_audio_companion_silence_suppression_enabled = true;
 #ifdef CONFIG_APP_SCALING
 static uint8_t s_legacy_app_render_mode = 1; // Default to scaled mode
 #endif
@@ -894,6 +895,12 @@ void shell_prefs_init(void) {
   
   // Initialize prefs sync (must be after prefs are loaded)
   prefs_sync_init();
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  // The audio companion service initializes before this point, so it cached compile-time defaults.
+  // Now that the prefs are loaded, let it pick up the user's persisted settings.
+  audio_companion_handle_prefs_loaded();
+#endif
 
   // Update accelerometer sensitivity with the loaded value
 #ifdef CONFIG_ACCEL_SENSITIVITY
