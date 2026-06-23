@@ -72,6 +72,7 @@ flight; the watch answers every request with a response notification carrying th
 | `0x04` | `PAUSE_REQUEST` | 3 |
 | `0x05` | `RESUME_REQUEST` | 2 |
 | `0x06` | `RECEIVER_HEALTH` | 8 |
+| `0x07` | `ENABLE_REQUEST` | 2 |
 
 `AUTH_REQUEST` (`0x01`):
 
@@ -107,6 +108,12 @@ currently authorized session's receiver id).
 `RECEIVER_HEALTH` (`0x06`): `u8 msg_id`, `u8 request_token`, `u8 battery_pct`,
 `u8 app_state` (1 foreground, 2 background, 3 restored), `u32 queue_depth_frames`.
 
+`ENABLE_REQUEST` (`0x07`): `u8 msg_id`, `u8 request_token`. When Background Audio is off, this
+asks the watch to show an on-watch approval prompt. The watch replies with `ACK(ok)` only after the
+user accepts and the setting has been persisted/enabled; decline, timeout, no UI handler, or another
+enable prompt already in flight return `ACK(rejected)`/`ACK(bad-state)`. If Background Audio is
+already on, the watch may return `ACK(ok)` immediately.
+
 ### 4.2 Watch → Phone (control notifications)
 
 | id | name | total size (v1) |
@@ -130,7 +137,8 @@ the final status (0 on accept; 4 on decline or timeout).
 Unsolicited (no request token).
 
 `ACK` (`0x43`): `u8 msg_id`, `u8 request_token`, `u8 status` (0 ok, 1 rejected, 2 bad-state).
-Response to `CHECKPOINT`, `PAUSE_REQUEST`, `RESUME_REQUEST`, and `RECEIVER_HEALTH`.
+Response to `CHECKPOINT`, `PAUSE_REQUEST`, `RESUME_REQUEST`, `RECEIVER_HEALTH`, and
+`ENABLE_REQUEST`.
 
 `STATE_CHANGED` (`0x44`): `u8 msg_id`, `u8 service_state` (Section 7). Pushed on every service
 state transition while a control subscription exists.
@@ -212,9 +220,12 @@ Sequence semantics: `sequence` increments per encoded frame within a stream, sta
 ## 6. Authorization And Session Flow
 
 1. Phone subscribes to Control, reads Info.
-2. Phone writes `AUTH_REQUEST{receiver_id, name}`. `receiver_id` is 32 random bytes generated
+2. If Info says Background Audio is disabled and the user wants recording, the phone may write
+   `ENABLE_REQUEST`. The watch prompts the user and only persists/enables Background Audio after
+   the watch-side approval. The phone then proceeds with authorization.
+3. Phone writes `AUTH_REQUEST{receiver_id, name}`. `receiver_id` is 32 random bytes generated
    once per app install, stored in platform-secure storage.
-3. Watch behavior:
+4. Watch behavior:
    - Feature pref disabled → `AUTH_RESULT(denied-disabled)`.
    - No stored receiver → consent prompt on watch → `AUTH_RESULT(pending-user-consent)`;
      on user accept the watch stores SHA-256(receiver_id) + name + timestamp and pushes
@@ -223,7 +234,7 @@ Sequence semantics: `sequence` increments per encoded frame within a stream, sta
    - Stored hash matches SHA-256(receiver_id) → `AUTH_RESULT(ok)` immediately.
    - Stored hash differs → `AUTH_RESULT(denied-mismatch)`. Fail closed; the user must revoke
      on the watch before a different install can bind.
-4. After `AUTH_RESULT(ok)` the session is authorized for the lifetime of the BLE connection.
+5. After `AUTH_RESULT(ok)` the session is authorized for the lifetime of the BLE connection.
    The phone subscribes to Data; the watch streams per policy.
 5. Any disconnect ends the session; reconnect repeats the handshake (silent when the hash
    matches).
