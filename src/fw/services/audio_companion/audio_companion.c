@@ -85,6 +85,8 @@ static TimerID s_consent_timer = TIMER_INVALID_ID;
 static bool s_owns_mic;
 static bool s_stream_active;
 static bool s_need_stream_start;
+static bool s_stream_resumed;    //!< the pending STREAM_START re-announces an ongoing stream
+static bool s_stream_attached;   //!< current ready session has been (re)announced the stream
 static uint32_t s_stream_id;
 static uint32_t s_next_sequence;
 static uint64_t s_next_sample_index;
@@ -527,7 +529,7 @@ static void prv_send_stream_start_locked(void) {
     .frame_duration_ms = AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
     .start_time_ms = prv_wall_clock_ms(),
     .start_monotonic_ms = prv_uptime_ms(),
-    .flags = 0,
+    .flags = s_stream_resumed ? AUDIO_COMPANION_STREAM_START_FLAG_RESUME : 0,
   };
   uint8_t buf[sizeof(AudioCompanionStreamStartMsg)];
   const size_t len = audio_companion_protocol_build_stream_start(buf, sizeof(buf), &params);
@@ -718,7 +720,23 @@ static void prv_begin_stream_locked(void) {
   audio_companion_spool_reset();
   s_stream_active = true;
   s_need_stream_start = true;
+  s_stream_resumed = false;  // a fresh stream begins at sequence 0
   prv_note_receiver_activity_locked();  // arm the liveness watchdog from stream start
+}
+
+//! Re-announce an already-running stream to a freshly (re)attached receiver. The receiver is a new
+//! GATT session with no stream context, so it would silently drop resumed STREAM_DATA unless we
+//! resend STREAM_START first. The RESUME flag tells it to take the first frame's sequence as the
+//! contiguity base; rewinding makes every un-checkpointed frame resend, so buffered audio that
+//! piled up while the receiver was away is delivered instead of lost.
+static void prv_request_stream_reannounce_locked(void) {
+  if (!s_stream_active) {
+    return;
+  }
+  s_need_stream_start = true;
+  s_stream_resumed = true;
+  audio_companion_spool_rewind_unsent();
+  prv_begin_catch_up_burst_locked();
 }
 
 static void prv_end_stream_locked(uint8_t stop_reason) {
@@ -744,6 +762,12 @@ static void prv_reevaluate_locked(void) {
     return;
   }
   audio_companion_spool_apply_pressure_policy();
+
+  // The current receiver session is no longer ready (disconnect, unsubscribe, or liveness
+  // watchdog): the next ready transition must re-announce the stream to whatever attaches.
+  if (!prv_session_ready_locked()) {
+    s_stream_attached = false;
+  }
 
   if (!s_enabled) {
     prv_stop_capture_locked();
@@ -803,9 +827,17 @@ static void prv_reevaluate_locked(void) {
   if (prv_session_ready_locked()) {
     if (!s_stream_active) {
       prv_begin_stream_locked();
+    } else if (!s_stream_attached) {
+      // A ready session is (re)attaching to an ongoing stream (reconnect or liveness revival).
+      // The receiver is a fresh GATT session with no stream context, so re-announce STREAM_START
+      // and resend buffered frames before any new data; finish the disconnect gap (if capture had
+      // parked) so loss is reported exactly once.
+      prv_request_stream_reannounce_locked();
+      prv_finish_gap_pause_locked();
     } else {
       prv_finish_gap_pause_locked();
     }
+    s_stream_attached = true;
     if (!prv_start_capture_locked()) {
       // Mic unavailable right now (dictation will fire the conflict hook).
       prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
@@ -1082,13 +1114,10 @@ static void prv_subscription_system_task_cb(void *data) {
   }
   if (prv_session_ready_locked()) {
     s_offline_baseline_dropped = 0;
-    if (s_stream_active) {
-      // Reconnect mid-stream: re-announce and resend unacknowledged frames.
-      s_need_stream_start = true;
-      audio_companion_spool_rewind_unsent();
-      prv_begin_catch_up_burst_locked();
-    }
   }
+  // Re-announce on reconnect is centralized in prv_reevaluate_locked (keyed off s_stream_attached)
+  // so it fires regardless of whether the receiver subscribes before or after AUTH — iOS subscribes
+  // both characteristics first, so doing it here would miss the common reconnect.
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
 }
@@ -1412,6 +1441,8 @@ void audio_companion_test_reset(void) {
   s_owns_mic = false;
   s_stream_active = false;
   s_need_stream_start = false;
+  s_stream_resumed = false;
+  s_stream_attached = false;
   s_stream_id = 0;
   s_next_sequence = 0;
   s_next_sample_index = 0;

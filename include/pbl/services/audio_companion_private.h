@@ -129,6 +129,11 @@ typedef enum {
 #define AUDIO_COMPANION_INFO_FLAG_ENABLED (1u << 1)
 #define AUDIO_COMPANION_INFO_FLAG_CONSENT_PENDING (1u << 2)
 
+//! STREAM_START flags. RESUME marks a re-announcement of an already-running stream to a freshly
+//! (re)attached receiver: the receiver must take the first STREAM_DATA/STREAM_GAP sequence as the
+//! stream's contiguity base rather than assuming the stream begins at sequence 0.
+#define AUDIO_COMPANION_STREAM_START_FLAG_RESUME (1u << 0)
+
 // ---- Wire structs (exact layouts; see PROTOCOL.md) ----
 
 typedef struct PACKED {

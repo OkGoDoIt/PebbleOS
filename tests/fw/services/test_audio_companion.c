@@ -504,6 +504,48 @@ void test_audio_companion__reconnect_uses_short_catch_up_burst(void) {
   cl_assert_equal_i(s_response_time_period_secs, TEST_MAX_PERIOD_RUN_FOREVER);
 }
 
+// Out-of-range reconnect with the real iOS ordering: the receiver subscribes BOTH characteristics
+// and only then sends AUTH_REQUEST. The watch must still re-announce STREAM_START (with the RESUME
+// flag) for the freshly attached session and resend the frames it buffered while disconnected,
+// otherwise the phone has no stream context and silently drops every resumed frame.
+void test_audio_companion__reconnect_ios_order_reannounces_with_resume_flag(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // The fresh stream announces with no RESUME flag.
+  const CapturedNotification *fresh = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(fresh);
+  AudioCompanionStreamStartMsg fresh_msg;
+  memcpy(&fresh_msg, fresh->data, sizeof(fresh_msg));
+  cl_assert_equal_i(fresh_msg.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME, 0);
+
+  // Out of range: the watch sees the BLE disconnect and falls back to Idle but keeps the stream
+  // active (brief-disconnect bridge), buffering further frames into the spool.
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateIdle);
+  prv_feed_frames(4);
+  s_data_count = 0;
+
+  // Back in range, iOS order: subscribe both characteristics, THEN authorize.
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // Draining now re-announces the stream as a RESUME and resends the buffered frames.
+  prv_feed_frames(8);
+  const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(resumed);
+  AudioCompanionStreamStartMsg resumed_msg;
+  memcpy(&resumed_msg, resumed->data, sizeof(resumed_msg));
+  cl_assert_equal_i(resumed_msg.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME,
+                    AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData));
+}
+
 void test_audio_companion__pause_resume_records_explicit_gap(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
