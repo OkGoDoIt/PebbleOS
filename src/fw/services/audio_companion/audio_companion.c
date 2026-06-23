@@ -493,8 +493,11 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
 
   bool schedule_park = false;
   if (prv_session_ready_locked()) {
-    schedule_drain =
-        audio_companion_spool_frames_pending_send() >= DRAIN_PUSH_THRESHOLD_FRAMES;
+    // Keep any drain already requested by silence suppression: exiting suppression must flush the
+    // recorded gap (and the resuming frame) promptly. The drain timer is stopped while suppressing,
+    // so overwriting this would strand the gap until enough frames re-accumulate.
+    schedule_drain = schedule_drain ||
+        (audio_companion_spool_frames_pending_send() >= DRAIN_PUSH_THRESHOLD_FRAMES);
   } else {
     // Offline: buffer until the spool starts dropping, then park the mic.
     AudioCompanionSpoolStats stats;
