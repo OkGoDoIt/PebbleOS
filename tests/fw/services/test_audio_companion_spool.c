@@ -274,9 +274,10 @@ void test_audio_companion_spool__trim_frees_emptied_chunks(void) {
 void test_audio_companion_spool__explicit_gap_records_merge(void) {
   audio_companion_spool_record_gap(10, 5, prv_sample_index(10),
                                    AudioCompanionGapReasonMicConflict);
-  // A later overflow while a gap is pending merges into the same record.
+  // A contiguous same-reason gap merges into the pending record (different reasons stay separate,
+  // see pending_gaps_do_not_merge_different_reasons).
   audio_companion_spool_record_gap(15, 3, prv_sample_index(15),
-                                   AudioCompanionGapReasonSpoolOverflow);
+                                   AudioCompanionGapReasonMicConflict);
 
   AudioCompanionSpoolPendingGap gap;
   cl_assert(audio_companion_spool_take_pending_gap(&gap));
