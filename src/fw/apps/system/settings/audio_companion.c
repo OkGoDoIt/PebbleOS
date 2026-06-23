@@ -5,6 +5,7 @@
 #include "audio_companion.h"
 #include "window.h"
 
+#include "applib/app_timer.h"
 #include "applib/ui/action_bar_layer.h"
 #include "applib/ui/dialogs/confirmation_dialog.h"
 #include "applib/ui/dialogs/dialog.h"
@@ -21,17 +22,18 @@
 
 typedef enum {
   AudioCompanionSettingsToggle,
-  AudioCompanionSettingsPauseStationary,
-  AudioCompanionSettingsPauseLowPower,
-  AudioCompanionSettingsSuppressSilence,
+  AudioCompanionSettingsStatus,
+  AudioCompanionSettingsSkipSilence,
   AudioCompanionSettingsReceiver,
-  AudioCompanionSettingsDiagnostics,
   AudioCompanionSettingsCount,
 } AudioCompanionSettingsItem;
 
 typedef struct {
   SettingsCallbacks callbacks;
+  AppTimer *update_timer;
 } SettingsAudioCompanionData;
+
+#define STATUS_UPDATE_INTERVAL_MS (500)
 
 static const char *prv_state_name(AudioCompanionServiceState state) {
   switch (state) {
@@ -113,12 +115,70 @@ static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
 }
 
 static void prv_deinit_cb(SettingsCallbacks *context) {
+  SettingsAudioCompanionData *data = (SettingsAudioCompanionData *)context;
+  if (data->update_timer) {
+    app_timer_cancel(data->update_timer);
+    data->update_timer = NULL;
+  }
   i18n_free_all(context);
   app_free(context);
 }
 
+static void prv_update_timer_cb(void *context) {
+  SettingsAudioCompanionData *data = context;
+  settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
+  data->update_timer = app_timer_register(STATUS_UPDATE_INTERVAL_MS, prv_update_timer_cb, data);
+}
+
+static void prv_appear_cb(SettingsCallbacks *context) {
+  SettingsAudioCompanionData *data = (SettingsAudioCompanionData *)context;
+  if (!data->update_timer) {
+    data->update_timer =
+        app_timer_register(STATUS_UPDATE_INTERVAL_MS, prv_update_timer_cb, data);
+  }
+}
+
+static void prv_hide_cb(SettingsCallbacks *context) {
+  SettingsAudioCompanionData *data = (SettingsAudioCompanionData *)context;
+  if (data->update_timer) {
+    app_timer_cancel(data->update_timer);
+    data->update_timer = NULL;
+  }
+}
+
 static uint16_t prv_num_rows_cb(SettingsCallbacks *context) {
   return AudioCompanionSettingsCount;
+}
+
+static const char *prv_silence_mode_name(AudioCompanionSilenceMode mode) {
+  switch (mode) {
+    case AudioCompanionSilenceModeOff:
+      return i18n_noop("Off");
+    case AudioCompanionSilenceModeLight:
+      return i18n_noop("Light");
+    case AudioCompanionSilenceModeBalanced:
+      return i18n_noop("Balanced");
+    case AudioCompanionSilenceModeAggressive:
+      return i18n_noop("Aggressive");
+    case AudioCompanionSilenceModeCount:
+      break;
+  }
+  return i18n_noop("Light");
+}
+
+static AudioCompanionSilenceMode prv_next_silence_mode(AudioCompanionSilenceMode mode) {
+  switch (mode) {
+    case AudioCompanionSilenceModeOff:
+      return AudioCompanionSilenceModeLight;
+    case AudioCompanionSilenceModeLight:
+      return AudioCompanionSilenceModeBalanced;
+    case AudioCompanionSilenceModeBalanced:
+      return AudioCompanionSilenceModeAggressive;
+    case AudioCompanionSilenceModeAggressive:
+    case AudioCompanionSilenceModeCount:
+      return AudioCompanionSilenceModeOff;
+  }
+  return AudioCompanionSilenceModeLight;
 }
 
 static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
@@ -133,29 +193,18 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       title = i18n_noop("Background Audio");
       subtitle = audio_companion_is_enabled() ? i18n_noop("On") : i18n_noop("Off");
       break;
-    case AudioCompanionSettingsPauseStationary:
-      title = i18n_noop("Pause Stationary");
-      subtitle = audio_companion_get_pause_stationary_enabled() ? i18n_noop("On")
-                                                                : i18n_noop("Off");
+    case AudioCompanionSettingsStatus:
+      title = i18n_noop("Status");
+      subtitle = prv_state_name(audio_companion_get_state());
       break;
-    case AudioCompanionSettingsPauseLowPower:
-      title = i18n_noop("Pause Low Power");
-      subtitle = audio_companion_get_pause_low_power_enabled() ? i18n_noop("On")
-                                                              : i18n_noop("Off");
-      break;
-    case AudioCompanionSettingsSuppressSilence:
-      title = i18n_noop("Suppress Silence");
-      subtitle = audio_companion_get_silence_suppression_enabled() ? i18n_noop("On")
-                                                                   : i18n_noop("Off");
+    case AudioCompanionSettingsSkipSilence:
+      title = i18n_noop("Skip Silence");
+      subtitle = prv_silence_mode_name(audio_companion_get_silence_mode());
       break;
     case AudioCompanionSettingsReceiver:
       title = i18n_noop("Receiver");
       subtitle = audio_companion_get_receiver_name(receiver_name, sizeof(receiver_name)) ?
                  receiver_name : i18n_noop("Not Paired");
-      break;
-    case AudioCompanionSettingsDiagnostics:
-      title = i18n_noop("Status");
-      subtitle = prv_state_name(audio_companion_get_state());
       break;
     case AudioCompanionSettingsCount:
       break;
@@ -173,21 +222,12 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       settings_menu_reload_data(SettingsMenuItemAudioCompanion);
       settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
       break;
-    case AudioCompanionSettingsPauseStationary:
-      audio_companion_set_pause_stationary_enabled(
-          !audio_companion_get_pause_stationary_enabled());
-      settings_menu_reload_data(SettingsMenuItemAudioCompanion);
-      settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
+    case AudioCompanionSettingsStatus:
+      prv_show_diagnostics(data);
       break;
-    case AudioCompanionSettingsPauseLowPower:
-      audio_companion_set_pause_low_power_enabled(
-          !audio_companion_get_pause_low_power_enabled());
-      settings_menu_reload_data(SettingsMenuItemAudioCompanion);
-      settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
-      break;
-    case AudioCompanionSettingsSuppressSilence:
-      audio_companion_set_silence_suppression_enabled(
-          !audio_companion_get_silence_suppression_enabled());
+    case AudioCompanionSettingsSkipSilence:
+      audio_companion_set_silence_mode(
+          prv_next_silence_mode(audio_companion_get_silence_mode()));
       settings_menu_reload_data(SettingsMenuItemAudioCompanion);
       settings_menu_mark_dirty(SettingsMenuItemAudioCompanion);
       break;
@@ -198,9 +238,6 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       }
       break;
     }
-    case AudioCompanionSettingsDiagnostics:
-      prv_show_diagnostics(data);
-      break;
     case AudioCompanionSettingsCount:
       break;
   }
@@ -213,6 +250,8 @@ static Window *prv_init(void) {
     .draw_row = prv_draw_row_cb,
     .select_click = prv_select_click_cb,
     .num_rows = prv_num_rows_cb,
+    .appear = prv_appear_cb,
+    .hide = prv_hide_cb,
   };
   return settings_window_create(SettingsMenuItemAudioCompanion, &data->callbacks);
 }

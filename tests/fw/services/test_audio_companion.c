@@ -50,12 +50,14 @@ static uint16_t s_rtc_ms;
 static bool s_pref_pause_stationary;
 static bool s_pref_pause_low_power;
 static bool s_pref_silence_suppression;
+static uint8_t s_pref_silence_mode;
 
 static AudioCompanionAuthEval s_auth_eval;
 static bool s_auth_receiver_exists;
 static bool s_auth_store_succeeds;
 static bool s_auth_forget_called;
 static char s_auth_name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES + 1];
+static bool s_enable_prompted;
 
 static bool s_voice_speex_initialized;
 static int16_t s_voice_frame_buffer[AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES];
@@ -164,6 +166,14 @@ bool shell_prefs_get_audio_companion_silence_suppression_enabled(void) {
 
 void shell_prefs_set_audio_companion_silence_suppression_enabled(bool enabled) {
   s_pref_silence_suppression = enabled;
+}
+
+uint8_t shell_prefs_get_audio_companion_silence_mode(void) {
+  return s_pref_silence_mode;
+}
+
+void shell_prefs_set_audio_companion_silence_mode(uint8_t mode) {
+  s_pref_silence_mode = mode;
 }
 
 void audio_companion_auth_init(void) {
@@ -304,6 +314,19 @@ static void prv_build_resume(uint8_t *buf, size_t *length_out, uint8_t token) {
   *length_out = sizeof(resume);
 }
 
+static void prv_build_enable_request(uint8_t *buf, size_t *length_out, uint8_t token) {
+  const AudioCompanionEnableRequestMsg request = {
+    .msg_id = AudioCompanionCtrlMsgIdEnableRequest,
+    .request_token = token,
+  };
+  memcpy(buf, &request, sizeof(request));
+  *length_out = sizeof(request);
+}
+
+static void prv_enable_handler(void) {
+  s_enable_prompted = true;
+}
+
 static void prv_send_control(const uint8_t *buf, size_t length) {
   audio_companion_handle_control_write(buf, length);
   fake_system_task_callbacks_invoke_pending();
@@ -389,11 +412,13 @@ void test_audio_companion__initialize(void) {
   s_pref_pause_stationary = true;
   s_pref_pause_low_power = true;
   s_pref_silence_suppression = false;
+  s_pref_silence_mode = AudioCompanionSilenceModeOff;
   s_auth_eval = AudioCompanionAuthEvalMatch;
   s_auth_receiver_exists = true;
   s_auth_store_succeeds = true;
   s_auth_forget_called = false;
   strcpy(s_auth_name, "Audio App");
+  s_enable_prompted = false;
   s_voice_speex_initialized = false;
   s_encoded_counter = 0;
   s_mic_running = false;
@@ -426,6 +451,29 @@ void test_audio_companion__denies_auth_while_disabled(void) {
   cl_assert_equal_i(msg.status, AudioCompanionAuthStatusDeniedDisabled);
   cl_assert_equal_i(s_data_count, 0);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateDisabled);
+}
+
+void test_audio_companion__enable_request_prompts_and_persists_pref(void) {
+  audio_companion_set_enable_handler(prv_enable_handler);
+  prv_subscribe(false, true);
+
+  uint8_t buf[sizeof(AudioCompanionEnableRequestMsg)];
+  size_t length = 0;
+  prv_build_enable_request(buf, &length, 0x2D);
+  prv_send_control(buf, length);
+  cl_assert(s_enable_prompted);
+  cl_assert(!audio_companion_is_enabled());
+
+  audio_companion_handle_enable_response(true);
+  cl_assert(audio_companion_is_enabled());
+  cl_assert(s_pref_enabled);
+
+  const CapturedNotification *ack = prv_last_control_msg(AudioCompanionCtrlMsgIdAck);
+  cl_assert(ack);
+  AudioCompanionAckMsg ack_msg;
+  memcpy(&ack_msg, ack->data, sizeof(ack_msg));
+  cl_assert_equal_i(ack_msg.request_token, 0x2D);
+  cl_assert_equal_i(ack_msg.status, AudioCompanionAckStatusOk);
 }
 
 void test_audio_companion__streams_only_after_authorized_session(void) {
@@ -696,18 +744,18 @@ void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) 
   cl_assert(gap_msg.missing_frame_count >= 1);
 }
 
-void test_audio_companion__stationary_pause_can_be_disabled(void) {
+void test_audio_companion__stationary_pause_is_always_on(void) {
   audio_companion_set_enabled(true);
   audio_companion_set_pause_stationary_enabled(false);
   prv_subscribe(true, true);
   prv_authenticate();
 
   audio_companion_set_runlevel(RunLevel_Stationary);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
 }
 
-void test_audio_companion__low_power_pause_can_be_disabled_separately(void) {
+void test_audio_companion__low_power_pause_is_always_on(void) {
   audio_companion_set_enabled(true);
   audio_companion_set_pause_stationary_enabled(true);
   audio_companion_set_pause_low_power_enabled(false);
@@ -715,9 +763,12 @@ void test_audio_companion__low_power_pause_can_be_disabled_separately(void) {
   prv_authenticate();
 
   audio_companion_set_runlevel(RunLevel_LowPower);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
+
+  audio_companion_set_runlevel(RunLevel_Normal);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
-
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
@@ -762,12 +813,12 @@ void test_audio_companion__prefs_loaded_restores_settings_after_boot(void) {
 
   // The prefs file loads later carrying the user's persisted choices; the reload hook must apply
   // them so a reboot does not revert to compile-time defaults.
-  s_pref_silence_suppression = true;
+  s_pref_silence_mode = AudioCompanionSilenceModeBalanced;
   s_pref_pause_stationary = false;
   audio_companion_handle_prefs_loaded();
 
   cl_assert_equal_b(audio_companion_get_silence_suppression_enabled(), true);
-  cl_assert_equal_b(audio_companion_get_pause_stationary_enabled(), false);
+  cl_assert_equal_i(audio_companion_get_silence_mode(), AudioCompanionSilenceModeBalanced);
 }
 
 void test_audio_companion__silence_suppression_can_be_disabled(void) {

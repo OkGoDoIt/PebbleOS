@@ -244,6 +244,7 @@ static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFa
 #define PREF_KEY_AUDIO_COMPANION_PAUSE_STATIONARY "audioCompanionPauseStationary"
 #define PREF_KEY_AUDIO_COMPANION_PAUSE_LOW_POWER "audioCompanionPauseLowPower"
 #define PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION "audioCompanionSilenceSuppression"
+#define PREF_KEY_AUDIO_COMPANION_SILENCE_MODE "audioCompanionSilenceMode"
 #ifdef CONFIG_APP_SCALING
 #define PREF_KEY_LEGACY_APP_RENDER_MODE "legacyAppRenderMode"
 #endif
@@ -256,6 +257,7 @@ static bool s_audio_companion_enabled = false;
 static bool s_audio_companion_pause_stationary_enabled = true;
 static bool s_audio_companion_pause_low_power_enabled = true;
 static bool s_audio_companion_silence_suppression_enabled = true;
+static uint8_t s_audio_companion_silence_mode = AudioCompanionSilenceModeLight;
 #ifdef CONFIG_APP_SCALING
 static uint8_t s_legacy_app_render_mode = 1; // Default to scaled mode
 #endif
@@ -736,6 +738,14 @@ static bool prv_set_s_audio_companion_pause_low_power_enabled(bool *enabled) {
 
 static bool prv_set_s_audio_companion_silence_suppression_enabled(bool *enabled) {
   s_audio_companion_silence_suppression_enabled = *enabled;
+  return true;
+}
+
+static bool prv_set_s_audio_companion_silence_mode(uint8_t *mode) {
+  if (*mode >= AudioCompanionSilenceModeCount) {
+    return false;
+  }
+  s_audio_companion_silence_mode = *mode;
   return true;
 }
 
@@ -1935,6 +1945,17 @@ bool shell_prefs_get_audio_companion_silence_suppression_enabled(void) {
 
 void shell_prefs_set_audio_companion_silence_suppression_enabled(bool enabled) {
   prv_pref_set(PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION, &enabled, sizeof(enabled));
+}
+
+uint8_t shell_prefs_get_audio_companion_silence_mode(void) {
+  return s_audio_companion_silence_mode;
+}
+
+void shell_prefs_set_audio_companion_silence_mode(uint8_t mode) {
+  if (mode >= AudioCompanionSilenceModeCount) {
+    return;
+  }
+  prv_pref_set(PREF_KEY_AUDIO_COMPANION_SILENCE_MODE, &mode, sizeof(mode));
 }
 
 #ifdef CONFIG_APP_SCALING

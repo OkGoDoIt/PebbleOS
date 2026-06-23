@@ -155,6 +155,9 @@ void test_audio_companion_protocol__parse_pause_resume_health(void) {
   cl_assert_equal_i(prv_parse_fixture("resume_request", &msg), AudioCompanionParseResultOk);
   cl_assert_equal_i(msg.resume_request.request_token, 0x2B);
 
+  cl_assert_equal_i(prv_parse_fixture("enable_request", &msg), AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.enable_request.request_token, 0x2D);
+
   cl_assert_equal_i(prv_parse_fixture("receiver_health", &msg), AudioCompanionParseResultOk);
   cl_assert_equal_i(msg.receiver_health.request_token, 0x2C);
   cl_assert_equal_i(msg.receiver_health.battery_pct, 76);

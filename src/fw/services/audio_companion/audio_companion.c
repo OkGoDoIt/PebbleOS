@@ -52,9 +52,15 @@
 #define LOSS_ALERT_MIN_INTERVAL_SECONDS (6 * 60 * 60)
 //! Lightweight silence suppression uses mean absolute PCM level before Speex's gain stage.
 //! Thresholds are intentionally low and hysteretic to avoid clipping quiet speech.
-#define SILENCE_ENTER_AVG_ABS_THRESHOLD (96)
-#define SILENCE_EXIT_AVG_ABS_THRESHOLD (180)
-#define SILENCE_ENTER_FRAMES (3 * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
+#define SILENCE_MODE_LIGHT_ENTER_THRESHOLD (64)
+#define SILENCE_MODE_LIGHT_EXIT_THRESHOLD (105)
+#define SILENCE_MODE_LIGHT_ENTER_MS (5000)
+#define SILENCE_MODE_BALANCED_ENTER_THRESHOLD (80)
+#define SILENCE_MODE_BALANCED_EXIT_THRESHOLD (135)
+#define SILENCE_MODE_BALANCED_ENTER_MS (3500)
+#define SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD (110)
+#define SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD (180)
+#define SILENCE_MODE_AGGRESSIVE_ENTER_MS (2000)
 
 typedef struct {
   bool data_subscribed;
@@ -72,14 +78,28 @@ typedef struct {
   char name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES + 1];
 } ConsentRequest;
 
+typedef struct {
+  bool pending;
+  uint8_t request_token;
+} EnableRequest;
+
+typedef struct {
+  uint32_t enter_threshold;
+  uint32_t exit_threshold;
+  uint32_t enter_frames;
+} SilenceModeConfig;
+
 static PebbleMutex *s_lock;
 static bool s_initialized;
 static AudioCompanionServiceState s_state = AudioCompanionServiceStateDisabled;
 static bool s_enabled;
 static ReceiverSession s_session;
 static ConsentRequest s_consent;
+static EnableRequest s_enable_request;
 static AudioCompanionConsentHandler s_consent_handler;
+static AudioCompanionEnableHandler s_enable_handler;
 static TimerID s_consent_timer = TIMER_INVALID_ID;
+static TimerID s_enable_timer = TIMER_INVALID_ID;
 
 // Stream + capture state
 static bool s_owns_mic;
@@ -105,7 +125,7 @@ static bool s_receiver_pause_requested;
 static bool s_low_battery;
 static bool s_pause_stationary_enabled;
 static bool s_pause_low_power_enabled;
-static bool s_silence_suppression_enabled;
+static AudioCompanionSilenceMode s_silence_mode = AudioCompanionSilenceModeLight;
 static RunLevel s_runlevel = RunLevel_Normal;
 static bool s_error;
 
@@ -149,8 +169,34 @@ static bool prv_session_ready_locked(void) {
 }
 
 static bool prv_power_save_active_locked(void) {
-  return ((s_runlevel == RunLevel_Stationary && s_pause_stationary_enabled) ||
-          (s_runlevel == RunLevel_LowPower && s_pause_low_power_enabled));
+  return s_runlevel == RunLevel_Stationary || s_runlevel == RunLevel_LowPower;
+}
+
+static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode) {
+  static const SilenceModeConfig s_configs[] = {
+    [AudioCompanionSilenceModeLight] = {
+      .enter_threshold = SILENCE_MODE_LIGHT_ENTER_THRESHOLD,
+      .exit_threshold = SILENCE_MODE_LIGHT_EXIT_THRESHOLD,
+      .enter_frames =
+          SILENCE_MODE_LIGHT_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+    },
+    [AudioCompanionSilenceModeBalanced] = {
+      .enter_threshold = SILENCE_MODE_BALANCED_ENTER_THRESHOLD,
+      .exit_threshold = SILENCE_MODE_BALANCED_EXIT_THRESHOLD,
+      .enter_frames =
+          SILENCE_MODE_BALANCED_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+    },
+    [AudioCompanionSilenceModeAggressive] = {
+      .enter_threshold = SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD,
+      .exit_threshold = SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD,
+      .enter_frames =
+          SILENCE_MODE_AGGRESSIVE_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+    },
+  };
+  if (mode <= AudioCompanionSilenceModeOff || mode >= AudioCompanionSilenceModeCount) {
+    return NULL;
+  }
+  return &s_configs[mode];
 }
 
 static void prv_reset_silence_suppression_locked(void) {
@@ -190,7 +236,8 @@ static uint32_t prv_mean_abs_pcm(const int16_t *samples, size_t sample_count) {
 
 static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sample_count,
                                               bool *out_schedule_drain) {
-  if (!s_silence_suppression_enabled) {
+  const SilenceModeConfig *config = prv_silence_mode_config(s_silence_mode);
+  if (!config) {
     if (s_silence_suppressing && out_schedule_drain) {
       *out_schedule_drain = true;
     }
@@ -200,16 +247,16 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
 
   const uint32_t mean_abs = prv_mean_abs_pcm(samples, sample_count);
   if (s_silence_suppressing) {
-    if (mean_abs >= SILENCE_EXIT_AVG_ABS_THRESHOLD) {
+    if (mean_abs >= config->exit_threshold) {
       prv_record_silence_gap_locked();
       if (out_schedule_drain) {
         *out_schedule_drain = true;
       }
       return false;
     }
-  } else if (mean_abs < SILENCE_ENTER_AVG_ABS_THRESHOLD) {
+  } else if (mean_abs < config->enter_threshold) {
     s_silence_candidate_frames++;
-    if (s_silence_candidate_frames <= SILENCE_ENTER_FRAMES) {
+    if (s_silence_candidate_frames <= config->enter_frames) {
       return false;
     }
     s_silence_suppressing = true;
@@ -877,6 +924,14 @@ static void prv_consent_timer_cb(void *data) {
   system_task_add_callback(prv_consent_timeout_system_task_cb, NULL);
 }
 
+static void prv_enable_timeout_system_task_cb(void *data) {
+  audio_companion_handle_enable_response(false);
+}
+
+static void prv_enable_timer_cb(void *data) {
+  system_task_add_callback(prv_enable_timeout_system_task_cb, NULL);
+}
+
 static void prv_handle_auth_request_locked(const AudioCompanionAuthRequest *req) {
   const uint8_t granted = (req->proto_version < AUDIO_COMPANION_PROTOCOL_VERSION)
                               ? req->proto_version
@@ -969,6 +1024,64 @@ void audio_companion_set_consent_handler(AudioCompanionConsentHandler handler) {
   mutex_unlock(s_lock);
 }
 
+static void prv_handle_enable_request_locked(const AudioCompanionEnableRequestMsg *req) {
+  if (s_enabled) {
+    prv_send_ack_locked(req->request_token, AudioCompanionAckStatusOk);
+    return;
+  }
+  if (s_enable_request.pending) {
+    prv_send_ack_locked(req->request_token, AudioCompanionAckStatusBadState);
+    return;
+  }
+  if (!s_enable_handler) {
+    prv_send_ack_locked(req->request_token, AudioCompanionAckStatusRejected);
+    return;
+  }
+
+  s_enable_request = (EnableRequest) {
+    .pending = true,
+    .request_token = req->request_token,
+  };
+  if (s_enable_timer == TIMER_INVALID_ID) {
+    s_enable_timer = new_timer_create();
+  }
+  new_timer_start(s_enable_timer, CONSENT_TIMEOUT_MS, prv_enable_timer_cb, NULL, 0);
+  PBL_LOG_INFO("Audio companion: requesting user approval to enable background audio");
+  s_enable_handler();
+}
+
+void audio_companion_handle_enable_response(bool granted) {
+  mutex_lock(s_lock);
+  if (!s_enable_request.pending) {
+    mutex_unlock(s_lock);
+    return;
+  }
+  const uint8_t token = s_enable_request.request_token;
+  s_enable_request.pending = false;
+  if (s_enable_timer != TIMER_INVALID_ID) {
+    new_timer_stop(s_enable_timer);
+  }
+  PBL_LOG_INFO("Audio companion enable response: %s", granted ? "granted" : "declined");
+  if (granted) {
+    shell_prefs_set_audio_companion_enabled(true);
+    if (!s_enabled) {
+      s_enabled = true;
+      prv_reevaluate_locked();
+    }
+    prv_send_ack_locked(token, AudioCompanionAckStatusOk);
+  } else {
+    prv_send_ack_locked(token, AudioCompanionAckStatusRejected);
+  }
+  memset(&s_enable_request, 0, sizeof(s_enable_request));
+  mutex_unlock(s_lock);
+}
+
+void audio_companion_set_enable_handler(AudioCompanionEnableHandler handler) {
+  mutex_lock(s_lock);
+  s_enable_handler = handler;
+  mutex_unlock(s_lock);
+}
+
 // ---- Control message handling ----
 
 static void prv_handle_checkpoint_locked(const AudioCompanionCheckpointMsg *checkpoint) {
@@ -1049,6 +1162,9 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
                   msg->receiver_health.battery_pct, msg->receiver_health.app_state,
                   msg->receiver_health.queue_depth_frames);
       prv_send_ack_locked(msg->receiver_health.request_token, AudioCompanionAckStatusOk);
+      break;
+    case AudioCompanionCtrlMsgIdEnableRequest:
+      prv_handle_enable_request_locked(&msg->enable_request);
       break;
     default:
       break;
@@ -1260,8 +1376,8 @@ void audio_companion_init(void) {
       shell_prefs_get_audio_companion_pause_stationary_enabled();
   s_pause_low_power_enabled =
       shell_prefs_get_audio_companion_pause_low_power_enabled();
-  s_silence_suppression_enabled =
-      shell_prefs_get_audio_companion_silence_suppression_enabled();
+  s_silence_mode =
+      (AudioCompanionSilenceMode)shell_prefs_get_audio_companion_silence_mode();
   const BatteryChargeState charge = battery_get_charge_state();
   s_low_battery = charge.charge_percent < CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT;
   prv_reevaluate_locked();
@@ -1286,7 +1402,8 @@ void audio_companion_handle_prefs_loaded(void) {
   s_enabled = shell_prefs_get_audio_companion_enabled();
   s_pause_stationary_enabled = shell_prefs_get_audio_companion_pause_stationary_enabled();
   s_pause_low_power_enabled = shell_prefs_get_audio_companion_pause_low_power_enabled();
-  s_silence_suppression_enabled = shell_prefs_get_audio_companion_silence_suppression_enabled();
+  s_silence_mode =
+      (AudioCompanionSilenceMode)shell_prefs_get_audio_companion_silence_mode();
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
 }
@@ -1360,22 +1477,40 @@ void audio_companion_set_pause_low_power_enabled(bool enabled) {
 
 bool audio_companion_get_silence_suppression_enabled(void) {
   mutex_lock(s_lock);
-  const bool enabled = s_silence_suppression_enabled;
+  const bool enabled = s_silence_mode != AudioCompanionSilenceModeOff;
   mutex_unlock(s_lock);
   return enabled;
 }
 
 void audio_companion_set_silence_suppression_enabled(bool enabled) {
   shell_prefs_set_audio_companion_silence_suppression_enabled(enabled);
+  audio_companion_set_silence_mode(enabled ? AudioCompanionSilenceModeLight
+                                           : AudioCompanionSilenceModeOff);
+}
+
+AudioCompanionSilenceMode audio_companion_get_silence_mode(void) {
   mutex_lock(s_lock);
-  if (s_silence_suppression_enabled != enabled) {
-    if (!enabled) {
+  const AudioCompanionSilenceMode mode = s_silence_mode;
+  mutex_unlock(s_lock);
+  return mode;
+}
+
+void audio_companion_set_silence_mode(AudioCompanionSilenceMode mode) {
+  if (mode >= AudioCompanionSilenceModeCount) {
+    return;
+  }
+  shell_prefs_set_audio_companion_silence_mode((uint8_t)mode);
+  shell_prefs_set_audio_companion_silence_suppression_enabled(
+      mode != AudioCompanionSilenceModeOff);
+  mutex_lock(s_lock);
+  if (s_silence_mode != mode) {
+    if (mode == AudioCompanionSilenceModeOff) {
       prv_record_silence_gap_locked();
       if (prv_session_ready_locked()) {
         prv_start_drain_timer_locked();
       }
     }
-    s_silence_suppression_enabled = enabled;
+    s_silence_mode = mode;
   }
   mutex_unlock(s_lock);
 }
@@ -1439,8 +1574,11 @@ void audio_companion_test_reset(void) {
   s_enabled = false;
   memset(&s_session, 0, sizeof(s_session));
   memset(&s_consent, 0, sizeof(s_consent));
+  memset(&s_enable_request, 0, sizeof(s_enable_request));
   s_consent_handler = NULL;
+  s_enable_handler = NULL;
   s_consent_timer = TIMER_INVALID_ID;
+  s_enable_timer = TIMER_INVALID_ID;
   s_owns_mic = false;
   s_stream_active = false;
   s_need_stream_start = false;
@@ -1462,7 +1600,7 @@ void audio_companion_test_reset(void) {
   s_low_battery = false;
   s_pause_stationary_enabled = false;
   s_pause_low_power_enabled = false;
-  s_silence_suppression_enabled = false;
+  s_silence_mode = AudioCompanionSilenceModeOff;
   s_runlevel = RunLevel_Normal;
   s_error = false;
   s_captured_frames = 0;

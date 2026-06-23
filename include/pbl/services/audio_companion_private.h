@@ -32,6 +32,7 @@ typedef enum {
   AudioCompanionCtrlMsgIdPauseRequest = 0x04,
   AudioCompanionCtrlMsgIdResumeRequest = 0x05,
   AudioCompanionCtrlMsgIdReceiverHealth = 0x06,
+  AudioCompanionCtrlMsgIdEnableRequest = 0x07,
 } AudioCompanionCtrlMsgId;
 
 //! Watch -> phone control message ids (notifications on the Control characteristic).
@@ -188,6 +189,11 @@ typedef struct PACKED {
 typedef struct PACKED {
   uint8_t msg_id;
   uint8_t request_token;
+} AudioCompanionEnableRequestMsg;
+
+typedef struct PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
   uint8_t battery_pct;
   uint8_t app_state;
   uint32_t queue_depth_frames;
@@ -291,6 +297,7 @@ typedef struct {
     AudioCompanionPauseRequestMsg pause_request;
     AudioCompanionResumeRequestMsg resume_request;
     AudioCompanionReceiverHealthMsg receiver_health;
+    AudioCompanionEnableRequestMsg enable_request;
   };
 } AudioCompanionControlMsg;
 

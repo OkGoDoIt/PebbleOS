@@ -136,6 +136,11 @@ static const uint8_t s_fx_data_unknown_id[] = {
   0x9f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+// Receiver asks the watch to prompt the user to enable Background Audio
+static const uint8_t s_fx_enable_request[] = {
+  0x07, 0x2d,
+};
+
 // Watch reports a malformed inbound message
 static const uint8_t s_fx_error_malformed[] = {
   0x45, 0x01, 0x00, 0x00, 0x00, 0x00,
@@ -408,6 +413,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "control_empty", FixtureChannelControlIn, FixtureExpectReject, s_fx_control_empty, 0 },
   { "control_unknown_id", FixtureChannelControlIn, FixtureExpectIgnore, s_fx_control_unknown_id, 2 },
   { "data_unknown_id", FixtureChannelData, FixtureExpectIgnore, s_fx_data_unknown_id, 9 },
+  { "enable_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_enable_request, 2 },
   { "error_malformed", FixtureChannelControlOut, FixtureExpectParse, s_fx_error_malformed, 6 },
   { "info_disabled", FixtureChannelInfo, FixtureExpectParse, s_fx_info_disabled, 20 },
   { "info_streaming", FixtureChannelInfo, FixtureExpectParse, s_fx_info_streaming, 20 },

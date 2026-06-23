@@ -10,6 +10,7 @@ _Static_assert(sizeof(AudioCompanionAuthRevokeMsg) == 34, "auth revoke size");
 _Static_assert(sizeof(AudioCompanionCheckpointMsg) == 26, "checkpoint size");
 _Static_assert(sizeof(AudioCompanionPauseRequestMsg) == 3, "pause request size");
 _Static_assert(sizeof(AudioCompanionResumeRequestMsg) == 2, "resume request size");
+_Static_assert(sizeof(AudioCompanionEnableRequestMsg) == 2, "enable request size");
 _Static_assert(sizeof(AudioCompanionReceiverHealthMsg) == 8, "receiver health size");
 _Static_assert(sizeof(AudioCompanionAuthResultMsg) == 4, "auth result size");
 _Static_assert(sizeof(AudioCompanionRevokedMsg) == 2, "revoked size");
@@ -72,6 +73,12 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
         return AudioCompanionParseResultMalformed;
       }
       memcpy(&msg_out->resume_request, data, sizeof(msg_out->resume_request));
+      break;
+    case AudioCompanionCtrlMsgIdEnableRequest:
+      if (length < sizeof(AudioCompanionEnableRequestMsg)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->enable_request, data, sizeof(msg_out->enable_request));
       break;
     case AudioCompanionCtrlMsgIdReceiverHealth:
       if (length < sizeof(AudioCompanionReceiverHealthMsg)) {

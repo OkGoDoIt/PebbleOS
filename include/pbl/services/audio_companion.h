@@ -44,12 +44,22 @@ void audio_companion_apply_enabled(bool enabled);
 //! the user's persisted Background Audio preference.
 void audio_companion_set_runlevel(RunLevel runlevel);
 
+typedef enum {
+  AudioCompanionSilenceModeOff = 0,
+  AudioCompanionSilenceModeLight = 1,
+  AudioCompanionSilenceModeBalanced = 2,
+  AudioCompanionSilenceModeAggressive = 3,
+  AudioCompanionSilenceModeCount,
+} AudioCompanionSilenceMode;
+
 bool audio_companion_get_pause_stationary_enabled(void);
 void audio_companion_set_pause_stationary_enabled(bool enabled);
 bool audio_companion_get_pause_low_power_enabled(void);
 void audio_companion_set_pause_low_power_enabled(bool enabled);
 bool audio_companion_get_silence_suppression_enabled(void);
 void audio_companion_set_silence_suppression_enabled(bool enabled);
+AudioCompanionSilenceMode audio_companion_get_silence_mode(void);
+void audio_companion_set_silence_mode(AudioCompanionSilenceMode mode);
 
 AudioCompanionServiceState audio_companion_get_state(void);
 void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out);
@@ -70,5 +80,8 @@ void audio_companion_mic_conflict_end(void);
 //! must defer UI work to KernelMain and must not call
 //! audio_companion_handle_consent_response() synchronously.
 typedef void (*AudioCompanionConsentHandler)(const char *receiver_name);
+typedef void (*AudioCompanionEnableHandler)(void);
 void audio_companion_set_consent_handler(AudioCompanionConsentHandler handler);
 void audio_companion_handle_consent_response(bool granted);
+void audio_companion_set_enable_handler(AudioCompanionEnableHandler handler);
+void audio_companion_handle_enable_response(bool granted);
