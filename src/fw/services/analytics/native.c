@@ -18,6 +18,8 @@
 #include "util/size.h"
 #include "util/uuid.h"
 
+PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
+
 #define NATIVE_HEARTBEAT_RECORD_VERSION 1
 #define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 507
 

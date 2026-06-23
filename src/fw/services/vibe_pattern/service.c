@@ -3,6 +3,7 @@
 
 #include "pbl/services/vibe_pattern.h"
 
+#include "drivers/accel.h"
 #include "drivers/vibe.h"
 #include "drivers/battery.h"
 #include "drivers/rtc.h"
@@ -26,6 +27,8 @@
 #include <inttypes.h>
 #include <stddef.h>
 
+PBL_LOG_MODULE_DEFINE(service_vibe_pattern, CONFIG_SERVICE_VIBE_PATTERN_LOG_LEVEL);
+
 typedef struct {
   ListNode list_node;
   uint64_t time_start;
@@ -34,7 +37,7 @@ typedef struct {
 
 // The maximum history we need to keep is based on the maximum time between accel samples (the
 // lowest sampling rate) in milliseconds and the maximum number of accel samples per update.
-#define MAX_HISTORY_MS (ACCEL_MAX_SAMPLES_PER_UPDATE * 1000 / ACCEL_MINIMUM_SAMPLING_RATE)
+#define MAX_HISTORY_MS (accel_get_max_num_samples() * 1000 / ACCEL_MINIMUM_SAMPLING_RATE)
 #define END_NOT_SET 0
 #define HISTORY_CLEAR_ALL 0
 
@@ -292,7 +295,6 @@ static void prv_timer_callback(void* data) {
   } else {
     // I'm done with the active pattern
     // make sure it's off
-    PBL_LOG_INFO("vibe_pattern: pattern complete");
     prv_vibes_set_vibe_strength(VIBE_STRENGTH_OFF);
     s_pattern_in_progress = false;
   }
@@ -399,7 +401,6 @@ DEFINE_SYSCALL(void, sys_vibe_pattern_trigger_start, void) {
 
 DEFINE_SYSCALL(void, sys_vibe_pattern_clear, void) {
   mutex_lock(s_vibe_pattern_mutex);
-  PBL_LOG_INFO("vibe_pattern: clear (was_in_progress=%d)", s_pattern_in_progress);
   new_timer_stop(s_pattern_timer);
   while (s_vibe_queue_head) {
     VibePatternStep *removed_node = s_vibe_queue_head;

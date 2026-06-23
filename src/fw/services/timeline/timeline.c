@@ -33,6 +33,8 @@
 #include "util/size.h"
 #include "util/time/time.h"
 
+PBL_LOG_MODULE_DEFINE(service_timeline, CONFIG_SERVICE_TIMELINE_LOG_LEVEL);
+
 struct TimelineNode {
   ListNode node;
   int index;
@@ -736,7 +738,7 @@ static void prv_perform_ancs_negative_action(const TimelineItem *item,
   uint32_t ancs_uid = attribute_get_uint32(&action->attr_list, AttributeIdAncsId,
                                            item->header.ancs_uid);
 
-  PBL_LOG_INFO("Perform ancs notification action (%"PRIu32", %"PRIu8")", ancs_uid,
+  PBL_LOG_DBG("Perform ancs notification action (%"PRIu32", %"PRIu8")", ancs_uid,
           action_id);
   ancs_perform_action(ancs_uid, action_id);
 

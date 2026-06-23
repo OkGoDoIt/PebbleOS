@@ -8,7 +8,9 @@
 #include "system/logging.h"
 #include "util/misc.h"
 #include "pbl/services/system_task.h"
-#include "kernel/util/stop.h"
+#include "pbl/soc/sf32lb/sleep.h"
+
+PBL_LOG_MODULE_DEFINE(driver_speaker_sf32lb, CONFIG_DRIVER_SPEAKER_LOG_LEVEL);
 
 //AVDD 3V3 for obelix
 #define BSP_AVDD_V18_ENABLE     0
@@ -342,7 +344,7 @@ void audec_start(AudioDevice* audio_device, AudioTransCB cb) {
     AUDCODEC_HandleTypeDef *haudcodec = &state->audcodec;
     state->trans_cb = cb;
 
-    stop_mode_disable(InhibitorAudio);
+    soc_sf32lb_sleep_block(SOC_SF32LB_DEEPWFI);
 
     prv_allocate_buffers(state);
 
@@ -419,7 +421,7 @@ void audec_stop(AudioDevice* audio_device) {
     prv_free_buffers(state);
     memset(haudcodec->buf[HAL_AUDCODEC_DAC_CH0], 0, haudcodec->bufSize);
 
-    stop_mode_enable(InhibitorAudio);
+    soc_sf32lb_sleep_release(SOC_SF32LB_DEEPWFI);
 }
 
 void audec_dac0_dma_irq_handler(AudioDevice* audio_device)

@@ -29,9 +29,10 @@ sys.path.append(os.path.join(waf_dir, 'sdk/tools/'))
 sys.path.append(os.path.join(waf_dir, 'waftools'))
 
 import waftools.gitinfo
+import waftools.boards
 import waftools.ldscript
-import waftools.openocd
 import waftools.pebble_sdk_gcc as pebble_sdk_gcc
+import tools.runners as pebble_runners
 from waftools.pebble_sdk_locator import activate_sdk
 
 from pebble_sdk_version import set_env_sdk_version
@@ -42,15 +43,8 @@ activate_sdk(waflib.Context.run_dir or os.getcwd())
 
 LOGHASH_OUT_PATH = 'src/fw/loghash_dict.json'
 
-RUNNERS = {
-    'asterix': ['openocd', 'nrfutil'],
-    'obelix_dvt': ['sftool'],
-    'obelix_pvt': ['sftool'],
-    'obelix_bb2': ['sftool'],
-    'getafix_evt': ['sftool'],
-    'getafix_dvt': ['sftool'],
-    'getafix_dvt2': ['sftool'],
-}
+def _available_boards():
+    return waftools.boards.available_boards(waflib.Context.run_dir or os.getcwd())
 
 
 def truncate(msg):
@@ -65,6 +59,17 @@ def truncate(msg):
     if len(msg) > truncate_length:
         msg = msg[:truncate_length-4] + '...\n' + waflib.Logs.colors.NORMAL
     return msg
+
+
+class _OptParserAdapter(object):
+    """Adapts a waf (optparse) option container to the argparse-style
+    add_argument() interface the runners' do_add_parser() expects."""
+
+    def __init__(self, opt):
+        self._opt = opt
+
+    def add_argument(self, *flags, **kwargs):
+        self._opt.add_option(*flags, **kwargs)
 
 
 def options(opt):
@@ -89,26 +94,18 @@ def options(opt):
     gr.add_option('--no_run', action='store_true', help='Do not run the tests, just build them')
     gr.add_option('--no_images', action='store_true', help='skip generation of test images, '
                   'which are only required for some tests and can slow down build times')
+    boards = _available_boards()
     opt.add_option('--board', action='store',
-                   choices=[ 'asterix',
-                             'obelix_dvt',
-                             'obelix_pvt',
-                             'obelix_bb2',
-                             'getafix_evt',
-                             'getafix_dvt',
-                             'getafix_dvt2',
-                             'qemu_emery',
-                             'qemu_flint',
-                             'qemu_gabbro',
-                            ],
+                   choices=boards,
                    help='Which board we are targeting '
-                        'asterix, obelix, getafix...')
-    opt.add_option('--runner', default=None, choices=['openocd', 'sftool', 'nrfutil'],
-                   help='Which runner we are using')
-    opt.add_option('--openocd-jtag', action='store', default=None, dest='openocd_jtag',  # default is bb2 (below)
-                   choices=waftools.openocd.JTAG_OPTIONS.keys(),
-                   help='Which JTAG programmer we are using '
-                        '(bb2 (default), olimex, ev2, etc)')
+                        '({})'.format(', '.join(boards)))
+    opt.add_option('--runner', default=None,
+                   help="Override the board's default runner for flash/run/debug")
+    opt.add_option('--resources', action='store_true',
+                   help='Also flash system resources alongside the firmware')
+    # Runner-specific arguments (e.g. --tty for sftool) are contributed by the
+    # runners themselves, mirroring Zephyr's west do_add_parser().
+    pebble_runners.register_args(_OptParserAdapter(opt))
     opt.add_option('--compile_commands', action='store_true', help='Create a clang compile_commands.json')
     opt.add_option('--onlysdk', action='store_true', help="only build the sdk")
     opt.add_option('--no-link', action='store_true',
@@ -127,6 +124,11 @@ def configure(conf):
         conf.fatal('No board selected! '
                    'You must pass a --board argument when configuring.')
 
+    try:
+        board = waftools.boards.parse_board(conf.srcnode.abspath(), conf.options.board)
+    except ValueError as e:
+        conf.fatal(str(e))
+
     # Has to be 'waftools.gettext' as unadorned 'gettext' will find the gettext
     # module in the standard library.
     conf.load('waftools.gettext')
@@ -140,22 +142,17 @@ def configure(conf):
     else:
         conf.env.JS_ENGINE = 'none'
 
-    if not conf.options.runner:
-        conf.env.RUNNER = RUNNERS.get(conf.options.board, [None])[0]
-    else:
-        if conf.options.runner not in RUNNERS.get(conf.options.board, []):
-            conf.fatal('Runner {} is not supported on board {}'.format(
-                       conf.options.runner, conf.options.board))
-        conf.env.RUNNER = conf.options.runner
+    if not board.runners and not conf.env.CONFIG_QEMU:
+        conf.fatal('Board {} does not define any supported runners'.format(
+                   board.target))
 
-    if conf.env.RUNNER == 'openocd':
-        if conf.options.openocd_jtag:
-            conf.env.OPENOCD_JTAG = conf.options.openocd_jtag
-        elif conf.options.board in ('asterix'):
-            conf.env.OPENOCD_JTAG = 'swd_cmsisdap'
-        else:
-            # default to bb2
-            conf.env.OPENOCD_JTAG = 'bb2'
+    for runner in board.runners:
+        if runner not in pebble_runners.names():
+            conf.fatal('Board {} references unknown runner {}'.format(
+                       board.target, runner))
+
+    conf.env.SUPPORTED_RUNNERS = board.runners
+    conf.env.RUNNER = board.runners[0] if board.runners else None
 
     conf.env.FLASH_ITCM = False
 
@@ -170,10 +167,13 @@ def configure(conf):
         conf.env.PLATFORM_NAME = 'gabbro'
         conf.env.MIN_SDK_VERSION = 3
     else:
-        conf.fatal('No platform specified for {}!'.format(conf.options.board))
+        conf.fatal('No platform specified for {}!'.format(board.target))
 
     # Save this for later
-    conf.env.BOARD = conf.options.board
+    conf.env.BOARD = board.target
+    conf.env.BOARD_NAME = board.name
+    conf.env.BOARD_REVISION = board.revision
+    conf.env.BOARD_NORMALIZED = board.normalized
 
     conf.env.VARIANT = conf.options.variant
     if conf.env.VARIANT == 'prf':
@@ -193,9 +193,6 @@ def configure(conf):
 
     conf.load('protoc')
     conf.recurse('src/fw')
-
-    if conf.env.RUNNER == 'openocd':
-        waftools.openocd.write_cfg(conf)
 
     # Save a baseline environment that we'll use for unit tests
     # Detach so operations against conf.env don't affect unit_test_env
@@ -248,7 +245,10 @@ def configure(conf):
                         '-gdwarf-4',
                         '-O0',
                         '-fdata-sections',
-                        '-ffunction-sections' ]
+                        '-ffunction-sections',
+                        '-fno-common',
+                        '-ffp-contract=off',
+                        '-fexcess-precision=standard' ]
 
     # Reset LINKFLAGS so firmware-specific flags (e.g. --undefined=HAL_GetTick)
     # don't leak into the host test environment.
@@ -503,13 +503,13 @@ def _make_bundle(ctx, fw_bin_path, fw_type='normal', board=None, resource_path=N
     import mkbundle
 
     if board is None:
-        board = ctx.env.BOARD
+        board = ctx.env.BOARD_NORMALIZED
 
     b = mkbundle.PebbleBundle()
 
     version_string, version_ts, version_commit = _get_version_info(ctx)
     slot = ctx.env.SLOT if fw_type == 'normal' and ctx.env.SLOT != -1 else None
-    out_file = ctx.get_pbz_node(fw_type, ctx.env.BOARD, version_string, slot).path_from(ctx.path)
+    out_file = ctx.get_pbz_node(fw_type, ctx.env.BOARD_NORMALIZED, version_string, slot).path_from(ctx.path)
 
     try:
         _check_firmware_image_size(ctx, fw_bin_path)
@@ -644,6 +644,82 @@ def _check_firmware_image_size(ctx, path):
 
     return ('%d / %d bytes used (%d free)' %
             (firmware_size, max_firmware_size, (max_firmware_size - firmware_size)))
+
+
+def _create_runner(ctx, want_resources=False):
+    selected = ctx.options.runner or ctx.env.RUNNER
+    supported = ctx.env.SUPPORTED_RUNNERS or ([ctx.env.RUNNER] if ctx.env.RUNNER else [])
+
+    if not selected:
+        ctx.fatal('No runner available for board {}'.format(ctx.env.BOARD))
+    if selected not in supported:
+        ctx.fatal('Board {} does not support runner {}. Supported runners: {}'.format(
+                  ctx.env.BOARD, selected, ', '.join(supported) or 'none'))
+
+    resources_file = None
+    if want_resources and ctx.options.resources and ctx.env.VARIANT != 'prf':
+        resources_file = ctx.get_pbpack_node().path_from(ctx.path)
+
+    fw = ctx.get_tintin_fw_node()
+    cfg = pebble_runners.RunnerConfig(
+        board_dir=os.path.join('boards', ctx.env.BOARD_NAME),
+        soc=ctx.env.CONFIG_SOC,
+        hex_file=fw.change_ext('.hex').path_from(ctx.path),
+        elf_file=fw.change_ext('.elf').path_from(ctx.path),
+        resources_file=resources_file,
+    )
+
+    try:
+        return pebble_runners.create(selected, cfg, ctx.options)
+    except pebble_runners.RunnerError as e:
+        ctx.fatal(str(e))
+
+
+class FlashCommand(BuildContext):
+    """flashes the firmware to a connected device"""
+    cmd = 'flash'
+    fun = 'flash'
+
+
+def flash(ctx):
+    fw_bin = ctx.get_tintin_fw_node()
+    try:
+        space_left = _check_firmware_image_size(ctx, fw_bin.path_from(ctx.path))
+    except FirmwareTooLargeException as e:
+        ctx.fatal(str(e))
+    Logs.pprint('CYAN', 'FW: ' + space_left)
+
+    runner = _create_runner(ctx, want_resources=True)
+    try:
+        runner.run('flash')
+    except pebble_runners.RunnerError as e:
+        ctx.fatal(str(e))
+
+
+class RunCommand(BuildContext):
+    """resets and runs the firmware on a connected device"""
+    cmd = 'run'
+    fun = 'run'
+
+
+def run(ctx):
+    try:
+        _create_runner(ctx).run('run')
+    except pebble_runners.RunnerError as e:
+        ctx.fatal(str(e))
+
+
+class DebugCommand(BuildContext):
+    """attaches gdb to the target"""
+    cmd = 'debug'
+    fun = 'debug'
+
+
+def debug(ctx):
+    try:
+        _create_runner(ctx).run('debug')
+    except pebble_runners.RunnerError as e:
+        ctx.fatal(str(e))
 
 
 # Tool build commands

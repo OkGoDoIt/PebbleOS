@@ -15,7 +15,6 @@
 #include "drivers/exti.h"
 #include "drivers/gpio.h"
 #include "drivers/i2c.h"
-#include "drivers/periph_config.h"
 #include "kernel/events.h"
 #include "kernel/util/delay.h"
 #include "kernel/util/sleep.h"
@@ -23,6 +22,8 @@
 #include "pbl/services/system_task.h"
 #include "system/logging.h"
 #include "system/passert.h"
+
+PBL_LOG_MODULE_DEFINE(driver_pmic_npm1300, CONFIG_DRIVER_PMIC_LOG_LEVEL);
 
 #define CHARGER_DEBOUNCE_MS 400
 #define ADC_POLL_DELAY_MS   5     // Delay between ADC poll iterations to reduce I2C traffic
@@ -175,10 +176,6 @@ static uint16_t prv_ntc_threshold_code(uint8_t celsius) {
 }
 
 void battery_init(void) {
-}
-
-uint32_t pmic_get_last_reset_reason(void) {
-  return 0;
 }
 
 static bool prv_read_register(uint16_t register_address, uint8_t *result) {
