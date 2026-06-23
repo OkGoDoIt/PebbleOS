@@ -780,8 +780,8 @@ void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes
   prv_subscribe(true, true);
   prv_authenticate();
 
-  // First quiet seconds are intentionally retained so quiet speech is not clipped.
-  prv_feed_silence_frames(155);
+  // Light mode keeps roughly the first five quiet seconds so quiet speech is not clipped.
+  prv_feed_silence_frames(255);
   const uint8_t encoded_before_resume = s_encoded_counter;
   cl_assert(encoded_before_resume > 0);
   cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
