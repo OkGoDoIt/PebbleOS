@@ -21,7 +21,7 @@
 PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
 
 #define NATIVE_HEARTBEAT_RECORD_VERSION 1
-#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 507
+#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 515
 
 /* Heartbeat record logged to DLS */
 struct PACKED native_heartbeat_record {
@@ -76,23 +76,23 @@ _Static_assert(offsetof(struct native_heartbeat_record, timestamp) == 1,
                "native_heartbeat_record timestamp offset changed");
 _Static_assert(offsetof(struct native_heartbeat_record, build_id) == 9,
                "native_heartbeat_record build_id offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct) == 94,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct) == 102,
                "native_heartbeat_record battery_soc_pct offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_scale) == 98,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_scale) == 106,
                "native_heartbeat_record battery_soc_pct scale offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_drop) == 100,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_drop) == 108,
                "native_heartbeat_record battery_soc_pct_drop offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_voltage) == 106,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_voltage) == 114,
                "native_heartbeat_record battery_voltage offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_tte_s) == 118,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_tte_s) == 126,
                "native_heartbeat_record battery_tte_s offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_time_ms) == 314,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_time_ms) == 322,
                "native_heartbeat_record watchface_time_ms offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_name) == 318,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_name) == 326,
                "native_heartbeat_record watchface_name offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_uuid) == 351,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_uuid) == 359,
                "native_heartbeat_record watchface_uuid offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) == 503,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) == 511,
                "native_heartbeat_record final metric offset changed");
 
 /* Type-specific internal index enums (dense, no gaps) */

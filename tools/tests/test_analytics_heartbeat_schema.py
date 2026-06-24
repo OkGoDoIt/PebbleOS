@@ -23,26 +23,26 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.fields = native_heartbeat_layout(self.metrics)
         self.offsets = field_offsets(self.fields)
 
-    def test_matches_official_v4_12_0_wire_layout(self):
-        self.assertEqual(wire_size(self.fields), 507)
+    def test_matches_official_v4_18_0_wire_layout(self):
+        self.assertEqual(wire_size(self.fields), 515)
         self.assertEqual(self.offsets["version"], 0)
         self.assertEqual(self.offsets["timestamp"], 1)
         self.assertEqual(self.offsets["build_id"], 9)
-        self.assertEqual(self.offsets["metric_fw_version"], 53)
-        self.assertEqual(self.offsets["metric_battery_soc_pct"], 94)
-        self.assertEqual(self.offsets["metric_battery_soc_pct_scale"], 98)
-        self.assertEqual(self.offsets["metric_battery_soc_pct_drop"], 100)
-        self.assertEqual(self.offsets["metric_battery_voltage"], 106)
-        self.assertEqual(self.offsets["metric_battery_tte_s"], 118)
-        self.assertEqual(self.offsets["metric_watchface_time_ms"], 314)
-        self.assertEqual(self.offsets["metric_watchface_name"], 318)
-        self.assertEqual(self.offsets["metric_watchface_uuid"], 351)
-        self.assertEqual(self.offsets["metric_connectivity_expected_time_ms"], 503)
+        self.assertEqual(self.offsets["metric_fw_version"], 61)
+        self.assertEqual(self.offsets["metric_battery_soc_pct"], 102)
+        self.assertEqual(self.offsets["metric_battery_soc_pct_scale"], 106)
+        self.assertEqual(self.offsets["metric_battery_soc_pct_drop"], 108)
+        self.assertEqual(self.offsets["metric_battery_voltage"], 114)
+        self.assertEqual(self.offsets["metric_battery_tte_s"], 126)
+        self.assertEqual(self.offsets["metric_watchface_time_ms"], 322)
+        self.assertEqual(self.offsets["metric_watchface_name"], 326)
+        self.assertEqual(self.offsets["metric_watchface_uuid"], 359)
+        self.assertEqual(self.offsets["metric_connectivity_expected_time_ms"], 511)
 
-    def test_does_not_emit_unreleased_syscall_stack_metrics(self):
+    def test_emits_released_syscall_stack_metrics(self):
         metric_names = {metric.name for metric in self.metrics}
-        self.assertNotIn("stack_free_app_syscall_bytes", metric_names)
-        self.assertNotIn("stack_free_worker_syscall_bytes", metric_names)
+        self.assertIn("stack_free_app_syscall_bytes", metric_names)
+        self.assertIn("stack_free_worker_syscall_bytes", metric_names)
 
 
 if __name__ == "__main__":
