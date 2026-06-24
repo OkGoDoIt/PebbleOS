@@ -51,16 +51,19 @@
 #define LOSS_ALERT_THRESHOLD_FRAMES (30 * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 #define LOSS_ALERT_MIN_INTERVAL_SECONDS (6 * 60 * 60)
 //! Lightweight silence suppression uses mean absolute PCM level before Speex's gain stage.
-//! Thresholds are intentionally low and hysteretic to avoid clipping quiet speech.
-#define SILENCE_MODE_LIGHT_ENTER_THRESHOLD (64)
-#define SILENCE_MODE_LIGHT_EXIT_THRESHOLD (105)
+//! Thresholds are intentionally low because dropping quiet speech is worse than sending noise.
+#define SILENCE_MODE_LIGHT_ENTER_THRESHOLD (40)
+#define SILENCE_MODE_LIGHT_EXIT_THRESHOLD (64)
 #define SILENCE_MODE_LIGHT_ENTER_MS (5000)
-#define SILENCE_MODE_BALANCED_ENTER_THRESHOLD (80)
-#define SILENCE_MODE_BALANCED_EXIT_THRESHOLD (135)
+#define SILENCE_MODE_LIGHT_WEAK_EXIT_FRAMES (1)
+#define SILENCE_MODE_BALANCED_ENTER_THRESHOLD (64)
+#define SILENCE_MODE_BALANCED_EXIT_THRESHOLD (96)
 #define SILENCE_MODE_BALANCED_ENTER_MS (3500)
-#define SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD (110)
-#define SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD (180)
+#define SILENCE_MODE_BALANCED_WEAK_EXIT_FRAMES (3)
+#define SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD (95)
+#define SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD (150)
 #define SILENCE_MODE_AGGRESSIVE_ENTER_MS (2000)
+#define SILENCE_MODE_AGGRESSIVE_WEAK_EXIT_FRAMES (5)
 
 typedef struct {
   bool data_subscribed;
@@ -87,6 +90,7 @@ typedef struct {
   uint32_t enter_threshold;
   uint32_t exit_threshold;
   uint32_t enter_frames;
+  uint32_t weak_exit_frames;
 } SilenceModeConfig;
 
 static PebbleMutex *s_lock;
@@ -140,6 +144,7 @@ static uint32_t s_alert_baseline_dropped;
 static uint32_t s_last_alert_uptime_s;
 static uint32_t s_offline_baseline_dropped;
 static uint32_t s_silence_candidate_frames;
+static uint32_t s_silence_resume_candidate_frames;
 static bool s_silence_suppressing;
 static uint32_t s_silence_gap_frames;
 static uint32_t s_silence_gap_first_sequence;
@@ -179,18 +184,21 @@ static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMod
       .exit_threshold = SILENCE_MODE_LIGHT_EXIT_THRESHOLD,
       .enter_frames =
           SILENCE_MODE_LIGHT_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+      .weak_exit_frames = SILENCE_MODE_LIGHT_WEAK_EXIT_FRAMES,
     },
     [AudioCompanionSilenceModeBalanced] = {
       .enter_threshold = SILENCE_MODE_BALANCED_ENTER_THRESHOLD,
       .exit_threshold = SILENCE_MODE_BALANCED_EXIT_THRESHOLD,
       .enter_frames =
           SILENCE_MODE_BALANCED_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+      .weak_exit_frames = SILENCE_MODE_BALANCED_WEAK_EXIT_FRAMES,
     },
     [AudioCompanionSilenceModeAggressive] = {
       .enter_threshold = SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD,
       .exit_threshold = SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD,
       .enter_frames =
           SILENCE_MODE_AGGRESSIVE_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+      .weak_exit_frames = SILENCE_MODE_AGGRESSIVE_WEAK_EXIT_FRAMES,
     },
   };
   if (mode <= AudioCompanionSilenceModeOff || mode >= AudioCompanionSilenceModeCount) {
@@ -202,6 +210,7 @@ static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMod
 static void prv_reset_silence_suppression_locked(void) {
   const bool was_suppressing = s_silence_suppressing;
   s_silence_candidate_frames = 0;
+  s_silence_resume_candidate_frames = 0;
   s_silence_suppressing = false;
   s_silence_gap_frames = 0;
   s_silence_gap_first_sequence = 0;
@@ -247,12 +256,18 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
 
   const uint32_t mean_abs = prv_mean_abs_pcm(samples, sample_count);
   if (s_silence_suppressing) {
-    if (mean_abs >= config->exit_threshold) {
+    const bool strong_resume = mean_abs >= config->exit_threshold;
+    const bool weak_resume = mean_abs >= config->enter_threshold &&
+        ++s_silence_resume_candidate_frames >= config->weak_exit_frames;
+    if (strong_resume || weak_resume) {
       prv_record_silence_gap_locked();
       if (out_schedule_drain) {
         *out_schedule_drain = true;
       }
       return false;
+    }
+    if (mean_abs < config->enter_threshold) {
+      s_silence_resume_candidate_frames = 0;
     }
   } else if (mean_abs < config->enter_threshold) {
     s_silence_candidate_frames++;

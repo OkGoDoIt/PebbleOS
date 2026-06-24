@@ -806,6 +806,37 @@ void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes
   cl_assert(gap_msg.missing_frame_count >= 50);
 }
 
+void test_audio_companion__light_silence_suppression_resumes_on_quiet_speech(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  prv_feed_silence_frames(255);
+  const uint8_t encoded_before_resume = s_encoded_counter;
+  cl_assert(encoded_before_resume > 0);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+
+  s_data_count = 0;
+  prv_feed_silence_frames(50);
+  cl_assert_equal_i(s_encoded_counter, encoded_before_resume);
+
+  // This is above Light's "definite quiet" threshold but below the old exit threshold, so it
+  // used to remain suppressed and drop audible low-level speech until a louder spike arrived.
+  prv_feed_frame_with_sample(48);
+  fake_system_task_callbacks_invoke_pending();
+
+  cl_assert_equal_i(s_encoded_counter, encoded_before_resume + 1);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+
+  const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
+  cl_assert(gap);
+  AudioCompanionStreamGapMsg gap_msg;
+  memcpy(&gap_msg, gap->data, sizeof(gap_msg));
+  cl_assert_equal_i(gap_msg.reason, AudioCompanionGapReasonSilenceSuppressed);
+  cl_assert(gap_msg.missing_frame_count >= 50);
+}
+
 void test_audio_companion__prefs_loaded_restores_settings_after_boot(void) {
   // setUp ran audio_companion_init() with silence suppression off, mirroring the boot order where
   // the service initializes before the shell prefs file is loaded.
