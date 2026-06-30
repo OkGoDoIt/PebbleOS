@@ -3,6 +3,7 @@
 #include "pbl/services/audio_companion.h"
 
 #include "auth.h"
+#include "reboot_trace.h"
 #include "spool.h"
 
 #include "applib/event_service_client.h"
@@ -22,6 +23,7 @@
 #include "shell/prefs.h"
 #include "system/logging.h"
 #include "system/passert.h"
+#include "system/reboot_reason.h"
 #include "util/rand.h"
 #include "util/time/time.h"
 
@@ -151,6 +153,10 @@ static uint32_t s_silence_gap_first_sequence;
 static uint64_t s_silence_gap_first_sample_index;
 
 static EventServiceInfo s_battery_event_info;
+
+// Reboot flight recorder (cached copy of the persisted ring; populated once at boot).
+static AudioCompanionRebootTrace s_reboot_trace;
+static bool s_reboot_trace_recorded;
 
 static void prv_reevaluate_locked(void);
 static void prv_drain_system_task_cb(void *data);
@@ -1379,12 +1385,40 @@ static void prv_battery_event_handler(PebbleEvent *event, void *context) {
 
 // ---- Public API ----
 
+//! Record why the previous session ended into the persisted reboot ring, so a user who notices
+//! the watch restarted can read the fault class from Settings. The OS captured the reason in a
+//! battery-backed register at boot; we just persist it alongside whether background audio was on.
+//! Does its own flash I/O, so it must run without the service lock held.
+static void prv_record_boot_reboot_trace(void) {
+  const uint8_t reason = (uint8_t)reboot_reason_get_last_reboot_reason();
+  const bool enabled = shell_prefs_get_audio_companion_enabled();
+
+  AudioCompanionRebootTrace trace;
+  audio_companion_reboot_trace_load(&trace);
+  audio_companion_reboot_trace_record(&trace, reason, enabled, (uint32_t)rtc_get_time());
+  audio_companion_reboot_trace_save(&trace);
+
+  mutex_lock(s_lock);
+  s_reboot_trace = trace;
+  mutex_unlock(s_lock);
+
+  if (audio_companion_reboot_trace_is_error_reason(reason)) {
+    PBL_LOG_WRN("Audio companion: previous restart was a fault (%s); %u faults / %u boots logged",
+                audio_companion_reboot_trace_reason_name(reason),
+                (unsigned)trace.total_error_reboots, (unsigned)trace.total_reboots);
+  } else {
+    PBL_LOG_INFO("Audio companion: previous restart reason: %s",
+                 audio_companion_reboot_trace_reason_name(reason));
+  }
+}
+
 void audio_companion_init(void) {
   s_lock = mutex_create();
   audio_companion_spool_init();
   audio_companion_auth_init();
 
   mutex_lock(s_lock);
+  audio_companion_reboot_trace_clear(&s_reboot_trace);
   s_initialized = true;
   s_enabled = shell_prefs_get_audio_companion_enabled();
   s_pause_stationary_enabled =
@@ -1420,6 +1454,23 @@ void audio_companion_handle_prefs_loaded(void) {
   s_silence_mode =
       (AudioCompanionSilenceMode)shell_prefs_get_audio_companion_silence_mode();
   prv_reevaluate_locked();
+  const bool record_reboot = !s_reboot_trace_recorded;
+  s_reboot_trace_recorded = true;
+  mutex_unlock(s_lock);
+
+  // Now that the persisted prefs are loaded (so the "enabled" flag is accurate) capture the
+  // previous reboot reason into the flight recorder. Done once per boot, outside the lock.
+  if (record_reboot) {
+    prv_record_boot_reboot_trace();
+  }
+}
+
+void audio_companion_get_reboot_trace(struct AudioCompanionRebootTrace *out) {
+  if (!out) {
+    return;
+  }
+  mutex_lock(s_lock);
+  *out = s_reboot_trace;
   mutex_unlock(s_lock);
 }
 
@@ -1627,6 +1678,8 @@ void audio_companion_test_reset(void) {
   s_alert_baseline_dropped = 0;
   s_last_alert_uptime_s = 0;
   s_offline_baseline_dropped = 0;
+  s_reboot_trace_recorded = false;
+  audio_companion_reboot_trace_clear(&s_reboot_trace);
   prv_reset_silence_suppression_locked();
   memset(&s_battery_event_info, 0, sizeof(s_battery_event_info));
 }

@@ -7,7 +7,9 @@
 #include "pbl/services/audio_companion_private.h"
 #include "pbl/services/battery/battery_state.h"
 #include "services/audio_companion/auth.h"
+#include "services/audio_companion/reboot_trace.h"
 #include "services/audio_companion/spool.h"
+#include "system/reboot_reason.h"
 
 #include "drivers/mic.h"
 
@@ -174,6 +176,21 @@ uint8_t shell_prefs_get_audio_companion_silence_mode(void) {
 
 void shell_prefs_set_audio_companion_silence_mode(uint8_t mode) {
   s_pref_silence_mode = mode;
+}
+
+// Reboot-trace persistence + OS reboot reason are stubbed; the pure ring logic
+// (reboot_trace.c) is linked in and exercised by test_audio_companion_reboot_trace.c.
+static RebootReasonCode s_last_reboot_reason = RebootReasonCode_Unknown;
+
+RebootReasonCode reboot_reason_get_last_reboot_reason(void) {
+  return s_last_reboot_reason;
+}
+
+void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace) {
+  audio_companion_reboot_trace_clear(trace);
+}
+
+void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace) {
 }
 
 void audio_companion_auth_init(void) {

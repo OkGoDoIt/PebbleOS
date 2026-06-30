@@ -1,0 +1,129 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "reboot_trace.h"
+
+#include "system/reboot_reason.h"
+
+#include <string.h>
+
+bool audio_companion_reboot_trace_is_error_reason(uint8_t reason_code) {
+  // The reboot reason enum groups intentional/benign restarts below
+  // RebootReasonCode_Watchdog and crash/fault classes at or above it.
+  return reason_code >= RebootReasonCode_Watchdog;
+}
+
+const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code) {
+  switch (reason_code) {
+    case RebootReasonCode_Unknown:
+      return "Unknown";
+    case RebootReasonCode_LowBattery:
+      return "Low Battery";
+    case RebootReasonCode_SoftwareUpdate:
+      return "FW Update";
+    case RebootReasonCode_ResetButtonsHeld:
+      return "Buttons Held";
+    case RebootReasonCode_ShutdownMenuItem:
+      return "Shutdown";
+    case RebootReasonCode_FactoryResetReset:
+    case RebootReasonCode_FactoryResetShutdown:
+      return "Factory Reset";
+    case RebootReasonCode_MfgShutdown:
+      return "Mfg Shutdown";
+    case RebootReasonCode_Serial:
+      return "Serial";
+    case RebootReasonCode_RemoteReset:
+      return "Remote Reset";
+    case RebootReasonCode_PrfReset:
+    case RebootReasonCode_PrfIdle:
+    case RebootReasonCode_PrfResetButtonsHeld:
+      return "Recovery";
+    case RebootReasonCode_ForcedCoreDump:
+      return "Forced Dump";
+    case RebootReasonCode_Watchdog:
+      return "Watchdog";
+    case RebootReasonCode_Assert:
+      return "Assert";
+    case RebootReasonCode_StackOverflow:
+      return "Stack Overflow";
+    case RebootReasonCode_HardFault:
+      return "Hard Fault";
+    case RebootReasonCode_LauncherPanic:
+      return "Launcher Panic";
+    case RebootReasonCode_ClockFailure:
+      return "Clock Failure";
+    case RebootReasonCode_AppHardFault:
+      return "App Fault";
+    case RebootReasonCode_EventQueueFull:
+      return "Event Queue Full";
+    case RebootReasonCode_WorkerHardFault:
+      return "Worker Fault";
+    case RebootReasonCode_OutOfMemory:
+      return "Out of Memory";
+    case RebootReasonCode_BtCoredump:
+      return "BT Coredump";
+    case RebootReasonCode_CoreDump:
+    case RebootReasonCode_CoreDumpEntryFailed:
+      return "Coredump";
+    default:
+      return "Other";
+  }
+}
+
+void audio_companion_reboot_trace_clear(AudioCompanionRebootTrace *trace) {
+  if (!trace) {
+    return;
+  }
+  memset(trace, 0, sizeof(*trace));
+  trace->version = AUDIO_COMPANION_REBOOT_TRACE_VERSION;
+}
+
+bool audio_companion_reboot_trace_is_valid(const AudioCompanionRebootTrace *trace) {
+  return trace && trace->version == AUDIO_COMPANION_REBOOT_TRACE_VERSION &&
+         trace->count <= AUDIO_COMPANION_REBOOT_TRACE_ENTRIES &&
+         trace->head < AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
+}
+
+void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8_t reason_code,
+                                         bool enabled, uint32_t boot_wall_time) {
+  if (!trace) {
+    return;
+  }
+  // Treat any unparseable / first-ever record as a fresh ring.
+  if (!audio_companion_reboot_trace_is_valid(trace)) {
+    audio_companion_reboot_trace_clear(trace);
+  }
+
+  const AudioCompanionRebootTraceEntry entry = {
+    .boot_wall_time = boot_wall_time,
+    .reason_code = reason_code,
+    .flags = enabled ? (uint8_t)AudioCompanionRebootTraceFlagEnabled : 0,
+  };
+
+  uint8_t insert_index;
+  if (trace->count < AUDIO_COMPANION_REBOOT_TRACE_ENTRIES) {
+    insert_index = (trace->head + trace->count) % AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
+    trace->count++;
+  } else {
+    // Ring full: overwrite the oldest entry and advance the head.
+    insert_index = trace->head;
+    trace->head = (trace->head + 1) % AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
+  }
+  trace->entries[insert_index] = entry;
+
+  if (trace->total_reboots < UINT16_MAX) {
+    trace->total_reboots++;
+  }
+  if (audio_companion_reboot_trace_is_error_reason(reason_code) &&
+      trace->total_error_reboots < UINT16_MAX) {
+    trace->total_error_reboots++;
+  }
+}
+
+const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_newest(
+    const AudioCompanionRebootTrace *trace) {
+  if (!trace || trace->count == 0) {
+    return NULL;
+  }
+  const uint8_t index = (trace->head + trace->count - 1) % AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
+  return &trace->entries[index];
+}

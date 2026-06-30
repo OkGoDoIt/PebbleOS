@@ -64,6 +64,12 @@ void audio_companion_set_silence_mode(AudioCompanionSilenceMode mode);
 AudioCompanionServiceState audio_companion_get_state(void);
 void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out);
 
+//! Copies the persisted reboot flight-recorder ring (see reboot_trace.h) so the
+//! watch Settings UI can show why the watch last restarted. Defined in the
+//! audio_companion service; struct lives in services/audio_companion/reboot_trace.h.
+struct AudioCompanionRebootTrace;
+void audio_companion_get_reboot_trace(struct AudioCompanionRebootTrace *out);
+
 bool audio_companion_get_receiver_name(char *buf, size_t buf_size);
 //! User revoke from watch Settings: wipes identity, notifies the app, stops.
 void audio_companion_forget_receiver(void);

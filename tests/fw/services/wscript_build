@@ -282,8 +282,15 @@ clar(ctx,
     sources_ant_glob = " ".join([
         " src/fw/services/audio_companion/audio_companion.c" \
         " src/fw/services/audio_companion/protocol.c" \
+        " src/fw/services/audio_companion/reboot_trace.c" \
         " src/fw/services/audio_companion/spool.c"]),
     test_sources_ant_glob = "test_audio_companion.c",
+    override_includes = ['dummy_board'])
+
+clar(ctx,
+    sources_ant_glob = " ".join([
+        " src/fw/services/audio_companion/reboot_trace.c"]),
+    test_sources_ant_glob = "test_audio_companion_reboot_trace.c",
     override_includes = ['dummy_board'])
 
 # Real-Speex golden bitstream test: compiles the vendored fixed-point encoder/decoder for the

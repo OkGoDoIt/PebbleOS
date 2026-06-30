@@ -14,6 +14,7 @@
 #include "kernel/pbl_malloc.h"
 #include "pbl/services/audio_companion.h"
 #include "pbl/services/i18n/i18n.h"
+#include "services/audio_companion/reboot_trace.h"
 #include "resource/resource_ids.auto.h"
 #include "system/passert.h"
 
@@ -98,12 +99,24 @@ static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   audio_companion_get_diagnostics(&diag);
 
   char *text = app_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
-  sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
+  int written = sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
             "State: %s\nCaptured: %" PRIu32 "\nSent: %" PRIu32 "\nBuffered: %" PRIu32
             " B\nDropped: %" PRIu32 "\nGaps: %" PRIu32 "\nBackpressure: %" PRIu32,
             i18n_get(prv_state_name(diag.state), data), diag.captured_frames, diag.sent_frames,
             diag.spool_bytes, diag.dropped_overflow_frames, diag.gap_records,
             diag.send_backpressure_events);
+
+  // Reboot flight recorder: shows why the watch last restarted so an unexpected reboot can be
+  // traced to a fault class (Watchdog / Event Queue Full / Out of Memory / ...) after the fact.
+  AudioCompanionRebootTrace trace;
+  audio_companion_get_reboot_trace(&trace);
+  const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+  if (last && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
+    sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written,
+              "\n\nLast restart: %s\nRestarts: %" PRIu16 " (faults %" PRIu16 ")",
+              audio_companion_reboot_trace_reason_name(last->reason_code), trace.total_reboots,
+              trace.total_error_reboots);
+  }
 
   ExpandableDialog *dialog = expandable_dialog_create_with_params(
       "Audio Diagnostics", RESOURCE_ID_AUDIO_CASSETTE_LARGE, text, GColorBlack, GColorWhite,
