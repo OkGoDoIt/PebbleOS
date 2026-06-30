@@ -66,6 +66,7 @@
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION,
               s_audio_companion_silence_suppression_enabled)
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_SILENCE_MODE, s_audio_companion_silence_mode)
+  PREFS_MACRO(PREF_KEY_ALS_THRESHOLD_MIGRATED_V1, s_als_threshold_migrated_v1)
 #ifdef CONFIG_APP_SCALING
   PREFS_MACRO(PREF_KEY_LEGACY_APP_RENDER_MODE, s_legacy_app_render_mode)
 #endif

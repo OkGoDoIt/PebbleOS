@@ -17,13 +17,15 @@ bool mcu_state_is_privileged(void);
 //! the caller stays privileged.
 //!
 //! Must be called from privileged thread mode (asserts and behaves
-//! unpredictably otherwise). The implementation lives in the .syscall_text
-//! section so it is allowed to re-elevate via svc 2 once @p fn returns; it
-//! also snapshots and restores the per-task TLS LR slot the inner SVC clobbers.
+//! unpredictably otherwise).
 //!
 //! Use this to invoke untrusted callbacks (e.g. JavaScript FFI dispatch) so
 //! that any kernel-memory or peripheral access inside @p fn faults the MPU
 //! instead of silently succeeding under the runtime's privileged context.
+//!
+//! The re-entry SVC is private to this helper. It is not part of the normal
+//! syscall island, and is accepted only while this helper is active for the
+//! current task.
 void mcu_call_unprivileged(void (*fn)(void *), void *ctx);
 
 #ifdef __arm__

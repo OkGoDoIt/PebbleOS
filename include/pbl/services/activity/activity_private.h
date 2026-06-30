@@ -536,3 +536,7 @@ ActivityScalarStore activity_metrics_prv_steps_per_minute(void);
 
 //! Set a metric's value. Used from BlobDB to honor requests from the phone
 void activity_metrics_prv_set_metric(ActivityMetric metric, DayInWeek day, int32_t value);
+
+//! Force the current day's value of a metric to an exact value (may decrease it). Intended for
+//! QEMU/test injection of health data.
+void activity_metrics_set_metric_exact(ActivityMetric metric, int32_t value);

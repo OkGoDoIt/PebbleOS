@@ -245,6 +245,7 @@ static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFa
 #define PREF_KEY_AUDIO_COMPANION_PAUSE_LOW_POWER "audioCompanionPauseLowPower"
 #define PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION "audioCompanionSilenceSuppression"
 #define PREF_KEY_AUDIO_COMPANION_SILENCE_MODE "audioCompanionSilenceMode"
+#define PREF_KEY_ALS_THRESHOLD_MIGRATED_V1 "alsThresholdMigratedV1"
 #ifdef CONFIG_APP_SCALING
 #define PREF_KEY_LEGACY_APP_RENDER_MODE "legacyAppRenderMode"
 #endif
@@ -258,6 +259,7 @@ static bool s_audio_companion_pause_stationary_enabled = true;
 static bool s_audio_companion_pause_low_power_enabled = true;
 static bool s_audio_companion_silence_suppression_enabled = true;
 static uint8_t s_audio_companion_silence_mode = AudioCompanionSilenceModeLight;
+static bool s_als_threshold_migrated_v1 = false;
 #ifdef CONFIG_APP_SCALING
 static uint8_t s_legacy_app_render_mode = 1; // Default to scaled mode
 #endif
@@ -749,6 +751,11 @@ static bool prv_set_s_audio_companion_silence_mode(uint8_t *mode) {
   return true;
 }
 
+static bool prv_set_s_als_threshold_migrated_v1(bool *done) {
+  s_als_threshold_migrated_v1 = *done;
+  return true;
+}
+
 #ifdef CONFIG_APP_SCALING
 static bool prv_set_s_legacy_app_render_mode(uint8_t *mode) {
   if (*mode >= LegacyAppRenderModeCount) {
@@ -874,6 +881,8 @@ static void prv_convert_deprecated_backlight_behaviour_key(SettingsFile *file) {
 
 
 // ------------------------------------------------------------------------------------
+static void prv_pref_set(const char* key, const void *value, size_t val_len);
+
 void shell_prefs_init(void) {
 #ifdef CONFIG_QEMU
   s_backlight_intensity = BACKLIGHT_INTENSITY_MAX; // Blinding
@@ -916,7 +925,24 @@ void shell_prefs_init(void) {
   if (!prv_backlight_intensity_is_valid(s_backlight_intensity)) {
     s_backlight_intensity = BACKLIGHT_INTENSITY_DEFAULT;
   }
-  
+
+#if defined(CONFIG_AMBIENT_LIGHT_W1160)
+  // One-time: the W1160 scale rework left old-scale ambient thresholds far below
+  // current readings (backlight stuck off). Drop any stored override so the
+  // device follows the new board default.
+  if (!s_als_threshold_migrated_v1) {
+    s_backlight_ambient_threshold = BOARD_CONFIG.ambient_light_dark_threshold;
+    SettingsFile mfile = {{0}};
+    if (settings_file_open(&mfile, SHELL_PREFS_FILE_NAME, SHELL_PREFS_FILE_LEN) == S_SUCCESS) {
+      settings_file_delete(&mfile, PREF_KEY_BACKLIGHT_AMBIENT_THRESHOLD,
+                           sizeof(PREF_KEY_BACKLIGHT_AMBIENT_THRESHOLD));
+      settings_file_close(&mfile);
+    }
+    const bool migrated = true;
+    prv_pref_set(PREF_KEY_ALS_THRESHOLD_MIGRATED_V1, &migrated, sizeof(migrated));
+  }
+#endif
+
   // Update the ambient light driver with the loaded threshold value
   ambient_light_set_dark_threshold(s_backlight_ambient_threshold);
   
@@ -2023,6 +2049,7 @@ void pbl_analytics_external_collect_settings(void) {
   PBL_ANALYTICS_SET_UNSIGNED(settings_motion_sensitivity, shell_prefs_get_motion_sensitivity());
   PBL_ANALYTICS_SET_UNSIGNED(settings_backlight_intensity_pct, backlight_get_intensity());
   PBL_ANALYTICS_SET_UNSIGNED(settings_backlight_timeout_s, backlight_get_timeout_ms() / 1000);
+  PBL_ANALYTICS_SET_UNSIGNED(settings_touch_enabled, touch_is_globally_enabled());
 }
 
 bool shell_prefs_get_music_show_volume_controls(void) {
