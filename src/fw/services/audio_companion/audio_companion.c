@@ -42,6 +42,10 @@
 
 #define DRAIN_PERIOD_MS (150)
 #define DRAIN_PUSH_THRESHOLD_FRAMES (8)
+//! Cap the BLE notifications sent in a single drain callback so the callback returns promptly
+//! (keeping the KernelBG watchdog fed) and yields the system task to other work even when a large
+//! post-reconnect backlog needs to flush. Any remainder is drained on a freshly posted callback.
+#define DRAIN_MAX_BATCHES_PER_CALL (16)
 //! Stop capturing if a streaming session goes this long with no control message from the
 //! receiver. The phone checkpoints every ~0.5-2 s while receiving, so a long silence means the
 //! app is gone even when the watch never saw a BLE disconnect (e.g. the receiver shares the link
@@ -119,6 +123,7 @@ static uint64_t s_next_sample_index;
 static TimerID s_drain_timer = TIMER_INVALID_ID;
 static TimerID s_catch_up_timer = TIMER_INVALID_ID;
 static bool s_catch_up_burst;
+static bool s_drain_cb_pending;        //!< a drain callback is queued; coalesces drain posts
 static bool s_capture_parked;          //!< capture stopped after offline overflow
 static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause began
 static uint8_t s_pending_resume_gap_reason;
@@ -160,6 +165,7 @@ static bool s_reboot_trace_recorded;
 
 static void prv_reevaluate_locked(void);
 static void prv_drain_system_task_cb(void *data);
+static void prv_post_drain_cb(void);
 static void prv_start_drain_timer_locked(void);
 static void prv_stop_drain_timer_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
@@ -541,7 +547,7 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   if (prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain)) {
     mutex_unlock(s_lock);
     if (schedule_drain) {
-      system_task_add_callback(prv_drain_system_task_cb, NULL);
+      prv_post_drain_cb();
     }
     return;
   }
@@ -579,7 +585,7 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   mutex_unlock(s_lock);
 
   if (schedule_drain) {
-    system_task_add_callback(prv_drain_system_task_cb, NULL);
+    prv_post_drain_cb();
   }
   if (schedule_park) {
     system_task_add_callback(prv_park_capture_system_task_cb, NULL);
@@ -717,23 +723,34 @@ static void prv_check_receiver_liveness_locked(void) {
   prv_reevaluate_locked();  // session no longer ready -> AuthorizedIdle, drain timer stops
 }
 
-static void prv_drain_locked(void) {
+//! Returns true if the spool still has frames to send but the per-callback batch cap was hit, so
+//! the caller should re-post a drain to continue (instead of holding the system task in one long
+//! callback). A return of false means there is nothing left to do or we stopped on BLE
+//! backpressure (the repeating drain timer retries that case).
+static bool prv_drain_locked(void) {
   prv_check_receiver_liveness_locked();
   audio_companion_spool_apply_pressure_policy();
   if (!prv_session_ready_locked() || !s_stream_active) {
-    return;
+    return false;
   }
   if (s_need_stream_start) {
     prv_send_stream_start_locked();
     if (s_need_stream_start) {
-      return;  // backpressure; retry on next drain
+      return false;  // backpressure; retry on next drain
     }
   }
   if (!prv_send_pending_gap_locked()) {
-    return;
+    return false;
   }
+  bool more_pending = false;
+  uint32_t batches_sent = 0;
   while (audio_companion_spool_frames_pending_send() > 0) {
     if (!prv_send_data_batch_locked()) {
+      break;  // BLE backpressure: the drain timer will retry shortly
+    }
+    if (++batches_sent >= DRAIN_MAX_BATCHES_PER_CALL) {
+      // Yield with work still queued; continue on a fresh callback so the watchdog is fed.
+      more_pending = audio_companion_spool_frames_pending_send() > 0;
       break;
     }
   }
@@ -748,16 +765,36 @@ static void prv_drain_locked(void) {
       !audio_companion_spool_has_pending_gap()) {
     prv_stop_drain_timer_locked();
   }
+  return more_pending;
 }
 
 static void prv_drain_system_task_cb(void *data) {
   mutex_lock(s_lock);
-  prv_drain_locked();
+  s_drain_cb_pending = false;
+  const bool more_pending = prv_drain_locked();
   mutex_unlock(s_lock);
+  if (more_pending) {
+    prv_post_drain_cb();
+  }
+}
+
+//! Queue a drain on the system task, coalescing so at most one drain callback is ever outstanding.
+//! The audio path posts a drain on (roughly) every push threshold and every drain-timer tick;
+//! without coalescing those would pile up on the shared, 30-deep system-task queue and a transient
+//! KernelBG stall could overflow it, which the OS treats as a fatal EventQueueFull reboot. Must be
+//! called without s_lock held.
+static void prv_post_drain_cb(void) {
+  mutex_lock(s_lock);
+  const bool already_pending = s_drain_cb_pending;
+  s_drain_cb_pending = true;
+  mutex_unlock(s_lock);
+  if (!already_pending) {
+    system_task_add_callback(prv_drain_system_task_cb, NULL);
+  }
 }
 
 static void prv_drain_timer_cb(void *data) {
-  system_task_add_callback(prv_drain_system_task_cb, NULL);
+  prv_post_drain_cb();
 }
 
 static void prv_start_drain_timer_locked(void) {
@@ -1656,6 +1693,7 @@ void audio_companion_test_reset(void) {
   s_drain_timer = TIMER_INVALID_ID;
   s_catch_up_timer = TIMER_INVALID_ID;
   s_catch_up_burst = false;
+  s_drain_cb_pending = false;
   s_capture_parked = false;
   s_pause_started_ms = 0;
   s_pending_resume_gap_reason = 0;

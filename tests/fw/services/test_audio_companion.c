@@ -513,6 +513,28 @@ void test_audio_companion__streams_only_after_authorized_session(void) {
   cl_assert_equal_i(header.frame_count, 8);
 }
 
+void test_audio_companion__drain_callbacks_coalesce(void) {
+  // EventQueueFull mitigation: the audio path posts a drain on every push threshold and every
+  // drain-timer tick. Those posts must coalesce so a burst of frames can never pile drain
+  // callbacks onto the shared, finite system-task queue (which the OS reboots on when full).
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  fake_system_task_callbacks_invoke_pending();
+
+  // Feed many frames WITHOUT servicing the system task in between (worst case: KernelBG stalled).
+  for (uint32_t i = 0; i < 64; i++) {
+    prv_feed_frame();
+  }
+  // No matter how many frames crossed the push threshold, at most one drain callback is queued.
+  cl_assert(fake_system_task_count_callbacks() <= 1);
+
+  fake_system_task_callbacks_invoke_pending();
+  // After servicing, the data still flowed through.
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData));
+}
+
 void test_audio_companion__checkpoint_trims_durable_frames(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
