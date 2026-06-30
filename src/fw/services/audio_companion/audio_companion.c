@@ -432,22 +432,31 @@ static void prv_post_loss_alert(void) {
   s_loss_alerts_posted++;
 }
 
-static void prv_maybe_alert_loss_locked(void) {
+static void prv_loss_alert_system_task_cb(void *data) {
+  // Building a timeline notification allocates and touches the notification store; keep it off the
+  // mic capture path (which runs under both s_lock and the mic driver's mutex on KernelBG).
+  prv_post_loss_alert();
+}
+
+//! Decides (under s_lock) whether a "some audio was skipped" alert is due. Returns true if the
+//! caller should post it from a plain system-task callback; the heavy notification work must not
+//! run inline on the locked mic path.
+static bool prv_maybe_alert_loss_locked(void) {
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
   if (stats.dropped_overflow_frames < s_alert_baseline_dropped + LOSS_ALERT_THRESHOLD_FRAMES) {
-    return;
+    return false;
   }
   const uint32_t now_s = time_get_uptime_seconds();
   s_alert_baseline_dropped = stats.dropped_overflow_frames;
   if (s_last_alert_uptime_s != 0 &&
       (now_s - s_last_alert_uptime_s) < LOSS_ALERT_MIN_INTERVAL_SECONDS) {
-    return;
+    return false;
   }
   s_last_alert_uptime_s = now_s;
   PBL_LOG_WRN("Audio companion lost >%u frames; alerting user",
               (unsigned)LOSS_ALERT_THRESHOLD_FRAMES);
-  prv_post_loss_alert();
+  return true;
 }
 
 // ---- Capture ----
@@ -581,7 +590,7 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   if (schedule_drain && prv_session_ready_locked()) {
     prv_start_drain_timer_locked();
   }
-  prv_maybe_alert_loss_locked();
+  const bool post_loss_alert = prv_maybe_alert_loss_locked();
   mutex_unlock(s_lock);
 
   if (schedule_drain) {
@@ -589,6 +598,9 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   }
   if (schedule_park) {
     system_task_add_callback(prv_park_capture_system_task_cb, NULL);
+  }
+  if (post_loss_alert) {
+    system_task_add_callback(prv_loss_alert_system_task_cb, NULL);
   }
 }
 
