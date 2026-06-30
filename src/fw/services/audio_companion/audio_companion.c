@@ -673,8 +673,11 @@ static bool prv_send_data_batch_locked(void) {
   }
   const size_t max_message_bytes = (size_t)mtu - 3;
 
+  // One stack buffer, not two: peek frames straight into the space after the header so this
+  // runs in ~512 B on the 4 KB KernelBG stack (a second staging buffer + the NimBLE notify call
+  // chain made the old frame uncomfortably deep).
   uint8_t message[512];
-  uint8_t frames_payload[512];
+  const size_t header_size = sizeof(AudioCompanionStreamDataHeader);
   uint32_t first_sequence = 0;
   uint64_t first_sample_index = 0;
   uint8_t frame_count = 0;
@@ -682,18 +685,16 @@ static bool prv_send_data_batch_locked(void) {
 
   const size_t budget =
       (max_message_bytes < sizeof(message)) ? max_message_bytes : sizeof(message);
-  if (!audio_companion_spool_peek_batch(budget, sizeof(AudioCompanionStreamDataHeader),
-                                        &first_sequence, &first_sample_index, &frame_count,
-                                        frames_payload, sizeof(frames_payload),
-                                        &payload_len)) {
+  if (!audio_companion_spool_peek_batch(budget, header_size, &first_sequence,
+                                        &first_sample_index, &frame_count, message + header_size,
+                                        sizeof(message) - header_size, &payload_len)) {
     return false;
   }
 
   const size_t header_len = audio_companion_protocol_build_stream_data_header(
-      message, sizeof(message), s_stream_id, first_sequence, first_sample_index, frame_count,
-      0);
-  PBL_ASSERTN(header_len > 0 && header_len + payload_len <= sizeof(message));
-  memcpy(message + header_len, frames_payload, payload_len);
+      message, header_size, s_stream_id, first_sequence, first_sample_index, frame_count, 0);
+  // peek_batch reserved exactly header_size up front and wrote the payload right after it.
+  PBL_ASSERTN(header_len == header_size && header_len + payload_len <= sizeof(message));
 
   if (!bt_driver_audio_companion_notify_data(message, header_len + payload_len)) {
     s_send_backpressure_events++;
