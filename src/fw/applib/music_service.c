@@ -34,15 +34,22 @@ static void do_handle(PebbleEvent *e, void *context) {
   PBL_ASSERTN(state->handler != NULL);
   switch (e->media.type) {
     case PebbleMediaEventTypeNowPlayingChanged:
-    case PebbleMediaEventTypeServerConnected:
-    case PebbleMediaEventTypeServerDisconnected:
       state->handler(MusicServiceEventNowPlayingChanged);
       break;
     case PebbleMediaEventTypePlaybackStateChanged:
       state->handler(MusicServiceEventPlaybackStateChanged);
       break;
-    default:
-      // Volume / track position changes are not exposed through this API
+    case PebbleMediaEventTypeVolumeChanged:
+      state->handler(MusicServiceEventVolumeChanged);
+      break;
+    case PebbleMediaEventTypeTrackPosChanged:
+      state->handler(MusicServiceEventTrackPositionChanged);
+      break;
+    case PebbleMediaEventTypeServerConnected:
+      state->handler(MusicServiceEventServerConnected);
+      break;
+    case PebbleMediaEventTypeServerDisconnected:
+      state->handler(MusicServiceEventServerDisconnected);
       break;
   }
 }
@@ -70,6 +77,22 @@ MusicServicePlaybackState music_service_get_playback_state(void) {
     default:
       return MusicServicePlaybackStateUnknown;
   }
+}
+
+bool music_service_get_player_name(char *player_name) {
+  return sys_music_get_player_name(player_name);
+}
+
+void music_service_get_playback_info(MusicServicePlaybackInfo *playback_info) {
+  sys_music_get_playback_info(playback_info);
+}
+
+bool music_service_is_command_supported(MusicServiceCommand command) {
+  return sys_music_is_command_supported(command);
+}
+
+bool music_service_send_command(MusicServiceCommand command) {
+  return sys_music_send_command(command);
 }
 
 void music_service_subscribe(MusicServiceEventHandler handler) {
