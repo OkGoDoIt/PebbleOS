@@ -9,7 +9,7 @@
 #include <host/ble_uuid.h>
 #include <os/os_mbuf.h>
 #include <pbl/services/audio_companion_private.h>
-#include <system/logging.h>
+#include <pbl/logging/logging.h>
 #include <system/passert.h>
 
 #include "comm/ble/gap_le_connection.h"
