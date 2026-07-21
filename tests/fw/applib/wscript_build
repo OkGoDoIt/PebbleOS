@@ -158,4 +158,9 @@ clar(ctx,
      defines=['CONFIG_SERVICE_MUSIC=1'],
      override_includes=['dummy_board'])
 
+clar(ctx,
+     sources_ant_glob="src/fw/syscall/services_syscalls.c",
+     test_sources_ant_glob="test_music_service_syscalls_disabled.c",
+     override_includes=['dummy_board'])
+
 # vim:filetype=python

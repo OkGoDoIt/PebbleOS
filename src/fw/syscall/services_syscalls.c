@@ -7,6 +7,9 @@
 #include "pbl/services/alarms/alarm.h"
 #include "pbl/services/music.h"
 
+_Static_assert(MUSIC_SERVICE_BUFFER_LENGTH == MUSIC_BUFFER_LENGTH,
+               "Music service buffer lengths must match");
+
 DEFINE_SYSCALL(bool, sys_alarm_get_next_enabled, time_t *timestamp_out) {
   if (PRIVILEGE_WAS_ELEVATED) {
     syscall_assert_userspace_buffer(timestamp_out, sizeof(*timestamp_out));
@@ -32,9 +35,9 @@ DEFINE_SYSCALL(bool, sys_music_has_now_playing) {
 
 DEFINE_SYSCALL(void, sys_music_get_now_playing, char *title, char *artist, char *album) {
   if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(title, MUSIC_BUFFER_LENGTH);
-    syscall_assert_userspace_buffer(artist, MUSIC_BUFFER_LENGTH);
-    syscall_assert_userspace_buffer(album, MUSIC_BUFFER_LENGTH);
+    syscall_assert_userspace_buffer(title, MUSIC_SERVICE_BUFFER_LENGTH);
+    syscall_assert_userspace_buffer(artist, MUSIC_SERVICE_BUFFER_LENGTH);
+    syscall_assert_userspace_buffer(album, MUSIC_SERVICE_BUFFER_LENGTH);
   }
 #ifdef CONFIG_SERVICE_MUSIC
   music_get_now_playing(title, artist, album);

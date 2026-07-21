@@ -151,6 +151,30 @@ void test_music_service_syscalls__reports_volume(void) {
   cl_assert_equal_i(info.playback_state, MusicServicePlaybackStateUnknown);
 }
 
+void test_music_service_syscalls__maps_every_playback_state(void) {
+  const struct {
+    MusicPlayState private_state;
+    MusicServicePlaybackState public_state;
+  } cases[] = {
+    { MusicPlayStateUnknown, MusicServicePlaybackStateUnknown },
+    { MusicPlayStatePlaying, MusicServicePlaybackStatePlaying },
+    { MusicPlayStatePaused, MusicServicePlaybackStatePaused },
+    { MusicPlayStateForwarding, MusicServicePlaybackStateForwarding },
+    { MusicPlayStateRewinding, MusicServicePlaybackStateRewinding },
+    { MusicPlayStateInvalid, MusicServicePlaybackStateUnknown },
+  };
+
+  s_state_supported = true;
+  for (size_t i = 0; i < ARRAY_LENGTH(cases); i++) {
+    s_playback_state = cases[i].private_state;
+
+    MusicServicePlaybackInfo info;
+    sys_music_get_playback_info(&info);
+
+    cl_assert_equal_i(info.playback_state, cases[i].public_state);
+  }
+}
+
 void test_music_service_syscalls__maps_every_supported_command(void) {
   const struct {
     MusicServiceCommand public_command;
