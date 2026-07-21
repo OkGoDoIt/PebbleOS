@@ -4,7 +4,7 @@
               "You should also make sure you are obeying our API design guidelines:",
               "https://pebbletechnology.atlassian.net/wiki/display/DEV/SDK+API+Design+Guidelines"
             ],
-  "revision" : "106",
+  "revision" : "107",
   "version" : "2.0",
   "files": [
     "fw/drivers/ambient_light.h",
@@ -460,6 +460,18 @@
                   "name": "MusicServiceEventHandler",
                   "addedRevision": "106"
                 }, {
+                  "type": "type",
+                  "name": "MusicServiceCapability",
+                  "addedRevision": "107"
+                }, {
+                  "type": "type",
+                  "name": "MusicServicePlaybackInfo",
+                  "addedRevision": "107"
+                }, {
+                  "type": "type",
+                  "name": "MusicServiceCommand",
+                  "addedRevision": "107"
+                }, {
                   "type": "function",
                   "name": "music_service_has_now_playing",
                   "addedRevision": "106"
@@ -471,6 +483,22 @@
                   "type": "function",
                   "name": "music_service_get_playback_state",
                   "addedRevision": "106"
+                }, {
+                  "type": "function",
+                  "name": "music_service_get_player_name",
+                  "addedRevision": "107"
+                }, {
+                  "type": "function",
+                  "name": "music_service_get_playback_info",
+                  "addedRevision": "107"
+                }, {
+                  "type": "function",
+                  "name": "music_service_is_command_supported",
+                  "addedRevision": "107"
+                }, {
+                  "type": "function",
+                  "name": "music_service_send_command",
+                  "addedRevision": "107"
                 }, {
                   "type": "function",
                   "name": "music_service_subscribe",
