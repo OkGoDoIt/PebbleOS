@@ -15,6 +15,7 @@
 #include "applib/data_logging.h"
 #include "applib/event_service_client.h"
 #include "applib/fonts/fonts.h"
+#include "applib/music_service.h"
 #include "applib/ui/window_stack_animation.h"
 
 #include "comm/ble/gap_le_scan.h"
@@ -326,3 +327,15 @@ void sys_music_get_now_playing(char *title, char *artist, char *album);
 
 //! @return The current music playback state.
 MusicPlayState sys_music_get_playback_state(void);
+
+//! Copy the active music player's name into a MUSIC_SERVICE_BUFFER_LENGTH-byte buffer.
+bool sys_music_get_player_name(char *player_name);
+
+//! Copy current music playback information.
+void sys_music_get_playback_info(MusicServicePlaybackInfo *playback_info);
+
+//! @return True if the command is supported by the connected music service.
+bool sys_music_is_command_supported(MusicServiceCommand command);
+
+//! Send a command supported by the connected music service.
+bool sys_music_send_command(MusicServiceCommand command);
