@@ -4,7 +4,7 @@
 
 #include "pbl/services/settings/settings_file.h"
 #include "drivers/rtc.h"
-#include "system/logging.h"
+#include "pbl/logging/logging.h"
 #include "pbl/util/attributes.h"
 
 #include "tinycrypt/sha256.h"

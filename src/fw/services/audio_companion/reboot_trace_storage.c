@@ -3,7 +3,7 @@
 #include "reboot_trace.h"
 
 #include "pbl/services/settings/settings_file.h"
-#include "system/logging.h"
+#include "pbl/logging/logging.h"
 
 #include <inttypes.h>
 #include <string.h>

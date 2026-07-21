@@ -14,7 +14,7 @@
 #include "pbl/services/audio_companion.h"
 #include "pbl/services/i18n/i18n.h"
 #include "resource/resource_ids.auto.h"
-#include "system/logging.h"
+#include "pbl/logging/logging.h"
 #include "system/passert.h"
 #include "pbl/util/string.h"
 
