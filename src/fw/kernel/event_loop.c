@@ -36,7 +36,7 @@
 #include "kernel/ui/kernel_ui.h"
 #include "kernel/ui/modals/modal_manager.h"
 #include "kernel/util/factory_reset.h"
-#include "mcu/fpu.h"
+#include "pbl/mcu/fpu.h"
 #include "process_management/app_install_manager.h"
 #include "process_management/app_manager.h"
 #include "process_management/app_run_state.h"
@@ -46,6 +46,7 @@
 #include "pbl/services/analytics/analytics.h"
 #include "pbl/services/battery/battery_state.h"
 #include "pbl/services/battery/battery_monitor.h"
+#include "pbl/services/clock.h"
 #include "pbl/services/compositor/compositor.h"
 #include "pbl/services/cron.h"
 #include "pbl/services/debounced_connection_service.h"
@@ -81,7 +82,7 @@
 #include "system/reset.h"
 #include "system/testinfra.h"
 #include "util/bitset.h"
-#include "util/struct.h"
+#include "pbl/util/struct.h"
 #include "system/version.h"
 
 #include "FreeRTOS.h"
@@ -530,6 +531,11 @@ static NOINLINE void prv_launcher_main_loop_init(void) {
   app_manager_init();
   worker_manager_init();
   vibes_init();
+#ifndef CONFIG_RECOVERY_FW
+  // The chime path uses alerts prefs and the vibe pattern service, so only
+  // arm it once vibes_init() has run; it must never fire before this point.
+  clock_hourly_chime_arm();
+#endif
   battery_monitor_init();
   evented_timer_init();
 #ifdef CONFIG_MAG

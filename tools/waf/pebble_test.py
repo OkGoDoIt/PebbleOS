@@ -144,7 +144,7 @@ def summary(bld):
         def strip_non_ascii(s):
             return "".join(i for i in str(s) if ord(i) < 128)
 
-        test_case = junit_xml.TestCase("all")
+        test_case = junit_xml.TestCase(node.parent.name)
         if code:
             # Include stdout and stderr if test failed:
             test_case.stdout = strip_non_ascii(stdout.decode("utf-8"))
@@ -330,9 +330,6 @@ def add_clar_test(
         "include",
         "src/core",
         "src/fw",
-        "src/libbtutil/include",
-        "src/libos/include",
-        "src/libutil/includes",
         "src/boot",
         "src/fw/applib/vendor/tinflate",
         "src/fw/applib/vendor/uPNG",
@@ -370,10 +367,7 @@ def add_clar_test(
     # DUMA is found in tests/vendor/duma
     use += [
         "libutil",
-        "libutil_includes",
-        "libos_includes",
         "libbtutil",
-        "libbtutil_includes",
     ]
     if "DUMA_DISABLED" not in defines and "DUMA_DISABLED" not in bld.env.DEFINES:
         use.append("duma")

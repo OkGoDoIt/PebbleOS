@@ -6,11 +6,11 @@
 
 #include "kernel/pbl_malloc.h"
 #include "system/passert.h"
-#include "util/attributes.h"
+#include "pbl/util/attributes.h"
 
 #ifndef UNITTEST
 #include "kernel/kernel_heap.h"
-#include "util/heap.h"
+#include "pbl/util/heap.h"
 #endif
 
 #include <string.h>

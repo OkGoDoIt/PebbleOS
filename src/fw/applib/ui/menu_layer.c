@@ -8,7 +8,7 @@
 #include "applib/preferred_content_size.h"
 #include "applib/graphics/graphics.h"
 #include "applib/graphics/text.h"
-#include "util/trig.h"
+#include "pbl/util/trig.h"
 #include "applib/fonts/fonts.h"
 #include "applib/ui/animation_timing.h"
 #include "applib/ui/click.h"
@@ -20,8 +20,8 @@
 #include "shell/system_theme.h"
 #include "system/logging.h"
 #include "system/passert.h"
-#include "util/math.h"
-#include "util/size.h"
+#include "pbl/util/math.h"
+#include "pbl/util/size.h"
 #include "vibes.h"
 
 #include <string.h>
@@ -133,6 +133,20 @@ static bool prv_menu_scroll_handle_wrap_around(MenuLayer *menu_layer, ClickRecog
     wraparound_dest_index = &first_index;
   } else {
     return false;
+  }
+
+  // Honor selection_will_change, like normal scrolling does, so the wrap
+  // destination can be redirected away from non-selectable rows.
+  MenuLayerSelectionWillChangeCallback will_change_cb =
+      menu_layer->callbacks.selection_will_change;
+  if (will_change_cb) {
+    MenuIndex new_index = *wraparound_dest_index;
+    will_change_cb(menu_layer, &new_index, current_index, menu_layer->callback_context);
+    if (menu_index_compare(&new_index, &current_index) == 0) {
+      // Callback locked the selection in place; don't wrap.
+      return false;
+    }
+    *wraparound_dest_index = new_index;
   }
 
   const bool animated = true;

@@ -10,12 +10,13 @@
 #include "pbl/services/comm_session/session.h"
 #include "pbl/services/notifications/alerts_preferences_private.h"
 #include "pbl/services/settings/settings_file.h"
+#include "shell/prefs.h"
 #include "shell/prefs_private.h"
 #include "system/logging.h"
 #include "system/passert.h"
 #include "pbl/services/system_task.h"
-#include "util/list.h"
-#include "util/size.h"
+#include "pbl/util/list.h"
+#include "pbl/util/size.h"
 
 #include <string.h>
 
@@ -65,15 +66,16 @@ static const char *s_syncable_settings[] = {
   "lightTouch",
   "lightAmbientThreshold",
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
-  "lightDynamicIntensity",
-  "dynBacklightMinThreshold",
+  "lightDynamicMode",
 #endif
+  "lightPreset",
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
   "lightColor",
 #endif
 
   // Language preferences
   "langEnglish",
+  "language",
 
   // App preferences
   "qlUp",
@@ -93,7 +95,9 @@ static const char *s_syncable_settings[] = {
   // Timeline preferences
   "timelineQuickViewEnabled",
   "timelineQuickViewBeforeTimeMin",
+#if TIMELINE_PEEK_WATCHFACE_FIT_SUPPORTED
   "timelineQuickViewWatchfaceFit",
+#endif
   "timelineSettingsOpened",
 
   // Activity preferences

@@ -23,8 +23,8 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.fields = native_heartbeat_layout(self.metrics)
         self.offsets = field_offsets(self.fields)
 
-    def test_matches_official_v4_20_0_wire_layout(self):
-        self.assertEqual(wire_size(self.fields), 523)
+    def test_matches_official_v4_30_0_wire_layout(self):
+        self.assertEqual(wire_size(self.fields), 527)
         self.assertEqual(self.offsets["version"], 0)
         self.assertEqual(self.offsets["timestamp"], 1)
         self.assertEqual(self.offsets["build_id"], 9)
@@ -37,13 +37,15 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.assertEqual(self.offsets["metric_watchface_time_ms"], 326)
         self.assertEqual(self.offsets["metric_watchface_name"], 330)
         self.assertEqual(self.offsets["metric_watchface_uuid"], 363)
-        self.assertEqual(self.offsets["metric_settings_touch_enabled"], 499)
-        self.assertEqual(self.offsets["metric_connectivity_expected_time_ms"], 519)
+        self.assertEqual(self.offsets["metric_ppog_reversed"], 467)
+        self.assertEqual(self.offsets["metric_settings_touch_enabled"], 503)
+        self.assertEqual(self.offsets["metric_connectivity_expected_time_ms"], 523)
 
     def test_emits_released_syscall_stack_metrics(self):
         metric_names = {metric.name for metric in self.metrics}
         self.assertIn("stack_free_app_syscall_bytes", metric_names)
         self.assertIn("stack_free_worker_syscall_bytes", metric_names)
+        self.assertIn("ppog_reversed", metric_names)
         self.assertIn("settings_touch_enabled", metric_names)
 
 

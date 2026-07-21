@@ -14,7 +14,7 @@
 #include "drivers/rtc.h"
 #include "kernel/events.h"
 #include "kernel/pbl_malloc.h"
-#include "os/mutex.h"
+#include "pbl/os/mutex.h"
 #include "pbl/services/battery/battery_state.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/runlevel.h"

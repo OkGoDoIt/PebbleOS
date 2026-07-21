@@ -3,10 +3,10 @@
 
 #include "audio_definitions.h"
 #include "kernel/pbl_malloc.h"
-#include "mcu/cache.h"
+#include "pbl/mcu/cache.h"
 #include "system/passert.h"
 #include "system/logging.h"
-#include "util/misc.h"
+#include "pbl/util/misc.h"
 #include "pbl/services/system_task.h"
 #include "pbl/soc/sf32lb/sleep.h"
 
@@ -275,10 +275,13 @@ static void prv_apply_volume(AudioDevice* audio_device) {
     }
 
     HAL_AUDCODEC_Mute_DACPath(haudcodec, 0);
-    // convert to HAL decoder range (-36~54)*2
-    int volume = ((int)state->volume - 36) * 2;
-    HAL_AUDCODEC_Config_DACPath_Volume(haudcodec, 0, volume);
-    HAL_AUDCODEC_Config_DACPath_Volume(haudcodec, 1, volume);
+    // Map 1..100 to -36..0 dB in the HAL's 0.5 dB units. Never apply positive
+    // digital gain: it clips full-scale content and overdrives the speaker.
+    int atten_half_db = ((MAX_VOLUME - (int)state->volume) * 72) / MAX_VOLUME;
+    if ((HAL_AUDCODEC_Config_DACPath_Volume(haudcodec, 0, -atten_half_db) != HAL_OK) ||
+        (HAL_AUDCODEC_Config_DACPath_Volume(haudcodec, 1, -atten_half_db) != HAL_OK)) {
+        PBL_LOG_WRN("Failed to apply DAC volume (%d half-dB)", -atten_half_db);
+    }
 }
 
 static bool prv_allocate_buffers(AudioDeviceState *state) {

@@ -22,7 +22,7 @@ typedef enum {
 typedef enum {
   SpeakerStateIdle = 0,
   SpeakerStatePlaying,
-  SpeakerStateDraining,    // stream closing, playing remaining buffered data
+  SpeakerStateDraining,    // source exhausted, playing remaining queued data
 } SpeakerState;
 
 typedef enum {
@@ -56,6 +56,13 @@ bool speaker_service_play_note_seq(const SpeakerNote *notes, uint32_t num_notes,
 bool speaker_service_play_tone(uint16_t freq_hz, uint16_t duration_ms,
                                uint8_t waveform, uint8_t velocity,
                                SpeakerPriority pri, uint8_t vol);
+
+//! Play a short fixed tone at an absolute output volume, bypassing the user's
+//! speaker-volume preference, so settings UIs can preview a candidate volume
+//! before it is saved. Mute still applies.
+//! @param vol Absolute output volume (0-100)
+//! @return true if playback started
+bool speaker_service_play_volume_preview(uint8_t vol);
 
 //! Play N monophonic tracks in parallel, mixed together.
 //! Track arrays and any sample data are copied into kernel memory.

@@ -8,7 +8,7 @@
 #include "kernel/events.h"
 #include "kernel/pbl_malloc.h"
 #include "kernel/system_message.h"
-#include "os/tick.h"
+#include "pbl/os/tick.h"
 #include "resource/resource_storage_file.h"
 #include "pbl/services/comm_session/session.h"
 #include "pbl/services/comm_session/session_receive_router.h"
@@ -20,8 +20,8 @@
 #include "system/firmware_storage.h"
 #include "system/logging.h"
 #include "system/passert.h"
-#include "util/attributes.h"
-#include "util/math.h"
+#include "pbl/util/attributes.h"
+#include "pbl/util/math.h"
 #include "util/net.h"
 #include <bluetooth/analytics.h>
 
@@ -313,7 +313,7 @@ static bool prv_init_put_job_queue_if_necessary(void) {
 
 static void prv_set_responsiveness(ResponseTimeState state, uint16_t timeout_secs) {
   comm_session_set_responsiveness(comm_session_get_system_session(),
-                                  BtConsumerPpPutBytes, ResponseTimeMin, timeout_secs);
+                                  BtConsumerPpPutBytes, state, timeout_secs);
 }
 
 static void prv_send_nack_from_system_task(void *data) {

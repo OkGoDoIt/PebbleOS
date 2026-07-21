@@ -39,7 +39,7 @@
 #include "shell/prefs.h"
 #include "system/logging.h"
 #include "system/passert.h"
-#include "util/list.h"
+#include "pbl/util/list.h"
 
 PBL_LOG_MODULE_DEFINE(service_i18n, CONFIG_SERVICE_I18N_LOG_LEVEL);
 
@@ -455,6 +455,10 @@ fail:
 }
 
 void i18n_get_with_buffer(const char *msgid, char *buffer, size_t length) {
+  if (length == 0) {
+    // Nothing fits, and buffer[length - 1] below would wrap to an OOB write.
+    return;
+  }
   if (msgid == NULL || msgid[0] == 0) {
     goto fail;
   }

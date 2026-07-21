@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "util/attributes.h"
+#include "pbl/util/attributes.h"
 
 #include <stdbool.h>
 #include <stddef.h>

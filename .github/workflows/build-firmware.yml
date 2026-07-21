@@ -20,6 +20,7 @@ jobs:
         with:
           filters: |
             src:
+              - '.github/actions/**'
               - '.github/workflows/build-firmware.yml'
               - 'boards/**'
               - 'platform/**'
@@ -39,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: ghcr.io/coredevices/pebbleos-docker:v5
+      image: ghcr.io/coredevices/pebbleos-docker:v6
 
     strategy:
       matrix:
@@ -59,6 +60,11 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          submodules: true
+
+      - name: Rebase onto target branch
+        uses: ./.github/actions/rebase
+        with:
           submodules: true
 
       - name: Install Python dependencies

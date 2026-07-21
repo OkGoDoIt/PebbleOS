@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: ghcr.io/coredevices/pebbleos-docker:v5
+      image: ghcr.io/coredevices/pebbleos-docker:v6
 
     strategy:
       matrix:
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: ghcr.io/coredevices/pebbleos-docker:v5
+      image: ghcr.io/coredevices/pebbleos-docker:v6
 
     strategy:
       matrix:
@@ -168,7 +168,7 @@ jobs:
           fi
 
       - name: Configure
-        run: ./waf configure --board '${{ matrix.board }}' --slot ${{ matrix.slot }} -DCONFIG_RELEASE=y
+        run: ./waf configure --board '${{ matrix.board }}' -DCONFIG_FIRMWARE_SLOT=${{ matrix.slot }} -DCONFIG_RELEASE=y
 
       - name: Build firmware
         run: ./waf build

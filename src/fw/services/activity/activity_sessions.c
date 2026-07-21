@@ -5,14 +5,14 @@
 #include "applib/health_service.h"
 #include "kernel/events.h"
 #include "kernel/pbl_malloc.h"
-#include "os/mutex.h"
-#include "os/tick.h"
+#include "pbl/os/mutex.h"
+#include "pbl/os/tick.h"
 #include "pbl/services/alarms/alarm.h"
 #include "syscall/syscall.h"
 #include "syscall/syscall_internal.h"
 #include "system/logging.h"
 #include "system/passert.h"
-#include "util/size.h"
+#include "pbl/util/size.h"
 
 #include <pebbleos/cron.h>
 
@@ -442,8 +442,8 @@ static void prv_update_sleep_metrics(time_t now_utc, time_t max_end_utc,
 
     if (sleep_data->cur_state != prev_sleep_data.cur_state) {
       // Debug logging
-      ACTIVITY_LOG_DEBUG("total_min: %"PRIu16", deep_min: %"PRIu16", state: %"PRIu16", "
-                         "state_min: %"PRIu16"",
+      ACTIVITY_LOG_DEBUG("total_min: %"PRIu32", deep_min: %"PRIu32", state: %"PRIu32", "
+                         "state_min: %"PRIu32"",
                          sleep_data->total_minutes,
                          sleep_data->restful_minutes,
                          sleep_data->cur_state,
@@ -598,8 +598,13 @@ void activity_sessions_prv_init(SettingsFile *file, time_t utc_now) {
   // Check the length first. The settings_file_get() call will not return an error if we ask
   // for less than the value size
   int stored_len = settings_file_get_len(file, &key, sizeof(key));
+  if (stored_len == 0) {
+    PBL_LOG_DBG("No stored activity sessions");
+    return;
+  }
   if (stored_len != sizeof(state->activity_sessions)) {
-    PBL_LOG_WRN("Stored activities not found or incompatible");
+    PBL_LOG_WRN("Stored activities incompatible: len %d != %d", stored_len,
+                (int)sizeof(state->activity_sessions));
     return;
   }
 

@@ -6,9 +6,9 @@
 #include "flash_region/flash_region.h"
 #include "system/firmware_storage.h"
 #include "system/passert.h"
-#include "util/attributes.h"
-#include "util/build_id.h"
-#include "util/string.h"
+#include "pbl/util/attributes.h"
+#include "pbl/util/build_id.h"
+#include "pbl/util/string.h"
 
 #include <ctype.h>
 #include <stddef.h>
@@ -36,7 +36,7 @@ const FirmwareMetadata TINTIN_METADATA SECTION(".pbl_fw_version") = {
 #else
   .is_dual_slot = false,
 #endif
-#if defined(FIRMWARE_SLOT_0) && !defined(CONFIG_RECOVERY_FW)
+#if defined(CONFIG_PBLBOOT) && CONFIG_FIRMWARE_SLOT == 0 && !defined(CONFIG_RECOVERY_FW)
   .is_slot_0 = true,
 #else
   .is_slot_0 = false,

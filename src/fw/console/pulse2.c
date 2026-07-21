@@ -17,16 +17,16 @@
 #include "drivers/task_watchdog.h"
 #include "kernel/pbl_malloc.h"
 #include "kernel/pebble_tasks.h"
-#include "mcu/interrupts.h"
-#include "os/mutex.h"
+#include "pbl/mcu/interrupts.h"
+#include "pbl/os/mutex.h"
 #include "pbl/services/regular_timer.h"
 #include "system/passert.h"
-#include "util/attributes.h"
-#include "util/crc32.h"
-#include "util/likely.h"
-#include "util/math.h"
+#include "pbl/util/attributes.h"
+#include "pbl/util/crc32.h"
+#include "pbl/util/likely.h"
+#include "pbl/util/math.h"
 #include "util/net.h"
-#include "util/size.h"
+#include "pbl/util/size.h"
 
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -383,7 +383,9 @@ static void prv_assert_tx_buffer(void *buf) {
 }
 
 void pulse_handle_character(char c, bool *should_context_switch) {
-  portBASE_TYPE tmp;
+  // FromISR calls only write pdTRUE when a higher-priority task is woken; they never
+  // write pdFALSE, so tmp must start as pdFALSE to avoid a spurious context switch.
+  portBASE_TYPE tmp = pdFALSE;
   xQueueSendToBackFromISR(s_pulse_task_queue, &c, &tmp);
   xSemaphoreGiveFromISR(s_pulse_task_service_semaphore, &tmp);
   *should_context_switch = (tmp == pdTRUE);
