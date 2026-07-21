@@ -142,6 +142,7 @@ else:
             'moddable/build/devices/pebble/modules/message/pebble-appmessage.c',
             'moddable/build/devices/pebble/modules/accelerometer/pebble-accelerometer.c',
             'moddable/build/devices/pebble/modules/battery/pebble-battery.c',
+            'moddable/build/devices/pebble/modules/music/pebble-music.c',
             'moddable/build/devices/pebble/modules/compass/pebble-compass.c',
             'moddable/build/devices/pebble/modules/touch/pebble-touch.c',
             'moddable/build/devices/pebble/modules/vibes/vibes.c',
