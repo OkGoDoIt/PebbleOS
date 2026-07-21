@@ -66,27 +66,41 @@ typedef struct {
 
 //! Command sent to the connected music player.
 typedef enum {
+  //! Start playback.
   MusicServiceCommandPlay = 0,
+  //! Pause playback.
   MusicServiceCommandPause,
+  //! Toggle between playing and paused.
   MusicServiceCommandTogglePlayPause,
+  //! Skip to the next track.
   MusicServiceCommandNextTrack,
+  //! Return to the previous track.
   MusicServiceCommandPreviousTrack,
+  //! Increase the player volume.
   MusicServiceCommandVolumeUp,
+  //! Decrease the player volume.
   MusicServiceCommandVolumeDown,
+  //! Cycle through the player's repeat modes.
   MusicServiceCommandAdvanceRepeatMode,
+  //! Cycle through the player's shuffle modes.
   MusicServiceCommandAdvanceShuffleMode,
+  //! Seek forward by the player's standard interval.
   MusicServiceCommandSkipForward,
+  //! Seek backward by the player's standard interval.
   MusicServiceCommandSkipBackward,
+  //! Mark the current item as liked.
   MusicServiceCommandLike,
+  //! Mark the current item as disliked.
   MusicServiceCommandDislike,
+  //! Bookmark the current item.
   MusicServiceCommandBookmark,
 } MusicServiceCommand;
 
 //! Type of music service event
 typedef enum {
-  //! The now-playing metadata (title, artist or album) changed. Also emitted
-  //! when a music server connects or disconnects, since the metadata is
-  //! (re)set at those points.
+  //! The now-playing metadata (title, artist, album or player name) changed.
+  //! Also emitted when a music server connects or disconnects, since the
+  //! metadata is (re)set at those points.
   MusicServiceEventNowPlayingChanged = 0,
   //! The playback state changed
   MusicServiceEventPlaybackStateChanged,
@@ -132,10 +146,10 @@ bool music_service_get_player_name(char *player_name);
 //! @param playback_info Structure to receive playback information. Must not be NULL.
 void music_service_get_playback_info(MusicServicePlaybackInfo *playback_info);
 
-//! Check whether the connected phone supports a playback command. Command
-//! availability differs by phone platform and active player.
+//! Check whether the connected phone's music transport supports a playback
+//! command. A supported command may still be ignored by the active player.
 //! @param command The command to check.
-//! @return True if the command is currently supported.
+//! @return True if the connected music transport supports the command.
 bool music_service_is_command_supported(MusicServiceCommand command);
 
 //! Send a playback command to the connected phone. Delivery is best-effort.
