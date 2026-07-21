@@ -35,7 +35,7 @@ ConnectionServiceState* kernel_applib_get_connection_service_state(void);
 
 BatteryStateServiceState* kernel_applib_get_battery_state_service_state(void);
 
-MusicServiceState* kernel_applib_get_music_service_state(void);
+MusicServiceState *kernel_applib_get_music_service_state(void);
 
 struct Layer;
 typedef struct Layer Layer;
