@@ -38,6 +38,7 @@
         "type": "object",
         "oneOf": [
           { "$ref": "project_types.json#/native-app" },
+          { "$ref": "project_types.json#/moddable-app" },
           { "$ref": "project_types.json#/package" }
         ]
       }
@@ -59,7 +60,7 @@
       "resources": { "$ref": "attributes.json#/resources" },
       "capabilities": { "$ref": "attributes.json#/capabilities" },
       "enableMultiJS": { "type": "boolean" },
-      "projectType": { "enum": [ "native", "pebblejs" ] }
+      "projectType": { "enum": [ "native", "pebblejs", "moddable" ] }
     },
     "required": ["uuid", "longName", "companyName", "versionLabel"]
   }
