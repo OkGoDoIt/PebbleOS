@@ -97,8 +97,7 @@ void test_music_service_syscalls__initialize(void) {
   s_send_count = 0;
 }
 
-void test_music_service_syscalls__cleanup(void) {
-}
+void test_music_service_syscalls__cleanup(void) {}
 
 void test_music_service_syscalls__returns_metadata(void) {
   s_has_now_playing = true;
@@ -156,12 +155,12 @@ void test_music_service_syscalls__maps_every_playback_state(void) {
     MusicPlayState private_state;
     MusicServicePlaybackState public_state;
   } cases[] = {
-    { MusicPlayStateUnknown, MusicServicePlaybackStateUnknown },
-    { MusicPlayStatePlaying, MusicServicePlaybackStatePlaying },
-    { MusicPlayStatePaused, MusicServicePlaybackStatePaused },
-    { MusicPlayStateForwarding, MusicServicePlaybackStateForwarding },
-    { MusicPlayStateRewinding, MusicServicePlaybackStateRewinding },
-    { MusicPlayStateInvalid, MusicServicePlaybackStateUnknown },
+      {MusicPlayStateUnknown, MusicServicePlaybackStateUnknown},
+      {MusicPlayStatePlaying, MusicServicePlaybackStatePlaying},
+      {MusicPlayStatePaused, MusicServicePlaybackStatePaused},
+      {MusicPlayStateForwarding, MusicServicePlaybackStateForwarding},
+      {MusicPlayStateRewinding, MusicServicePlaybackStateRewinding},
+      {MusicPlayStateInvalid, MusicServicePlaybackStateUnknown},
   };
 
   s_state_supported = true;
@@ -180,20 +179,20 @@ void test_music_service_syscalls__maps_every_supported_command(void) {
     MusicServiceCommand public_command;
     MusicCommand private_command;
   } cases[] = {
-    { MusicServiceCommandPlay, MusicCommandPlay },
-    { MusicServiceCommandPause, MusicCommandPause },
-    { MusicServiceCommandTogglePlayPause, MusicCommandTogglePlayPause },
-    { MusicServiceCommandNextTrack, MusicCommandNextTrack },
-    { MusicServiceCommandPreviousTrack, MusicCommandPreviousTrack },
-    { MusicServiceCommandVolumeUp, MusicCommandVolumeUp },
-    { MusicServiceCommandVolumeDown, MusicCommandVolumeDown },
-    { MusicServiceCommandAdvanceRepeatMode, MusicCommandAdvanceRepeatMode },
-    { MusicServiceCommandAdvanceShuffleMode, MusicCommandAdvanceShuffleMode },
-    { MusicServiceCommandSkipForward, MusicCommandSkipForward },
-    { MusicServiceCommandSkipBackward, MusicCommandSkipBackward },
-    { MusicServiceCommandLike, MusicCommandLike },
-    { MusicServiceCommandDislike, MusicCommandDislike },
-    { MusicServiceCommandBookmark, MusicCommandBookmark },
+      {MusicServiceCommandPlay, MusicCommandPlay},
+      {MusicServiceCommandPause, MusicCommandPause},
+      {MusicServiceCommandTogglePlayPause, MusicCommandTogglePlayPause},
+      {MusicServiceCommandNextTrack, MusicCommandNextTrack},
+      {MusicServiceCommandPreviousTrack, MusicCommandPreviousTrack},
+      {MusicServiceCommandVolumeUp, MusicCommandVolumeUp},
+      {MusicServiceCommandVolumeDown, MusicCommandVolumeDown},
+      {MusicServiceCommandAdvanceRepeatMode, MusicCommandAdvanceRepeatMode},
+      {MusicServiceCommandAdvanceShuffleMode, MusicCommandAdvanceShuffleMode},
+      {MusicServiceCommandSkipForward, MusicCommandSkipForward},
+      {MusicServiceCommandSkipBackward, MusicCommandSkipBackward},
+      {MusicServiceCommandLike, MusicCommandLike},
+      {MusicServiceCommandDislike, MusicCommandDislike},
+      {MusicServiceCommandBookmark, MusicCommandBookmark},
   };
 
   for (size_t i = 0; i < ARRAY_LENGTH(cases); i++) {

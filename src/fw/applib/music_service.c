@@ -12,9 +12,8 @@
 #include "process_state/app_state/app_state.h"
 #include "process_state/worker_state/worker_state.h"
 
-
 // ----------------------------------------------------------------------------------------------------
-static MusicServiceState* prv_get_state(PebbleTask task) {
+static MusicServiceState *prv_get_state(PebbleTask task) {
   if (task == PebbleTask_Unknown) {
     task = pebble_task_get_current();
   }
@@ -27,7 +26,6 @@ static MusicServiceState* prv_get_state(PebbleTask task) {
     WTF;
   }
 }
-
 
 static void do_handle(PebbleEvent *e, void *context) {
   MusicServiceState *state = prv_get_state(PebbleTask_Unknown);
@@ -108,10 +106,11 @@ void music_service_unsubscribe(void) {
 }
 
 void music_service_state_init(MusicServiceState *state) {
-  *state = (MusicServiceState) {
-    .mss_info = {
-      .type = PEBBLE_MEDIA_EVENT,
-      .handler = &do_handle,
-    },
+  *state = (MusicServiceState){
+      .mss_info =
+          {
+              .type = PEBBLE_MEDIA_EVENT,
+              .handler = &do_handle,
+          },
   };
 }

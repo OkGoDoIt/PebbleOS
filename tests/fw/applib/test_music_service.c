@@ -81,7 +81,7 @@ static void prv_event_handler(MusicServiceEventType event) {
 }
 
 void test_music_service__initialize(void) {
-  s_music_service_state = (MusicServiceState) {};
+  s_music_service_state = (MusicServiceState){};
   s_last_event = MusicServiceEventNowPlayingChanged;
   s_event_count = 0;
   s_has_now_playing = false;
@@ -91,7 +91,7 @@ void test_music_service__initialize(void) {
   s_playback_state = MusicPlayStateUnknown;
   s_has_player_name = false;
   s_player_name[0] = '\0';
-  s_playback_info = (MusicServicePlaybackInfo) {};
+  s_playback_info = (MusicServicePlaybackInfo){};
   s_last_command = MusicServiceCommandPlay;
   s_command_supported = false;
 
@@ -99,8 +99,7 @@ void test_music_service__initialize(void) {
   music_service_state_init(&s_music_service_state);
 }
 
-void test_music_service__cleanup(void) {
-}
+void test_music_service__cleanup(void) {}
 
 void test_music_service__metadata_and_playback_wrappers(void) {
   s_has_now_playing = true;
@@ -110,15 +109,14 @@ void test_music_service__metadata_and_playback_wrappers(void) {
   s_playback_state = MusicPlayStatePlaying;
   s_has_player_name = true;
   strncpy(s_player_name, "Player", sizeof(s_player_name));
-  s_playback_info = (MusicServicePlaybackInfo) {
-    .position_ms = 1234,
-    .duration_ms = 5678,
-    .playback_rate_percent = 100,
-    .playback_state = MusicServicePlaybackStatePlaying,
-    .capabilities = MusicServiceCapabilityPlaybackState |
-                    MusicServiceCapabilityProgress |
-                    MusicServiceCapabilityVolume,
-    .volume_percent = 42,
+  s_playback_info = (MusicServicePlaybackInfo){
+      .position_ms = 1234,
+      .duration_ms = 5678,
+      .playback_rate_percent = 100,
+      .playback_state = MusicServicePlaybackStatePlaying,
+      .capabilities = MusicServiceCapabilityPlaybackState | MusicServiceCapabilityProgress |
+                      MusicServiceCapabilityVolume,
+      .volume_percent = 42,
   };
 
   char title[MUSIC_SERVICE_BUFFER_LENGTH];
@@ -150,12 +148,12 @@ void test_music_service__maps_private_playback_states(void) {
     MusicPlayState private_state;
     MusicServicePlaybackState public_state;
   } cases[] = {
-    { MusicPlayStateUnknown, MusicServicePlaybackStateUnknown },
-    { MusicPlayStatePlaying, MusicServicePlaybackStatePlaying },
-    { MusicPlayStatePaused, MusicServicePlaybackStatePaused },
-    { MusicPlayStateForwarding, MusicServicePlaybackStateForwarding },
-    { MusicPlayStateRewinding, MusicServicePlaybackStateRewinding },
-    { MusicPlayStateInvalid, MusicServicePlaybackStateUnknown },
+      {MusicPlayStateUnknown, MusicServicePlaybackStateUnknown},
+      {MusicPlayStatePlaying, MusicServicePlaybackStatePlaying},
+      {MusicPlayStatePaused, MusicServicePlaybackStatePaused},
+      {MusicPlayStateForwarding, MusicServicePlaybackStateForwarding},
+      {MusicPlayStateRewinding, MusicServicePlaybackStateRewinding},
+      {MusicPlayStateInvalid, MusicServicePlaybackStateUnknown},
   };
 
   for (size_t i = 0; i < ARRAY_LENGTH(cases); i++) {
@@ -182,12 +180,12 @@ void test_music_service__maps_all_media_events(void) {
     PebbleMediaEventType private_event;
     MusicServiceEventType public_event;
   } cases[] = {
-    { PebbleMediaEventTypeNowPlayingChanged, MusicServiceEventNowPlayingChanged },
-    { PebbleMediaEventTypePlaybackStateChanged, MusicServiceEventPlaybackStateChanged },
-    { PebbleMediaEventTypeVolumeChanged, MusicServiceEventVolumeChanged },
-    { PebbleMediaEventTypeTrackPosChanged, MusicServiceEventTrackPositionChanged },
-    { PebbleMediaEventTypeServerConnected, MusicServiceEventServerConnected },
-    { PebbleMediaEventTypeServerDisconnected, MusicServiceEventServerDisconnected },
+      {PebbleMediaEventTypeNowPlayingChanged, MusicServiceEventNowPlayingChanged},
+      {PebbleMediaEventTypePlaybackStateChanged, MusicServiceEventPlaybackStateChanged},
+      {PebbleMediaEventTypeVolumeChanged, MusicServiceEventVolumeChanged},
+      {PebbleMediaEventTypeTrackPosChanged, MusicServiceEventTrackPositionChanged},
+      {PebbleMediaEventTypeServerConnected, MusicServiceEventServerConnected},
+      {PebbleMediaEventTypeServerDisconnected, MusicServiceEventServerDisconnected},
   };
 
   music_service_subscribe(prv_event_handler);
@@ -196,8 +194,8 @@ void test_music_service__maps_all_media_events(void) {
 
   for (size_t i = 0; i < ARRAY_LENGTH(cases); i++) {
     PebbleEvent event = {
-      .type = PEBBLE_MEDIA_EVENT,
-      .media.type = cases[i].private_event,
+        .type = PEBBLE_MEDIA_EVENT,
+        .media.type = cases[i].private_event,
     };
     event_info->handler(&event, event_info->context);
     cl_assert_equal_i(s_last_event, cases[i].public_event);

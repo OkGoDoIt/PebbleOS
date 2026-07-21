@@ -152,7 +152,7 @@ BatteryStateServiceState* kernel_applib_get_battery_state_service_state(void) {
 }
 
 // -----------------------------------------------------------------------------------------------------------
-MusicServiceState* kernel_applib_get_music_service_state(void) {
+MusicServiceState *kernel_applib_get_music_service_state(void) {
   static MusicServiceState s_music_service_state;
   return &s_music_service_state;
 }

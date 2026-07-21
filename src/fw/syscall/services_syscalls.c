@@ -92,8 +92,8 @@ DEFINE_SYSCALL(void, sys_music_get_playback_info, MusicServicePlaybackInfo *play
     syscall_assert_userspace_buffer(playback_info, sizeof(*playback_info));
   }
 
-  *playback_info = (MusicServicePlaybackInfo) {
-    .playback_state = MusicServicePlaybackStateUnknown,
+  *playback_info = (MusicServicePlaybackInfo){
+      .playback_state = MusicServicePlaybackStateUnknown,
   };
 
 #ifdef CONFIG_SERVICE_MUSIC
