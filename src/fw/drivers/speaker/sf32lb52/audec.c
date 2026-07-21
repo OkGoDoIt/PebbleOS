@@ -5,7 +5,7 @@
 #include "kernel/pbl_malloc.h"
 #include "pbl/mcu/cache.h"
 #include "system/passert.h"
-#include "system/logging.h"
+#include <pbl/logging/logging.h>
 #include "pbl/util/misc.h"
 #include "pbl/services/system_task.h"
 #include "pbl/soc/sf32lb/sleep.h"
@@ -366,6 +366,7 @@ void audec_start(AudioDevice* audio_device, AudioTransCB cb) {
     AudioDeviceState* state = audio_device->state;
     AUDCODEC_HandleTypeDef *haudcodec = &state->audcodec;
     state->trans_cb = cb;
+    state->callback_pending = false;
 
     soc_sf32lb_sleep_block(SOC_SF32LB_DEEPWFI);
 
@@ -448,6 +449,7 @@ void audec_dac0_dma_irq_handler(AudioDevice* audio_device)
 
 static void prv_audio_trans_bg(void* data) {
     AudioDeviceState* state  = (AudioDeviceState*) data;
+    state->callback_pending = false;
     uint32_t free_size = circular_buffer_get_write_space_remaining(&state->circ_buffer);
     state->trans_cb(&free_size);
 }
@@ -474,10 +476,17 @@ static void prv_dma_request_processing(AudioDeviceState* state) {
     // any bytes we didn't touch were already memset() to silence.
     dcache_flush(state->queue_buf[HAL_AUDCODEC_DAC_CH0], CFG_AUDIO_PLAYBACK_PIPE_SIZE);
     uint32_t free_size = circular_buffer_get_write_space_remaining(&state->circ_buffer);
-    if(state->trans_cb && free_size >= CFG_AUDIO_PLAYBACK_PIPE_SIZE) {
+    // Only one refill callback may be in flight: this ISR fires every half
+    // buffer, and enqueueing on each one floods the system task queue when
+    // KernelBG is starved, tripping the Event Queue Full reset.
+    if(state->trans_cb && !state->callback_pending &&
+       free_size >= CFG_AUDIO_PLAYBACK_PIPE_SIZE) {
         bool system_task_switch_context = false;
-        system_task_add_callback_from_isr(prv_audio_trans_bg, (void*)state,
-            &system_task_switch_context);
+        state->callback_pending = true;
+        if (!system_task_add_callback_from_isr(prv_audio_trans_bg, (void*)state,
+                &system_task_switch_context)) {
+            state->callback_pending = false;
+        }
     }
 }
 
