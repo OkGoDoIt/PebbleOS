@@ -173,7 +173,7 @@ void test_audio_companion_speex__bitstream_is_golden(void) {
                            sizeof(GOLDEN_FRAME0_PREFIX)), 0);
 
   // Optional fixture export for the app repo (spec/fixtures/speex_frames_v1*):
-  // AUDIO_COMPANION_SPEEX_FIXTURE_DIR=<dir> ./waf test -M test_audio_companion_speex
+  // AUDIO_COMPANION_SPEEX_FIXTURE_DIR=<dir> ./waf test -M '.*test_audio_companion_speex\.c'
   const char *fixture_dir = getenv("AUDIO_COMPANION_SPEEX_FIXTURE_DIR");
   if (fixture_dir != NULL) {
     char path[512];
