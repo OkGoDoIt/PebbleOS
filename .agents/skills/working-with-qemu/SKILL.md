@@ -5,66 +5,30 @@ description: Use when building, launching, debugging, or capturing screenshots o
 
 # Working with QEMU
 
-PebbleOS can run under a custom QEMU version shipped with the PebbleOS SDK.
+Read `docs/development/qemu.md` — it documents the full workflow: qemu_*
+boards, `./pbl qemu` (monitor sockets, serial ports, uart1.log), `./pbl
+console`, `./pbl screenshot`, programmatic key input via `sendkey`, touch
+injection via `./pbl touch`/`./pbl swipe`, and `./pbl debug`.
 
-## Configure & build
+Agent notes:
 
-```sh
-./pbl configure --board $BOARD
-./pbl build
-```
+- Use `./pbl screenshot` to validate UI changes; read the resulting PNG.
+- Drive the UI over the socket monitor (`build/qemu-mon.sock`) with
+  `sendkey` rather than the interactive QEMU window.
 
-where `$BOARD` is any of the `qemu_*` boards:
+## Touch
 
-- `qemu_emery`
-- `qemu_flint`
-- `qemu_gabbro`
-
-QEMU boards target a specific platform, e.g. `qemu_emery` targets the Emery platform, which is the platform used by Pebble Time 2.
-
-## Launch
-
-```sh
-./pbl qemu
-```
-
-The launched QEMU exposes:
-
-- Interactive QEMU monitor on the launching terminal (`-monitor stdio`)
-- Programmatic socket monitor (`-monitor unix:build/qemu-mon.sock`)
-- Serial console over TCP on `localhost:12345` (console) and `localhost:12344` (pebble-tool)
-
-UART1 output is also captured to `build/uart1.log`.
-
-## Console
+On touch-capable boards you can inject touch into a running QEMU (`./pbl qemu`
+exposes the QMP socket used for injection). Coordinates are screen pixels; the
+display size is read from the emulated `pebble-touch` device and scaled
+automatically.
 
 ```sh
-./pbl console
+./pbl touch 130 130                          # tap at (130, 130)
+./pbl swipe 130 220 130 40                   # swipe up (finger bottom -> top)
+./pbl swipe 130 220 130 40 --steps 20 --duration 0.4
 ```
 
-Requires QEMU to be running.
-Uses the TCP serial port to connect to the QEMU console, and provides a prompt for sending commands and receiving responses.
-
-## Screenshot
-
-```sh
-./pbl screenshot # defaults to build/screenshot.png
-./pbl screenshot --screenshot-output /tmp/foo.png
-```
-
-Requires QEMU to be running.
-Uses the programmatic socket monitor to capture a screenshot of the QEMU display and save it to disk.
-Useful to validate or iterate on UI changes.
-
-## Interaction
-
-Keyboard input is captured by QEMU, so you can interact with the PebbleOS UI.
-Keys can also be send programmatically over the socket monitor using the `sendkey` command.
-They key mapping is:
-
-| QEMU key | PebbleOS key |
-| -------- | ------------ |
-| `left`   | `back`       |
-| `right`  | `select`     |
-| `up`     | `up`         |
-| `down`   | `down`       |
+A tap is a finger down then up; a swipe streams intermediate moves so drag
+gestures are seen as continuous. Injection uses the absolute-pointer input
+path; multi-touch is not wired up in the device.

@@ -1,14 +1,15 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "drivers/i2c.h"
-#include "definitions.h"
-#include "hal.h"
+#include <pbl/drivers/i2c.h>
+#include <pbl/drivers/i2c/definitions.h>
+#include <pbl/drivers/i2c/hal.h>
 
 #include "board/board.h"
 #include "debug/power_tracking.h"
-#include "drivers/gpio.h"
-#include "drivers/rtc.h"
+#include "pbl/services/analytics/analytics.h"
+#include <pbl/drivers/gpio.h>
+#include <pbl/drivers/rtc.h>
 #include "FreeRTOS.h"
 #include "kernel/pbl_malloc.h"
 #include "pbl/os/tick.h"
@@ -20,7 +21,7 @@
 #include "pbl/util/size.h"
 
 #ifdef CONFIG_PMIC
-#include "drivers/pmic.h"
+#include <pbl/drivers/pmic.h>
 #endif
 
 #include <inttypes.h>
@@ -242,6 +243,7 @@ static bool prv_do_transfer_locked(I2CBus *bus, I2CTransferDirection direction, 
           (bus->state->transfer_event == I2CTransferEvent_Error)) {
         if (bus->state->transfer_event == I2CTransferEvent_Error) {
           PBL_LOG_ERR("I2C Error on bus %s", bus->name);
+          PBL_ANALYTICS_ADD(i2c_transfer_error_count, 1);
         }
         complete = true;
         result = (bus->state->transfer_event == I2CTransferEvent_TransferComplete);
@@ -270,6 +272,7 @@ static bool prv_do_transfer_locked(I2CBus *bus, I2CTransferDirection direction, 
       i2c_hal_abort_transfer(bus);
       complete = true;
       PBL_LOG_ERR("Transfer timed out on bus %s", bus->name);
+      PBL_ANALYTICS_ADD(i2c_transfer_error_count, 1);
       break;
     }
   } while (!complete);

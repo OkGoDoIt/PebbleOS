@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 #include "console/prompt.h"
-#include "drivers/rtc.h"
+#include <pbl/drivers/rtc.h>
 #include "pbl/os/mutex.h"
 #include "pbl/services/analytics/backend.h"
 #include "pbl/services/system_task.h"
@@ -20,8 +20,8 @@
 
 PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
 
-#define NATIVE_HEARTBEAT_RECORD_VERSION 1
-#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 527
+#define NATIVE_HEARTBEAT_RECORD_VERSION 3
+#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 563
 
 /* Heartbeat record logged to DLS */
 struct PACKED native_heartbeat_record {
@@ -94,9 +94,11 @@ _Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_uuid) =
                "native_heartbeat_record watchface_uuid offset changed");
 _Static_assert(offsetof(struct native_heartbeat_record, metric_ppog_reversed) == 467,
                "native_heartbeat_record ppog_reversed offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_settings_touch_enabled) == 503,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_settings_touch_enabled) == 499,
                "native_heartbeat_record settings_touch_enabled offset changed");
-_Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) == 523,
+_Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) == 519,
+               "native_heartbeat_record connectivity_expected_time_ms offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_min) == 557,
                "native_heartbeat_record final metric offset changed");
 
 /* Type-specific internal index enums (dense, no gaps) */

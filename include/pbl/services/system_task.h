@@ -23,11 +23,19 @@ void system_task_watchdog_feed(void);
 typedef void (*SystemTaskEventCallback)(void *data);
 
 //! @param cb Callback function that will later be called from the system task
+//! @param data Context pointer passed to the callback
 //! @param should_context_switch A boolean that indicates our ISR should context switch at the end instead of
 //!                              resuming the previous task. See portEND_SWITCHING_ISR()
 bool system_task_add_callback_from_isr(SystemTaskEventCallback cb, void *data, bool* should_context_switch);
 
+//! Same as system_task_add_callback_from_isr(), except a full queue drops the callback and
+//! returns false instead of resetting the system. Only use this when losing the callback is
+//! tolerable, e.g. a periodic refill that a later interrupt retries.
+bool system_task_add_callback_from_isr_droppable(SystemTaskEventCallback cb, void *data,
+                                                 bool *should_context_switch);
+
 //! @param cb Callback function that will later be called from the system task
+//! @param data Context pointer passed to the callback
 bool system_task_add_callback(SystemTaskEventCallback cb, void *data);
 
 //! @param block True if callbacks should be rejected, False if they should be let through.

@@ -11,7 +11,7 @@
 #include "services/audio_companion/spool.h"
 #include "system/reboot_reason.h"
 
-#include "drivers/mic.h"
+#include <pbl/drivers/mic.h>
 
 #include "clar.h"
 #include "fake_mutex.h"

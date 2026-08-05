@@ -4,7 +4,7 @@
 #include "clar.h"
 
 #include "board/board.h"
-#include "drivers/backlight.h"
+#include <pbl/drivers/backlight.h>
 #include "pbl/services/light.h"
 #include "pbl/util/math.h"
 #include "pbl/util/size.h"
@@ -69,6 +69,10 @@ void backlight_set_ambient_sensor_enabled(bool enabled) {
 
 void backlight_set_brightness(uint8_t brightness) {
   s_backlight_brightness = brightness;
+}
+
+uint8_t backlight_get_level(uint8_t brightness) {
+  return brightness;
 }
 
 void backlight_refresh(void) {

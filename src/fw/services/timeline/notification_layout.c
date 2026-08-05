@@ -113,7 +113,10 @@ static const NotificationStyle s_notification_styles[NumPreferredContentSizes] =
     .location_margin = 10,
     .body_icon_margin = -10,
     .body_padding = 2,
-    .body_line_delta = -2,
+    // Round: -3 makes the Gothic-24 body pitch 21px, fitting 10 lines per 224px page
+    // (9*21 + the 29px last-line reserve = 218 <= 224) instead of 9, shrinking the
+    // page-seam gap from more than a line pitch (26px) to a 14px modulo.
+    .body_line_delta = PBL_IF_RECT_ELSE(-2, -3),
 #if PBL_ROUND
     .timestamp_upper_padding = 6,
 #else
@@ -614,6 +617,10 @@ static void prv_layout_destroy(LayoutLayer *layout) {
   NotificationLayout *notification_layout = (NotificationLayout *)layout;
   prv_destroy_view(notification_layout);
   kino_layer_deinit(&notification_layout->icon_layer);
+  // Every other layout deinits its base layer before freeing (see timeline_layout_deinit);
+  // skipping it leaks attached recognizers and frees a layer the touch system may still
+  // reference.
+  layer_deinit(&notification_layout->layout.layer);
   task_free(notification_layout);
 }
 

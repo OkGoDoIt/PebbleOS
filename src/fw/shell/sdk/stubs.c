@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "board/board.h"
-#include "drivers/backlight.h"
+#include <pbl/drivers/backlight.h>
 #include "process_management/pebble_process_md.h"
 #include "pbl/services/activity/activity.h"
 #include "pbl/services/timeline/peek.h"
@@ -72,6 +72,14 @@ bool touch_is_globally_enabled(void) {
 }
 
 void touch_set_globally_enabled(bool enable) {
+}
+
+
+bool touch_navigation_menu_is_enabled(void) {
+  return false;
+}
+
+void touch_set_navigation_menu_enabled(bool enable) {
 }
 
 #include "process_management/app_install_types.h"

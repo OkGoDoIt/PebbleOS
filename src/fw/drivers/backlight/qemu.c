@@ -1,12 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "drivers/backlight.h"
+#include <pbl/drivers/backlight.h>
 
 #include "board/board.h"
 #include "console/prompt.h"
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
-#include "drivers/backlight.h"
+#include <pbl/drivers/backlight.h>
 #endif
 
 #include <stdlib.h>
@@ -77,6 +77,11 @@ void backlight_set_brightness(uint8_t brightness) {
   REG32(QEMU_DISPLAY_BASE + DISP_BRIGHTNESS) = level;
   REG32(QEMU_DISPLAY_BASE + DISP_CTRL) |= CTRL_UPDATE;
 #endif
+}
+
+uint8_t backlight_get_level(uint8_t brightness) {
+  // Emulated backlight: every brightness value is distinct.
+  return brightness;
 }
 
 void backlight_refresh(void) {

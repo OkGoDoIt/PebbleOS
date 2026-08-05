@@ -10,8 +10,8 @@
 #include "bluetooth/audio_companion_service.h"
 #include "comm/bt_conn_mgr.h"
 #include "board/board.h"
-#include "drivers/mic.h"
-#include "drivers/rtc.h"
+#include <pbl/drivers/mic.h>
+#include <pbl/drivers/rtc.h>
 #include "kernel/events.h"
 #include "kernel/pbl_malloc.h"
 #include "pbl/os/mutex.h"

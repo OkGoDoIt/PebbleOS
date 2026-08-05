@@ -9,6 +9,7 @@
 #include "applib/graphics/graphics.h"
 #include "applib/ui/recognizer/recognizer.h"
 #include "applib/ui/recognizer/recognizer_list.h"
+#include "applib/ui/recognizer/recognizer_manager.h"
 #include "applib/ui/window_private.h"
 #include "applib/unobstructed_area_service_private.h"
 #include "kernel/kernel_applib_state.h"
@@ -55,12 +56,36 @@ static bool prv_destroy_recognizer(Recognizer *recognizer, void *context) {
   recognizer_destroy(recognizer);
   return true;
 }
+
+//! The recognizer manager latches the touched layer for the whole gesture and walks its parent
+//! chain on every touch event. A layer destroyed mid-gesture (an app rebuilding UI from a timer
+//! or message callback with a finger down) would leave that latch dangling, so if the dying layer
+//! is the active layer or one of its ancestors, cancel the gesture and reset the manager.
+static void prv_invalidate_manager_active_layer(Layer *layer) {
+  if (!layer->window) {
+    return;
+  }
+  RecognizerManager *manager = window_get_recognizer_manager(layer->window);
+  if (!manager) {
+    return;
+  }
+  for (Layer *active = manager->active_layer; active; active = active->parent) {
+    if (active == layer) {
+      recognizer_manager_cancel_and_reset(manager);
+      return;
+    }
+  }
+}
 #endif
 
 void layer_deinit(Layer *layer) {
   if (!layer) {
     return;
   }
+#ifdef CONFIG_TOUCH
+  // Must run while layer->window is still set (layer_remove_from_parent clears it).
+  prv_invalidate_manager_active_layer(layer);
+#endif
   layer_remove_from_parent(layer);
 
 #ifdef CONFIG_TOUCH
@@ -315,9 +340,21 @@ GRect layer_get_unobstructed_bounds_by_value(const Layer *layer) {
   return bounds;
 }
 
+#ifdef CONFIG_TOUCH
+static bool prv_register_recognizer_cb(Recognizer *recognizer, void *context) {
+  recognizer_manager_register_recognizer(context, recognizer);
+  return true;
+}
+#endif
+
 //! Sets the window on the layer and on all of its children
 static void layer_set_window(Layer *layer, Window *window) {
   layer->window = window;
+#ifdef CONFIG_TOUCH
+  // Register recognizers that were attached while the layer had no window (NULL manager is a no-op)
+  recognizer_list_iterate(&layer->recognizer_list, prv_register_recognizer_cb,
+                          window_get_recognizer_manager(window));
+#endif
   Layer *child = layer->first_child;
   while (child) {
     layer_set_window(child, window);
@@ -336,6 +373,13 @@ void layer_remove_from_parent(Layer *child) {
   if (!child || child->parent == NULL) {
     return;
   }
+#ifdef CONFIG_TOUCH
+  // Must run while child->window is still set (cleared below). A subtree that leaves the
+  // tree mid-gesture must drop the recognizer manager's active-layer latch: the layers may
+  // be freed right after removal without a layer_deinit (e.g. the swap-layer layout path),
+  // leaving the latch dangling.
+  prv_invalidate_manager_active_layer(child);
+#endif
   if (child->parent->window) {
     window_schedule_render(child->parent->window);
   }

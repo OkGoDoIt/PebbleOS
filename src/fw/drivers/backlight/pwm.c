@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "drivers/backlight.h"
-#include "drivers/gpio.h"
+#include <pbl/drivers/backlight.h>
+#include <pbl/drivers/gpio.h>
 
 #include "board/board.h"
-#include "drivers/pwm.h"
+#include <pbl/drivers/pwm.h>
 
 //! The counter reload value. The timer will count from 0 to this value and then reset again.
 static const uint32_t TIMER_PERIOD_RESOLUTION = 1024;
@@ -40,6 +40,11 @@ void backlight_set_brightness(uint8_t brightness) {
                                         TIMER_PERIOD_RESOLUTION / 10000;
     pwm_set_duty_cycle(&BACKLIGHT_PWM.pwm, desired_duty_cycle);
   }
+}
+
+uint8_t backlight_get_level(uint8_t brightness) {
+  // Continuous PWM control: every brightness value is distinct.
+  return brightness;
 }
 
 void backlight_refresh(void) {

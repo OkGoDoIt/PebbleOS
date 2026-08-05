@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "drivers/backlight.h"
+#include <pbl/drivers/backlight.h>
 
 #include "board/board.h"
-#include "drivers/i2c.h"
+#include <pbl/drivers/i2c.h>
 #include <pbl/logging/logging.h>
 
 PBL_LOG_MODULE_DEFINE(driver_backlight_aw2016, CONFIG_DRIVER_BACKLIGHT_LOG_LEVEL);
@@ -152,6 +152,11 @@ void backlight_set_color(uint32_t rgb_color) {
 
 uint32_t backlight_get_color(void) {
   return s_rgb_current_color;
+}
+
+uint8_t backlight_get_level(uint8_t brightness) {
+  // 255-step current control: every brightness value is distinct.
+  return brightness;
 }
 
 void backlight_refresh(void) {

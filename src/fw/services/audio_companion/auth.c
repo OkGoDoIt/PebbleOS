@@ -3,7 +3,7 @@
 #include "auth.h"
 
 #include "pbl/services/settings/settings_file.h"
-#include "drivers/rtc.h"
+#include <pbl/drivers/rtc.h>
 #include "pbl/logging/logging.h"
 #include "pbl/util/attributes.h"
 

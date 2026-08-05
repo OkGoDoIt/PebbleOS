@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "audio_definitions.h"
+#include <pbl/drivers/speaker/sf32lb52/audio_definitions.h>
 #include "kernel/pbl_malloc.h"
 #include "pbl/mcu/cache.h"
 #include "system/passert.h"
@@ -479,11 +479,13 @@ static void prv_dma_request_processing(AudioDeviceState* state) {
     // Only one refill callback may be in flight: this ISR fires every half
     // buffer, and enqueueing on each one floods the system task queue when
     // KernelBG is starved, tripping the Event Queue Full reset.
+    // A dropped refill is retried on the next half-buffer IRQ; a momentary
+    // underrun beats resetting the system over a full queue.
     if(state->trans_cb && !state->callback_pending &&
        free_size >= CFG_AUDIO_PLAYBACK_PIPE_SIZE) {
         bool system_task_switch_context = false;
         state->callback_pending = true;
-        if (!system_task_add_callback_from_isr(prv_audio_trans_bg, (void*)state,
+        if (!system_task_add_callback_from_isr_droppable(prv_audio_trans_bg, (void*)state,
                 &system_task_switch_context)) {
             state->callback_pending = false;
         }

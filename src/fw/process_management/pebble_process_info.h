@@ -168,11 +168,15 @@ typedef enum {
 // sdk.major:0x5 .minor:0x64 -- Add kModdableCreationFlagDebug (rev 103)
 // sdk.major:0x5 .minor:0x65 -- Expose speaker playback limits (rev 104)
 // sdk.major:0x5 .minor:0x66 -- Expose alarm service (alarm_service_peek_next) to apps (rev 105)
-// sdk.major:0x5 .minor:0x67 -- Expose read-only music now-playing metadata to apps (rev 106)
-// sdk.major:0x5 .minor:0x68 -- Expose music playback information and controls to apps (rev 107)
+// sdk.major:0x5 .minor:0x67 -- Explicit Resource Management in Moddable (rev 106)
+// sdk.major:0x5 .minor:0x68 -- Expose gesture recognizer API (tap/pan/swipe + window attach/detach) to apps (rev 107)
+// sdk.major:0x5 .minor:0x69 -- Add app_touch_navigation_enable() opt-in for third-party touch nav (rev 108)
+// sdk.major:0x5 .minor:0x6a -- Add HRV sampling API (health_service_set_hrv_sample_period) (rev 109)
+// sdk.major:0x5 .minor:0x6b -- Expose read-only music now-playing metadata to apps (rev 110)
+// sdk.major:0x5 .minor:0x6c -- Expose music playback information and controls to apps (rev 111)
 
 #define PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR 0x5
-#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x68
+#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x6c
 
 // The first SDK to ship with 2.x APIs
 #define PROCESS_INFO_FIRST_2X_SDK_VERSION_MAJOR 0x4

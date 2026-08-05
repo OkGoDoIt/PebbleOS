@@ -3,9 +3,9 @@
 
 #include "board/board.h"
 #include "console/prompt.h"
-#include "drivers/gpio.h"
-#include "drivers/i2c.h"
-#include "drivers/vibe.h"
+#include <pbl/drivers/gpio.h>
+#include <pbl/drivers/i2c.h>
+#include <pbl/drivers/vibe.h>
 #include "kernel/util/sleep.h"
 #include <pbl/logging/logging.h>
 #include "system/passert.h"
@@ -134,8 +134,8 @@ void vibe_set_strength(int8_t strength) {
 
   scale = ((uint16_t)strength * AW8623X_CONTCFG7_DRV2_LVL_MAX) / 100U;
 
-  ret &= prv_write_register(AW8623X_CONTCFG6, scale | AW8623X_CONTCFG6_TRACK_EN);
-  ret = prv_write_register(AW8623X_CONTCFG7, scale);
+  ret = prv_write_register(AW8623X_CONTCFG6, scale | AW8623X_CONTCFG6_TRACK_EN);
+  ret &= prv_write_register(AW8623X_CONTCFG7, scale);
   PBL_ASSERTN(ret);
 }
 

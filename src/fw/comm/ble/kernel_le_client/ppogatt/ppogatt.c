@@ -28,7 +28,7 @@
 
 #include <inttypes.h>
 
-#include "drivers/rtc.h"
+#include <pbl/drivers/rtc.h>
 
 //! See https://pebbletechnology.atlassian.net/wiki/pages/viewpage.action?pageId=22511665
 //! for detailed information regarding the PPoGATT protocol state machine.
@@ -1389,6 +1389,9 @@ static const PPoGATTPacket * prv_prepare_next_reset_packet(const PPoGATTClient *
                                                       uint16_t *payload_size_out) {
   PPoGATTPacket *packet = prv_lazily_allocate_packet_if_needed(client, heap_packet_in_out);
   if (!packet) {
+    PBL_LOG_WRN("Couldn't allocate reset packet: role=%u state=%u type=%u",
+                client->role, client->state,
+                (unsigned) client->out.reset_packet_to_send.type);
     return NULL;
   }
 

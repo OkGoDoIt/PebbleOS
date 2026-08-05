@@ -14,8 +14,8 @@
 #include "applib/voice/dictation_session.h"
 #include "applib/ui/click.h"
 #include "apps/system/app_fetch_ui.h"
-#include "drivers/battery.h"
-#include "drivers/button_id.h"
+#include <pbl/drivers/battery.h>
+#include <pbl/drivers/button_id.h>
 #include "process_management/app_install_types.h"
 #include "pbl/services/battery/battery_monitor.h"
 #include "pbl/services/bluetooth/bluetooth_ctl.h"
@@ -589,11 +589,11 @@ typedef struct PACKED { // 9 bytes
   bool dst_changed;
 } PebbleSetTimeEvent;
 
-typedef struct PACKED { // 5 bytes
+typedef struct PACKED { // 6 bytes
   TouchEvent event;
 } PebbleTouchEvent;
 
-typedef struct PACKED { // 5 bytes
+typedef struct PACKED { // 6 bytes
   GestureEvent event;
 } PebbleGestureEvent;
 
@@ -817,6 +817,12 @@ typedef struct PACKED {
   //  event data unions word aligned (and avoid unaligned access exceptions).
   PebbleEventType type:8;
 } PebbleEvent;
+
+// Guard the on-target size. The bound assumes 4-byte pointers, so it only
+// applies to the firmware target; the host unit-test build has wider pointers.
+#if __SIZEOF_POINTER__ == 4
+_Static_assert(sizeof(PebbleEvent) <= 12, "PebbleEvent grew; check the event union layout");
+#endif
 
 void events_init(void);
 

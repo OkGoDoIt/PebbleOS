@@ -111,6 +111,18 @@ void backlight_set_touch_wake(BacklightTouchWake wake);
 bool touch_is_globally_enabled(void);
 void touch_set_globally_enabled(bool enable);
 
+// Touch-navigation sub-pref, ANDed with the master "Touch" kill switch above
+// (touch_is_globally_enabled) for the SYSTEM experience: menus, notifications
+// and the button bridge are active only while BOTH are on; with this off
+// nothing system-side subscribes to touch. Only the wake-gesture pref, SDK
+// raw-touch apps, and third-party apps that explicitly opted in via
+// app_touch_navigation_enable() (they follow the master switch alone) still
+// consume the sensor. Defaults to off. Toggling either pref runs the
+// enable/disable transaction when the effective (ANDed) state changes and
+// re-evaluates the running app's twin otherwise.
+bool touch_navigation_menu_is_enabled(void);
+void touch_set_navigation_menu_enabled(bool enable);
+
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
 // Dynamic backlight: how aggressively brightness ramps with ambient light.
 // Every mode keeps the same dim floor; the mode selects the lux level at
@@ -202,15 +214,6 @@ typedef enum TimelinePeekUnsupportedFaceMode {
 void timeline_peek_prefs_set_unsupported_face_mode(TimelinePeekUnsupportedFaceMode mode);
 TimelinePeekUnsupportedFaceMode timeline_peek_prefs_get_unsupported_face_mode(void);
 #endif
-
-typedef enum PowerMode {
-  PowerMode_HighPerformance = 0,
-  PowerMode_LowPower = 1,
-  PowerModeCount
-} PowerMode;
-
-PowerMode shell_prefs_get_power_mode(void);
-void shell_prefs_set_power_mode(PowerMode mode);
 
 bool shell_prefs_can_coredump_on_request(void);
 void shell_prefs_set_coredump_on_request(bool enabled);

@@ -13,8 +13,8 @@
 #include "apps/system/toggle/quiet_time.h"
 #include "board/board.h"
 #include "applib/graphics/gtypes.h"
-#include "drivers/ambient_light.h"
-#include "drivers/backlight.h"
+#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/backlight.h>
 #include "mfg/mfg_info.h"
 #include "pbl/os/mutex.h"
 #include "popups/timeline/peek.h"
@@ -23,7 +23,7 @@
 #include "pbl/services/accel_manager.h"
 #include "pbl/services/audio_companion.h"
 #include "pbl/services/touch/touch.h"
-#include "pbl/services/powermode_service.h"
+#include "pbl/services/touch/touch_nav_service.h"
 #include "pbl/services/hrm/hrm_manager.h"
 #include "pbl/services/i18n/i18n.h"
 #include "resource/resource_ids.auto.h"
@@ -94,6 +94,9 @@ static uint8_t s_backlight_touch_wake = BacklightTouchWake_DoubleTap;
 
 #define PREF_KEY_TOUCH_ENABLED "touchEnabled"
 static bool s_touch_enabled = true;
+
+#define PREF_KEY_TOUCH_NAVIGATION_MENU "touchNavMenuEnabled"
+static bool s_touch_navigation_menu_enabled = false;
 
 #define PREF_KEY_MOTION_SENSITIVITY "motionSensitivity"
 static uint8_t s_motion_sensitivity = 55; // Default to Medium
@@ -288,7 +291,6 @@ static uint16_t s_timeline_peek_before_time_m =
 static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFaceMode_None;
 #endif
 
-#define PREF_KEY_POWER_MODE "powerMode"
 #define PREF_KEY_COREDUMP_ON_REQUEST "coredumpOnRequest"
 #define PREF_KEY_ACCEL_SHAKE_LOG_INFO "accelShakeLogInfo"
 #define PREF_KEY_VIBE_LOG_INFO "vibeLogInfo"
@@ -303,7 +305,6 @@ static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFa
 #ifdef CONFIG_APP_SCALING
 #define PREF_KEY_LEGACY_APP_RENDER_MODE "legacyAppRenderMode"
 #endif
-static uint8_t s_power_mode = PowerMode_HighPerformance;
 static bool s_coredump_on_request_enabled = false;
 static bool s_accel_shake_log_info_enabled = false;
 static bool s_vibe_log_info_enabled = false;
@@ -448,10 +449,45 @@ static bool prv_set_s_backlight_touch_wake(uint8_t *wake) {
   return true;
 }
 
+#ifdef CONFIG_TOUCH
+// System touch navigation is active only while BOTH prefs are on: the master
+// "Touch" switch (the global touch kill, PREF_KEY_TOUCH_ENABLED) and the
+// "Touch Navigation" sub-pref. The enable/disable transaction (twin
+// subscriptions + permanent sensor hold) keys on the conjunction. Third-party
+// apps that explicitly opted in follow the master pref alone.
+static bool prv_touch_navigation_effective(void) {
+  return s_touch_enabled && s_touch_navigation_menu_enabled;
+}
+#endif
+
 static bool prv_set_s_touch_enabled(bool *enabled) {
+#ifdef CONFIG_TOUCH
+  const bool was_effective = prv_touch_navigation_effective();
+  const bool was_on = s_touch_enabled;
+#endif
   s_touch_enabled = *enabled;
 #ifdef CONFIG_TOUCH
   touch_service_set_globally_enabled(*enabled);
+  if (prv_touch_navigation_effective() != was_effective) {
+    touch_nav_set_enabled(prv_touch_navigation_effective());
+  } else if (was_on != *enabled) {
+    // Effective system nav unchanged (sub-pref off), but an opted-in running app follows the
+    // master "Touch" pref alone: re-evaluate its twin.
+    touch_nav_master_changed();
+  }
+#endif
+  return true;
+}
+
+static bool prv_set_s_touch_navigation_menu_enabled(bool *enabled) {
+#ifdef CONFIG_TOUCH
+  const bool was_effective = prv_touch_navigation_effective();
+#endif
+  s_touch_navigation_menu_enabled = *enabled;
+#ifdef CONFIG_TOUCH
+  if (prv_touch_navigation_effective() != was_effective) {
+    touch_nav_set_enabled(prv_touch_navigation_effective());
+  }
 #endif
   return true;
 }
@@ -753,15 +789,6 @@ static bool prv_set_s_timeline_peek_unsupported_face_mode(uint8_t *mode) {
   return true;
 }
 #endif
-
-static bool prv_set_s_power_mode(uint8_t *mode) {
-  if (*mode >= PowerModeCount) {
-    return false;
-  }
-  s_power_mode = *mode;
-  powermode_service_set_enabled(*mode == PowerMode_LowPower);
-  return true;
-}
 
 static bool prv_set_s_coredump_on_request_enabled(bool *enabled) {
   s_coredump_on_request_enabled = *enabled;
@@ -1092,6 +1119,7 @@ void shell_prefs_init(void) {
 #ifdef CONFIG_TOUCH
   touch_set_backlight_enabled(s_backlight_touch_wake != BacklightTouchWake_Off);
   touch_service_set_globally_enabled(s_touch_enabled);
+  touch_nav_set_enabled(prv_touch_navigation_effective());
 #endif
 }
 
@@ -1394,6 +1422,14 @@ bool touch_is_globally_enabled(void) {
 
 void touch_set_globally_enabled(bool enable) {
   prv_pref_set(PREF_KEY_TOUCH_ENABLED, &enable, sizeof(enable));
+}
+
+bool touch_navigation_menu_is_enabled(void) {
+  return s_touch_navigation_menu_enabled;
+}
+
+void touch_set_navigation_menu_enabled(bool enable) {
+  prv_pref_set(PREF_KEY_TOUCH_NAVIGATION_MENU, &enable, sizeof(enable));
 }
 
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
@@ -2184,15 +2220,6 @@ void shell_prefs_set_menu_scroll_vibe_behavior(MenuScrollVibeBehavior behavior) 
   prv_pref_set(PREF_KEY_MENU_SCROLL_VIBE_BEHAVIOR, &behavior, sizeof(MenuScrollVibeBehavior));
 }
 
-PowerMode shell_prefs_get_power_mode(void) {
-  return (PowerMode)s_power_mode;
-}
-
-void shell_prefs_set_power_mode(PowerMode mode) {
-  uint8_t val = (uint8_t)mode;
-  prv_pref_set(PREF_KEY_POWER_MODE, &val, sizeof(val));
-}
-
 void pbl_analytics_external_collect_settings(void) {
   PBL_ANALYTICS_SET_UNSIGNED(settings_health_tracking_enabled,
                              activity_prefs_tracking_is_enabled());
@@ -2204,7 +2231,6 @@ void pbl_analytics_external_collect_settings(void) {
   PBL_ANALYTICS_SET_UNSIGNED(settings_health_hrm_activity_tracking_enabled,
                              activity_prefs_hrm_activity_tracking_is_enabled());
 #endif
-  PBL_ANALYTICS_SET_UNSIGNED(settings_power_mode, shell_prefs_get_power_mode());
   PBL_ANALYTICS_SET_UNSIGNED(settings_motion_sensitivity, shell_prefs_get_motion_sensitivity());
   PBL_ANALYTICS_SET_UNSIGNED(settings_backlight_intensity_pct, backlight_get_intensity());
   PBL_ANALYTICS_SET_UNSIGNED(settings_backlight_timeout_s, backlight_get_timeout_ms() / 1000);

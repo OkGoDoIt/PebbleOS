@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "sf32lb.h"
-#include "definitions.h"
-#include "hal.h"
+#include <pbl/drivers/i2c/sf32lb.h>
+#include <pbl/drivers/i2c/definitions.h>
+#include <pbl/drivers/i2c/hal.h>
 
 #include "pbl/soc/sf32lb/sleep.h"
 #include "system/passert.h"
@@ -37,6 +37,10 @@ void i2c_irq_handler(I2CBus *bus) {
   HAL_I2C_StateTypeDef state;
   I2CTransferEvent event;
   portBASE_TYPE woken;
+
+  if (hdl->XferISR == NULL) {
+    return;
+  }
 
   (void)hdl->XferISR(hdl, 0, 0);
 

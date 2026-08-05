@@ -6,7 +6,7 @@
 #include "hrm_manager.h"
 
 #include "applib/event_service_client.h"
-#include "drivers/rtc.h"
+#include <pbl/drivers/rtc.h>
 #include "freertos_types.h"
 #include "kernel/events.h"
 #include "pbl/os/mutex.h"
@@ -79,6 +79,8 @@ struct HRMManagerState {
 
   uint8_t check_disable_counter;   // increments to HRM_CHECK_SENSOR_DISABLE_COUNT
   uint8_t enable_failure_count;    // counts consecutive hrm_enable failures, stops retrying after max
+
+  HRMFeature enabled_features;     // feature union the sensor was last enabled with
 
   bool enabled_run_level;          // True if the current run_level (LowPower, Stationary,
                                    // Normal, etc.) allows the sensor to be turned on
