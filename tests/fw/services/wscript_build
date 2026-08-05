@@ -278,12 +278,16 @@ clar(ctx,
         " src/fw/util/rand/rand.c" \
         " src/fw/util/time/time.c" \
         " third_party/tinymt/TinyMT/tinymt/tinymt32.c" \
-        " third_party/nimble/mynewt-nimble/ext/tinycrypt/src/sha256.c" \
-        " third_party/nimble/mynewt-nimble/ext/tinycrypt/src/utils.c" \
+        " third_party/mbedtls/mbedtls/library/sha256.c" \
+        " third_party/mbedtls/mbedtls/library/platform_util.c" \
         " tests/fakes/fake_rtc.c" \
         " tests/fakes/fake_spi_flash.c"]),
     test_sources_ant_glob = "test_audio_companion_auth.c",
-    add_includes = ["third_party/nimble/mynewt-nimble/ext/tinycrypt/include"],
+    add_includes = ["third_party/mbedtls/mbedtls/include",
+                    "third_party/mbedtls/mbedtls/library",
+                    "third_party/mbedtls/include"],
+    defines = ['MBEDTLS_CONFIG_FILE="pebble_mbedtls_config.h"',
+               'CONFIG_SERVICE_AUDIO_COMPANION=1'],
     override_includes = ['dummy_board'])
 
 clar(ctx,

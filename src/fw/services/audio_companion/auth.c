@@ -6,12 +6,14 @@
 #include <pbl/drivers/rtc.h>
 #include "pbl/logging/logging.h"
 #include "pbl/util/attributes.h"
+#include "system/passert.h"
 
-#include "tinycrypt/sha256.h"
-#include "tinycrypt/constants.h"
+#include <mbedtls/sha256.h>
 
 #include <inttypes.h>
 #include <string.h>
+
+#define AUTH_RECEIVER_HASH_BYTES (32)
 
 #define AUTH_SETTINGS_FILE_NAME "audiocomp"
 #define AUTH_SETTINGS_FILE_SIZE (1024)
@@ -19,7 +21,7 @@
 
 typedef struct PACKED {
   uint8_t version;
-  uint8_t receiver_hash[TC_SHA256_DIGEST_SIZE];
+  uint8_t receiver_hash[AUTH_RECEIVER_HASH_BYTES];
   char name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES + 1];
   uint32_t authorized_at;
 } StoredReceiver;
@@ -31,10 +33,8 @@ static StoredReceiver s_receiver;
 static bool s_receiver_loaded;
 
 static void prv_hash_receiver_id(const uint8_t *receiver_id, uint8_t *hash_out) {
-  struct tc_sha256_state_struct sha;
-  tc_sha256_init(&sha);
-  tc_sha256_update(&sha, receiver_id, AUDIO_COMPANION_RECEIVER_ID_BYTES);
-  tc_sha256_final(hash_out, &sha);
+  PBL_ASSERTN(mbedtls_sha256(receiver_id, AUDIO_COMPANION_RECEIVER_ID_BYTES, hash_out,
+                             0 /* SHA-256, not SHA-224 */) == 0);
 }
 
 static bool prv_load_from_flash(void) {
@@ -75,7 +75,7 @@ AudioCompanionAuthEval audio_companion_auth_evaluate(
   if (!s_receiver_loaded) {
     return AudioCompanionAuthEvalNoReceiver;
   }
-  uint8_t hash[TC_SHA256_DIGEST_SIZE];
+  uint8_t hash[AUTH_RECEIVER_HASH_BYTES];
   prv_hash_receiver_id(receiver_id, hash);
   if (memcmp(hash, s_receiver.receiver_hash, sizeof(hash)) == 0) {
     return AudioCompanionAuthEvalMatch;

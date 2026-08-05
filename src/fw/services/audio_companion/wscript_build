@@ -1,17 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
-tinycrypt_dir = 'third_party/nimble/mynewt-nimble/ext/tinycrypt'
+mbedtls_dir = 'third_party/mbedtls'
 
 sources = bld.path.ant_glob('*.c')
-if not bld.env.CONFIG_BT_FW_NIMBLE:
-    # NimBLE builds already compile tinycrypt; other BT backends need SHA-256
-    # for the receiver registry.
-    sources.append(bld.srcnode.find_node(tinycrypt_dir + '/src/sha256.c'))
-    sources.append(bld.srcnode.find_node(tinycrypt_dir + '/src/utils.c'))
+includes = []
+defines = []
+use = ['fw_includes']
+if bld.env.CONFIG_BT_FW_NIMBLE:
+    # NimBLE builds already compile Mbed TLS; SHA-256 is enabled there by
+    # CONFIG_SERVICE_AUDIO_COMPANION in pebble_mbedtls_config.h.
+    use.append('mbedtls')
+else:
+    # Other BT backends compile the SHA-256 primitive directly for the
+    # receiver registry.
+    sources.append(bld.srcnode.find_node(mbedtls_dir + '/mbedtls/library/sha256.c'))
+    sources.append(bld.srcnode.find_node(mbedtls_dir + '/mbedtls/library/platform_util.c'))
+    includes = [
+        bld.srcnode.find_node(mbedtls_dir + '/mbedtls/include').abspath(),
+        bld.srcnode.find_node(mbedtls_dir + '/mbedtls/library').abspath(),
+        bld.srcnode.find_node(mbedtls_dir + '/include').abspath(),
+    ]
+    defines = ['MBEDTLS_CONFIG_FILE="pebble_mbedtls_config.h"']
 
 bld.stlib(
-    use=['fw_includes'],
-    includes=[bld.srcnode.find_node(tinycrypt_dir + '/include').abspath()],
+    use=use,
+    includes=includes,
+    defines=defines,
     source=sources,
     target='services_audio_companion',
 )

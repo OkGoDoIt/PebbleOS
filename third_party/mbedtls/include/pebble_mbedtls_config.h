@@ -39,3 +39,9 @@ void kernel_free(void *ptr);
 #define MBEDTLS_ECP_FIXED_POINT_OPTIM 0
 
 #define MBEDTLS_NO_PLATFORM_ENTROPY
+
+/* The audio companion receiver registry hashes receiver ids with SHA-256.
+ * Kept off in default builds so they stay identical to upstream. */
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#define MBEDTLS_SHA256_C
+#endif
