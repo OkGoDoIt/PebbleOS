@@ -21,7 +21,7 @@
 PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
 
 #define NATIVE_HEARTBEAT_RECORD_VERSION 3
-#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 563
+#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 567
 
 /* Heartbeat record logged to DLS */
 struct PACKED native_heartbeat_record {
@@ -99,6 +99,8 @@ _Static_assert(offsetof(struct native_heartbeat_record, metric_settings_touch_en
 _Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) == 519,
                "native_heartbeat_record connectivity_expected_time_ms offset changed");
 _Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_min) == 557,
+               "native_heartbeat_record battery_soc_pct_min offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_touch_gated_touchdown_count) == 563,
                "native_heartbeat_record final metric offset changed");
 
 /* Type-specific internal index enums (dense, no gaps) */
