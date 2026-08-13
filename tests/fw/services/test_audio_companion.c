@@ -24,6 +24,7 @@
 #include <time.h>
 
 void audio_companion_test_reset(void);
+PebbleMutex *audio_companion_test_get_lock(void);
 
 #define MAX_CAPTURED_NOTIFICATIONS (32)
 #define MAX_CAPTURED_NOTIFICATION_BYTES (512)
@@ -261,8 +262,19 @@ int voice_speex_encode_frame(int16_t *samples, uint8_t *encoded_data, size_t max
   return 4;
 }
 
+//! The real mic driver holds its own mutex while it calls the data handler, and the handler takes
+//! the service lock. Entering the driver with the service lock already held is therefore a lock
+//! order inversion: it deadlocked KernelBG mid-dispatch against whichever task was starting or
+//! stopping capture, and the watch rebooted on the task watchdog ~7 s later. Assert the invariant
+//! on every driver call so no future change can quietly reintroduce it.
+static void prv_assert_service_lock_not_held(void) {
+  const FakePebbleMutex *lock = (const FakePebbleMutex *)audio_companion_test_get_lock();
+  cl_assert(!lock || lock->lock_count == 0);
+}
+
 bool mic_start(MicDevice *this, MicDataHandlerCB data_handler, void *context,
                int16_t *audio_buffer, size_t audio_buffer_len) {
+  prv_assert_service_lock_not_held();
   if (!s_mic_start_succeeds || s_mic_running) {
     return false;
   }
@@ -274,6 +286,7 @@ bool mic_start(MicDevice *this, MicDataHandlerCB data_handler, void *context,
 }
 
 void mic_stop(MicDevice *this) {
+  prv_assert_service_lock_not_held();
   s_mic_running = false;
 }
 
@@ -901,4 +914,60 @@ void test_audio_companion__silence_suppression_can_be_disabled(void) {
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
   cl_assert_equal_i(s_encoded_counter, 170);
+}
+
+// The mic driver invokes the data handler under its own mutex, and the handler takes the service
+// lock -- so the driver lock is always acquired before the service lock on the capture path.
+// Capture transitions must therefore reach the driver with the service lock released, or KernelBG
+// (mid-dispatch, holding the driver mutex, waiting on the service lock) deadlocks against whatever
+// task is starting/stopping capture, and the task watchdog reboots the watch. prv_assert_service_
+// lock_not_held() in the mic fakes enforces the invariant; these cases drive the transitions that
+// arrive from a task other than the one running the mic dispatch.
+void test_audio_companion__capture_transitions_never_enter_mic_under_service_lock(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert(s_mic_running);
+
+  // Dictation on the App task: voice calls the conflict hook while KernelBG is dispatching frames.
+  prv_feed_frame();
+  audio_companion_mic_conflict_begin();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+  audio_companion_mic_conflict_end();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // Runlevel changes arrive from KernelMain (stationary service, low power).
+  prv_feed_frame();
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert(!s_mic_running);
+  audio_companion_set_runlevel(RunLevel_Normal);
+  cl_assert(s_mic_running);
+
+  // The settings UI runs on the App task.
+  prv_feed_frame();
+  audio_companion_set_enabled(false);
+  cl_assert(!s_mic_running);
+  audio_companion_set_enabled(true);
+  cl_assert(s_mic_running);
+}
+
+// A mic_start() that loses the race for the driver must settle on PausedConflict instead of
+// leaving the applier retrying a start it can never complete.
+void test_audio_companion__mic_unavailable_settles_on_conflict_and_recovers(void) {
+  audio_companion_set_enabled(true);
+  s_mic_start_succeeds = false;
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+
+  // The latch must not wedge the service: once the mic frees up, a pause/resume cycle retries.
+  s_mic_start_succeeds = true;
+  audio_companion_mic_conflict_begin();
+  audio_companion_mic_conflict_end();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 }

@@ -112,7 +112,22 @@ static TimerID s_consent_timer = TIMER_INVALID_ID;
 static TimerID s_enable_timer = TIMER_INVALID_ID;
 
 // Stream + capture state
-static bool s_owns_mic;
+//!
+//! Capture intent vs. reality. The mic driver calls prv_mic_data_handler() with its own mutex
+//! held, and that handler takes s_lock -- so on the capture path the driver mutex is always
+//! acquired *before* s_lock. Calling mic_start()/mic_stop() while holding s_lock takes the same
+//! two locks in the opposite order, so any task that did that (dictation from the App task,
+//! runlevel/battery changes from KernelMain, the settings UI) could deadlock against KernelBG
+//! sitting mid-dispatch. KernelBG then never feeds the task watchdog again and the watch resets
+//! ~7 s later with RebootReasonCode_Watchdog.
+//!
+//! So the state machine only records *intent* (s_owns_mic / s_capture_wanted) under s_lock, and
+//! prv_apply_capture() performs the driver calls with s_lock dropped.
+static bool s_owns_mic;                //!< service intends to hold the mic (guarded by s_lock)
+static bool s_capture_wanted;          //!< intent handed to prv_apply_capture() (guarded by s_lock)
+static bool s_capture_start_failed;    //!< last apply could not take the mic (guarded by s_lock)
+static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()
+static PebbleMutex *s_capture_lock;    //!< serializes appliers; never held while taking s_lock
 static bool s_stream_active;
 static bool s_need_stream_start;
 static bool s_stream_resumed;    //!< the pending STREAM_START re-announces an ongoing stream
@@ -185,8 +200,12 @@ static bool prv_session_ready_locked(void) {
   return s_session.authorized && s_session.data_subscribed && !s_receiver_presumed_gone;
 }
 
+//! Background capture only runs at RunLevel_Normal. Stationary and LowPower pause unconditionally
+//! (deliberate: the pause is not user-overridable), and BareMinimum / FirmwareUpdate must stop the
+//! mic too -- those runlevels are entered for panics, factory resets and firmware updates, where
+//! holding the mic and the Speex encoder open is exactly the wrong thing to do.
 static bool prv_power_save_active_locked(void) {
-  return s_runlevel == RunLevel_Stationary || s_runlevel == RunLevel_LowPower;
+  return s_runlevel != RunLevel_Normal;
 }
 
 static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode) {
@@ -463,43 +482,86 @@ static bool prv_maybe_alert_loss_locked(void) {
 
 static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context);
 
-static bool prv_start_capture_locked(void) {
-  if (s_owns_mic) {
-    return true;
-  }
-  if (!voice_speex_init()) {
-    PBL_LOG_ERR("Audio companion: speex init failed");
-    return false;
-  }
-  int16_t *frame_buffer = voice_speex_get_frame_buffer();
-  const size_t frame_samples = voice_speex_get_frame_size();
-  if (!frame_buffer || frame_samples == 0) {
-    voice_speex_deinit();
-    return false;
-  }
-  if (!mic_start(MIC, prv_mic_data_handler, NULL, frame_buffer, frame_samples)) {
-    // Mic already owned by someone else (e.g. dictation): treat as conflict.
-    PBL_LOG_WRN("Audio companion: mic unavailable; treating as conflict");
-    voice_speex_deinit();
-    return false;
-  }
-  PBL_LOG_INFO("Audio companion: capture started");
+//! Record that capture should be running. The mic driver is only touched later, by
+//! prv_apply_capture(), which the caller must invoke once it has dropped s_lock.
+static void prv_start_capture_locked(void) {
+  s_capture_wanted = true;
   s_owns_mic = true;
   s_capture_parked = false;
-  return true;
 }
 
+//! Record that capture should stop, and clear the "mic was unavailable" latch so a later attempt
+//! is allowed. Like prv_start_capture_locked(), the driver call happens in prv_apply_capture().
 static void prv_stop_capture_locked(void) {
-  if (s_owns_mic) {
-    if (mic_is_running(MIC)) {
-      mic_stop(MIC);
-    }
-    s_owns_mic = false;
-    if (voice_speex_is_initialized()) {
-      voice_speex_deinit();
-    }
-    PBL_LOG_INFO("Audio companion: capture stopped");
+  s_capture_wanted = false;
+  s_owns_mic = false;
+  s_capture_start_failed = false;
+}
+
+//! Reconcile the mic driver with the intent recorded under s_lock.
+//!
+//! MUST be called with s_lock released: this is the function that actually takes the driver's
+//! mutex, and taking it under s_lock is the lock-order inversion described above. s_capture_lock
+//! serializes concurrent appliers and is itself never acquired while s_lock is held, so the
+//! global order stays acyclic: s_capture_lock -> mic mutex -> s_lock.
+static void prv_apply_capture(void) {
+  if (!s_capture_lock) {
+    return;
   }
+  mutex_lock(s_capture_lock);
+  for (;;) {
+    mutex_lock(s_lock);
+    const bool want = s_capture_wanted;
+    mutex_unlock(s_lock);
+
+    if (want == s_mic_started) {
+      break;
+    }
+
+    if (!want) {
+      if (mic_is_running(MIC)) {
+        mic_stop(MIC);
+      }
+      if (voice_speex_is_initialized()) {
+        voice_speex_deinit();
+      }
+      s_mic_started = false;
+      PBL_LOG_INFO("Audio companion: capture stopped");
+      continue;  // intent may have flipped again while the driver call ran
+    }
+
+    bool started = false;
+    if (voice_speex_init()) {
+      int16_t *frame_buffer = voice_speex_get_frame_buffer();
+      const size_t frame_samples = voice_speex_get_frame_size();
+      if (frame_buffer && frame_samples > 0) {
+        started = mic_start(MIC, prv_mic_data_handler, NULL, frame_buffer, frame_samples);
+      }
+      if (!started) {
+        voice_speex_deinit();
+      }
+    } else {
+      PBL_LOG_ERR("Audio companion: speex init failed");
+    }
+    s_mic_started = started;
+
+    if (started) {
+      PBL_LOG_INFO("Audio companion: capture started");
+      continue;
+    }
+
+    // Mic already owned by someone else (e.g. dictation) or out of memory. Latch the failure so
+    // the state machine settles on PausedConflict instead of spinning on a start we cannot
+    // complete; audio_companion_mic_conflict_end() (or any pause) clears the latch.
+    PBL_LOG_WRN("Audio companion: mic unavailable; treating as conflict");
+    mutex_lock(s_lock);
+    s_capture_wanted = false;
+    s_owns_mic = false;
+    s_capture_start_failed = true;
+    prv_reevaluate_locked();
+    mutex_unlock(s_lock);
+  }
+  mutex_unlock(s_capture_lock);
 }
 
 //! Begin a pause that will become a STREAM_GAP when capture resumes.
@@ -538,6 +600,7 @@ static void prv_park_capture_system_task_cb(void *data) {
     prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context) {
@@ -786,6 +849,7 @@ static void prv_drain_system_task_cb(void *data) {
   s_drain_cb_pending = false;
   const bool more_pending = prv_drain_locked();
   mutex_unlock(s_lock);
+  prv_apply_capture();  // the liveness check above can drop capture intent
   if (more_pending) {
     prv_post_drain_cb();
   }
@@ -906,7 +970,9 @@ static void prv_reevaluate_locked(void) {
   }
 
   if (s_mic_conflict_active) {
-    // Capture was already stopped in mic_conflict_begin.
+    // Capture intent was already dropped in mic_conflict_begin; this also clears the
+    // "mic unavailable" latch so capture is retried once the conflict ends.
+    prv_stop_capture_locked();
     prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
     return;
@@ -915,9 +981,9 @@ static void prv_reevaluate_locked(void) {
   if (s_low_battery) {
     if (s_owns_mic) {
       prv_record_silence_gap_locked();
-      prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonLowBattery);
     }
+    prv_stop_capture_locked();
     prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedLowBattery);
     return;
@@ -926,9 +992,9 @@ static void prv_reevaluate_locked(void) {
   if (s_receiver_pause_requested) {
     if (s_owns_mic) {
       prv_record_silence_gap_locked();
-      prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonUserDisabled);
     }
+    prv_stop_capture_locked();
     prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedPolicy);
     return;
@@ -937,9 +1003,9 @@ static void prv_reevaluate_locked(void) {
   if (prv_power_save_active_locked()) {
     if (s_owns_mic) {
       prv_record_silence_gap_locked();
-      prv_stop_capture_locked();
       prv_begin_gap_pause_locked(AudioCompanionGapReasonPowerSave);
     }
+    prv_stop_capture_locked();
     prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedPowerSave);
     return;
@@ -959,11 +1025,14 @@ static void prv_reevaluate_locked(void) {
       prv_finish_gap_pause_locked();
     }
     s_stream_attached = true;
-    if (!prv_start_capture_locked()) {
-      // Mic unavailable right now (dictation will fire the conflict hook).
+    if (s_capture_start_failed) {
+      // A previous apply could not take the mic (dictation will fire the conflict hook). Stay
+      // parked rather than re-arming intent, which would spin the applier on a doomed start.
+      prv_stop_drain_timer_locked();
       prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
       return;
     }
+    prv_start_capture_locked();
     prv_start_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStateStreaming);
     return;
@@ -1087,6 +1156,7 @@ void audio_companion_handle_consent_response(bool granted) {
   }
   memset(&s_consent, 0, sizeof(s_consent));
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 void audio_companion_set_consent_handler(AudioCompanionConsentHandler handler) {
@@ -1145,6 +1215,7 @@ void audio_companion_handle_enable_response(bool granted) {
   }
   memset(&s_enable_request, 0, sizeof(s_enable_request));
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 void audio_companion_set_enable_handler(AudioCompanionEnableHandler handler) {
@@ -1276,6 +1347,7 @@ static void prv_control_write_system_task_cb(void *data) {
       break;
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
   kernel_free(work);
 }
 
@@ -1310,6 +1382,7 @@ static void prv_subscription_system_task_cb(void *data) {
   // both characteristics first, so doing it here would miss the common reconnect.
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 void audio_companion_handle_subscription_change(bool data_subscribed,
@@ -1348,6 +1421,7 @@ static void prv_disconnect_system_task_cb(void *data) {
   }
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 void audio_companion_handle_disconnect(void) {
@@ -1395,13 +1469,16 @@ void audio_companion_mic_conflict_begin(void) {
   mutex_lock(s_lock);
   if (s_owns_mic) {
     prv_record_silence_gap_locked();
-    prv_stop_capture_locked();
     prv_begin_gap_pause_locked(AudioCompanionGapReasonMicConflict);
     s_mic_conflicts++;
   }
+  prv_stop_capture_locked();
   s_mic_conflict_active = true;
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
+  // Synchronous: the voice service calls this immediately before claiming the mic itself, so the
+  // driver must actually be released before we return.
+  prv_apply_capture();
 }
 
 void audio_companion_mic_conflict_end(void) {
@@ -1412,6 +1489,7 @@ void audio_companion_mic_conflict_end(void) {
   s_mic_conflict_active = false;
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 // ---- Battery policy ----
@@ -1431,6 +1509,7 @@ static void prv_battery_event_handler(PebbleEvent *event, void *context) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 // ---- Public API ----
@@ -1464,6 +1543,7 @@ static void prv_record_boot_reboot_trace(void) {
 
 void audio_companion_init(void) {
   s_lock = mutex_create();
+  s_capture_lock = mutex_create();
   audio_companion_spool_init();
   audio_companion_auth_init();
 
@@ -1481,6 +1561,7 @@ void audio_companion_init(void) {
   s_low_battery = charge.charge_percent < CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT;
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
+  prv_apply_capture();
 
   s_battery_event_info = (EventServiceInfo){
     .type = PEBBLE_BATTERY_STATE_CHANGE_EVENT,
@@ -1507,6 +1588,7 @@ void audio_companion_handle_prefs_loaded(void) {
   const bool record_reboot = !s_reboot_trace_recorded;
   s_reboot_trace_recorded = true;
   mutex_unlock(s_lock);
+  prv_apply_capture();
 
   // Now that the persisted prefs are loaded (so the "enabled" flag is accurate) capture the
   // previous reboot reason into the flight recorder. Done once per boot, outside the lock.
@@ -1538,6 +1620,7 @@ void audio_companion_apply_enabled(bool enabled) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 void audio_companion_set_enabled(bool enabled) {
@@ -1555,6 +1638,7 @@ void audio_companion_set_runlevel(RunLevel runlevel) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 bool audio_companion_get_pause_stationary_enabled(void) {
@@ -1572,6 +1656,7 @@ void audio_companion_set_pause_stationary_enabled(bool enabled) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 bool audio_companion_get_pause_low_power_enabled(void) {
@@ -1589,6 +1674,7 @@ void audio_companion_set_pause_low_power_enabled(bool enabled) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 bool audio_companion_get_silence_suppression_enabled(void) {
@@ -1679,12 +1765,19 @@ void audio_companion_forget_receiver(void) {
   memset(s_session.receiver_id, 0, sizeof(s_session.receiver_id));
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
+  prv_apply_capture();
 }
 
 #ifdef UNITTEST
+//! Lets the mic fakes assert that the driver is never entered while the service lock is held.
+//! That ordering is the deadlock: the driver calls prv_mic_data_handler() under its own mutex,
+//! and the handler takes s_lock.
+PebbleMutex *audio_companion_test_get_lock(void) { return s_lock; }
+
 void audio_companion_test_reset(void) {
   audio_companion_spool_reset();
   s_lock = NULL;
+  s_capture_lock = NULL;
   s_initialized = false;
   s_state = AudioCompanionServiceStateDisabled;
   s_enabled = false;
@@ -1696,6 +1789,9 @@ void audio_companion_test_reset(void) {
   s_consent_timer = TIMER_INVALID_ID;
   s_enable_timer = TIMER_INVALID_ID;
   s_owns_mic = false;
+  s_capture_wanted = false;
+  s_capture_start_failed = false;
+  s_mic_started = false;
   s_stream_active = false;
   s_need_stream_start = false;
   s_stream_resumed = false;
