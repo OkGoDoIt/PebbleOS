@@ -24,6 +24,7 @@
 typedef enum {
   AudioCompanionSettingsToggle,
   AudioCompanionSettingsStatus,
+  AudioCompanionSettingsRestarts,
   AudioCompanionSettingsSkipSilence,
   AudioCompanionSettingsReceiver,
   AudioCompanionSettingsCount,
@@ -94,36 +95,69 @@ static void prv_diagnostics_close(ClickRecognizerRef recognizer, void *context) 
   expandable_dialog_pop(context);
 }
 
+static void prv_push_detail_dialog(const char *header, const char *text) {
+  ExpandableDialog *dialog = expandable_dialog_create_with_params(
+      "Audio Diagnostics", RESOURCE_ID_AUDIO_CASSETTE_LARGE, text, GColorBlack, GColorWhite,
+      NULL, RESOURCE_ID_ACTION_BAR_ICON_CHECK, prv_diagnostics_close);
+  expandable_dialog_show_action_bar(dialog, true);
+  expandable_dialog_set_header(dialog, i18n_get(header, dialog));
+  app_expandable_dialog_push(dialog);
+}
+
 static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   AudioCompanionDiagnostics diag;
   audio_companion_get_diagnostics(&diag);
 
+  // Restart history lives in its own row/dialog: both bodies together overran
+  // DIALOG_MAX_MESSAGE_LEN and the restart line was silently cut off mid-word.
   char *text = app_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
-  int written = sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
+  sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
             "State: %s\nCaptured: %" PRIu32 "\nSent: %" PRIu32 "\nBuffered: %" PRIu32
             " B\nDropped: %" PRIu32 "\nGaps: %" PRIu32 "\nBackpressure: %" PRIu32,
             i18n_get(prv_state_name(diag.state), data), diag.captured_frames, diag.sent_frames,
             diag.spool_bytes, diag.dropped_overflow_frames, diag.gap_records,
             diag.send_backpressure_events);
+  prv_push_detail_dialog(i18n_noop("Diagnostics"), text);
+  app_free(text);
+}
 
-  // Reboot flight recorder: shows why the watch last restarted so an unexpected reboot can be
-  // traced to a fault class (Watchdog / Event Queue Full / Out of Memory / ...) after the fact.
+//! Reboot flight recorder. Names the fault class *and* the task that stalled, and prints the raw
+//! PC/LR/callback so an address can be symbolized against the firmware ELF -- "watchdog" alone
+//! only says the watch hung, not what hung it.
+static void prv_show_restarts(SettingsAudioCompanionData *data) {
   AudioCompanionRebootTrace trace;
   audio_companion_get_reboot_trace(&trace);
   const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
-  if (last && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
-    sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written,
-              "\n\nLast restart: %s\nRestarts: %" PRIu16 " (faults %" PRIu16 ")",
-              audio_companion_reboot_trace_reason_name(last->reason_code), trace.total_reboots,
-              trace.total_error_reboots);
+
+  char *text = app_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
+  if (!last) {
+    sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
+              "%s", i18n_get("No restarts recorded yet.", data));
+    prv_push_detail_dialog(i18n_noop("Restarts"), text);
+    app_free(text);
+    return;
   }
 
-  ExpandableDialog *dialog = expandable_dialog_create_with_params(
-      "Audio Diagnostics", RESOURCE_ID_AUDIO_CASSETTE_LARGE, text, GColorBlack, GColorWhite,
-      NULL, RESOURCE_ID_ACTION_BAR_ICON_CHECK, prv_diagnostics_close);
-  expandable_dialog_show_action_bar(dialog, true);
-  expandable_dialog_set_header(dialog, i18n_get("Diagnostics", dialog));
-  app_expandable_dialog_push(dialog);
+  int written = sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
+                          "Last: %s\nTotal: %" PRIu16 "\nFaults: %" PRIu16 "\nAudio was %s",
+                          audio_companion_reboot_trace_reason_name(last->reason_code),
+                          trace.total_reboots, trace.total_error_reboots,
+                          (last->flags & AudioCompanionRebootTraceFlagEnabled) ? "on" : "off");
+
+  const char *stuck = audio_companion_reboot_trace_stuck_task_name(last);
+  if (stuck && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
+    written += sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written, "\nStuck: %s", stuck);
+  }
+  if (last->fault_pc && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
+    written += sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written,
+                         "\nPC %08" PRIx32 "\nLR %08" PRIx32, last->fault_pc, last->fault_lr);
+  }
+  if (last->fault_extra && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
+    sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written, "\nCB %08" PRIx32,
+              last->fault_extra);
+  }
+
+  prv_push_detail_dialog(i18n_noop("Restarts"), text);
   app_free(text);
 }
 
@@ -200,6 +234,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
   const char *title = NULL;
   const char *subtitle = NULL;
   char receiver_name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES + 1] = {0};
+  char restarts_summary[24] = {0};
 
   switch ((AudioCompanionSettingsItem)row) {
     case AudioCompanionSettingsToggle:
@@ -210,6 +245,23 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       title = i18n_noop("Status");
       subtitle = prv_state_name(audio_companion_get_state());
       break;
+    case AudioCompanionSettingsRestarts: {
+      title = i18n_noop("Restarts");
+      AudioCompanionRebootTrace trace;
+      audio_companion_get_reboot_trace(&trace);
+      const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+      if (!last) {
+        subtitle = i18n_noop("None");
+      } else {
+        // Lead with the fault class and carry the tally, so an unexpected reboot is visible from
+        // the menu instead of only after drilling in.
+        sniprintf(restarts_summary, sizeof(restarts_summary), "%s (%" PRIu16 ")",
+                  audio_companion_reboot_trace_reason_name(last->reason_code),
+                  trace.total_reboots);
+        subtitle = restarts_summary;
+      }
+      break;
+    }
     case AudioCompanionSettingsSkipSilence:
       title = i18n_noop("Skip Silence");
       subtitle = prv_silence_mode_name(audio_companion_get_silence_mode());
@@ -237,6 +289,9 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       break;
     case AudioCompanionSettingsStatus:
       prv_show_diagnostics(data);
+      break;
+    case AudioCompanionSettingsRestarts:
+      prv_show_restarts(data);
       break;
     case AudioCompanionSettingsSkipSilence:
       audio_companion_set_silence_mode(

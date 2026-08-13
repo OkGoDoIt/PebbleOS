@@ -43,7 +43,7 @@ void test_audio_companion_reboot_trace__error_classification(void) {
 }
 
 void test_audio_companion_reboot_trace__records_newest(void) {
-  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_EventQueueFull, true, 1000);
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_EventQueueFull, true, 1000, NULL);
   const AudioCompanionRebootTraceEntry *newest = audio_companion_reboot_trace_newest(&s_trace);
   cl_assert(newest != NULL);
   cl_assert_equal_i(newest->reason_code, RebootReasonCode_EventQueueFull);
@@ -55,14 +55,14 @@ void test_audio_companion_reboot_trace__records_newest(void) {
 }
 
 void test_audio_companion_reboot_trace__enabled_flag_reflects_pref(void) {
-  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, false, 7);
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, false, 7, NULL);
   const AudioCompanionRebootTraceEntry *newest = audio_companion_reboot_trace_newest(&s_trace);
   cl_assert((newest->flags & AudioCompanionRebootTraceFlagEnabled) == 0);
 }
 
 void test_audio_companion_reboot_trace__benign_not_counted_as_fault(void) {
-  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_SoftwareUpdate, true, 1);
-  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 2);
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_SoftwareUpdate, true, 1, NULL);
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 2, NULL);
   cl_assert_equal_i(s_trace.total_reboots, 2);
   cl_assert_equal_i(s_trace.total_error_reboots, 1);
 }
@@ -72,7 +72,7 @@ void test_audio_companion_reboot_trace__ring_evicts_oldest(void) {
   const int total = AUDIO_COMPANION_REBOOT_TRACE_ENTRIES + 3;
   for (int i = 0; i < total; i++) {
     audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true,
-                                        (uint32_t)(100 + i));
+                                        (uint32_t)(100 + i), NULL);
   }
   cl_assert_equal_i(s_trace.count, AUDIO_COMPANION_REBOOT_TRACE_ENTRIES);
   cl_assert_equal_i(s_trace.total_reboots, total);
@@ -89,7 +89,7 @@ void test_audio_companion_reboot_trace__ring_evicts_oldest(void) {
 void test_audio_companion_reboot_trace__counts_saturate(void) {
   s_trace.total_reboots = 0xFFFF;
   s_trace.total_error_reboots = 0xFFFF;
-  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 1);
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 1, NULL);
   cl_assert_equal_i(s_trace.total_reboots, 0xFFFF);
   cl_assert_equal_i(s_trace.total_error_reboots, 0xFFFF);
 }
@@ -98,7 +98,7 @@ void test_audio_companion_reboot_trace__invalid_blob_resets(void) {
   // Simulate a garbage/old-version persisted blob: record() must start fresh
   // rather than trusting bogus indices.
   memset(&s_trace, 0xAB, sizeof(s_trace));
-  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_HardFault, true, 42);
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_HardFault, true, 42, NULL);
   cl_assert(audio_companion_reboot_trace_is_valid(&s_trace));
   cl_assert_equal_i(s_trace.count, 1);
   cl_assert_equal_i(s_trace.total_reboots, 1);
@@ -110,4 +110,52 @@ void test_audio_companion_reboot_trace__reason_names_present(void) {
   cl_assert(strlen(audio_companion_reboot_trace_reason_name(RebootReasonCode_EventQueueFull)) > 0);
   cl_assert(strlen(audio_companion_reboot_trace_reason_name(RebootReasonCode_Watchdog)) > 0);
   cl_assert(strlen(audio_companion_reboot_trace_reason_name(250)) > 0);
+}
+
+void test_audio_companion_reboot_trace__records_watchdog_detail(void) {
+  // "Watchdog" alone is the fault class, not the culprit. The OS latches which watched tasks
+  // failed to check in plus the stuck PC/LR, and the ring has to carry that through.
+  const AudioCompanionRebootTraceDetail detail = {
+    .watchdog_bits = 0x01,  // KernelMain checked in
+    .watchdog_mask = 0x03,  // KernelMain + KernelBackground watched
+    .fault_pc = 0x0801a2c4,
+    .fault_lr = 0x0801a1f0,
+    .fault_extra = 0x0800e3a8,
+  };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 5, &detail);
+
+  const AudioCompanionRebootTraceEntry *newest = audio_companion_reboot_trace_newest(&s_trace);
+  cl_assert(newest != NULL);
+  cl_assert_equal_i(newest->watchdog_bits, 0x01);
+  cl_assert_equal_i(newest->watchdog_mask, 0x03);
+  cl_assert_equal_i(newest->fault_pc, 0x0801a2c4);
+  cl_assert_equal_i(newest->fault_lr, 0x0801a1f0);
+  cl_assert_equal_i(newest->fault_extra, 0x0800e3a8);
+  cl_assert_equal_s(audio_companion_reboot_trace_stuck_task_name(newest), "KernelBG");
+}
+
+void test_audio_companion_reboot_trace__stuck_task_name_absent_without_detail(void) {
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 5, NULL);
+  const AudioCompanionRebootTraceEntry *newest = audio_companion_reboot_trace_newest(&s_trace);
+  cl_assert(audio_companion_reboot_trace_stuck_task_name(newest) == NULL);
+  cl_assert(audio_companion_reboot_trace_stuck_task_name(NULL) == NULL);
+
+  // Everything checked in: nothing to name, and we must not invent a culprit.
+  const AudioCompanionRebootTraceDetail all_fed = { .watchdog_bits = 0x03, .watchdog_mask = 0x03 };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 6, &all_fed);
+  cl_assert(audio_companion_reboot_trace_stuck_task_name(
+                audio_companion_reboot_trace_newest(&s_trace)) == NULL);
+}
+
+void test_audio_companion_reboot_trace__stuck_task_prefers_lowest_priority(void) {
+  // A stalled high-priority task starves the lower-priority ones, so when several are missing the
+  // lowest-priority watched task is the one that explains the reset.
+  const AudioCompanionRebootTraceDetail detail = {
+    .watchdog_bits = 0x00,
+    .watchdog_mask = 0x03,  // both KernelMain and KernelBackground missing
+  };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 9, &detail);
+  cl_assert_equal_s(
+      audio_companion_reboot_trace_stuck_task_name(audio_companion_reboot_trace_newest(&s_trace)),
+      "KernelBG");
 }

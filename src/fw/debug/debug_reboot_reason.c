@@ -18,14 +18,27 @@
 #include "system/reboot_reason.h"
 
 static RebootReasonCode s_last_reboot_reason_code = RebootReasonCode_Unknown;
+//! The backup registers are cleared at the end of debug_reboot_reason_print(), so keep the whole
+//! record: the watchdog stuck-task bitsets and PC/LR are the only on-device evidence of *which*
+//! task stalled, and services that come up later (e.g. the audio companion flight recorder) need
+//! them long after the registers are gone.
+static RebootReason s_last_reboot_reason;
+
 RebootReasonCode reboot_reason_get_last_reboot_reason(void) {
   return s_last_reboot_reason_code;
+}
+
+void reboot_reason_get_last_reboot_reason_full(RebootReason *reason_out) {
+  if (reason_out) {
+    *reason_out = s_last_reboot_reason;
+  }
 }
 
 void debug_reboot_reason_print(McuRebootReason mcu_reboot_reason) {
   RebootReason reason;
   reboot_reason_get(&reason);
   s_last_reboot_reason_code = reason.code;
+  s_last_reboot_reason = reason;
 
   // We're out of flash space, scrape a few bytes back!
   static const char* rebooted_due_to = " rebooted due to ";

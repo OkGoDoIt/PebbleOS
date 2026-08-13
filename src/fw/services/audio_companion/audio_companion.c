@@ -1519,12 +1519,35 @@ static void prv_battery_event_handler(PebbleEvent *event, void *context) {
 //! battery-backed register at boot; we just persist it alongside whether background audio was on.
 //! Does its own flash I/O, so it must run without the service lock held.
 static void prv_record_boot_reboot_trace(void) {
+  RebootReason full;
+  reboot_reason_get_last_reboot_reason_full(&full);
   const uint8_t reason = (uint8_t)reboot_reason_get_last_reboot_reason();
   const bool enabled = shell_prefs_get_audio_companion_enabled();
 
+  // Carry the OS's stuck-task evidence into the persisted ring. Without this the trace can only
+  // say "watchdog", which is the fault class, not the culprit; with it the watch can name the
+  // task that stalled and hand over a PC/LR to symbolize against the firmware ELF.
+  AudioCompanionRebootTraceDetail detail = {0};
+  if (reason == RebootReasonCode_Watchdog) {
+    detail.watchdog_bits = full.data8[0];
+    detail.watchdog_mask = full.data8[1];
+    detail.fault_pc = full.watchdog.stuck_task_pc;
+    detail.fault_lr = full.watchdog.stuck_task_lr;
+    detail.fault_extra = full.watchdog.stuck_task_callback;
+  } else if (reason == RebootReasonCode_EventQueueFull) {
+    detail.fault_pc = full.event_queue.push_lr;
+    detail.fault_lr = full.event_queue.current_event;
+    detail.fault_extra = full.event_queue.dropped_event;
+  } else if (reason == RebootReasonCode_OutOfMemory) {
+    detail.fault_pc = full.heap_data.heap_alloc_lr;
+    detail.fault_lr = full.heap_data.heap_ptr;
+  } else if (audio_companion_reboot_trace_is_error_reason(reason)) {
+    detail.fault_pc = full.extra.value;
+  }
+
   AudioCompanionRebootTrace trace;
   audio_companion_reboot_trace_load(&trace);
-  audio_companion_reboot_trace_record(&trace, reason, enabled, (uint32_t)rtc_get_time());
+  audio_companion_reboot_trace_record(&trace, reason, enabled, (uint32_t)rtc_get_time(), &detail);
   audio_companion_reboot_trace_save(&trace);
 
   mutex_lock(s_lock);
@@ -1532,9 +1555,17 @@ static void prv_record_boot_reboot_trace(void) {
   mutex_unlock(s_lock);
 
   if (audio_companion_reboot_trace_is_error_reason(reason)) {
-    PBL_LOG_WRN("Audio companion: previous restart was a fault (%s); %u faults / %u boots logged",
-                audio_companion_reboot_trace_reason_name(reason),
+    const AudioCompanionRebootTraceEntry *newest = audio_companion_reboot_trace_newest(&trace);
+    const char *stuck = audio_companion_reboot_trace_stuck_task_name(newest);
+    // Hashed logging allows at most two %s per line, so fold the missing-task case into one.
+    PBL_LOG_WRN("Audio companion: previous restart was a fault (%s, stuck task %s); "
+                "%u faults / %u boots logged",
+                audio_companion_reboot_trace_reason_name(reason), stuck ? stuck : "n/a",
                 (unsigned)trace.total_error_reboots, (unsigned)trace.total_reboots);
+    PBL_LOG_WRN("Audio companion: fault detail pc=0x%08" PRIx32 " lr=0x%08" PRIx32
+                " extra=0x%08" PRIx32 " (audio %s)",
+                detail.fault_pc, detail.fault_lr, detail.fault_extra,
+                enabled ? "enabled" : "disabled");
   } else {
     PBL_LOG_INFO("Audio companion: previous restart reason: %s",
                  audio_companion_reboot_trace_reason_name(reason));

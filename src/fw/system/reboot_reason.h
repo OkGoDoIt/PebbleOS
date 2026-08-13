@@ -87,3 +87,8 @@ uint32_t reboot_get_slot_of_last_launched_app(void);
 void reboot_set_slot_of_last_launched_app(uint32_t app_slot);
 
 RebootReasonCode reboot_reason_get_last_reboot_reason(void);
+
+//! Full reason for the reboot that produced this boot, including the watchdog stuck-task
+//! bitsets/PC/LR and the fault payloads. Captured before the backup registers are cleared, so this
+//! is the only way to reach that detail after boot. Zeroed if nothing was recorded.
+void reboot_reason_get_last_reboot_reason_full(RebootReason *reason_out);

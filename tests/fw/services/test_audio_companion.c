@@ -182,9 +182,15 @@ void shell_prefs_set_audio_companion_silence_mode(uint8_t mode) {
 // Reboot-trace persistence + OS reboot reason are stubbed; the pure ring logic
 // (reboot_trace.c) is linked in and exercised by test_audio_companion_reboot_trace.c.
 static RebootReasonCode s_last_reboot_reason = RebootReasonCode_Unknown;
+static RebootReason s_last_reboot_reason_full;
+static AudioCompanionRebootTrace s_saved_reboot_trace;
 
 RebootReasonCode reboot_reason_get_last_reboot_reason(void) {
   return s_last_reboot_reason;
+}
+
+void reboot_reason_get_last_reboot_reason_full(RebootReason *reason_out) {
+  *reason_out = s_last_reboot_reason_full;
 }
 
 void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace) {
@@ -192,6 +198,7 @@ void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace) {
 }
 
 void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace) {
+  s_saved_reboot_trace = *trace;
 }
 
 void audio_companion_auth_init(void) {
@@ -456,6 +463,9 @@ void test_audio_companion__initialize(void) {
   s_mic_handler = NULL;
   s_mic_context = NULL;
   s_rand32_value = 0x12345678;
+  s_last_reboot_reason = RebootReasonCode_Unknown;
+  memset(&s_last_reboot_reason_full, 0, sizeof(s_last_reboot_reason_full));
+  memset(&s_saved_reboot_trace, 0, sizeof(s_saved_reboot_trace));
   audio_companion_spool_test_set_heap_free_bytes(UINT32_MAX);
   audio_companion_test_reset();
   audio_companion_init();
@@ -970,4 +980,59 @@ void test_audio_companion__mic_unavailable_settles_on_conflict_and_recovers(void
   audio_companion_mic_conflict_end();
   cl_assert(s_mic_running);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
+// The boot-time flight recorder is the only thing that survives a watchdog reset, so it has to
+// carry the OS's stuck-task evidence -- not just the fault class.
+void test_audio_companion__boot_trace_captures_watchdog_stuck_task(void) {
+  s_last_reboot_reason = RebootReasonCode_Watchdog;
+  s_last_reboot_reason_full = (RebootReason) {
+    .code = RebootReasonCode_Watchdog,
+    .data8 = { 0x01, 0x03 },  // KernelMain fed the watchdog, KernelBackground did not
+    .watchdog = {
+      .stuck_task_pc = 0x0801a2c4,
+      .stuck_task_lr = 0x0801a1f0,
+      .stuck_task_callback = 0x0800e3a8,
+    },
+  };
+  s_pref_enabled = true;
+
+  audio_companion_handle_prefs_loaded();
+
+  AudioCompanionRebootTrace trace;
+  audio_companion_get_reboot_trace(&trace);
+  const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+  cl_assert(last != NULL);
+  cl_assert_equal_i(last->reason_code, RebootReasonCode_Watchdog);
+  cl_assert_equal_i(last->fault_pc, 0x0801a2c4);
+  cl_assert_equal_i(last->fault_lr, 0x0801a1f0);
+  cl_assert_equal_i(last->fault_extra, 0x0800e3a8);
+  cl_assert(last->flags & AudioCompanionRebootTraceFlagEnabled);
+  cl_assert_equal_s(audio_companion_reboot_trace_stuck_task_name(last), "KernelBG");
+  // Persisted too, so the detail is still there after the next boot.
+  cl_assert_equal_i(s_saved_reboot_trace.total_error_reboots, 1);
+}
+
+void test_audio_companion__boot_trace_captures_event_queue_full_detail(void) {
+  s_last_reboot_reason = RebootReasonCode_EventQueueFull;
+  s_last_reboot_reason_full = (RebootReason) {
+    .code = RebootReasonCode_EventQueueFull,
+    .event_queue = {
+      .push_lr = 0x08001111,
+      .current_event = 0x08002222,
+      .dropped_event = 0x08003333,
+    },
+  };
+
+  audio_companion_handle_prefs_loaded();
+
+  AudioCompanionRebootTrace trace;
+  audio_companion_get_reboot_trace(&trace);
+  const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+  cl_assert(last != NULL);
+  cl_assert_equal_i(last->fault_pc, 0x08001111);
+  cl_assert_equal_i(last->fault_lr, 0x08002222);
+  cl_assert_equal_i(last->fault_extra, 0x08003333);
+  // No watchdog bitsets recorded for a non-watchdog reset: do not name a bogus stuck task.
+  cl_assert(audio_companion_reboot_trace_stuck_task_name(last) == NULL);
 }

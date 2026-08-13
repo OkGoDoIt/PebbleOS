@@ -17,7 +17,9 @@
 //! the breadcrumb that turns "it randomly reboots" into a specific fault class.
 
 #define AUDIO_COMPANION_REBOOT_TRACE_ENTRIES (6)
-#define AUDIO_COMPANION_REBOOT_TRACE_VERSION (1)
+#define AUDIO_COMPANION_REBOOT_TRACE_VERSION (2)
+//! v1 recorded only the reason code; v2 adds the stuck-task detail the OS already captures.
+#define AUDIO_COMPANION_REBOOT_TRACE_VERSION_V1 (1)
 
 typedef enum {
   AudioCompanionRebootTraceFlagEnabled = (1 << 0),  //!< background audio pref was on
@@ -27,8 +29,25 @@ typedef struct PACKED {
   uint32_t boot_wall_time;  //!< rtc_get_time() captured when this entry was recorded
   uint8_t reason_code;      //!< RebootReasonCode of the session that just ended
   uint8_t flags;            //!< AudioCompanionRebootTraceFlags bitfield
-  uint16_t reserved;
+  //! For a watchdog reset, the task bitsets the OS latched: which tasks had checked in
+  //! (@ref watchdog_bits) out of those being watched (@ref watchdog_mask). Tasks in
+  //! `mask & ~bits` are the ones that stopped feeding the watchdog. Zero otherwise.
+  uint8_t watchdog_bits;
+  uint8_t watchdog_mask;
+  uint32_t fault_pc;     //!< stuck task PC (watchdog) or fault address; 0 if unknown
+  uint32_t fault_lr;     //!< stuck task LR; 0 if unknown
+  uint32_t fault_extra;  //!< stuck system-task/timer callback (watchdog); 0 if unknown
 } AudioCompanionRebootTraceEntry;
+
+//! Detail captured by the OS for the reboot that just happened, as passed to
+//! audio_companion_reboot_trace_record(). All fields zero when nothing was recorded.
+typedef struct {
+  uint8_t watchdog_bits;
+  uint8_t watchdog_mask;
+  uint32_t fault_pc;
+  uint32_t fault_lr;
+  uint32_t fault_extra;
+} AudioCompanionRebootTraceDetail;
 
 typedef struct PACKED AudioCompanionRebootTrace {
   uint8_t version;
@@ -47,15 +66,23 @@ bool audio_companion_reboot_trace_is_error_reason(uint8_t reason_code);
 //! Short human-readable name for a RebootReasonCode, for logs and the watch UI.
 const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code);
 
+//! Name of the task that stopped feeding the watchdog, derived from the latched bitsets, or NULL
+//! when the entry carries no usable watchdog detail. Reported in reverse priority order so the
+//! most suspicious task wins, matching the task the OS stored the PC/LR for.
+const char *audio_companion_reboot_trace_stuck_task_name(
+    const AudioCompanionRebootTraceEntry *entry);
+
 //! Reset a trace to the empty/initial state.
 void audio_companion_reboot_trace_clear(AudioCompanionRebootTrace *trace);
 
 //! True if the trace is structurally sound (matching version, in-range indices).
 bool audio_companion_reboot_trace_is_valid(const AudioCompanionRebootTrace *trace);
 
-//! Append a boot record to the ring, evicting the oldest entry when full.
+//! Append a boot record to the ring, evicting the oldest entry when full. @p detail may be NULL
+//! when the OS captured no fault detail for this reboot.
 void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8_t reason_code,
-                                         bool enabled, uint32_t boot_wall_time);
+                                         bool enabled, uint32_t boot_wall_time,
+                                         const AudioCompanionRebootTraceDetail *detail);
 
 //! Newest recorded entry, or NULL if the trace is empty.
 const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_newest(

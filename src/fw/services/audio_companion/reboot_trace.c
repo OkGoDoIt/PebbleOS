@@ -2,6 +2,7 @@
 
 #include "reboot_trace.h"
 
+#include "kernel/pebble_tasks.h"
 #include "system/reboot_reason.h"
 
 #include <string.h>
@@ -69,6 +70,35 @@ const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code) {
   }
 }
 
+const char *audio_companion_reboot_trace_stuck_task_name(
+    const AudioCompanionRebootTraceEntry *entry) {
+  if (!entry || entry->watchdog_mask == 0) {
+    return NULL;
+  }
+  // Tasks being watched that never checked in. Ordered least-to-most suspicious the same way
+  // task_watchdog.c reports them: a stuck high-priority task starves the lower-priority ones, so
+  // the lowest-priority watched task is the one whose stall actually explains the reset.
+  const uint8_t stuck = (uint8_t)(entry->watchdog_mask & (uint8_t)~entry->watchdog_bits);
+  if (stuck == 0) {
+    return NULL;
+  }
+  static const struct {
+    uint8_t task;
+    const char *name;
+  } k_tasks[] = {
+    { PebbleTask_KernelBackground, "KernelBG" },
+    { PebbleTask_KernelMain, "KernelMain" },
+    { PebbleTask_PULSE, "PULSE" },
+    { PebbleTask_NewTimers, "Timers" },
+  };
+  for (size_t i = 0; i < sizeof(k_tasks) / sizeof(k_tasks[0]); i++) {
+    if (k_tasks[i].task < 8 && (stuck & (uint8_t)(1 << k_tasks[i].task))) {
+      return k_tasks[i].name;
+    }
+  }
+  return "Other Task";
+}
+
 void audio_companion_reboot_trace_clear(AudioCompanionRebootTrace *trace) {
   if (!trace) {
     return;
@@ -84,7 +114,8 @@ bool audio_companion_reboot_trace_is_valid(const AudioCompanionRebootTrace *trac
 }
 
 void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8_t reason_code,
-                                         bool enabled, uint32_t boot_wall_time) {
+                                         bool enabled, uint32_t boot_wall_time,
+                                         const AudioCompanionRebootTraceDetail *detail) {
   if (!trace) {
     return;
   }
@@ -97,6 +128,11 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
     .boot_wall_time = boot_wall_time,
     .reason_code = reason_code,
     .flags = enabled ? (uint8_t)AudioCompanionRebootTraceFlagEnabled : 0,
+    .watchdog_bits = detail ? detail->watchdog_bits : 0,
+    .watchdog_mask = detail ? detail->watchdog_mask : 0,
+    .fault_pc = detail ? detail->fault_pc : 0,
+    .fault_lr = detail ? detail->fault_lr : 0,
+    .fault_extra = detail ? detail->fault_extra : 0,
   };
 
   uint8_t insert_index;
