@@ -125,7 +125,6 @@ static TimerID s_enable_timer = TIMER_INVALID_ID;
 //! prv_apply_capture() performs the driver calls with s_lock dropped.
 static bool s_owns_mic;                //!< service intends to hold the mic (guarded by s_lock)
 static bool s_capture_wanted;          //!< intent handed to prv_apply_capture() (guarded by s_lock)
-static bool s_capture_start_failed;    //!< last apply could not take the mic (guarded by s_lock)
 static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()
 static PebbleMutex *s_capture_lock;    //!< serializes appliers; never held while taking s_lock
 static bool s_stream_active;
@@ -490,12 +489,11 @@ static void prv_start_capture_locked(void) {
   s_capture_parked = false;
 }
 
-//! Record that capture should stop, and clear the "mic was unavailable" latch so a later attempt
-//! is allowed. Like prv_start_capture_locked(), the driver call happens in prv_apply_capture().
+//! Record that capture should stop. Like prv_start_capture_locked(), the driver call happens in
+//! prv_apply_capture().
 static void prv_stop_capture_locked(void) {
   s_capture_wanted = false;
   s_owns_mic = false;
-  s_capture_start_failed = false;
 }
 
 //! Reconcile the mic driver with the intent recorded under s_lock.
@@ -550,15 +548,16 @@ static void prv_apply_capture(void) {
       continue;
     }
 
-    // Mic already owned by someone else (e.g. dictation) or out of memory. Latch the failure so
-    // the state machine settles on PausedConflict instead of spinning on a start we cannot
-    // complete; audio_companion_mic_conflict_end() (or any pause) clears the latch.
+    // Mic already owned by someone else (e.g. dictation) or out of memory. Park on the conflict
+    // state directly rather than re-running the state machine: prv_reevaluate_locked() would set
+    // the intent straight back to "capture" and spin this loop on a start that cannot succeed.
+    // The next event to reach prv_reevaluate_locked() retries, exactly as before.
     PBL_LOG_WRN("Audio companion: mic unavailable; treating as conflict");
     mutex_lock(s_lock);
     s_capture_wanted = false;
     s_owns_mic = false;
-    s_capture_start_failed = true;
-    prv_reevaluate_locked();
+    prv_stop_drain_timer_locked();
+    prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
     mutex_unlock(s_lock);
   }
   mutex_unlock(s_capture_lock);
@@ -970,8 +969,8 @@ static void prv_reevaluate_locked(void) {
   }
 
   if (s_mic_conflict_active) {
-    // Capture intent was already dropped in mic_conflict_begin; this also clears the
-    // "mic unavailable" latch so capture is retried once the conflict ends.
+    // Capture intent was already dropped in mic_conflict_begin; repeat it so the intent is
+    // unambiguous however this branch was reached.
     prv_stop_capture_locked();
     prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
@@ -1025,13 +1024,8 @@ static void prv_reevaluate_locked(void) {
       prv_finish_gap_pause_locked();
     }
     s_stream_attached = true;
-    if (s_capture_start_failed) {
-      // A previous apply could not take the mic (dictation will fire the conflict hook). Stay
-      // parked rather than re-arming intent, which would spin the applier on a doomed start.
-      prv_stop_drain_timer_locked();
-      prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
-      return;
-    }
+    // Capture intent only; prv_apply_capture() takes the mic once s_lock is dropped, and parks on
+    // PausedConflict if the driver is unavailable (dictation also fires the conflict hook).
     prv_start_capture_locked();
     prv_start_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStateStreaming);
@@ -1821,7 +1815,6 @@ void audio_companion_test_reset(void) {
   s_enable_timer = TIMER_INVALID_ID;
   s_owns_mic = false;
   s_capture_wanted = false;
-  s_capture_start_failed = false;
   s_mic_started = false;
   s_stream_active = false;
   s_need_stream_start = false;
