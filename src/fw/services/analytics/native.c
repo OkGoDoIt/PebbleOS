@@ -21,7 +21,22 @@
 PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
 
 #define NATIVE_HEARTBEAT_RECORD_VERSION 3
+
+/* Wire size the official backend decodes for each record version. The version byte at offset 0 is
+ * the only thing it keys the layout off, so a layout change must come with a version bump. */
+#define NATIVE_HEARTBEAT_WIRE_SIZE_V1 527
+#define NATIVE_HEARTBEAT_WIRE_SIZE_V2 523
+#define NATIVE_HEARTBEAT_WIRE_SIZE_V3 563
+
+/* sizeof() the struct upstream declares; grows whenever upstream appends a metric. */
 #define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 567
+
+/* What we put on the wire: the prefix the emitted version byte promises. v4.33 appended
+ * touch_gated_touchdown_count (563 -> 567) without bumping the version byte, so a v4.33 watch
+ * advertises version 3 and emits four extra bytes. The backend slices batches at 563, so every
+ * record after the first decodes shifted: battery_soc_pct reads a zero metric and watchface_name
+ * turns to mojibake. Transmit the version-3 prefix until the backend decodes a newer version. */
+#define NATIVE_HEARTBEAT_TRANSMIT_SIZE NATIVE_HEARTBEAT_WIRE_SIZE_V3
 
 /* Heartbeat record logged to DLS */
 struct PACKED native_heartbeat_record {
@@ -102,6 +117,23 @@ _Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_m
                "native_heartbeat_record battery_soc_pct_min offset changed");
 _Static_assert(offsetof(struct native_heartbeat_record, metric_touch_gated_touchdown_count) == 563,
                "native_heartbeat_record final metric offset changed");
+
+/* Transmitted size and version byte must move together; the backend has no other layout selector.
+ * If an upstream merge trips these, do not just update the numbers: confirm what the official
+ * backend decodes for the new version first. Getting this wrong reports 0% battery and a garbled
+ * watchface name on the official Battery screen, with no error anywhere. */
+_Static_assert(NATIVE_HEARTBEAT_RECORD_VERSION == 3,
+               "heartbeat version byte changed: add its backend wire size, then point "
+               "NATIVE_HEARTBEAT_TRANSMIT_SIZE at it only once the backend decodes that version");
+_Static_assert(NATIVE_HEARTBEAT_TRANSMIT_SIZE == NATIVE_HEARTBEAT_WIRE_SIZE_V3,
+               "transmitted heartbeat size must match the layout its version byte promises");
+_Static_assert(NATIVE_HEARTBEAT_TRANSMIT_SIZE <= sizeof(struct native_heartbeat_record),
+               "transmitted heartbeat size must not exceed the record");
+/* Only metrics appended after version 3 was defined may fall outside the transmitted prefix, so
+ * truncating can never cut a field the backend reads. */
+_Static_assert(offsetof(struct native_heartbeat_record, metric_touch_gated_touchdown_count) ==
+                   NATIVE_HEARTBEAT_TRANSMIT_SIZE,
+               "truncation would cut a metric the version-3 backend layout includes");
 
 /* Type-specific internal index enums (dense, no gaps) */
 
@@ -345,7 +377,7 @@ void pbl_analytics__native_heartbeat(void) {
     Uuid system_uuid = UUID_SYSTEM;
 
     s_dls_session = dls_create(DlsSystemTagAnalyticsNativeHeartbeat, DATA_LOGGING_BYTE_ARRAY,
-                               sizeof(struct native_heartbeat_record), false, false, &system_uuid);
+                               NATIVE_HEARTBEAT_TRANSMIT_SIZE, false, false, &system_uuid);
     PBL_ASSERTN(s_dls_session != NULL);
   }
 

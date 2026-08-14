@@ -5,6 +5,7 @@ analytics_schema_deps = [
     analytics_schema_test,
     bld.path.find_node('../analytics_heartbeat_schema.py'),
     bld.path.find_node('../../include/pbl/services/analytics/analytics.def'),
+    bld.path.find_node('../../src/fw/services/analytics/native.c'),
 ]
 bld(rule="{} {}".format(sys.executable, analytics_schema_test.abspath()),
     source=analytics_schema_deps)

@@ -11,10 +11,18 @@ repo_dir = os.path.abspath(os.path.join(root_dir, os.pardir))
 sys.path.insert(0, root_dir)
 
 from analytics_heartbeat_schema import field_offsets, native_heartbeat_layout
-from analytics_heartbeat_schema import parse_analytics_def, wire_size
+from analytics_heartbeat_schema import parse_analytics_def, parse_native_wire_constants, wire_size
 
 
 ANALYTICS_DEF = os.path.join(repo_dir, "include", "pbl", "services", "analytics", "analytics.def")
+NATIVE_C = os.path.join(repo_dir, "src", "fw", "services", "analytics", "native.c")
+
+# Wire size the official backend decodes for each heartbeat record version. The version byte at
+# offset 0 is its only layout selector, so these pairs are a compatibility contract, not a
+# reflection of whatever the tree currently compiles to. Only extend this after confirming on a
+# real watch that the backend decodes the new version -- see Sessions 29 and 91 in
+# UPSTREAM_THIRD_PARTY_BACKGROUND_AUDIO_IMPLEMENTATION_PLAN.md.
+BACKEND_WIRE_SIZE_BY_VERSION = {1: 527, 2: 523, 3: 563}
 
 
 class TestAnalyticsHeartbeatSchema(unittest.TestCase):
@@ -43,6 +51,45 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.assertEqual(self.offsets["metric_ble_conn_slave_lat0_time_ms"], 523)
         self.assertEqual(self.offsets["metric_battery_soc_pct_min"], 557)
         self.assertEqual(self.offsets["metric_touch_gated_touchdown_count"], 563)
+
+    def test_transmitted_size_matches_the_emitted_version_byte(self):
+        """The backend picks a layout purely from the version byte, so the two must agree.
+
+        Upstream may append metrics without bumping the version byte (v4.33 did, 563 -> 567).
+        That is fine as long as we keep transmitting the prefix the version byte promises; it is
+        not fine to raise the transmitted size to match, which is what broke the Battery screen.
+        """
+        constants = parse_native_wire_constants(NATIVE_C)
+        version = constants["NATIVE_HEARTBEAT_RECORD_VERSION"]
+        transmitted = constants["NATIVE_HEARTBEAT_TRANSMIT_SIZE"]
+
+        self.assertIn(
+            version,
+            BACKEND_WIRE_SIZE_BY_VERSION,
+            f"heartbeat record version {version} has no known backend wire size; confirm what the "
+            f"official backend decodes for it before shipping",
+        )
+        self.assertEqual(
+            transmitted,
+            BACKEND_WIRE_SIZE_BY_VERSION[version],
+            f"transmitting {transmitted} bytes while advertising version {version} "
+            f"({BACKEND_WIRE_SIZE_BY_VERSION[version]} bytes): the backend will decode batched "
+            f"records shifted -- 0% battery and a garbled watchface name",
+        )
+
+    def test_truncated_tail_is_only_post_v3_appends(self):
+        """Everything outside the transmitted prefix must be metrics appended after version 3."""
+        constants = parse_native_wire_constants(NATIVE_C)
+        transmitted = constants["NATIVE_HEARTBEAT_TRANSMIT_SIZE"]
+
+        self.assertLessEqual(transmitted, wire_size(self.fields))
+        self.assertIn(
+            transmitted,
+            {field.offset for field in self.fields},
+            "the transmitted prefix must end on a field boundary, or the backend reads a "
+            "half-written metric",
+        )
+        self.assertEqual(self.offsets["metric_touch_gated_touchdown_count"], transmitted)
 
     def test_emits_released_syscall_stack_metrics(self):
         metric_names = {metric.name for metric in self.metrics}

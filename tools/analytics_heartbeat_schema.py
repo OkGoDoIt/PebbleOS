@@ -96,3 +96,25 @@ def wire_size(fields):
         return 0
     last = fields[-1]
     return last.offset + last.size
+
+
+_DEFINE_RE = re.compile(r"^#define\s+(NATIVE_HEARTBEAT_[A-Z0-9_]+)\s+(\S+)")
+
+
+def parse_native_wire_constants(path):
+    """Resolve the NATIVE_HEARTBEAT_* #defines in native.c to ints."""
+    raw = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            match = _DEFINE_RE.match(line)
+            if match:
+                raw[match.group(1)] = match.group(2)
+
+    resolved = {}
+    for name, value in raw.items():
+        seen = set()
+        while value in raw and value not in seen:
+            seen.add(value)
+            value = raw[value]
+        resolved[name] = int(value, 0)
+    return resolved
