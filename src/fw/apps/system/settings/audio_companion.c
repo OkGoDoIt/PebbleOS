@@ -104,21 +104,41 @@ static void prv_push_detail_dialog(const char *header, const char *text) {
   app_expandable_dialog_push(dialog);
 }
 
+//! The dialog copies whatever it is handed (dialog_set_text() allocates to fit) and the expandable
+//! dialog scrolls, so DIALOG_MAX_MESSAGE_LEN is only a convention for callers -- these bodies get
+//! room to say the whole thing rather than being cut off mid-word.
+#define DETAIL_TEXT_MAX_LEN (512)
+
 static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   AudioCompanionDiagnostics diag;
   audio_companion_get_diagnostics(&diag);
 
-  // Restart history lives in its own row/dialog: both bodies together overran
-  // DIALOG_MAX_MESSAGE_LEN and the restart line was silently cut off mid-word.
-  char *text = app_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
-  sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
+  char *text = app_zalloc_check(DETAIL_TEXT_MAX_LEN);
+  sniprintf(text, DETAIL_TEXT_MAX_LEN,
             "State: %s\nCaptured: %" PRIu32 "\nSent: %" PRIu32 "\nBuffered: %" PRIu32
-            " B\nDropped: %" PRIu32 "\nGaps: %" PRIu32 "\nBackpressure: %" PRIu32,
+            " B\nPeak: %" PRIu32 " B\nDropped: %" PRIu32 "\nGaps: %" PRIu32
+            "\nBackpressure: %" PRIu32 "\nMic conflicts: %" PRIu32 "\nFree heap: %" PRIu32 " B",
             i18n_get(prv_state_name(diag.state), data), diag.captured_frames, diag.sent_frames,
-            diag.spool_bytes, diag.dropped_overflow_frames, diag.gap_records,
-            diag.send_backpressure_events);
+            diag.spool_bytes, diag.spool_high_water_bytes, diag.dropped_overflow_frames,
+            diag.gap_records, diag.send_backpressure_events, diag.mic_conflicts,
+            diag.kernel_heap_free_bytes);
   prv_push_detail_dialog(i18n_noop("Diagnostics"), text);
   app_free(text);
+}
+
+//! Compact "how long did that session last" for the restart list.
+static void prv_format_duration(uint32_t seconds, char *buf, size_t buf_size) {
+  if (seconds == 0) {
+    sniprintf(buf, buf_size, "?");
+  } else if (seconds < 60) {
+    sniprintf(buf, buf_size, "%" PRIu32 "s", seconds);
+  } else if (seconds < 60 * 60) {
+    sniprintf(buf, buf_size, "%" PRIu32 "m", seconds / 60);
+  } else if (seconds < 24 * 60 * 60) {
+    sniprintf(buf, buf_size, "%" PRIu32 "h", seconds / (60 * 60));
+  } else {
+    sniprintf(buf, buf_size, "%" PRIu32 "d", seconds / (24 * 60 * 60));
+  }
 }
 
 //! Reboot flight recorder. Names the fault class *and* the task that stalled, and prints the raw
@@ -129,32 +149,62 @@ static void prv_show_restarts(SettingsAudioCompanionData *data) {
   audio_companion_get_reboot_trace(&trace);
   const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
 
-  char *text = app_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
+  char *text = app_zalloc_check(DETAIL_TEXT_MAX_LEN);
   if (!last) {
-    sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
-              "%s", i18n_get("No restarts recorded yet.", data));
+    sniprintf(text, DETAIL_TEXT_MAX_LEN, "%s", i18n_get("No restarts recorded yet.", data));
     prv_push_detail_dialog(i18n_noop("Restarts"), text);
     app_free(text);
     return;
   }
 
-  int written = sniprintf(text, DIALOG_MAX_MESSAGE_LEN,
-                          "Last: %s\nTotal: %" PRIu16 "\nFaults: %" PRIu16 "\nAudio was %s",
-                          audio_companion_reboot_trace_reason_name(last->reason_code),
-                          trace.total_reboots, trace.total_error_reboots,
-                          (last->flags & AudioCompanionRebootTraceFlagEnabled) ? "on" : "off");
+  int written = sniprintf(text, DETAIL_TEXT_MAX_LEN, "Total: %" PRIu16 "\nFaults: %" PRIu16,
+                          trace.total_reboots, trace.total_error_reboots);
 
-  const char *stuck = audio_companion_reboot_trace_stuck_task_name(last);
-  if (stuck && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
-    written += sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written, "\nStuck: %s", stuck);
+  // Lead with the sticky last fault: the ring is evicted by ordinary restarts, so after a crash
+  // that forced a firmware reload this is often the only place the crash still exists.
+  const AudioCompanionRebootTraceEntry *fault = audio_companion_reboot_trace_last_fault(&trace);
+  if (fault && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+    char ran_for[12];
+    prv_format_duration(trace.last_fault_session_seconds, ran_for, sizeof(ran_for));
+    written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written,
+                         "\n\nLast fault: %s\nAfter: %s up\nAudio was %s",
+                         audio_companion_reboot_trace_reason_name(fault->reason_code), ran_for,
+                         (fault->flags & AudioCompanionRebootTraceFlagEnabled) ? "on" : "off");
+
+    const char *stuck = audio_companion_reboot_trace_stuck_task_name(fault);
+    if (stuck && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+      written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written, "\nStuck: %s", stuck);
+    }
+    if (fault->fault_pc && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+      written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written,
+                           "\nPC %08" PRIx32 "\nLR %08" PRIx32, fault->fault_pc, fault->fault_lr);
+    }
+    if (fault->fault_extra && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+      written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written, "\nCB %08" PRIx32,
+                           fault->fault_extra);
+    }
   }
-  if (last->fault_pc && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
-    written += sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written,
-                         "\nPC %08" PRIx32 "\nLR %08" PRIx32, last->fault_pc, last->fault_lr);
+
+  // Then the recent history, newest first. Each line reports how long that session ran, which is
+  // what separates a one-off after a day of uptime from a boot loop.
+  if (written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+    written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written, "\n\nRecent:");
   }
-  if (last->fault_extra && written > 0 && written < DIALOG_MAX_MESSAGE_LEN) {
-    sniprintf(text + written, DIALOG_MAX_MESSAGE_LEN - written, "\nCB %08" PRIx32,
-              last->fault_extra);
+  for (uint8_t i = 0; i < AUDIO_COMPANION_REBOOT_TRACE_ENTRIES; i++) {
+    const AudioCompanionRebootTraceEntry *entry = audio_companion_reboot_trace_at(&trace, i);
+    if (!entry || written <= 0 || written >= DETAIL_TEXT_MAX_LEN) {
+      break;
+    }
+    const AudioCompanionRebootTraceEntry *older = audio_companion_reboot_trace_at(&trace, i + 1);
+    char ran_for[12];
+    prv_format_duration(
+        (older && entry->boot_wall_time > older->boot_wall_time)
+            ? (entry->boot_wall_time - older->boot_wall_time) : 0,
+        ran_for, sizeof(ran_for));
+    const char *stuck = audio_companion_reboot_trace_stuck_task_name(entry);
+    written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written, "\n%s %s%s%s",
+                         audio_companion_reboot_trace_reason_name(entry->reason_code), ran_for,
+                         stuck ? " " : "", stuck ? stuck : "");
   }
 
   prv_push_detail_dialog(i18n_noop("Restarts"), text);
@@ -250,11 +300,18 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       AudioCompanionRebootTrace trace;
       audio_companion_get_reboot_trace(&trace);
       const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+      const AudioCompanionRebootTraceEntry *fault =
+          audio_companion_reboot_trace_last_fault(&trace);
       if (!last) {
         subtitle = i18n_noop("None");
+      } else if (fault) {
+        // Surface the fault, not the benign restart that happened to come after it -- reloading
+        // firmware to recover from a crash would otherwise hide the crash behind "FW Update".
+        sniprintf(restarts_summary, sizeof(restarts_summary), "%s (%" PRIu16 " faults)",
+                  audio_companion_reboot_trace_reason_name(fault->reason_code),
+                  trace.total_error_reboots);
+        subtitle = restarts_summary;
       } else {
-        // Lead with the fault class and carry the tally, so an unexpected reboot is visible from
-        // the menu instead of only after drilling in.
         sniprintf(restarts_summary, sizeof(restarts_summary), "%s (%" PRIu16 ")",
                   audio_companion_reboot_trace_reason_name(last->reason_code),
                   trace.total_reboots);

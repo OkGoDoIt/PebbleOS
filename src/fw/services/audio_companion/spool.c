@@ -435,6 +435,8 @@ bool audio_companion_spool_has_pending_gap(void) { return s_pending_gap_count > 
 
 uint32_t audio_companion_spool_frames_pending_send(void) { return s_frames_unsent; }
 
+uint32_t audio_companion_spool_heap_free_bytes(void) { return prv_heap_free_bytes(); }
+
 void audio_companion_spool_get_stats(AudioCompanionSpoolStats *stats_out) {
   if (!stats_out) {
     return;

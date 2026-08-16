@@ -1768,6 +1768,7 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
     .spool_bytes = stats.current_bytes,
     .spool_high_water_bytes = stats.high_water_bytes,
     .loss_alerts_posted = s_loss_alerts_posted,
+    .kernel_heap_free_bytes = audio_companion_spool_heap_free_bytes(),
   };
   mutex_unlock(s_lock);
 }

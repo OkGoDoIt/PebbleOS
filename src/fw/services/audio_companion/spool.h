@@ -82,6 +82,10 @@ bool audio_companion_spool_has_pending_gap(void);
 void audio_companion_spool_apply_pressure_policy(void);
 
 uint32_t audio_companion_spool_frames_pending_send(void);
+//! Free kernel heap as the spool's growth policy sees it. Surfaced in diagnostics so a slow
+//! leak or fragmentation is visible on the watch instead of only as an eventual OOM reboot.
+uint32_t audio_companion_spool_heap_free_bytes(void);
+
 void audio_companion_spool_get_stats(AudioCompanionSpoolStats *stats_out);
 
 #ifdef UNITTEST

@@ -159,3 +159,69 @@ void test_audio_companion_reboot_trace__stuck_task_prefers_lowest_priority(void)
       audio_companion_reboot_trace_stuck_task_name(audio_companion_reboot_trace_newest(&s_trace)),
       "KernelBG");
 }
+
+void test_audio_companion_reboot_trace__last_fault_survives_benign_reboots(void) {
+  // Recovering from a crash means reloading firmware, which used to push the crash straight out
+  // of a six-deep ring. The sticky slot must outlive any number of ordinary restarts.
+  const AudioCompanionRebootTraceDetail detail = {
+    .watchdog_bits = 0x01,
+    .watchdog_mask = 0x03,
+    .fault_pc = 0x0801beef,
+    .fault_lr = 0x0801cafe,
+  };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 1000, &detail);
+
+  for (int i = 0; i < AUDIO_COMPANION_REBOOT_TRACE_ENTRIES + 2; i++) {
+    audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_SoftwareUpdate, true,
+                                        (uint32_t)(2000 + i), NULL);
+  }
+
+  // Evicted from the ring...
+  for (uint8_t i = 0; i < AUDIO_COMPANION_REBOOT_TRACE_ENTRIES; i++) {
+    const AudioCompanionRebootTraceEntry *entry = audio_companion_reboot_trace_at(&s_trace, i);
+    cl_assert(!entry || entry->reason_code != RebootReasonCode_Watchdog);
+  }
+  // ...but still reportable.
+  const AudioCompanionRebootTraceEntry *fault = audio_companion_reboot_trace_last_fault(&s_trace);
+  cl_assert(fault != NULL);
+  cl_assert_equal_i(fault->reason_code, RebootReasonCode_Watchdog);
+  cl_assert_equal_i(fault->fault_pc, 0x0801beef);
+  cl_assert_equal_s(audio_companion_reboot_trace_stuck_task_name(fault), "KernelBG");
+}
+
+void test_audio_companion_reboot_trace__no_fault_reported_when_none_recorded(void) {
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_SoftwareUpdate, true, 10, NULL);
+  cl_assert(audio_companion_reboot_trace_last_fault(&s_trace) == NULL);
+}
+
+void test_audio_companion_reboot_trace__records_session_length_before_fault(void) {
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_SoftwareUpdate, true, 1000, NULL);
+  // Crash a day later: the gap between boots is how long that session survived.
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 1000 + 86400,
+                                      NULL);
+  cl_assert_equal_i(s_trace.last_fault_session_seconds, 86400);
+
+  // A boot loop looks completely different, and must overwrite the previous fault.
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 1000 + 86430,
+                                      NULL);
+  cl_assert_equal_i(s_trace.last_fault_session_seconds, 30);
+}
+
+void test_audio_companion_reboot_trace__session_length_unknown_on_clock_jump(void) {
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_SoftwareUpdate, true, 5000, NULL);
+  // RTC went backwards across the reboot: report unknown rather than a bogus duration.
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 100, NULL);
+  cl_assert_equal_i(s_trace.last_fault_session_seconds, 0);
+}
+
+void test_audio_companion_reboot_trace__at_indexes_from_newest(void) {
+  for (int i = 0; i < 3; i++) {
+    audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true,
+                                        (uint32_t)(100 + i), NULL);
+  }
+  cl_assert_equal_i(audio_companion_reboot_trace_at(&s_trace, 0)->boot_wall_time, 102);
+  cl_assert_equal_i(audio_companion_reboot_trace_at(&s_trace, 1)->boot_wall_time, 101);
+  cl_assert_equal_i(audio_companion_reboot_trace_at(&s_trace, 2)->boot_wall_time, 100);
+  cl_assert(audio_companion_reboot_trace_at(&s_trace, 3) == NULL);
+  cl_assert(audio_companion_reboot_trace_at(NULL, 0) == NULL);
+}

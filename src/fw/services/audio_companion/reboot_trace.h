@@ -17,9 +17,11 @@
 //! the breadcrumb that turns "it randomly reboots" into a specific fault class.
 
 #define AUDIO_COMPANION_REBOOT_TRACE_ENTRIES (6)
-#define AUDIO_COMPANION_REBOOT_TRACE_VERSION (2)
-//! v1 recorded only the reason code; v2 adds the stuck-task detail the OS already captures.
+#define AUDIO_COMPANION_REBOOT_TRACE_VERSION (3)
+//! v1 recorded only the reason code; v2 added the stuck-task detail the OS already captures;
+//! v3 adds the sticky last-fault slot. The entry layout is unchanged between v2 and v3.
 #define AUDIO_COMPANION_REBOOT_TRACE_VERSION_V1 (1)
+#define AUDIO_COMPANION_REBOOT_TRACE_VERSION_V2 (2)
 
 typedef enum {
   AudioCompanionRebootTraceFlagEnabled = (1 << 0),  //!< background audio pref was on
@@ -56,6 +58,13 @@ typedef struct PACKED AudioCompanionRebootTrace {
   uint8_t reserved;
   uint16_t total_reboots;        //!< saturating count of every recorded boot
   uint16_t total_error_reboots;  //!< saturating count of crash/fault-class boots
+  //! Wall-clock seconds the session before @ref last_fault ran for; 0 when unknown. This is what
+  //! separates a one-off after a day of uptime from a boot loop.
+  uint32_t last_fault_session_seconds;
+  //! Sticky copy of the newest crash/fault-class boot. Ordinary restarts evict entries from the
+  //! ring -- reloading firmware after a crash is enough to push the crash out of it -- so keep
+  //! the record that actually matters somewhere routine reboots cannot reach.
+  AudioCompanionRebootTraceEntry last_fault;
   AudioCompanionRebootTraceEntry entries[AUDIO_COMPANION_REBOOT_TRACE_ENTRIES];
 } AudioCompanionRebootTrace;
 
@@ -86,6 +95,14 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
 
 //! Newest recorded entry, or NULL if the trace is empty.
 const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_newest(
+    const AudioCompanionRebootTrace *trace);
+
+//! Ring entry @p index_from_newest boots back (0 == newest), or NULL past the end.
+const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_at(
+    const AudioCompanionRebootTrace *trace, uint8_t index_from_newest);
+
+//! Sticky record of the newest fault-class boot, or NULL if none was ever recorded.
+const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_last_fault(
     const AudioCompanionRebootTrace *trace);
 
 //! ---- Persistence (implemented against the settings file on the watch) ----

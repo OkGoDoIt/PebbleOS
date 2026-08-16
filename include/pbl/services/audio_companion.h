@@ -27,6 +27,9 @@ typedef struct {
   uint32_t spool_bytes;
   uint32_t spool_high_water_bytes;
   uint32_t loss_alerts_posted;
+  //! Free kernel heap. Capture churns 4 KB spool chunks and a ~10 KB mic buffer continuously, so
+  //! a downward drift here over a long session is the signal for a leak or heap fragmentation.
+  uint32_t kernel_heap_free_bytes;
 } AudioCompanionDiagnostics;
 
 void audio_companion_init(void);

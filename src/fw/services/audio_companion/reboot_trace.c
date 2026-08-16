@@ -135,6 +135,15 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
     .fault_extra = detail ? detail->fault_extra : 0,
   };
 
+  // How long the session that just ended ran for, from the previous boot's wall time. Only
+  // meaningful while the RTC is monotonic across the reboot, so treat a backwards clock as
+  // unknown rather than reporting nonsense.
+  const AudioCompanionRebootTraceEntry *previous = audio_companion_reboot_trace_newest(trace);
+  const uint32_t session_seconds =
+      (previous && boot_wall_time > previous->boot_wall_time)
+          ? (boot_wall_time - previous->boot_wall_time)
+          : 0;
+
   uint8_t insert_index;
   if (trace->count < AUDIO_COMPANION_REBOOT_TRACE_ENTRIES) {
     insert_index = (trace->head + trace->count) % AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
@@ -149,17 +158,34 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
   if (trace->total_reboots < UINT16_MAX) {
     trace->total_reboots++;
   }
-  if (audio_companion_reboot_trace_is_error_reason(reason_code) &&
-      trace->total_error_reboots < UINT16_MAX) {
-    trace->total_error_reboots++;
+  if (audio_companion_reboot_trace_is_error_reason(reason_code)) {
+    if (trace->total_error_reboots < UINT16_MAX) {
+      trace->total_error_reboots++;
+    }
+    trace->last_fault = entry;
+    trace->last_fault_session_seconds = session_seconds;
   }
+}
+
+const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_at(
+    const AudioCompanionRebootTrace *trace, uint8_t index_from_newest) {
+  if (!trace || index_from_newest >= trace->count) {
+    return NULL;
+  }
+  const uint8_t index = (trace->head + trace->count - 1 - index_from_newest) %
+                        AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
+  return &trace->entries[index];
 }
 
 const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_newest(
     const AudioCompanionRebootTrace *trace) {
-  if (!trace || trace->count == 0) {
+  return audio_companion_reboot_trace_at(trace, 0);
+}
+
+const AudioCompanionRebootTraceEntry *audio_companion_reboot_trace_last_fault(
+    const AudioCompanionRebootTrace *trace) {
+  if (!trace || !audio_companion_reboot_trace_is_error_reason(trace->last_fault.reason_code)) {
     return NULL;
   }
-  const uint8_t index = (trace->head + trace->count - 1) % AUDIO_COMPANION_REBOOT_TRACE_ENTRIES;
-  return &trace->entries[index];
+  return &trace->last_fault;
 }
