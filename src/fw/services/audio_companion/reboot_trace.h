@@ -90,6 +90,13 @@ const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code);
 const char *audio_companion_reboot_trace_stuck_task_name(
     const AudioCompanionRebootTraceEntry *entry);
 
+//! Writes *every* task that failed to check in, joined with '+', into @p buf (empty string when
+//! the entry carries no watchdog detail). One task alone and several at once mean very different
+//! things -- a stalled NewTimers also stops the regular-timer callback that feeds KernelBG while
+//! it is idle, so "KernelBG" on its own and "KernelBG+Timers" point at different bugs.
+void audio_companion_reboot_trace_stuck_tasks(const AudioCompanionRebootTraceEntry *entry,
+                                              char *buf, size_t buf_size);
+
 //! Reset a trace to the empty/initial state.
 void audio_companion_reboot_trace_clear(AudioCompanionRebootTrace *trace);
 

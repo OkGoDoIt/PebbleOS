@@ -127,6 +127,15 @@ static bool s_owns_mic;                //!< service intends to hold the mic (gua
 static bool s_capture_wanted;          //!< intent handed to prv_apply_capture() (guarded by s_lock)
 static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()
 static PebbleMutex *s_capture_lock;    //!< serializes appliers; never held while taking s_lock
+//! Desired BLE responsiveness, applied outside s_lock by prv_apply_ble_responsiveness().
+static ResponseTimeState s_response_state_desired = ResponseTimeMax;
+static uint16_t s_response_period_desired;
+static bool s_response_dirty;
+//! Guards s_drain_cb_pending alone. The drain timer fires on the NewTimers task, which must never
+//! block on s_lock: that task also runs the regular-timer callback that feeds KernelBG's watchdog
+//! bit while it is idle, so stalling it takes out both watchdogged tasks. This lock is only ever
+//! held for a flag read-modify-write, with nothing nested inside it.
+static PebbleMutex *s_drain_post_lock;
 static bool s_stream_active;
 static bool s_need_stream_start;
 static bool s_stream_resumed;    //!< the pending STREAM_START re-announces an ongoing stream
@@ -183,6 +192,7 @@ static void prv_post_drain_cb(void);
 static void prv_start_drain_timer_locked(void);
 static void prv_stop_drain_timer_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
+static void prv_apply_pending(void);
 
 // ---- Small helpers ----
 
@@ -309,6 +319,11 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
     s_silence_gap_first_sequence = s_next_sequence;
     s_silence_gap_first_sample_index = s_next_sample_index;
     prv_update_ble_responsiveness_locked();
+    if (out_schedule_drain) {
+      // Entering suppression relaxes the connection interval, but the mic path cannot apply that
+      // itself (it holds the mic driver mutex). Posting a drain hands it to the system task.
+      *out_schedule_drain = true;
+    }
   } else {
     s_silence_candidate_frames = 0;
     return false;
@@ -352,14 +367,50 @@ static void prv_cancel_catch_up_burst_locked(void) {
   }
 }
 
+//! Record the responsiveness the current state wants. The driver call itself takes bt_lock, which
+//! the BT stack can hold for seconds, and s_lock must not be held across it -- see
+//! prv_apply_ble_responsiveness().
 static void prv_update_ble_responsiveness_locked(void) {
+  ResponseTimeState state = ResponseTimeMax;
+  uint16_t period = 0;
   if (s_state == AudioCompanionServiceStateStreaming && s_catch_up_burst) {
-    bt_driver_audio_companion_set_response_time(ResponseTimeMin,
-                                                MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS);
+    state = ResponseTimeMin;
+    period = MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS;
   } else if (s_state == AudioCompanionServiceStateStreaming && !s_silence_suppressing) {
-    bt_driver_audio_companion_set_response_time(ResponseTimeMiddle, MAX_PERIOD_RUN_FOREVER);
-  } else {
-    bt_driver_audio_companion_set_response_time(ResponseTimeMax, 0);
+    state = ResponseTimeMiddle;
+    period = MAX_PERIOD_RUN_FOREVER;
+  }
+  if (state != s_response_state_desired || period != s_response_period_desired) {
+    s_response_state_desired = state;
+    s_response_period_desired = period;
+    s_response_dirty = true;
+  }
+}
+
+//! Push the recorded responsiveness to the BT driver with s_lock released.
+//!
+//! bt_driver_audio_companion_set_response_time() takes bt_lock, a global the BT stack holds across
+//! HCI round trips and bonding flash I/O. Holding s_lock across that is what makes s_lock a
+//! multi-second lock, and s_lock is on the watchdog-critical path: the drain timer callback runs
+//! on the NewTimers task, which also drives the regular-timer seconds callbacks that feed
+//! KernelBG's watchdog bit while it is idle. Stall NewTimers and both watchdogged tasks go
+//! unfed -- which is the reset this feature has been causing.
+static void prv_apply_ble_responsiveness(void) {
+  if (!s_lock) {
+    return;
+  }
+  for (;;) {
+    mutex_lock(s_lock);
+    const bool dirty = s_response_dirty;
+    const ResponseTimeState state = s_response_state_desired;
+    const uint16_t period = s_response_period_desired;
+    s_response_dirty = false;
+    mutex_unlock(s_lock);
+
+    if (!dirty) {
+      return;
+    }
+    bt_driver_audio_companion_set_response_time(state, period);
   }
 }
 
@@ -371,6 +422,7 @@ static void prv_end_catch_up_burst_system_task_cb(void *data) {
   }
   prv_update_ble_responsiveness_locked();
   mutex_unlock(s_lock);
+  prv_apply_pending();
 }
 
 static void prv_catch_up_timer_cb(void *data) {
@@ -583,6 +635,14 @@ static void prv_apply_capture(void) {
   mutex_unlock(s_capture_lock);
 }
 
+//! Flush everything the state machine deferred because it could not be done under s_lock.
+//! MUST be called with s_lock released, and never from prv_mic_data_handler(): that runs with the
+//! mic driver's mutex held, and prv_apply_capture() waits on that same mutex from other tasks.
+static void prv_apply_pending(void) {
+  prv_apply_capture();
+  prv_apply_ble_responsiveness();
+}
+
 //! Begin a pause that will become a STREAM_GAP when capture resumes.
 static void prv_begin_gap_pause_locked(uint8_t gap_reason) {
   if (s_pending_resume_gap_reason == 0) {
@@ -619,7 +679,7 @@ static void prv_park_capture_system_task_cb(void *data) {
     prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context) {
@@ -864,11 +924,14 @@ static bool prv_drain_locked(void) {
 }
 
 static void prv_drain_system_task_cb(void *data) {
-  mutex_lock(s_lock);
+  mutex_lock(s_drain_post_lock);
   s_drain_cb_pending = false;
+  mutex_unlock(s_drain_post_lock);
+
+  mutex_lock(s_lock);
   const bool more_pending = prv_drain_locked();
   mutex_unlock(s_lock);
-  prv_apply_capture();  // the liveness check above can drop capture intent
+  prv_apply_pending();  // the liveness check above can drop capture intent
   if (more_pending) {
     prv_post_drain_cb();
   }
@@ -880,10 +943,13 @@ static void prv_drain_system_task_cb(void *data) {
 //! KernelBG stall could overflow it, which the OS treats as a fatal EventQueueFull reboot. Must be
 //! called without s_lock held.
 static void prv_post_drain_cb(void) {
-  mutex_lock(s_lock);
+  if (!s_drain_post_lock) {
+    return;
+  }
+  mutex_lock(s_drain_post_lock);
   const bool already_pending = s_drain_cb_pending;
   s_drain_cb_pending = true;
-  mutex_unlock(s_lock);
+  mutex_unlock(s_drain_post_lock);
   if (!already_pending) {
     system_task_add_callback(prv_drain_system_task_cb, NULL);
   }
@@ -1170,7 +1236,7 @@ void audio_companion_handle_consent_response(bool granted) {
   }
   memset(&s_consent, 0, sizeof(s_consent));
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 void audio_companion_set_consent_handler(AudioCompanionConsentHandler handler) {
@@ -1229,7 +1295,7 @@ void audio_companion_handle_enable_response(bool granted) {
   }
   memset(&s_enable_request, 0, sizeof(s_enable_request));
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 void audio_companion_set_enable_handler(AudioCompanionEnableHandler handler) {
@@ -1361,7 +1427,7 @@ static void prv_control_write_system_task_cb(void *data) {
       break;
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
   kernel_free(work);
 }
 
@@ -1396,7 +1462,7 @@ static void prv_subscription_system_task_cb(void *data) {
   // both characteristics first, so doing it here would miss the common reconnect.
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 void audio_companion_handle_subscription_change(bool data_subscribed,
@@ -1435,7 +1501,7 @@ static void prv_disconnect_system_task_cb(void *data) {
   }
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 void audio_companion_handle_disconnect(void) {
@@ -1492,7 +1558,7 @@ void audio_companion_mic_conflict_begin(void) {
   mutex_unlock(s_lock);
   // Synchronous: the voice service calls this immediately before claiming the mic itself, so the
   // driver must actually be released before we return.
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 void audio_companion_mic_conflict_end(void) {
@@ -1503,7 +1569,7 @@ void audio_companion_mic_conflict_end(void) {
   s_mic_conflict_active = false;
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 // ---- Battery policy ----
@@ -1523,7 +1589,7 @@ static void prv_battery_event_handler(PebbleEvent *event, void *context) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 // ---- Public API ----
@@ -1610,6 +1676,7 @@ static void prv_record_boot_reboot_trace(void) {
 void audio_companion_init(void) {
   s_lock = mutex_create();
   s_capture_lock = mutex_create();
+  s_drain_post_lock = mutex_create();
   audio_companion_spool_init();
   audio_companion_auth_init();
 
@@ -1627,7 +1694,7 @@ void audio_companion_init(void) {
   s_low_battery = charge.charge_percent < CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT;
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 
   s_battery_event_info = (EventServiceInfo){
     .type = PEBBLE_BATTERY_STATE_CHANGE_EVENT,
@@ -1654,7 +1721,7 @@ void audio_companion_handle_prefs_loaded(void) {
   const bool record_reboot = !s_reboot_trace_recorded;
   s_reboot_trace_recorded = true;
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 
   // Now that the persisted prefs are loaded (so the "enabled" flag is accurate) capture the
   // previous reboot reason into the flight recorder. Done once per boot, outside the lock.
@@ -1686,7 +1753,7 @@ void audio_companion_apply_enabled(bool enabled) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 void audio_companion_set_enabled(bool enabled) {
@@ -1704,7 +1771,7 @@ void audio_companion_set_runlevel(RunLevel runlevel) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 bool audio_companion_get_pause_stationary_enabled(void) {
@@ -1722,7 +1789,7 @@ void audio_companion_set_pause_stationary_enabled(bool enabled) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 bool audio_companion_get_pause_low_power_enabled(void) {
@@ -1740,7 +1807,7 @@ void audio_companion_set_pause_low_power_enabled(bool enabled) {
     prv_reevaluate_locked();
   }
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 bool audio_companion_get_silence_suppression_enabled(void) {
@@ -1832,7 +1899,7 @@ void audio_companion_forget_receiver(void) {
   memset(s_session.receiver_id, 0, sizeof(s_session.receiver_id));
   prv_reevaluate_locked();
   mutex_unlock(s_lock);
-  prv_apply_capture();
+  prv_apply_pending();
 }
 
 #ifdef UNITTEST
@@ -1848,6 +1915,7 @@ void audio_companion_test_reset(void) {
   audio_companion_spool_reset();
   s_lock = NULL;
   s_capture_lock = NULL;
+  s_drain_post_lock = NULL;
   s_initialized = false;
   s_state = AudioCompanionServiceStateDisabled;
   s_enabled = false;
@@ -1861,6 +1929,9 @@ void audio_companion_test_reset(void) {
   s_owns_mic = false;
   s_capture_wanted = false;
   s_mic_started = false;
+  s_response_state_desired = ResponseTimeMax;
+  s_response_period_desired = 0;
+  s_response_dirty = false;
   s_stream_active = false;
   s_need_stream_start = false;
   s_stream_resumed = false;

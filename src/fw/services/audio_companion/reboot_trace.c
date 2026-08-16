@@ -4,6 +4,7 @@
 
 #include "kernel/pebble_tasks.h"
 #include "system/reboot_reason.h"
+#include "pbl/util/size.h"
 
 #include <string.h>
 
@@ -70,30 +71,61 @@ const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code) {
   }
 }
 
+//! The tasks task_watchdog.c watches, ordered least-to-most suspicious exactly as it reports them:
+//! a stalled high-priority task starves the lower-priority ones, so the lowest-priority watched
+//! task is the one whose stall actually explains the reset.
+static const struct {
+  uint8_t task;
+  const char *name;
+} s_watched_tasks[] = {
+  { PebbleTask_KernelBackground, "KernelBG" },
+  { PebbleTask_KernelMain, "KernelMain" },
+  { PebbleTask_PULSE, "PULSE" },
+  { PebbleTask_NewTimers, "Timers" },
+};
+
+void audio_companion_reboot_trace_stuck_tasks(const AudioCompanionRebootTraceEntry *entry,
+                                              char *buf, size_t buf_size) {
+  if (!buf || buf_size == 0) {
+    return;
+  }
+  buf[0] = '\0';
+  if (!entry || entry->watchdog_mask == 0) {
+    return;
+  }
+  const uint8_t stuck = (uint8_t)(entry->watchdog_mask & (uint8_t)~entry->watchdog_bits);
+  size_t used = 0;
+  for (size_t i = 0; i < ARRAY_LENGTH(s_watched_tasks); i++) {
+    if (s_watched_tasks[i].task >= 8 || !(stuck & (uint8_t)(1 << s_watched_tasks[i].task))) {
+      continue;
+    }
+    const char *name = s_watched_tasks[i].name;
+    const size_t name_len = strlen(name);
+    const size_t sep_len = (used > 0) ? 1 : 0;
+    if (used + sep_len + name_len + 1 > buf_size) {
+      break;
+    }
+    if (sep_len) {
+      buf[used++] = '+';
+    }
+    memcpy(&buf[used], name, name_len);
+    used += name_len;
+    buf[used] = '\0';
+  }
+}
+
 const char *audio_companion_reboot_trace_stuck_task_name(
     const AudioCompanionRebootTraceEntry *entry) {
   if (!entry || entry->watchdog_mask == 0) {
     return NULL;
   }
-  // Tasks being watched that never checked in. Ordered least-to-most suspicious the same way
-  // task_watchdog.c reports them: a stuck high-priority task starves the lower-priority ones, so
-  // the lowest-priority watched task is the one whose stall actually explains the reset.
   const uint8_t stuck = (uint8_t)(entry->watchdog_mask & (uint8_t)~entry->watchdog_bits);
   if (stuck == 0) {
     return NULL;
   }
-  static const struct {
-    uint8_t task;
-    const char *name;
-  } k_tasks[] = {
-    { PebbleTask_KernelBackground, "KernelBG" },
-    { PebbleTask_KernelMain, "KernelMain" },
-    { PebbleTask_PULSE, "PULSE" },
-    { PebbleTask_NewTimers, "Timers" },
-  };
-  for (size_t i = 0; i < sizeof(k_tasks) / sizeof(k_tasks[0]); i++) {
-    if (k_tasks[i].task < 8 && (stuck & (uint8_t)(1 << k_tasks[i].task))) {
-      return k_tasks[i].name;
+  for (size_t i = 0; i < ARRAY_LENGTH(s_watched_tasks); i++) {
+    if (s_watched_tasks[i].task < 8 && (stuck & (uint8_t)(1 << s_watched_tasks[i].task))) {
+      return s_watched_tasks[i].name;
     }
   }
   return "Other Task";

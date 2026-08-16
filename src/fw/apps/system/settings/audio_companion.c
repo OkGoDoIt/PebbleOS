@@ -175,9 +175,14 @@ static void prv_show_restarts(SettingsAudioCompanionData *data) {
                          audio_companion_reboot_trace_reason_name(fault->reason_code), ran_for,
                          (fault->flags & AudioCompanionRebootTraceFlagEnabled) ? "on" : "off");
 
-    const char *stuck = audio_companion_reboot_trace_stuck_task_name(fault);
-    if (stuck && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
-      written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written, "\nStuck: %s", stuck);
+    // Every stuck task, not just the most suspicious one: "KernelBG" alone and "KernelBG+Timers"
+    // point at different bugs. The raw bitsets follow as a check on the decoding.
+    char stuck_tasks[40];
+    audio_companion_reboot_trace_stuck_tasks(fault, stuck_tasks, sizeof(stuck_tasks));
+    if (stuck_tasks[0] != '\0' && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+      written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written,
+                           "\nStuck: %s\nWD %02x/%02x", stuck_tasks, fault->watchdog_bits,
+                           fault->watchdog_mask);
     }
     if (fault->fault_pc && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
       written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written,

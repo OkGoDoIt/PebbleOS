@@ -76,6 +76,16 @@ static uint32_t s_rand32_value;
 
 // ---- Firmware dependency fakes ----
 
+//! The real mic driver holds its own mutex while it calls the data handler, and the handler takes
+//! the service lock. Entering the driver with the service lock already held is therefore a lock
+//! order inversion: it deadlocked KernelBG mid-dispatch against whichever task was starting or
+//! stopping capture, and the watch rebooted on the task watchdog ~7 s later. Assert the invariant
+//! on every driver call so no future change can quietly reintroduce it.
+static void prv_assert_service_lock_not_held(void) {
+  const FakePebbleMutex *lock = (const FakePebbleMutex *)audio_companion_test_get_lock();
+  cl_assert(!lock || lock->lock_count == 0);
+}
+
 bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length) {
   if (!s_notify_data_succeeds) {
     return false;
@@ -106,6 +116,11 @@ uint16_t bt_driver_audio_companion_get_effective_mtu(void) {
 
 void bt_driver_audio_companion_set_response_time(ResponseTimeState state,
                                                  uint16_t max_period_secs) {
+  // This call takes bt_lock, which the BT stack holds across HCI round trips and bonding flash
+  // I/O. Holding the service lock across it makes s_lock a multi-second lock, and the drain timer
+  // callback takes s_lock on the NewTimers task -- the same task that feeds KernelBG's watchdog
+  // bit while it is idle. That is a watchdog reset, so pin the ordering here.
+  prv_assert_service_lock_not_held();
   s_response_time_state = state;
   s_response_time_period_secs = max_period_secs;
 }
@@ -273,16 +288,6 @@ int voice_speex_encode_frame(int16_t *samples, uint8_t *encoded_data, size_t max
   encoded_data[2] = 0x58;
   encoded_data[3] = s_encoded_counter++;
   return 4;
-}
-
-//! The real mic driver holds its own mutex while it calls the data handler, and the handler takes
-//! the service lock. Entering the driver with the service lock already held is therefore a lock
-//! order inversion: it deadlocked KernelBG mid-dispatch against whichever task was starting or
-//! stopping capture, and the watch rebooted on the task watchdog ~7 s later. Assert the invariant
-//! on every driver call so no future change can quietly reintroduce it.
-static void prv_assert_service_lock_not_held(void) {
-  const FakePebbleMutex *lock = (const FakePebbleMutex *)audio_companion_test_get_lock();
-  cl_assert(!lock || lock->lock_count == 0);
 }
 
 bool mic_start(MicDevice *this, MicDataHandlerCB data_handler, void *context,

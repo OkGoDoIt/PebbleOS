@@ -4,6 +4,7 @@
 
 #include "services/audio_companion/reboot_trace.h"
 #include "system/reboot_reason.h"
+#include "kernel/pebble_tasks.h"
 
 #include "stubs_logging.h"
 #include "stubs_passert.h"
@@ -224,4 +225,46 @@ void test_audio_companion_reboot_trace__at_indexes_from_newest(void) {
   cl_assert_equal_i(audio_companion_reboot_trace_at(&s_trace, 2)->boot_wall_time, 100);
   cl_assert(audio_companion_reboot_trace_at(&s_trace, 3) == NULL);
   cl_assert(audio_companion_reboot_trace_at(NULL, 0) == NULL);
+}
+
+void test_audio_companion_reboot_trace__stuck_tasks_lists_all_of_them(void) {
+  char buf[40];
+
+  // Only KernelBackground missing.
+  const AudioCompanionRebootTraceDetail one = { .watchdog_bits = 0x01, .watchdog_mask = 0x03 };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 100, &one);
+  audio_companion_reboot_trace_stuck_tasks(audio_companion_reboot_trace_newest(&s_trace), buf,
+                                           sizeof(buf));
+  cl_assert_equal_s(buf, "KernelBG");
+
+  // KernelBackground and NewTimers both missing: a stalled timer task also stops the callback
+  // that feeds KernelBG while it is idle, so reporting only one of them hides the real story.
+  const AudioCompanionRebootTraceDetail both = {
+    .watchdog_bits = 0x00,
+    .watchdog_mask = (uint8_t)((1 << PebbleTask_KernelBackground) | (1 << PebbleTask_NewTimers)),
+  };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 200, &both);
+  audio_companion_reboot_trace_stuck_tasks(audio_companion_reboot_trace_newest(&s_trace), buf,
+                                           sizeof(buf));
+  cl_assert_equal_s(buf, "KernelBG+Timers");
+
+  // No watchdog detail at all: empty, not a guess.
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_HardFault, true, 300, NULL);
+  audio_companion_reboot_trace_stuck_tasks(audio_companion_reboot_trace_newest(&s_trace), buf,
+                                           sizeof(buf));
+  cl_assert_equal_s(buf, "");
+  audio_companion_reboot_trace_stuck_tasks(NULL, buf, sizeof(buf));
+  cl_assert_equal_s(buf, "");
+}
+
+void test_audio_companion_reboot_trace__stuck_tasks_truncates_safely(void) {
+  const AudioCompanionRebootTraceDetail both = {
+    .watchdog_bits = 0x00,
+    .watchdog_mask = (uint8_t)((1 << PebbleTask_KernelBackground) | (1 << PebbleTask_NewTimers)),
+  };
+  audio_companion_reboot_trace_record(&s_trace, RebootReasonCode_Watchdog, true, 100, &both);
+  char small[10];  // fits "KernelBG" and its terminator, but not "+Timers"
+  audio_companion_reboot_trace_stuck_tasks(audio_companion_reboot_trace_newest(&s_trace), small,
+                                           sizeof(small));
+  cl_assert_equal_s(small, "KernelBG");
 }
