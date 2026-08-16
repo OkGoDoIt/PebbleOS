@@ -25,6 +25,7 @@
 
 void audio_companion_test_reset(void);
 PebbleMutex *audio_companion_test_get_lock(void);
+void audio_companion_test_force_reboot_trace_capture(void);
 
 #define MAX_CAPTURED_NOTIFICATIONS (32)
 #define MAX_CAPTURED_NOTIFICATION_BYTES (512)
@@ -193,8 +194,13 @@ void reboot_reason_get_last_reboot_reason_full(RebootReason *reason_out) {
   *reason_out = s_last_reboot_reason_full;
 }
 
+// Persist across simulated boots so consecutive-fault detection can actually be exercised.
 void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace) {
-  audio_companion_reboot_trace_clear(trace);
+  if (audio_companion_reboot_trace_is_valid(&s_saved_reboot_trace)) {
+    *trace = s_saved_reboot_trace;
+  } else {
+    audio_companion_reboot_trace_clear(trace);
+  }
 }
 
 void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace) {
@@ -1035,4 +1041,59 @@ void test_audio_companion__boot_trace_captures_event_queue_full_detail(void) {
   cl_assert_equal_i(last->fault_extra, 0x08003333);
   // No watchdog bitsets recorded for a non-watchdog reset: do not name a bogus stuck task.
   cl_assert(audio_companion_reboot_trace_stuck_task_name(last) == NULL);
+}
+
+// A background feature must never be able to push the watch into recovery firmware. Three fault
+// boots without a healthy session in between means the crash is reproducing on every boot, so the
+// feature stands down rather than riding the watch down to a reflash.
+void test_audio_companion__stands_down_after_repeated_fault_boots(void) {
+  s_pref_enabled = true;
+  s_last_reboot_reason = RebootReasonCode_Watchdog;
+  s_last_reboot_reason_full = (RebootReason) { .code = RebootReasonCode_Watchdog };
+
+  // Each boot lands soon after the last, so the crash run is never broken by a healthy session.
+  for (int i = 1; i <= AUDIO_COMPANION_FAULT_LOOP_THRESHOLD; i++) {
+    s_rtc_time = 1000 + (i * 60);
+    audio_companion_test_force_reboot_trace_capture();
+    audio_companion_handle_prefs_loaded();
+  }
+
+  cl_assert_equal_b(s_pref_enabled, false);
+  cl_assert_equal_b(audio_companion_is_enabled(), false);
+  cl_assert(!s_mic_running);
+  // The run is cleared so re-enabling is not immediately undone on the next boot.
+  cl_assert_equal_i(s_saved_reboot_trace.consecutive_fault_boots, 0);
+}
+
+void test_audio_companion__healthy_session_breaks_the_fault_run(void) {
+  s_pref_enabled = true;
+  s_last_reboot_reason = RebootReasonCode_Watchdog;
+  s_last_reboot_reason_full = (RebootReason) { .code = RebootReasonCode_Watchdog };
+
+  // Two quick crashes, then one that only came after a long healthy session: a one-off after a
+  // day of uptime is not a loop and must not disable the feature.
+  const uint32_t times[] = { 1000, 1060, 1120 + (24 * 60 * 60) };
+  for (size_t i = 0; i < 3; i++) {
+    s_rtc_time = (time_t)times[i];
+    audio_companion_test_force_reboot_trace_capture();
+    audio_companion_handle_prefs_loaded();
+  }
+
+  cl_assert_equal_b(s_pref_enabled, true);
+  cl_assert_equal_i(s_saved_reboot_trace.consecutive_fault_boots, 1);
+}
+
+void test_audio_companion__benign_reboots_never_stand_down(void) {
+  s_pref_enabled = true;
+  s_last_reboot_reason = RebootReasonCode_SoftwareUpdate;
+  s_last_reboot_reason_full = (RebootReason) { .code = RebootReasonCode_SoftwareUpdate };
+
+  for (int i = 1; i <= AUDIO_COMPANION_FAULT_LOOP_THRESHOLD + 2; i++) {
+    s_rtc_time = 1000 + (i * 60);
+    audio_companion_test_force_reboot_trace_capture();
+    audio_companion_handle_prefs_loaded();
+  }
+
+  cl_assert_equal_b(s_pref_enabled, true);
+  cl_assert_equal_i(s_saved_reboot_trace.consecutive_fault_boots, 0);
 }

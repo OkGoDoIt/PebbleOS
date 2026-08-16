@@ -450,6 +450,26 @@ static void prv_post_loss_alert(void) {
   s_loss_alerts_posted++;
 }
 
+//! Tell the user why background audio turned itself off. Silence here would look like the setting
+//! forgot itself, which is worse than the crash run it is reporting.
+static void prv_post_stand_down_alert(void) {
+#ifndef UNITTEST
+  AttributeList attr_list = {0};
+  attribute_list_add_cstring(&attr_list, AttributeIdTitle, "Audio Companion");
+  attribute_list_add_cstring(&attr_list, AttributeIdBody,
+                             "Background audio turned itself off after your watch restarted "
+                             "several times. Settings shows what happened.");
+  TimelineItem *item = timeline_item_create_with_attributes(
+      rtc_get_time(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attr_list, NULL);
+  attribute_list_destroy_list(&attr_list);
+  if (item) {
+    item->header.from_watch = true;
+    notifications_add_notification(item);
+    timeline_item_destroy(item);
+  }
+#endif
+}
+
 static void prv_loss_alert_system_task_cb(void *data) {
   // Building a timeline notification allocates and touches the notification store; keep it off the
   // mic capture path (which runs under both s_lock and the mic driver's mutex on KernelBG).
@@ -1542,11 +1562,32 @@ static void prv_record_boot_reboot_trace(void) {
   AudioCompanionRebootTrace trace;
   audio_companion_reboot_trace_load(&trace);
   audio_companion_reboot_trace_record(&trace, reason, enabled, (uint32_t)rtc_get_time(), &detail);
+
+  // Fail closed on a crash run. The bootloader escalates to recovery firmware when the watch keeps
+  // restarting before it stabilizes, which costs the user a reflash to get their watch back --
+  // a background feature must not be able to cause that. Stand down and say so instead; the user
+  // re-enables when they choose to.
+  const bool stand_down =
+      enabled && trace.consecutive_fault_boots >= AUDIO_COMPANION_FAULT_LOOP_THRESHOLD;
+  if (stand_down) {
+    // Clear the run so re-enabling gets a fresh start rather than tripping again next boot.
+    trace.consecutive_fault_boots = 0;
+    PBL_LOG_WRN("Audio companion: %u restarts without a healthy session; disabling background "
+                "audio so the watch does not fall back to recovery",
+                (unsigned)AUDIO_COMPANION_FAULT_LOOP_THRESHOLD);
+    shell_prefs_set_audio_companion_enabled(false);
+  }
+
   audio_companion_reboot_trace_save(&trace);
 
   mutex_lock(s_lock);
   s_reboot_trace = trace;
   mutex_unlock(s_lock);
+
+  if (stand_down) {
+    audio_companion_apply_enabled(false);
+    prv_post_stand_down_alert();
+  }
 
   if (audio_companion_reboot_trace_is_error_reason(reason)) {
     const AudioCompanionRebootTraceEntry *newest = audio_companion_reboot_trace_newest(&trace);
@@ -1799,6 +1840,9 @@ void audio_companion_forget_receiver(void) {
 //! That ordering is the deadlock: the driver calls prv_mic_data_handler() under its own mutex,
 //! and the handler takes s_lock.
 PebbleMutex *audio_companion_test_get_lock(void) { return s_lock; }
+
+//! Re-arm the once-per-boot reboot-trace capture so a test can simulate consecutive boots.
+void audio_companion_test_force_reboot_trace_capture(void) { s_reboot_trace_recorded = false; }
 
 void audio_companion_test_reset(void) {
   audio_companion_spool_reset();

@@ -17,6 +17,12 @@
 //! the breadcrumb that turns "it randomly reboots" into a specific fault class.
 
 #define AUDIO_COMPANION_REBOOT_TRACE_ENTRIES (6)
+//! A session that lasted this long is treated as healthy, clearing the consecutive-fault run.
+//! Matches the firmware's own "stable" definition (main.c arms BOOT_BIT_FW_STABLE at 15 minutes),
+//! which is the threshold the bootloader's escalation to recovery is keyed off.
+#define AUDIO_COMPANION_HEALTHY_SESSION_SECONDS (15 * 60)
+//! Consecutive fault boots after which background audio stands itself down.
+#define AUDIO_COMPANION_FAULT_LOOP_THRESHOLD (3)
 #define AUDIO_COMPANION_REBOOT_TRACE_VERSION (3)
 //! v1 recorded only the reason code; v2 added the stuck-task detail the OS already captures;
 //! v3 adds the sticky last-fault slot. The entry layout is unchanged between v2 and v3.
@@ -55,7 +61,10 @@ typedef struct PACKED AudioCompanionRebootTrace {
   uint8_t version;
   uint8_t count;    //!< number of valid entries (<= AUDIO_COMPANION_REBOOT_TRACE_ENTRIES)
   uint8_t head;     //!< ring index of the oldest valid entry
-  uint8_t reserved;
+  //! Fault boots since the last session that ran long enough to look healthy. A watch that keeps
+  //! crashing before it stabilizes is escalated to recovery firmware by the bootloader, so this
+  //! is what lets the feature stand down before it takes the whole watch with it.
+  uint8_t consecutive_fault_boots;
   uint16_t total_reboots;        //!< saturating count of every recorded boot
   uint16_t total_error_reboots;  //!< saturating count of crash/fault-class boots
   //! Wall-clock seconds the session before @ref last_fault ran for; 0 when unknown. This is what

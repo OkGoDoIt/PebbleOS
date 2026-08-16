@@ -159,6 +159,10 @@ static void prv_show_restarts(SettingsAudioCompanionData *data) {
 
   int written = sniprintf(text, DETAIL_TEXT_MAX_LEN, "Total: %" PRIu16 "\nFaults: %" PRIu16,
                           trace.total_reboots, trace.total_error_reboots);
+  if (trace.consecutive_fault_boots > 0 && written > 0 && written < DETAIL_TEXT_MAX_LEN) {
+    written += sniprintf(text + written, DETAIL_TEXT_MAX_LEN - written, "\nIn a row: %" PRIu8,
+                         trace.consecutive_fault_boots);
+  }
 
   // Lead with the sticky last fault: the ring is evicted by ordinary restarts, so after a crash
   // that forced a firmware reload this is often the only place the crash still exists.

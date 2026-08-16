@@ -158,9 +158,18 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
   if (trace->total_reboots < UINT16_MAX) {
     trace->total_reboots++;
   }
+  // A session that survived long enough to look healthy ends any crash run, even if it ultimately
+  // ended in a fault -- one crash after a day of uptime is not a loop.
+  if (session_seconds >= AUDIO_COMPANION_HEALTHY_SESSION_SECONDS) {
+    trace->consecutive_fault_boots = 0;
+  }
+
   if (audio_companion_reboot_trace_is_error_reason(reason_code)) {
     if (trace->total_error_reboots < UINT16_MAX) {
       trace->total_error_reboots++;
+    }
+    if (trace->consecutive_fault_boots < UINT8_MAX) {
+      trace->consecutive_fault_boots++;
     }
     trace->last_fault = entry;
     trace->last_fault_session_seconds = session_seconds;
