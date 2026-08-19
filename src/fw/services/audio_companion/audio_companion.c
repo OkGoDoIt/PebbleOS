@@ -42,10 +42,23 @@
 
 #define DRAIN_PERIOD_MS (150)
 #define DRAIN_PUSH_THRESHOLD_FRAMES (8)
-//! Cap the BLE notifications sent in a single drain callback so the callback returns promptly
-//! (keeping the KernelBG watchdog fed) and yields the system task to other work even when a large
-//! post-reconnect backlog needs to flush. Any remainder is drained on a freshly posted callback.
-#define DRAIN_MAX_BATCHES_PER_CALL (16)
+//! Cap the BLE notifications sent in a single drain callback, and let the repeating drain timer
+//! pace the next slice rather than re-posting immediately.
+//!
+//! This is transport backpressure, not just callback length. Notifications reach the BT
+//! controller through a 512-byte SiFli IPC ring, and ipc_queue_write() busy-waits -- with no
+//! yield -- for as long as its timeout while that ring is full. That spin runs on NimbleHost at
+//! priority 3; KernelBG runs at priority 1, so a sustained spin starves KernelBG completely.
+//! KernelBG's watchdog bit is fed only by system_task_idle_timer_callback(), which (correctly)
+//! declines to feed while callbacks are queued, so >6.5 s of that is a watchdog reset that gets
+//! recorded against KernelBG even though KernelBG was merely a starved bystander.
+//!
+//! Draining a backlog as fast as NimBLE accepts mbufs keeps that ring permanently full, which is
+//! exactly the sustained spin. So bound each burst to what the link can absorb inside one drain
+//! period: ~4 x (MTU-3) is roughly 6 KB/s, still several times the ~2 KB/s the 16 kHz/20 ms Speex
+//! stream produces, so a backlog catches up at a few times real time while leaving the transport
+//! idle between slices.
+#define DRAIN_MAX_BATCHES_PER_CALL (4)
 //! Stop capturing if a streaming session goes this long with no control message from the
 //! receiver. The phone checkpoints every ~0.5-2 s while receiving, so a long silence means the
 //! app is gone even when the watch never saw a BLE disconnect (e.g. the receiver shares the link
@@ -878,35 +891,31 @@ static void prv_check_receiver_liveness_locked(void) {
   prv_reevaluate_locked();  // session no longer ready -> AuthorizedIdle, drain timer stops
 }
 
-//! Returns true if the spool still has frames to send but the per-callback batch cap was hit, so
-//! the caller should re-post a drain to continue (instead of holding the system task in one long
-//! callback). A return of false means there is nothing left to do or we stopped on BLE
-//! backpressure (the repeating drain timer retries that case).
-static bool prv_drain_locked(void) {
+//! Sends at most DRAIN_MAX_BATCHES_PER_CALL notifications and returns. Anything still queued --
+//! because the batch cap was hit or because we stopped on BLE backpressure -- is picked up by the
+//! repeating drain timer, which is what paces us against the transport.
+static void prv_drain_locked(void) {
   prv_check_receiver_liveness_locked();
   audio_companion_spool_apply_pressure_policy();
   if (!prv_session_ready_locked() || !s_stream_active) {
-    return false;
+    return;
   }
   if (s_need_stream_start) {
     prv_send_stream_start_locked();
     if (s_need_stream_start) {
-      return false;  // backpressure; retry on next drain
+      return;  // backpressure; retry on next drain
     }
   }
   if (!prv_send_pending_gap_locked()) {
-    return false;
+    return;
   }
-  bool more_pending = false;
   uint32_t batches_sent = 0;
   while (audio_companion_spool_frames_pending_send() > 0) {
     if (!prv_send_data_batch_locked()) {
       break;  // BLE backpressure: the drain timer will retry shortly
     }
     if (++batches_sent >= DRAIN_MAX_BATCHES_PER_CALL) {
-      // Yield with work still queued; continue on a fresh callback so the watchdog is fed.
-      more_pending = audio_companion_spool_frames_pending_send() > 0;
-      break;
+      break;  // Burst cap: the drain timer continues within DRAIN_PERIOD_MS.
     }
   }
   if (s_catch_up_burst && audio_companion_spool_frames_pending_send() == 0) {
@@ -920,7 +929,6 @@ static bool prv_drain_locked(void) {
       !audio_companion_spool_has_pending_gap()) {
     prv_stop_drain_timer_locked();
   }
-  return more_pending;
 }
 
 static void prv_drain_system_task_cb(void *data) {
@@ -929,12 +937,12 @@ static void prv_drain_system_task_cb(void *data) {
   mutex_unlock(s_drain_post_lock);
 
   mutex_lock(s_lock);
-  const bool more_pending = prv_drain_locked();
+  prv_drain_locked();
   mutex_unlock(s_lock);
   prv_apply_pending();  // the liveness check above can drop capture intent
-  if (more_pending) {
-    prv_post_drain_cb();
-  }
+  // Deliberately no re-post when frames remain: the repeating drain timer picks the backlog up
+  // within DRAIN_PERIOD_MS. Re-posting here made the batch cap meaningless -- KernelBG looped
+  // straight back into another burst -- which is what held the IPC ring full continuously.
 }
 
 //! Queue a drain on the system task, coalescing so at most one drain callback is ever outstanding.
