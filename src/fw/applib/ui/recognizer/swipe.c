@@ -8,22 +8,17 @@
 
 #include "pbl/drivers/rtc.h"
 #include "pbl/util/math.h"
+#include "syscall/syscall.h"
 
 #include <string.h>
 
-// Minimum travel (component-wise, on the major axis) from the touchdown point for a path to count
-// as a swipe. A shorter flick is treated as a tap or noise. Value from the reference PT2 touch-nav
-// gesture spec.
-#define SWIPE_MIN_LENGTH_PX (30)
+// SWIPE_MIN_LENGTH_PX and SWIPE_MAX_DURATION_MS live in swipe.h: synthetic gesture generators size
+// their paths from the same limits this recognizer enforces.
 
 // Once the major-axis travel exceeds this, the path is committed enough that we start enforcing
 // straightness: any further wandering on the minor axis fails the swipe early. The drag threshold
 // value comes from the reference PT2 touch-nav gesture spec.
 #define SWIPE_STRAIGHTNESS_MIN_PX (10)
-
-// Maximum touchdown-to-liftoff duration for a swipe; a slower drag is a pan, not a flick. Value
-// from the reference PT2 touch-nav gesture spec.
-#define SWIPE_MAX_DURATION_MS (300)
 
 // Number of most-recent position samples retained for the velocity estimate.
 #define SWIPE_VELOCITY_SAMPLE_COUNT (3)
@@ -71,7 +66,7 @@ static uint32_t prv_ticks_to_ms(RtcTicks ticks) {
 }
 
 static uint32_t prv_touch_duration_ms(const SwipeRecognizerData *data) {
-  return prv_ticks_to_ms(rtc_get_ticks() - data->state.touch_down_ticks);
+  return prv_ticks_to_ms(sys_get_ticks() - data->state.touch_down_ticks);
 }
 
 static void prv_record_sample(SwipeRecognizerData *data, GPoint point, RtcTicks ticks) {
@@ -132,7 +127,7 @@ static void prv_handle_touch_event(Recognizer *recognizer, const TouchEvent *tou
   switch (touch_event->type) {
     case TouchEvent_Touchdown: {
       const GPoint point = GPoint(touch_event->x, touch_event->y);
-      const RtcTicks now = rtc_get_ticks();
+      const RtcTicks now = sys_get_ticks();
       data->state.touch_down_point = point;
       data->state.last_point = point;
       data->state.touch_down_ticks = now;
@@ -145,7 +140,7 @@ static void prv_handle_touch_event(Recognizer *recognizer, const TouchEvent *tou
 
     case TouchEvent_PositionUpdate: {
       const GPoint point = GPoint(touch_event->x, touch_event->y);
-      prv_record_sample(data, point, rtc_get_ticks());
+      prv_record_sample(data, point, sys_get_ticks());
       data->state.last_point = point;
 
       const GPoint total_delta = gpoint_sub(point, data->state.touch_down_point);

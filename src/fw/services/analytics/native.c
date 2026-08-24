@@ -377,7 +377,7 @@ void pbl_analytics__native_heartbeat(void) {
     Uuid system_uuid = UUID_SYSTEM;
 
     s_dls_session = dls_create(DlsSystemTagAnalyticsNativeHeartbeat, DATA_LOGGING_BYTE_ARRAY,
-                               NATIVE_HEARTBEAT_TRANSMIT_SIZE, false, false, &system_uuid);
+                               NATIVE_HEARTBEAT_TRANSMIT_SIZE, true, false, &system_uuid);
     PBL_ASSERTN(s_dls_session != NULL);
   }
 

@@ -49,6 +49,9 @@ static void do_handle(PebbleEvent *e, void *context) {
     case PebbleMediaEventTypeServerDisconnected:
       state->handler(MusicServiceEventServerDisconnected);
       break;
+    case PebbleMediaEventTypeAlbumArtUpdated:
+      // Album art is not part of the MusicService SDK surface.
+      break;
   }
 }
 
