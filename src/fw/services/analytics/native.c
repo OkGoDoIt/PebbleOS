@@ -376,8 +376,11 @@ void pbl_analytics__native_heartbeat(void) {
   if (s_dls_session == NULL) {
     Uuid system_uuid = UUID_SYSTEM;
 
+    /* This session must stay unbuffered: buffered DLS sessions cap items at
+     * DLS_SESSION_MAX_BUFFERED_ITEM_SIZE (300), far below the heartbeat record, so a buffered
+     * dls_create here returns NULL and the assert below reboots the watch every heartbeat. */
     s_dls_session = dls_create(DlsSystemTagAnalyticsNativeHeartbeat, DATA_LOGGING_BYTE_ARRAY,
-                               NATIVE_HEARTBEAT_TRANSMIT_SIZE, true, false, &system_uuid);
+                               NATIVE_HEARTBEAT_TRANSMIT_SIZE, false, false, &system_uuid);
     PBL_ASSERTN(s_dls_session != NULL);
   }
 

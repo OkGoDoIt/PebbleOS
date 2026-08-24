@@ -118,3 +118,42 @@ def parse_native_wire_constants(path):
             value = raw[value]
         resolved[name] = int(value, 0)
     return resolved
+
+
+_DLS_CREATE_RE = re.compile(
+    r"dls_create\s*\(\s*DlsSystemTagAnalyticsNativeHeartbeat\s*,(?P<args>.*?)\)\s*;",
+    re.DOTALL,
+)
+
+
+def parse_heartbeat_dls_create_buffered(path):
+    """Return the `buffered` argument of native.c's heartbeat dls_create call as a bool."""
+    with open(path, encoding="utf-8") as f:
+        match = _DLS_CREATE_RE.search(f.read())
+    if not match:
+        raise ValueError("no dls_create(DlsSystemTagAnalyticsNativeHeartbeat, ...) call found")
+    # Args after the tag: item_type, item_size, buffered, resume, uuid.
+    args = [a.strip() for a in match.group("args").split(",")]
+    if len(args) != 5 or args[2] not in ("true", "false"):
+        raise ValueError(f"unexpected dls_create argument shape: {args}")
+    return args[2] == "true"
+
+
+def parse_dls_session_size_caps(dls_private_h_path, comm_protocol_h_path):
+    """Return (max_buffered_item_size, max_unbuffered_item_size) from the DLS headers."""
+    with open(dls_private_h_path, encoding="utf-8") as f:
+        dls_src = f.read()
+    match = re.search(r"DLS_SESSION_MAX_BUFFERED_ITEM_SIZE\s*=\s*(\d+)", dls_src)
+    if not match:
+        raise ValueError("DLS_SESSION_MAX_BUFFERED_ITEM_SIZE not found")
+    max_buffered = int(match.group(1))
+
+    with open(comm_protocol_h_path, encoding="utf-8") as f:
+        comm_src = f.read()
+    match = re.search(r"#define\s+COMM_MAX_OUTBOUND_PAYLOAD_SIZE\s+(\d+)", comm_src)
+    if not match:
+        raise ValueError("COMM_MAX_OUTBOUND_PAYLOAD_SIZE not found")
+    # DLS_ENDPOINT_MAX_PAYLOAD = COMM_MAX_OUTBOUND_PAYLOAD_SIZE - sizeof(DataLoggingSendDataMessage)
+    # (command u8 + session_id u8 + items_left u32 + crc32 u32 = 10 bytes of header).
+    max_unbuffered = int(match.group(1)) - 10
+    return max_buffered, max_unbuffered

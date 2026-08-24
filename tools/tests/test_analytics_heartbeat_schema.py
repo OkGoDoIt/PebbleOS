@@ -12,10 +12,16 @@ sys.path.insert(0, root_dir)
 
 from analytics_heartbeat_schema import field_offsets, native_heartbeat_layout
 from analytics_heartbeat_schema import parse_analytics_def, parse_native_wire_constants, wire_size
+from analytics_heartbeat_schema import parse_dls_session_size_caps
+from analytics_heartbeat_schema import parse_heartbeat_dls_create_buffered
 
 
 ANALYTICS_DEF = os.path.join(repo_dir, "include", "pbl", "services", "analytics", "analytics.def")
 NATIVE_C = os.path.join(repo_dir, "src", "fw", "services", "analytics", "native.c")
+DLS_PRIVATE_H = os.path.join(repo_dir, "include", "pbl", "services", "data_logging",
+                             "dls_private.h")
+COMM_PROTOCOL_H = os.path.join(repo_dir, "include", "pbl", "services", "comm_session",
+                               "protocol.h")
 
 # Wire size the official backend decodes for each heartbeat record version. The version byte at
 # offset 0 is its only layout selector, so these pairs are a compatibility contract, not a
@@ -90,6 +96,29 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
             "half-written metric",
         )
         self.assertEqual(self.offsets["metric_touch_gated_touchdown_count"], transmitted)
+
+    def test_session_type_can_carry_the_record(self):
+        """The heartbeat item must fit the caps of the DLS session type native.c requests.
+
+        Buffered sessions cap items at DLS_SESSION_MAX_BUFFERED_ITEM_SIZE (300 bytes) -- far
+        below the heartbeat record -- so dls_create returns NULL and the PBL_ASSERTN right after
+        it reboots the watch on every heartbeat. Upstream's v4.35 `buffered=true` change
+        (bebc13477) trips exactly this and must not be taken on a merge. Unbuffered sessions cap
+        items at the comm outbound payload limit instead.
+        """
+        buffered = parse_heartbeat_dls_create_buffered(NATIVE_C)
+        max_buffered, max_unbuffered = parse_dls_session_size_caps(DLS_PRIVATE_H, COMM_PROTOCOL_H)
+        constants = parse_native_wire_constants(NATIVE_C)
+        transmitted = constants["NATIVE_HEARTBEAT_TRANSMIT_SIZE"]
+
+        cap = max_buffered if buffered else max_unbuffered
+        self.assertLessEqual(
+            transmitted,
+            cap,
+            f"heartbeat dls_create({'buffered' if buffered else 'unbuffered'}) caps items at "
+            f"{cap} bytes but the record is {transmitted}: dls_create returns NULL and the "
+            f"assert after it reboots the watch every heartbeat",
+        )
 
     def test_emits_released_syscall_stack_metrics(self):
         metric_names = {metric.name for metric in self.metrics}
