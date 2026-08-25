@@ -230,6 +230,7 @@ set(sources
   moddable/build/devices/pebble/modules/wakeup/wakeup.c
   moddable/build/devices/pebble/modules/dictation/dictation.c
   moddable/build/devices/pebble/modules/health/pebble-health.c
+  moddable/build/devices/pebble/modules/peek/pebble-peek.c
   moddable/modules/io/files/pebble/files-pebble.c
   ${moddable_host_dir}/mc.xs.c
   ${moddable_host_dir}/mc.resources.c
