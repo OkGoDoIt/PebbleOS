@@ -7,6 +7,7 @@
 #include "applib/ui/animation.h"
 #include "applib/ui/window.h"
 #include "kernel/events.h"
+#include "pbl/services/peek_widgets.h"
 #include "pbl/services/timeline/timeline.h"
 
 #define TIMELINE_PEEK_HEIGHT \
@@ -105,6 +106,26 @@ void timeline_peek_pop(void);
 
 //! Toggles whether TimelinePeek is enabled. Used by the qemu serial protocol for the SDK.
 void timeline_peek_set_enabled(bool enabled);
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+//! Whether the user has Timeline Quick View enabled. The Quick View widget arbiter consults
+//! this so a disabled timeline peek does not shadow lower-priority widgets.
+bool timeline_peek_is_enabled(void);
+
+//! Shows widget content from a non-timeline source. The item is copied, so the caller keeps
+//! ownership; it is typically a synthetic generic-layout item built by the widget arbiter.
+//! @param source The widget source the content belongs to; must not be Timeline or None.
+//! @param item The content to display. Must not be NULL; hide by setting a NULL timeline item.
+//! @param animated Whether the peek animates into its new state
+void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item, bool animated);
+
+//! The source of the content currently on screen.
+PeekWidgetSource timeline_peek_get_source(void);
+
+//! Records timeline state carried by a peek event that the arbiter consumed. Keeps
+//! timeline_peek_is_future_empty() accurate while a widget owns the surface.
+void timeline_peek_note_event_flags(bool is_future_empty);
+#endif
 
 //! Handles timeline peek events
 void timeline_peek_handle_peek_event(PebbleTimelinePeekEvent *event);

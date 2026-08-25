@@ -7,12 +7,14 @@
 
 #include "applib/ui/animation.h"
 #include "applib/ui/window.h"
+#include "pbl/services/peek_widgets.h"
 #include "pbl/services/timeline/timeline_layout.h"
 
 typedef struct PeekLayout {
   TimelineLayoutInfo info;
   TimelineLayout *timeline_layout;
   TimelineItem *item;
+  PeekWidgetSource source; //!< The widget source this content belongs to.
 } PeekLayout;
 
 typedef struct TimelinePeek {
@@ -20,6 +22,9 @@ typedef struct TimelinePeek {
   Layer layout_layer;
   PeekLayout *peek_layout;
   Animation *animation; //!< Currently running animation
+  //! The source of the most recently set content (the current content once any swap animation
+  //! completes). PeekLayout.source tracks what is actually on screen.
+  PeekWidgetSource source;
   bool exists; //!< Whether there exists an item to show in peek.
   bool started; //!< Whether the item has started.
   bool enabled; //!< Whether to persistently show or hide the peek.

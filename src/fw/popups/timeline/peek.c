@@ -21,6 +21,14 @@
 
 #include <pebbleos/cron.h>
 
+#if defined(CONFIG_SERVICE_PEEK_WIDGETS) && defined(CONFIG_SERVICE_MUSIC)
+#define PEEK_MUSIC_WIDGET_SUPPORTED 1
+#include "pbl/services/music.h"
+#include "pbl/services/regular_timer.h"
+#else
+#define PEEK_MUSIC_WIDGET_SUPPORTED 0
+#endif
+
 #define TIMELINE_PEEK_FRAME_HIDDEN GRect(0, DISP_ROWS, DISP_COLS, TIMELINE_PEEK_HEIGHT)
 #define TIMELINE_PEEK_OUTER_BORDER_WIDTH PBL_IF_RECT_ELSE(2, 1)
 #define TIMELINE_PEEK_MULTI_BORDER_WIDTH (1)
@@ -90,6 +98,31 @@ void timeline_peek_draw_background(GContext *ctx, const GRect *frame,
   prv_draw_background(ctx, frame, num_concurrent);
 }
 
+#if PEEK_MUSIC_WIDGET_SUPPORTED
+//! Draws a slim track-progress bar along the bottom of the music widget's content area.
+static void prv_draw_music_progress(GContext *ctx, const GRect *frame) {
+  if (!music_is_progress_reporting_supported()) {
+    return;
+  }
+  uint32_t pos_ms = 0;
+  uint32_t length_ms = 0;
+  music_get_pos(&pos_ms, &length_ms);
+  if (length_ms == 0) {
+    return;
+  }
+  const int16_t width = DISP_COLS - TIMELINE_PEEK_ICON_BOX_WIDTH - (2 * TIMELINE_PEEK_MARGIN);
+  GRect bar = GRect(frame->origin.x + TIMELINE_PEEK_MARGIN,
+                    frame->origin.y + frame->size.h - 5, width, 2);
+#if PBL_COLOR
+  graphics_context_set_fill_color(ctx, GColorLightGray);
+  graphics_fill_rect(ctx, &bar);
+#endif
+  bar.size.w = (int16_t)(((uint64_t)width * pos_ms) / length_ms);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, &bar);
+}
+#endif
+
 static void prv_timeline_peek_update_proc(Layer *layer, GContext *ctx) {
   TimelinePeek *peek = (TimelinePeek *)layer;
   const unsigned int num_concurrent = peek->peek_layout ?
@@ -98,6 +131,11 @@ static void prv_timeline_peek_update_proc(Layer *layer, GContext *ctx) {
     prv_draw_background(ctx, &TIMELINE_PEEK_FRAME_VISIBLE, num_concurrent - 1);
   }
   prv_draw_background(ctx, &peek->layout_layer.frame, num_concurrent);
+#if PEEK_MUSIC_WIDGET_SUPPORTED
+  if (peek->peek_layout && (peek->peek_layout->source == PeekWidgetSource_Music)) {
+    prv_draw_music_progress(ctx, &peek->layout_layer.frame);
+  }
+#endif
 }
 
 static void prv_redraw(void *PBL_UNUSED data) {
@@ -118,6 +156,35 @@ static CronJob s_timeline_peek_job = {
   .cb = prv_cron_callback,
 };
 
+#if PEEK_MUSIC_WIDGET_SUPPORTED
+static void prv_music_refresh_timer_cb(void *data) {
+  launcher_task_add_callback(prv_redraw, NULL);
+}
+
+static RegularTimerInfo s_music_refresh_timer = {
+  .cb = prv_music_refresh_timer_cb,
+};
+static bool s_music_refresh_timer_active;
+
+//! Keeps a 1 Hz redraw running while the music widget is on screen so its progress bar
+//! tracks the extrapolated track position.
+static void prv_update_music_refresh_timer(void) {
+  TimelinePeek *peek = &s_peek;
+  const bool active = (peek->visible && (peek->source == PeekWidgetSource_Music));
+  if (active == s_music_refresh_timer_active) {
+    return;
+  }
+  s_music_refresh_timer_active = active;
+  if (active) {
+    regular_timer_add_seconds_callback(&s_music_refresh_timer);
+  } else {
+    regular_timer_remove_callback(&s_music_refresh_timer);
+  }
+}
+#else
+static void prv_update_music_refresh_timer(void) {}
+#endif
+
 static void prv_destroy_layout(void) {
   TimelinePeek *peek = &s_peek;
   if (!peek->peek_layout) {
@@ -130,10 +197,12 @@ static void prv_destroy_layout(void) {
   peek->peek_layout = NULL;
 }
 
-static PeekLayout *prv_create_layout(TimelineItem *item, unsigned int num_concurrent) {
+static PeekLayout *prv_create_layout(TimelineItem *item, unsigned int num_concurrent,
+                                     PeekWidgetSource source) {
   PeekLayout *layout = task_zalloc_check(sizeof(PeekLayout));
   item = timeline_item_copy(item);
   layout->item = item;
+  layout->source = source;
   timeline_layout_init_info(&layout->info, item, time_util_get_midnight_of(rtc_get_time()));
   layout->info.num_concurrent = num_concurrent;
   const LayoutLayerConfig config = {
@@ -438,6 +507,7 @@ static void prv_set_visible(bool visible, bool animated) {
     cron_job_unschedule(&s_timeline_peek_job);
   }
   prv_transition_frame(peek, visible, animated);
+  prv_update_music_refresh_timer();
 }
 
 static bool prv_can_animate(void) {
@@ -451,12 +521,20 @@ void timeline_peek_set_visible(bool visible, bool animated) {
     visible = false;
   }
 #endif
-  prv_set_visible((app_manager_is_watchface_running() && peek->enabled && visible),
+  bool enabled = peek->enabled;
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  // The Timeline Quick View toggle only governs timeline content; the other widget sources
+  // carry their own prefs, enforced by the widget arbiter.
+  if ((peek->source != PeekWidgetSource_Timeline) && (peek->source != PeekWidgetSource_None)) {
+    enabled = true;
+  }
+#endif
+  prv_set_visible((app_manager_is_watchface_running() && enabled && visible),
                   (prv_can_animate() && animated));
 }
 
-void timeline_peek_set_item(TimelineItem *item, bool started, unsigned int num_concurrent,
-                            bool first, bool animated) {
+static void prv_set_content(PeekWidgetSource source, TimelineItem *item, bool started,
+                            unsigned int num_concurrent, bool first, bool animated) {
   TimelinePeek *peek = &s_peek;
   animated = (prv_can_animate() && animated);
   if (!animated) {
@@ -464,12 +542,13 @@ void timeline_peek_set_item(TimelineItem *item, bool started, unsigned int num_c
     prv_destroy_layout();
   }
 
+  peek->source = item ? source : PeekWidgetSource_None;
   peek->exists = (item != NULL);
   peek->started = started;
   peek->first = first;
   timeline_peek_set_visible(peek->exists, animated);
 
-  PeekLayout *layout = item ? prv_create_layout(item, num_concurrent) : NULL;
+  PeekLayout *layout = item ? prv_create_layout(item, num_concurrent, source) : NULL;
   if (animated && !peek->animation && peek->visible) {
     // Swap the layout in an animation
     prv_transition_concurrent(peek, layout);
@@ -477,13 +556,47 @@ void timeline_peek_set_item(TimelineItem *item, bool started, unsigned int num_c
     // Immediately set the new layout
     prv_set_layout(layout);
   }
+  prv_update_music_refresh_timer();
 }
+
+void timeline_peek_set_item(TimelineItem *item, bool started, unsigned int num_concurrent,
+                            bool first, bool animated) {
+  prv_set_content(PeekWidgetSource_Timeline, item, started, num_concurrent, first, animated);
+}
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item, bool animated) {
+  PBL_ASSERTN(item && (source != PeekWidgetSource_Timeline) &&
+              (source != PeekWidgetSource_None));
+  prv_set_content(source, item, true /* started */, 0 /* num_concurrent */, false /* first */,
+                  animated);
+}
+
+PeekWidgetSource timeline_peek_get_source(void) {
+  TimelinePeek *peek = &s_peek;
+  return peek->peek_layout ? peek->peek_layout->source : PeekWidgetSource_None;
+}
+
+bool timeline_peek_is_enabled(void) {
+  return s_peek.enabled;
+}
+
+void timeline_peek_note_event_flags(bool is_future_empty) {
+  s_peek.future_empty = is_future_empty;
+}
+#endif
 
 void timeline_peek_dismiss(void) {
   TimelinePeek *peek = &s_peek;
   if (!peek->peek_layout) {
     return;
   }
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  if (peek->peek_layout->source != PeekWidgetSource_Timeline) {
+    // Widget dismissal is routed through peek_widgets_handle_dismiss()
+    return;
+  }
+#endif
   TimelineItem *item = peek->peek_layout->item;
   const status_t rv = pin_db_set_status_bits(&item->header.id, TimelineItemStatusDismissed);
   if (rv == S_SUCCESS) {
@@ -513,8 +626,12 @@ int16_t timeline_peek_get_obstruction_origin_y(void) {
 
 void timeline_peek_get_item_id(TimelineItemId *item_id_out) {
   TimelinePeek *peek = &s_peek;
-  *item_id_out = (peek->enabled && peek->visible && peek->exists && peek->peek_layout)
-      ? peek->peek_layout->item->header.id : UUID_INVALID;
+  bool valid = (peek->enabled && peek->visible && peek->exists && peek->peek_layout);
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  // Only timeline content carries a pin id; widget items are synthetic.
+  valid = valid && (peek->peek_layout->source == PeekWidgetSource_Timeline);
+#endif
+  *item_id_out = valid ? peek->peek_layout->item->header.id : UUID_INVALID;
 }
 
 bool timeline_peek_is_first_event(void) {
@@ -540,7 +657,13 @@ void timeline_peek_pop(void) {
 void timeline_peek_set_enabled(bool enabled) {
   TimelinePeek *peek = &s_peek;
   peek->enabled = enabled;
+#if defined(CONFIG_SERVICE_PEEK_WIDGETS) && !defined(CONFIG_SHELL_SDK)
+  // Let the widget arbiter re-elect: a lower-priority widget may take over the surface when
+  // the timeline peek is disabled, and timeline content returns when it is re-enabled.
+  peek_widgets_handle_prefs_changed();
+#else
   timeline_peek_set_visible(enabled, true /* animated */);
+#endif
 }
 
 void timeline_peek_handle_peek_event(PebbleTimelinePeekEvent *event) {
@@ -582,6 +705,11 @@ void timeline_peek_handle_peek_event(PebbleTimelinePeekEvent *event) {
 
 void timeline_peek_handle_process_start(void) {
   timeline_peek_set_visible(true, false /* animated */);
+#if defined(CONFIG_SERVICE_PEEK_WIDGETS) && !defined(CONFIG_SHELL_SDK)
+  if (app_manager_is_watchface_running()) {
+    peek_widgets_handle_watchface_started();
+  }
+#endif
 }
 
 void timeline_peek_handle_process_kill(void) {
