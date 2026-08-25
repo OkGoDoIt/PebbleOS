@@ -55,6 +55,7 @@ typedef struct PeekWidgetsTestState {
   // Prefs
   QuickViewMusicMode music_mode;
   uint16_t notif_seconds;
+  bool notif_muted;
   bool apps_enabled;
   QuickViewButtonMode button_mode;
   // Music service
@@ -141,6 +142,10 @@ QuickViewMusicMode quick_view_prefs_get_music_mode(void) {
 
 uint16_t quick_view_prefs_get_notif_seconds(void) {
   return s_test.notif_seconds;
+}
+
+bool quick_view_prefs_get_notif_muted_enabled(void) {
+  return s_test.notif_muted;
 }
 
 bool quick_view_prefs_get_apps_enabled(void) {
@@ -523,6 +528,31 @@ void test_peek_widgets__notification_respects_gates(void) {
   // Hidden during Quiet Time
   s_test.dnd_active = true;
   s_test.dnd_mode = DndNotificationModeHide;
+  prv_send_notification_added(&s_notif_uuid);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_show_when_muted(void) {
+  s_test.notif_muted = true;
+  s_test.notif_exists = true;
+
+  // Muted by the alerts mask: no popup would show, so the widget appears immediately
+  s_test.alerts_allow = false;
+  prv_send_notification_added(&s_notif_uuid);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+  cl_assert_equal_s(s_test.last_title, "Alice");
+  cl_assert(peek_widgets_handle_dismiss());
+
+  // Hidden during Quiet Time: same silent residue
+  s_test.alerts_allow = true;
+  s_test.dnd_active = true;
+  s_test.dnd_mode = DndNotificationModeHide;
+  prv_send_notification_added(&s_notif_uuid);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+  cl_assert(peek_widgets_handle_dismiss());
+
+  // The duration pref still disables the widget entirely
+  s_test.notif_seconds = 0;
   prv_send_notification_added(&s_notif_uuid);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
 }
