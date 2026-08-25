@@ -44,11 +44,15 @@ typedef enum PeekWidgetResult {
 #define PEEK_WIDGET_TITLE_MAX_LEN (32)
 #define PEEK_WIDGET_SUBTITLE_MAX_LEN (32)
 
+//! Use the app's own icon for the widget, the same convention app glances use.
+#define PEEK_WIDGET_APP_ICON ((uint32_t)0)
+
 //! Description of an app's Quick View widget. Strings are copied during
 //! \ref peek_widget_publish(), so they need not outlive the call.
 typedef struct PeekWidgetInfo {
   //! The icon shown in the widget's icon box: a \ref PublishedId from the app's
-  //! `publishedMedia`, or 0 for a generic icon. Tiny (25x25) icons fit best.
+  //! `publishedMedia`, or \ref PEEK_WIDGET_APP_ICON to use the app's own icon.
+  //! Tiny (25x25) icons fit best.
   uint32_t icon;
   //! The widget's title. Required.
   const char *title;

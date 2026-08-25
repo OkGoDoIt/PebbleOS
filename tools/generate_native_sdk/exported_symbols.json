@@ -452,6 +452,10 @@
                   "addedRevision": "110"
                 }, {
                   "type": "define",
+                  "name": "PEEK_WIDGET_APP_ICON",
+                  "addedRevision": "110"
+                }, {
+                  "type": "define",
                   "name": "PEEK_WIDGET_SUBTITLE_MAX_LEN",
                   "addedRevision": "110"
                 }, {
