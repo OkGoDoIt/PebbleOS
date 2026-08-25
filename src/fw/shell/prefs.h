@@ -216,6 +216,46 @@ void timeline_peek_prefs_set_unsupported_face_mode(TimelinePeekUnsupportedFaceMo
 TimelinePeekUnsupportedFaceMode timeline_peek_prefs_get_unsupported_face_mode(void);
 #endif
 
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+// Quick View widget prefs. Local-only: deliberately not synced through Settings BlobDB, so the
+// widget policies remain watch-side state with no official-app involvement.
+
+typedef enum QuickViewMusicMode {
+  QuickViewMusicMode_Disabled = 0,
+  //! Show the music widget whenever something is playing.
+  QuickViewMusicMode_WhilePlaying = 1,
+  //! Show the music widget for the first few seconds of each track.
+  QuickViewMusicMode_TrackStart = 2,
+  QuickViewMusicModeCount,
+} QuickViewMusicMode;
+
+typedef enum QuickViewButtonMode {
+  QuickViewButtonMode_Disabled = 0,
+  //! DOWN launches the widget's app while a widget is showing.
+  QuickViewButtonMode_Press = 1,
+  //! DOWN twice launches the widget's app; a single press keeps its normal action.
+  QuickViewButtonMode_DoublePress = 2,
+  //! Holding DOWN launches the widget's app; a single press keeps its normal action.
+  QuickViewButtonMode_Hold = 3,
+  QuickViewButtonModeCount,
+} QuickViewButtonMode;
+
+//! Sentinel notif-seconds value: the notification widget stays until dismissed.
+#define QUICK_VIEW_NOTIF_SECONDS_PERSISTENT ((uint16_t)0xFFFF)
+#define QUICK_VIEW_NOTIF_SECONDS_DEFAULT ((uint16_t)15)
+
+QuickViewMusicMode quick_view_prefs_get_music_mode(void);
+void quick_view_prefs_set_music_mode(QuickViewMusicMode mode);
+//! 0 disables the notification widget; QUICK_VIEW_NOTIF_SECONDS_PERSISTENT keeps it until
+//! dismissed; otherwise the widget shows for this many seconds once the watchface is visible.
+uint16_t quick_view_prefs_get_notif_seconds(void);
+void quick_view_prefs_set_notif_seconds(uint16_t seconds);
+bool quick_view_prefs_get_apps_enabled(void);
+void quick_view_prefs_set_apps_enabled(bool enabled);
+QuickViewButtonMode quick_view_prefs_get_button_mode(void);
+void quick_view_prefs_set_button_mode(QuickViewButtonMode mode);
+#endif
+
 bool shell_prefs_can_coredump_on_request(void);
 void shell_prefs_set_coredump_on_request(bool enabled);
 
