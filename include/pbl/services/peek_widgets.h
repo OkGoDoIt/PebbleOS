@@ -44,10 +44,13 @@ typedef struct PeekWidgetLaunch {
 //! withdrawn, their app is uninstalled, or the watch reboots.
 #define PEEK_WIDGET_APP_TIMEOUT_MAX_S (12 * 60 * 60)
 
+//! Icon value meaning "use the publishing app's own icon", matching the app glance convention.
+#define PEEK_WIDGET_APP_ICON_DEFAULT (0)
+
 //! An app-published widget. Strings are copied.
 typedef struct PeekWidgetAppPublish {
   Uuid owner;             //!< The publishing app's UUID
-  uint32_t icon;          //!< TimelineResourceId; 0 uses a generic fallback icon
+  uint32_t icon;          //!< The app's published media id; 0 uses the app's own icon
   const char *title;      //!< Required, truncated at PEEK_WIDGET_APP_TITLE_MAX_LEN
   const char *subtitle;   //!< Optional, truncated at PEEK_WIDGET_APP_SUBTITLE_MAX_LEN
   uint32_t launch_code;   //!< Returned by launch_get_args() on a widget launch

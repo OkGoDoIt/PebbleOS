@@ -476,7 +476,8 @@ static TimelineItem *prv_create_widget_item(const char *title, const char *subti
 
 void test_timeline_peek__widget_item_source_and_guards(void) {
   TimelineItem *item = prv_create_widget_item("Radio Song", "The Sample Band");
-  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, false /* animated */);
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, NULL /* icon_override */,
+                                false /* animated */);
   timeline_item_destroy(item);
 
   TimelinePeek *peek = timeline_peek_get_peek();
@@ -518,8 +519,33 @@ void test_timeline_peek__widget_visible_while_timeline_disabled(void) {
 
   // Widget content has its own prefs and shows regardless.
   TimelineItem *item = prv_create_widget_item("Radio Song", "The Sample Band");
-  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, false /* animated */);
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, NULL /* icon_override */,
+                                false /* animated */);
   timeline_item_destroy(item);
   cl_assert(peek->layout_layer.frame.origin.y < DISP_ROWS);
+}
+
+void test_timeline_peek__widget_icon_override_wins(void) {
+  TimelinePeek *peek = timeline_peek_get_peek();
+
+  // Without an override the item's own icon attribute is resolved as a timeline resource.
+  TimelineItem *item = prv_create_widget_item("Radio Song", "The Sample Band");
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, NULL /* icon_override */,
+                                false /* animated */);
+  const AppResourceInfo resolved = peek->peek_layout->timeline_layout->icon_res_info;
+  cl_assert(resolved.res_id != RESOURCE_ID_INVALID);
+
+  // An override names an already-resolved resource - an app's own icon lives in the app's
+  // bank and has no timeline resource id - and is used as-is.
+  const AppResourceInfo override = {
+    .res_app_num = 7,
+    .res_id = RESOURCE_ID_MENU_LAYER_GENERIC_WATCHAPP_ICON,
+  };
+  timeline_peek_set_widget_item(PeekWidgetSource_App, item, &override, false /* animated */);
+  timeline_item_destroy(item);
+
+  const AppResourceInfo used = peek->peek_layout->timeline_layout->icon_res_info;
+  cl_assert_equal_i(used.res_app_num, override.res_app_num);
+  cl_assert_equal_i(used.res_id, override.res_id);
 }
 #endif // CONFIG_SERVICE_PEEK_WIDGETS
