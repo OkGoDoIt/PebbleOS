@@ -158,3 +158,11 @@ pbl_clar_test(test_template_string
     src/fw/applib/template_string.c
   OVERRIDES dummy_board
 )
+
+pbl_clar_test(test_peek_widget
+  SOURCES
+    src/fw/applib/peek_widget.c
+    src/fw/syscall/services_syscalls.c
+  DEFINES CONFIG_SERVICE_PEEK_WIDGETS=1
+  OVERRIDES dummy_board
+)
