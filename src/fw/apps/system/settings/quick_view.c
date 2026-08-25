@@ -23,6 +23,7 @@ typedef struct SettingsQuickViewData {
 enum SettingsQuickViewItem {
   SettingsQuickViewMusic,
   SettingsQuickViewNotifications,
+  SettingsQuickViewNotifMuted,
   SettingsQuickViewAppWidgets,
   SettingsQuickViewButton,
   NumSettingsQuickViewItems
@@ -149,6 +150,11 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       subtitle = s_notif_labels[prv_notif_seconds_to_index(quick_view_prefs_get_notif_seconds())];
       break;
     }
+    case SettingsQuickViewNotifMuted: {
+      title = i18n_noop("Show When Muted");
+      subtitle = quick_view_prefs_get_notif_muted_enabled() ? i18n_noop("On") : i18n_noop("Off");
+      break;
+    }
     case SettingsQuickViewAppWidgets: {
       title = i18n_noop("App Widgets");
       subtitle = quick_view_prefs_get_apps_enabled() ? i18n_noop("On") : i18n_noop("Off");
@@ -176,6 +182,9 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       break;
     case SettingsQuickViewNotifications:
       prv_notif_menu_push(data);
+      break;
+    case SettingsQuickViewNotifMuted:
+      quick_view_prefs_set_notif_muted_enabled(!quick_view_prefs_get_notif_muted_enabled());
       break;
     case SettingsQuickViewAppWidgets:
       quick_view_prefs_set_apps_enabled(!quick_view_prefs_get_apps_enabled());
