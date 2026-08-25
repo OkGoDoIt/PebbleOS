@@ -6,12 +6,16 @@
 #include "apps/system_app_ids.h"
 #include "kernel/events.h"
 #include "popups/timeline/peek.h"
+#include "resource/resource_ids.auto.h"
 #include "resource/timeline_resource_ids.auto.h"
 #include "pbl/services/music.h"
 #include "pbl/services/notifications/alerts.h"
 #include "pbl/services/notifications/alerts_preferences.h"
 #include "pbl/services/timeline/attribute.h"
 #include "pbl/services/timeline/item.h"
+#include "pbl/services/timeline/notification_layout.h"
+#include "pbl/services/timeline/timeline_resources.h"
+#include "process_management/app_install_manager.h"
 #include "shell/prefs.h"
 
 #include "clar.h"
@@ -49,6 +53,10 @@ typedef struct PeekWidgetsTestState {
   char last_title[64];
   char last_subtitle[64];
   Uuid last_item_id;
+  Uuid last_parent_id;            //!< The item's app id, used to resolve published icons
+  uint32_t last_icon;             //!< AttributeIdIconTiny on the item, 0 when absent
+  bool last_has_icon_override;
+  AppResourceInfo last_icon_override;
   unsigned int num_content_calls;
   bool timeline_enabled;
   bool last_future_empty;
@@ -70,45 +78,67 @@ typedef struct PeekWidgetsTestState {
   bool dnd_active;
   DndNotificationMode dnd_mode;
   bool pin_exists;
+  bool notif_pin_exists;          //!< Whether the notification's pin resolves to an app
+  uint32_t app_icon_resource;     //!< The installed app's own icon resource
   Uuid installed_app_uuid;
   AppInstallId installed_app_id;
   // Notification storage
   bool notif_exists;
+  uint32_t notif_icon;            //!< The notification's own icon; 0 = it carries none
   Uuid stored_notif_id;
   // Watchface hook
   unsigned int num_button_state_calls;
 } PeekWidgetsTestState;
+
+// The Music app's identity and icon, as the real app registry would report them
+static const Uuid s_music_app_uuid = {
+  0x1f, 0x03, 0x29, 0x3d, 0x47, 0xaf, 0x4f, 0x28,
+  0xb9, 0x60, 0xf2, 0xb0, 0x2a, 0x6d, 0xd7, 0x57,
+};
+#define MUSIC_APP_ICON_RESOURCE (4242)
+#define SYSTEM_APP_ICON_BANK (0)
+#define APP_ICON_BANK (7)
+#define APP_OWN_ICON_RESOURCE (99)
 
 static PeekWidgetsTestState s_test;
 
 // Popup fakes (the real popup is not compiled into this test)
 ////////////////////////////////////////////////////////////////
 
-static void prv_record_content(PeekWidgetSource source, TimelineItem *item) {
+static void prv_record_content(PeekWidgetSource source, TimelineItem *item,
+                               const AppResourceInfo *icon_override) {
   s_test.last_source = source;
   s_test.num_content_calls++;
   s_test.last_title[0] = '\0';
   s_test.last_subtitle[0] = '\0';
   s_test.last_item_id = UUID_INVALID;
+  s_test.last_parent_id = UUID_INVALID;
+  s_test.last_icon = 0;
+  s_test.last_has_icon_override = (icon_override != NULL);
+  s_test.last_icon_override = icon_override ? *icon_override : (AppResourceInfo) {};
   if (item) {
     const char *title = attribute_get_string(&item->attr_list, AttributeIdTitle, "");
     const char *subtitle = attribute_get_string(&item->attr_list, AttributeIdSubtitle, "");
     strncpy(s_test.last_title, title, sizeof(s_test.last_title) - 1);
     strncpy(s_test.last_subtitle, subtitle, sizeof(s_test.last_subtitle) - 1);
     s_test.last_item_id = item->header.id;
+    s_test.last_parent_id = item->header.parent_id;
+    s_test.last_icon = attribute_get_uint32(&item->attr_list, AttributeIdIconTiny, 0);
   }
 }
 
 void timeline_peek_set_item(TimelineItem *item, bool started, unsigned int num_concurrent,
                             bool first, bool animated) {
-  prv_record_content(item ? PeekWidgetSource_Timeline : PeekWidgetSource_None, item);
+  prv_record_content(item ? PeekWidgetSource_Timeline : PeekWidgetSource_None, item,
+                     NULL /* icon_override */);
 }
 
-void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item, bool animated) {
+void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item,
+                                   const AppResourceInfo *icon_override, bool animated) {
   cl_assert(item != NULL);
   cl_assert(source != PeekWidgetSource_Timeline);
   cl_assert(source != PeekWidgetSource_None);
-  prv_record_content(source, item);
+  prv_record_content(source, item, icon_override);
 }
 
 bool timeline_peek_is_enabled(void) {
@@ -197,7 +227,55 @@ AppInstallId app_install_get_id_for_uuid(const Uuid *uuid) {
   if (uuid_equal(uuid, &s_test.installed_app_uuid)) {
     return s_test.installed_app_id;
   }
+  if (uuid_equal(uuid, &s_music_app_uuid)) {
+    return APP_ID_MUSIC;
+  }
   return INSTALL_ID_INVALID;
+}
+
+bool app_install_get_entry_for_install_id(AppInstallId install_id, AppInstallEntry *entry) {
+  if (install_id == s_test.installed_app_id) {
+    *entry = (AppInstallEntry) { .uuid = s_test.installed_app_uuid };
+    return true;
+  }
+  if (install_id == APP_ID_MUSIC) {
+    *entry = (AppInstallEntry) { .uuid = s_music_app_uuid };
+    return true;
+  }
+  return false;
+}
+
+uint32_t app_install_entry_get_icon_resource_id(const AppInstallEntry *entry) {
+  if (uuid_equal(&entry->uuid, &s_music_app_uuid)) {
+    return MUSIC_APP_ICON_RESOURCE;
+  }
+  return s_test.app_icon_resource;
+}
+
+ResAppNum app_install_get_app_icon_bank(const AppInstallEntry *entry) {
+  return uuid_equal(&entry->uuid, &s_music_app_uuid) ? SYSTEM_APP_ICON_BANK
+                                                     : APP_ICON_BANK;
+}
+
+status_t pin_db_read_item_header(TimelineItem *item_out, TimelineItemId *id) {
+  if (!s_test.notif_pin_exists) {
+    return E_DOES_NOT_EXIST;
+  }
+  *item_out = (TimelineItem) {
+    .header = {
+      .id = *id,
+      .parent_id = s_test.installed_app_uuid,
+    },
+  };
+  return S_SUCCESS;
+}
+
+bool timeline_resources_is_system(TimelineResourceId timeline_id) {
+  return (timeline_id & SYSTEM_RESOURCE_FLAG) != 0;
+}
+
+TimelineResourceId notification_layout_get_fallback_icon_id(TimelineItemType type) {
+  return NOTIF_FALLBACK_ICON;
 }
 
 static Attribute s_pin_title_attr = {
@@ -228,12 +306,14 @@ status_t pin_db_get(const TimelineItemId *id, TimelineItem *pin_out) {
 static Attribute s_notif_attrs[] = {
   { .id = AttributeIdTitle, .cstring = "Alice" },
   { .id = AttributeIdSubtitle, .cstring = "Lunch?" },
+  { .id = AttributeIdIconTiny, .uint32 = 0 },
 };
 
 bool notification_storage_get(const Uuid *id, TimelineItem *item_out) {
   if (!s_test.notif_exists || !uuid_equal(id, &s_test.stored_notif_id)) {
     return false;
   }
+  s_notif_attrs[2].uint32 = s_test.notif_icon;
   *item_out = (TimelineItem) {
     .header = {
       .id = *id,
@@ -242,7 +322,9 @@ bool notification_storage_get(const Uuid *id, TimelineItem *item_out) {
       .layout = LayoutIdNotification,
     },
     .attr_list = {
-      .num_attributes = ARRAY_LENGTH(s_notif_attrs),
+      // The icon attribute is only present when the notification actually carries one
+      .num_attributes = s_test.notif_icon ? ARRAY_LENGTH(s_notif_attrs)
+                                          : (ARRAY_LENGTH(s_notif_attrs) - 1),
       .attributes = s_notif_attrs,
     },
   };
@@ -316,7 +398,7 @@ static void prv_publish_app_widget(const Uuid *owner, const char *title, uint32_
                                    uint16_t timeout_s) {
   const PeekWidgetAppPublish publish = {
     .owner = *owner,
-    .icon = TIMELINE_RESOURCE_NOTIFICATION_FLAG,
+    .icon = PEEK_WIDGET_APP_ICON_DEFAULT,
     .title = title,
     .launch_code = launch_code,
     .timeout_s = timeout_s,
@@ -349,6 +431,7 @@ void test_peek_widgets__initialize(void) {
     .stored_notif_id = s_notif_uuid,
     .installed_app_uuid = s_app_uuid,
     .installed_app_id = 1234,
+    .app_icon_resource = APP_OWN_ICON_RESOURCE,
   };
   peek_widgets_init();
 }
@@ -630,6 +713,86 @@ void test_peek_widgets__app_widget_dismiss(void) {
   prv_publish_app_widget(&s_app_uuid, "Tea steeped", 0, 0);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_App);
   cl_assert_equal_s(s_test.last_title, "Tea steeped");
+}
+
+// Tests: icons
+////////////////////////////////////////////////////////////////
+
+void test_peek_widgets__notification_wears_its_own_icon(void) {
+  // A system icon (the sender's, e.g. the SMS glyph) is carried through untouched
+  s_test.notif_exists = true;
+  s_test.notif_icon = SYSTEM_RESOURCE_FLAG | 45;
+  prv_send_notification_added(&s_notif_uuid);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+  cl_assert_equal_i(s_test.last_icon, SYSTEM_RESOURCE_FLAG | 45);
+  cl_assert(!s_test.last_has_icon_override);
+}
+
+void test_peek_widgets__notification_without_icon_uses_notification_fallback(void) {
+  s_test.notif_exists = true;
+  s_test.notif_icon = 0;
+  prv_send_notification_added(&s_notif_uuid);
+  // The notification list's fallback, not the generic layout's timeline pin flag
+  cl_assert_equal_i(s_test.last_icon, NOTIF_FALLBACK_ICON);
+}
+
+void test_peek_widgets__notification_app_icon_resolves_through_the_pin(void) {
+  // An app-published icon id only means something against the publishing app's UUID, which
+  // lives on the pin the notification belongs to, not on the notification itself.
+  s_test.notif_exists = true;
+  s_test.notif_icon = 7;
+  s_test.notif_pin_exists = true;
+  prv_send_notification_added(&s_notif_uuid);
+  cl_assert_equal_i(s_test.last_icon, 7);
+  cl_assert(uuid_equal(&s_test.last_parent_id, &s_app_uuid));
+
+  // Without the pin the id cannot be resolved, so fall back rather than show a wrong icon
+  cl_assert(peek_widgets_handle_dismiss());
+  s_test.notif_pin_exists = false;
+  prv_send_notification_added(&s_notif_uuid);
+  cl_assert_equal_i(s_test.last_icon, NOTIF_FALLBACK_ICON);
+}
+
+void test_peek_widgets__music_wears_the_music_app_icon(void) {
+  prv_start_playing();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+  cl_assert(s_test.last_has_icon_override);
+  cl_assert_equal_i(s_test.last_icon_override.res_id, MUSIC_APP_ICON_RESOURCE);
+  cl_assert_equal_i(s_test.last_icon_override.res_app_num, SYSTEM_APP_ICON_BANK);
+}
+
+void test_peek_widgets__app_widget_uses_its_published_icon(void) {
+  const PeekWidgetAppPublish publish = {
+    .owner = s_app_uuid,
+    .icon = 3,
+    .title = "Kettle ready",
+  };
+  cl_assert(peek_widgets_publish_app_widget(&publish));
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_App);
+  // Resolved as published media against the publishing app
+  cl_assert_equal_i(s_test.last_icon, 3);
+  cl_assert(uuid_equal(&s_test.last_parent_id, &s_app_uuid));
+  cl_assert(!s_test.last_has_icon_override);
+}
+
+void test_peek_widgets__app_widget_defaults_to_the_app_icon(void) {
+  prv_publish_app_widget(&s_app_uuid, "Kettle ready", 0 /* launch_code */, 0 /* timeout_s */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_App);
+  cl_assert_equal_i(s_test.last_icon, 0);
+  cl_assert(s_test.last_has_icon_override);
+  cl_assert_equal_i(s_test.last_icon_override.res_id, APP_OWN_ICON_RESOURCE);
+  cl_assert_equal_i(s_test.last_icon_override.res_app_num, APP_ICON_BANK);
+}
+
+void test_peek_widgets__app_widget_without_an_app_icon_falls_back(void) {
+  s_test.app_icon_resource = 0;
+  prv_publish_app_widget(&s_app_uuid, "Kettle ready", 0 /* launch_code */, 0 /* timeout_s */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_App);
+  // The app has no icon of its own, so use the launcher's generic app icon rather than
+  // letting the layout fall back to a timeline pin icon.
+  cl_assert(s_test.last_has_icon_override);
+  cl_assert_equal_i(s_test.last_icon_override.res_id,
+                    RESOURCE_ID_MENU_LAYER_GENERIC_WATCHAPP_ICON);
 }
 
 // Tests: launch info

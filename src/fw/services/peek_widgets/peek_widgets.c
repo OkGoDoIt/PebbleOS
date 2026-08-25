@@ -10,6 +10,7 @@
 #include "popups/timeline/peek.h"
 #include "process_management/app_install_manager.h"
 #include "process_management/app_manager.h"
+#include "resource/resource_ids.auto.h"
 #include "resource/timeline_resource_ids.auto.h"
 #include "pbl/os/mutex.h"
 #include "pbl/services/music.h"
@@ -20,6 +21,8 @@
 #include "pbl/services/notifications/notification_storage.h"
 #include "pbl/services/timeline/attribute.h"
 #include "pbl/services/timeline/item.h"
+#include "pbl/services/timeline/notification_layout.h"
+#include "pbl/services/timeline/timeline_resources.h"
 #include "pbl/services/blob_db/pin_db.h"
 #include "shell/normal/watchface.h"
 #include "shell/prefs.h"
@@ -136,6 +139,37 @@ static bool prv_music_is_active(void) {
   return true;
 }
 
+//! Looks up an installed app's own icon, the way the launcher and app glances do. A widget
+//! that launches an app wears that app's icon unless it supplied one of its own.
+//! @return true if the app is installed and has an icon.
+static bool prv_get_app_icon(const Uuid *uuid, AppResourceInfo *icon_out) {
+  AppInstallEntry entry;
+  const AppInstallId install_id = app_install_get_id_for_uuid(uuid);
+  if ((install_id == INSTALL_ID_INVALID) ||
+      !app_install_get_entry_for_install_id(install_id, &entry)) {
+    return false;
+  }
+  const uint32_t res_id = app_install_entry_get_icon_resource_id(&entry);
+  if (res_id == RESOURCE_ID_INVALID) {
+    return false;
+  }
+  *icon_out = (AppResourceInfo) {
+    .res_app_num = app_install_get_app_icon_bank(&entry),
+    .res_id = res_id,
+  };
+  return true;
+}
+
+//! The icon of the app a widget launches, for widgets that have no icon of their own.
+static const AppResourceInfo *prv_get_launch_target_icon(AppInstallId app_id,
+                                                         AppResourceInfo *icon_out) {
+  AppInstallEntry entry;
+  if (!app_install_get_entry_for_install_id(app_id, &entry)) {
+    return NULL;
+  }
+  return prv_get_app_icon(&entry.uuid, icon_out) ? icon_out : NULL;
+}
+
 static void prv_show_music(bool animated) {
   char title[MUSIC_BUFFER_LENGTH];
   char artist[MUSIC_BUFFER_LENGTH];
@@ -147,7 +181,6 @@ static void prv_show_music(bool animated) {
   if (artist[0] != '\0') {
     attribute_list_add_cstring(&attr_list, AttributeIdSubtitle, artist);
   }
-  attribute_list_add_resource_id(&attr_list, AttributeIdIconTiny, TIMELINE_RESOURCE_MUSIC_EVENT);
 
   TimelineItem *item = timeline_item_create_with_attributes(
       rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
@@ -157,7 +190,10 @@ static void prv_show_music(bool animated) {
     return;
   }
   item->header.id = s_music_widget_item_id;
-  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, animated);
+  // Wear the Music app's own icon rather than a timeline pin icon
+  AppResourceInfo icon;
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item,
+                                prv_get_launch_target_icon(APP_ID_MUSIC, &icon), animated);
   timeline_item_destroy(item);
 }
 
@@ -226,11 +262,27 @@ static bool prv_show_notification(bool animated) {
   const char *body = attribute_get_string(&notif.attr_list, AttributeIdBody, NULL);
   const char *primary = title ?: subtitle ?: body;
   const char *secondary = title ? (subtitle ?: body) : (subtitle ? body : NULL);
-  const uint32_t icon = attribute_get_uint32(&notif.attr_list, AttributeIdIconTiny,
-                                             TIMELINE_RESOURCE_NOTIFICATION_GENERIC);
   if (!primary) {
     timeline_item_free_allocated_buffer(&notif);
     return false;
+  }
+
+  // Show the sender's icon, exactly as the notification list does: the icon id lives in
+  // AttributeIdIconTiny, and an app-published one resolves against the publishing app's UUID,
+  // which is one hop away through the pin the notification belongs to.
+  const TimelineResourceId fallback_icon =
+      notification_layout_get_fallback_icon_id(notif.header.type);
+  TimelineResourceId icon = attribute_get_uint32(&notif.attr_list, AttributeIdIconTiny,
+                                                 fallback_icon);
+  Uuid icon_app_id = UUID_INVALID;
+  if (!timeline_resources_is_system(icon)) {
+    TimelineItem pin;
+    if (pin_db_read_item_header(&pin, &notif.header.parent_id) == S_SUCCESS) {
+      icon_app_id = pin.header.parent_id;
+    } else {
+      // The publishing app is unknown, so the id cannot be resolved
+      icon = fallback_icon;
+    }
   }
 
   AttributeList attr_list = {};
@@ -247,8 +299,9 @@ static bool prv_show_notification(bool animated) {
   const bool shown = (item != NULL);
   if (item) {
     item->header.id = s_state.notif_id;
-    item->header.parent_id = notif.header.parent_id;
-    timeline_peek_set_widget_item(PeekWidgetSource_Notification, item, animated);
+    item->header.parent_id = icon_app_id;
+    timeline_peek_set_widget_item(PeekWidgetSource_Notification, item, NULL /* icon_override */,
+                                  animated);
     timeline_item_destroy(item);
   }
   timeline_item_free_allocated_buffer(&notif);
@@ -426,8 +479,10 @@ static bool prv_show_app_widget(bool animated) {
   if (copy.subtitle[0] != '\0') {
     attribute_list_add_cstring(&attr_list, AttributeIdSubtitle, copy.subtitle);
   }
-  attribute_list_add_resource_id(&attr_list, AttributeIdIconTiny,
-                                 copy.icon ?: TIMELINE_RESOURCE_NOTIFICATION_FLAG);
+  if (copy.icon != PEEK_WIDGET_APP_ICON_DEFAULT) {
+    // A published media id, resolved against the owning app below
+    attribute_list_add_resource_id(&attr_list, AttributeIdIconTiny, copy.icon);
+  }
 
   TimelineItem *item = timeline_item_create_with_attributes(
       rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
@@ -438,7 +493,18 @@ static bool prv_show_app_widget(bool animated) {
   }
   item->header.id = copy.owner;
   item->header.parent_id = copy.owner;
-  timeline_peek_set_widget_item(PeekWidgetSource_App, item, animated);
+  // No published icon: wear the app's own icon like an app glance does, or the launcher's
+  // generic app icon. Either beats a timeline pin icon, which an app widget is not.
+  AppResourceInfo icon = {
+    .res_app_num = SYSTEM_APP,
+    .res_id = RESOURCE_ID_MENU_LAYER_GENERIC_WATCHAPP_ICON,
+  };
+  const AppResourceInfo *icon_override = NULL;
+  if (copy.icon == PEEK_WIDGET_APP_ICON_DEFAULT) {
+    prv_get_app_icon(&copy.owner, &icon);
+    icon_override = &icon;
+  }
+  timeline_peek_set_widget_item(PeekWidgetSource_App, item, icon_override, animated);
   timeline_item_destroy(item);
   return true;
 }
