@@ -1,0 +1,20 @@
+# SPDX-Copyright-Text: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+from tools.waf.pebble_test import clar
+
+clar(ctx,
+     sources_ant_glob=(
+         "src/fw/services/peek_widgets/peek_widgets.c "
+         "src/fw/services/timeline/attribute.c "
+         "src/fw/services/timeline/attribute_group.c "
+         "src/fw/services/timeline/attributes_actions.c "
+         "src/fw/services/timeline/item.c "
+         "src/fw/util/time/time.c "
+         "tests/fakes/fake_rtc.c "
+     ),
+     test_sources_ant_glob="test_peek_widgets.c",
+     defines=['CONFIG_SERVICE_PEEK_WIDGETS=1'],
+     override_includes=['dummy_board'])
+
+# vim:filetype=python

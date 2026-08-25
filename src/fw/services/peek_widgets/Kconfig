@@ -3,7 +3,7 @@
 
 config SERVICE_PEEK_WIDGETS
     bool "Quick View widgets"
-    depends on SERVICE_TIMELINE && SERVICE_NOTIFICATIONS
+    depends on SERVICE_TIMELINE && SERVICE_NOTIFICATIONS && SERVICE_MUSIC
     help
       Generalizes the Timeline Quick View overlay into a contextual widget
       surface: now-playing music, recently arrived notifications, and
