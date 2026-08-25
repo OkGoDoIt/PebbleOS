@@ -85,6 +85,8 @@ if bld.env.CONFIG_SERVICE_NOTIFICATIONS:
     bld.recurse('notifications')
 if bld.env.CONFIG_SERVICE_ORIENTATION_MANAGER:
     bld.recurse('orientation_manager')
+if bld.env.CONFIG_SERVICE_PEEK_WIDGETS:
+    bld.recurse('peek_widgets')
 if bld.env.CONFIG_SERVICE_PERSIST:
     bld.recurse('persist')
 if bld.env.CONFIG_SERVICE_PHONE_CALL:

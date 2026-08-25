@@ -1,0 +1,9 @@
+# SPDX-Copyright-Text: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+bld.stlib(
+    use=['fw_includes'],
+    source=['peek_widgets.c'],
+    target='services_peek_widgets',
+)
+bld.env.SERVICES.append('services_peek_widgets')
