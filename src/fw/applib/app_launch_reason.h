@@ -31,6 +31,7 @@ typedef enum {
   APP_LAUNCH_QUICK_LAUNCH, //!< App launched by user using quick launch
   APP_LAUNCH_TIMELINE_ACTION,  //!< App launched by user opening it from a pin
   APP_LAUNCH_SMARTSTRAP,  //!< App launched by a smartstrap
+  APP_LAUNCH_PEEK_WIDGET,  //!< App launched from its Quick View widget on the watchface
 } AppLaunchReason;
 
 //! Provides the method used to launch the current application.
@@ -47,9 +48,9 @@ typedef enum {
 } AppQuickLaunchAction;
 
 //! Get the argument passed to the app when it was launched.
-//! @note Currently the only way to pass arguments to apps is by using an openWatchApp action
-//! on a pin.
-//! @return The argument passed to the app, or 0 if the app wasn't launched from a Launch App action
+//! @note Arguments are passed to apps by an openWatchApp action on a pin, or by the app's
+//! Quick View widget when the widget's button shortcut launches the app.
+//! @return The argument passed to the app, or 0 if the app was launched some other way
 uint32_t app_launch_get_args(void);
 
 //! Get the action that was used to quick launch the app.
