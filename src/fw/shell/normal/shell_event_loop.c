@@ -30,6 +30,7 @@
 #include "pbl/services/music.h"
 #include "pbl/services/music_endpoint.h"
 #include "pbl/services/notifications/do_not_disturb.h"
+#include "pbl/services/peek_widgets.h"
 #include "pbl/services/stationary.h"
 #include "pbl/services/system_task.h"
 #include "pbl/services/timeline/event.h"
@@ -67,6 +68,7 @@ void shell_event_loop_init(void) {
   app_message_sender_init();
   watchface_init();
   timeline_peek_init();
+  peek_widgets_init();
   // Start activity tracking if enabled
   if (activity_prefs_tracking_is_enabled()) {
     activity_start_tracking(false /*test_mode*/);
@@ -106,11 +108,13 @@ void shell_event_loop_handle_event(PebbleEvent *e) {
       } else {
         app_idle_timeout_pause();
       }
+      peek_widgets_handle_app_focus_event(&e->app_focus);
       return;
 
     case PEBBLE_SYS_NOTIFICATION_EVENT:
       // This handles incoming Notifications and actions on Notifications and Reminders
       notification_window_handle_notification(&e->sys_notification);
+      peek_widgets_handle_notification_event(&e->sys_notification);
       return;
 
     case PEBBLE_CALENDAR_EVENT:
@@ -118,7 +122,11 @@ void shell_event_loop_handle_event(PebbleEvent *e) {
       return;
 
     case PEBBLE_TIMELINE_PEEK_EVENT:
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+      peek_widgets_handle_timeline_peek_event(&e->timeline_peek);
+#else
       timeline_peek_handle_peek_event(&e->timeline_peek);
+#endif
       return;
 
     case PEBBLE_BLOBDB_EVENT:
@@ -160,6 +168,7 @@ void shell_event_loop_handle_event(PebbleEvent *e) {
       if (e->media.playback_state == MusicPlayStatePlaying) {
         app_install_mark_prioritized(APP_ID_MUSIC, true /* can_expire */);
       }
+      peek_widgets_handle_media_event(&e->media);
       return;
 
     case PEBBLE_HEALTH_SERVICE_EVENT:
