@@ -508,7 +508,8 @@ clar(ctx,
          "tests/stubs/stubs_timeline_peek.c "
      ),
      test_sources_ant_glob="test_timeline_peek.c",
-     defines=ctx.env.test_image_defines + ["USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1"],
+     defines=ctx.env.test_image_defines + ["USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1",
+                                           "CONFIG_SERVICE_PEEK_WIDGETS=1"],
      runtime_deps=ctx.env.test_pngs + ctx.env.test_pbis + ctx.env.test_pfos,
      override_includes=['dummy_board'],
      platforms=['obelix', 'gabbro'])
