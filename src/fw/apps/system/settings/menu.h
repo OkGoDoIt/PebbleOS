@@ -20,6 +20,9 @@ typedef enum {
   SettingsMenuItemVibrations,
   SettingsMenuItemQuietTime,
   SettingsMenuItemTimeline,
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  SettingsMenuItemQuickView,
+#endif
   SettingsMenuItemQuickLaunch,
   SettingsMenuItemDateTime,
   SettingsMenuItemDisplay,
