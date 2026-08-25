@@ -261,12 +261,17 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
       if (quick_view_prefs_get_notif_seconds() == 0) {
         return;
       }
-      if (do_not_disturb_is_active() &&
-          (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide)) {
-        return;
-      }
-      if (!alerts_should_notify_for_type(AlertMobile)) {
-        return;
+      // By default the widget follows the popup's gating; the Show When Muted pref keeps it
+      // arming even when the alerts filter or Quiet Time suppressed the popup, as a silent
+      // residue for users who keep notification popups off entirely.
+      if (!quick_view_prefs_get_notif_muted_enabled()) {
+        if (do_not_disturb_is_active() &&
+            (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide)) {
+          return;
+        }
+        if (!alerts_should_notify_for_type(AlertMobile)) {
+          return;
+        }
       }
       s_state.notif_id = *event->notification_id;
       s_state.notif_active = false;

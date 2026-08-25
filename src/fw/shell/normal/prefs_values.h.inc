@@ -57,6 +57,7 @@
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
   PREFS_MACRO(PREF_KEY_QUICK_VIEW_MUSIC_MODE, s_quick_view_music_mode)
   PREFS_MACRO(PREF_KEY_QUICK_VIEW_NOTIF_SECONDS, s_quick_view_notif_seconds)
+  PREFS_MACRO(PREF_KEY_QUICK_VIEW_NOTIF_MUTED, s_quick_view_notif_muted)
   PREFS_MACRO(PREF_KEY_QUICK_VIEW_APPS_ENABLED, s_quick_view_apps_enabled)
   PREFS_MACRO(PREF_KEY_QUICK_VIEW_BUTTON_MODE, s_quick_view_button_mode)
 #endif

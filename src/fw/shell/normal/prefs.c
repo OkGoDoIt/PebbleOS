@@ -295,10 +295,12 @@ static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFa
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
 #define PREF_KEY_QUICK_VIEW_MUSIC_MODE "quickViewMusicMode"
 #define PREF_KEY_QUICK_VIEW_NOTIF_SECONDS "quickViewNotifSeconds"
+#define PREF_KEY_QUICK_VIEW_NOTIF_MUTED "quickViewNotifMuted"
 #define PREF_KEY_QUICK_VIEW_APPS_ENABLED "quickViewAppsEnabled"
 #define PREF_KEY_QUICK_VIEW_BUTTON_MODE "quickViewButtonMode"
 static uint8_t s_quick_view_music_mode = QuickViewMusicMode_WhilePlaying;
 static uint16_t s_quick_view_notif_seconds = QUICK_VIEW_NOTIF_SECONDS_DEFAULT;
+static bool s_quick_view_notif_muted = false;
 static bool s_quick_view_apps_enabled = true;
 static uint8_t s_quick_view_button_mode = QuickViewButtonMode_Press;
 #endif
@@ -826,6 +828,12 @@ static bool prv_set_s_quick_view_notif_seconds(uint16_t *seconds) {
       return false;
   }
   s_quick_view_notif_seconds = *seconds;
+  peek_widgets_handle_prefs_changed();
+  return true;
+}
+
+static bool prv_set_s_quick_view_notif_muted(bool *enabled) {
+  s_quick_view_notif_muted = *enabled;
   peek_widgets_handle_prefs_changed();
   return true;
 }
@@ -2199,6 +2207,14 @@ void quick_view_prefs_set_notif_seconds(uint16_t seconds) {
       return;
   }
   prv_pref_set(PREF_KEY_QUICK_VIEW_NOTIF_SECONDS, &seconds, sizeof(seconds));
+}
+
+bool quick_view_prefs_get_notif_muted_enabled(void) {
+  return s_quick_view_notif_muted;
+}
+
+void quick_view_prefs_set_notif_muted_enabled(bool enabled) {
+  prv_pref_set(PREF_KEY_QUICK_VIEW_NOTIF_MUTED, &enabled, sizeof(enabled));
 }
 
 bool quick_view_prefs_get_apps_enabled(void) {

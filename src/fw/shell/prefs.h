@@ -250,6 +250,10 @@ void quick_view_prefs_set_music_mode(QuickViewMusicMode mode);
 //! dismissed; otherwise the widget shows for this many seconds once the watchface is visible.
 uint16_t quick_view_prefs_get_notif_seconds(void);
 void quick_view_prefs_set_notif_seconds(uint16_t seconds);
+//! When enabled, the notification widget also shows for notifications the alerts filter or
+//! Quiet Time muted: a silent residue for users who keep notification popups off.
+bool quick_view_prefs_get_notif_muted_enabled(void);
+void quick_view_prefs_set_notif_muted_enabled(bool enabled);
 bool quick_view_prefs_get_apps_enabled(void);
 void quick_view_prefs_set_apps_enabled(bool enabled);
 QuickViewButtonMode quick_view_prefs_get_button_mode(void);
