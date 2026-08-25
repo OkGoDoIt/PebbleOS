@@ -4,7 +4,7 @@
               "You should also make sure you are obeying our API design guidelines:",
               "https://pebbletechnology.atlassian.net/wiki/display/DEV/SDK+API+Design+Guidelines"
             ],
-  "revision" : "109",
+  "revision" : "110",
   "version" : "2.0",
   "files": [
     "include/pbl/drivers/ambient_light.h",
@@ -31,6 +31,7 @@
     "fw/applib/app_worker.h",
     "fw/applib/backlight_service.h",
     "fw/applib/battery_state_service.h",
+    "fw/applib/peek_widget.h",
     "fw/applib/bluetooth/ble_ad_parse.h",
     "fw/applib/bluetooth/ble_central.h",
     "fw/applib/bluetooth/ble_characteristic.h",
@@ -438,6 +439,39 @@
                   "type": "function",
                   "name": "battery_state_service_peek",
                   "addedRevision": "0"
+                }
+              ]
+            }, {
+              "type": "group",
+              "name": "PeekWidget",
+              "addedRevision": "110",
+              "exports": [
+                {
+                  "type": "define",
+                  "name": "PEEK_WIDGET_TITLE_MAX_LEN",
+                  "addedRevision": "110"
+                }, {
+                  "type": "define",
+                  "name": "PEEK_WIDGET_SUBTITLE_MAX_LEN",
+                  "addedRevision": "110"
+                }, {
+                  "type": "type",
+                  "name": "PeekWidgetResult",
+                  "addedRevision": "110"
+                }, {
+                  "type": "type",
+                  "name": "PeekWidgetInfo",
+                  "addedRevision": "110"
+                }, {
+                  "type": "function",
+                  "name": "peek_widget_publish",
+                  "addedRevision": "110",
+                  "stubReturn": "PEEK_WIDGET_RESULT_DISABLED"
+                }, {
+                  "type": "function",
+                  "name": "peek_widget_withdraw",
+                  "addedRevision": "110",
+                  "stubReturn": "void"
                 }
               ]
             }, {

@@ -16,6 +16,7 @@
 #include "applib/event_service_client.h"
 #include "applib/fonts/fonts.h"
 #include "applib/graphics/gtypes.h"
+#include "applib/peek_widget_private.h"
 #include "applib/ui/window_stack_animation.h"
 
 #include "comm/ble/gap_le_scan.h"
@@ -339,3 +340,9 @@ bool sys_do_not_disturb_is_active(void);
 //! @param timestamp_out Set to the UTC time of the next enabled alarm.
 //! @return True if at least one enabled alarm is scheduled.
 bool sys_alarm_get_next_enabled(time_t *timestamp_out);
+
+//! Publish (or replace) the calling process's Quick View widget.
+PeekWidgetResult sys_peek_widget_publish(const PeekWidgetPublishArgs *args);
+
+//! Withdraw the calling process's Quick View widget, if any.
+void sys_peek_widget_withdraw(void);
