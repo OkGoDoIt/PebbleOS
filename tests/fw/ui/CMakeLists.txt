@@ -947,7 +947,7 @@ pbl_clar_test(test_timeline_peek
     tests/stubs/stubs_timeline_layout.c
     tests/stubs/stubs_timeline_peek.c
   PLATFORMS obelix gabbro
-  DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1
+  DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1 CONFIG_SERVICE_PEEK_WIDGETS=1
   OVERRIDES dummy_board
   TEST_IMAGES
 )

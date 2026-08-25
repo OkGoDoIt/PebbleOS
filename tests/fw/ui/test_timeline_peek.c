@@ -93,6 +93,13 @@ bool app_manager_is_watchface_running(void) {
   return s_is_watchface_running;
 }
 
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+// Quick View widget arbiter stubs
+void peek_widgets_handle_prefs_changed(void) {}
+
+void peek_widgets_handle_watchface_started(void) {}
+#endif
+
 // Setup and Teardown
 ////////////////////////////////////
 
@@ -448,3 +455,71 @@ void test_timeline_peek__peek_hidden_leaving_and_entering_watchface(void) {
   // Peek should be visible again, but it should still be off-screen.
   cl_assert(layer->frame.origin.y >= DISP_ROWS);
 }
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+// Quick View widgets
+//////////////////////
+
+static TimelineItem *prv_create_widget_item(const char *title, const char *subtitle) {
+  AttributeList list;
+  attribute_list_init_list(3 /* num_attributes */, &list);
+  attribute_list_add_cstring(&list, AttributeIdTitle, title);
+  if (subtitle) {
+    attribute_list_add_cstring(&list, AttributeIdSubtitle, subtitle);
+  }
+  attribute_list_add_uint32(&list, AttributeIdIconTiny, TIMELINE_RESOURCE_AUDIO_CASSETTE);
+  TimelineItem *item = timeline_item_create_with_attributes(
+      rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &list, NULL);
+  attribute_list_destroy_list(&list);
+  return item;
+}
+
+void test_timeline_peek__widget_item_source_and_guards(void) {
+  TimelineItem *item = prv_create_widget_item("Radio Song", "The Sample Band");
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, false /* animated */);
+  timeline_item_destroy(item);
+
+  TimelinePeek *peek = timeline_peek_get_peek();
+  // Widget content shows just like timeline content.
+  cl_assert(peek->layout_layer.frame.origin.y < DISP_ROWS);
+  cl_assert_equal_i(timeline_peek_get_source(), PeekWidgetSource_Music);
+
+  // Widget items are synthetic, so no pin id is ever reported.
+  TimelineItemId item_id;
+  timeline_peek_get_item_id(&item_id);
+  cl_assert(uuid_is_invalid(&item_id));
+
+  // Widget dismissal is the arbiter's job; the pin_db path must not run.
+  timeline_peek_dismiss();
+  cl_assert_equal_i(timeline_peek_get_source(), PeekWidgetSource_Music);
+
+  // Timeline content reports its pin id again.
+  TimelineItem *pin = prv_set_timeline_item(&(TimelinePeekItemConfig) {
+    .title = "CoreUX Design x Eng",
+    .icon = TIMELINE_RESOURCE_TIMELINE_CALENDAR,
+  }, false /* animated */);
+  cl_assert_equal_i(timeline_peek_get_source(), PeekWidgetSource_Timeline);
+  timeline_peek_get_item_id(&item_id);
+  cl_assert(uuid_equal(&item_id, &pin->header.id));
+  timeline_item_destroy(pin);
+}
+
+void test_timeline_peek__widget_visible_while_timeline_disabled(void) {
+  TimelinePeek *peek = timeline_peek_get_peek();
+  peek->enabled = false;
+
+  // Timeline content honors the Timeline Quick View toggle.
+  TimelineItem *pin = prv_set_timeline_item(&(TimelinePeekItemConfig) {
+    .title = "CoreUX Design x Eng",
+    .icon = TIMELINE_RESOURCE_TIMELINE_CALENDAR,
+  }, false /* animated */);
+  cl_assert(peek->layout_layer.frame.origin.y >= DISP_ROWS);
+  timeline_item_destroy(pin);
+
+  // Widget content has its own prefs and shows regardless.
+  TimelineItem *item = prv_create_widget_item("Radio Song", "The Sample Band");
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item, false /* animated */);
+  timeline_item_destroy(item);
+  cl_assert(peek->layout_layer.frame.origin.y < DISP_ROWS);
+}
+#endif // CONFIG_SERVICE_PEEK_WIDGETS
