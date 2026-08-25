@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config SERVICE_PEEK_WIDGETS
+    bool "Quick View widgets"
+    depends on SERVICE_TIMELINE
+    help
+      Generalizes the Timeline Quick View overlay into a contextual widget
+      surface: now-playing music, recently arrived notifications, and
+      app-published widgets can peek at the bottom of the watchface, with a
+      configurable down-button shortcut that launches the widget's app.
+
+if SERVICE_PEEK_WIDGETS
+
+module = SERVICE_PEEK_WIDGETS
+module-str = PeekWidgets
+source "subsys/logging/Kconfig.template.log_level"
+
+endif
