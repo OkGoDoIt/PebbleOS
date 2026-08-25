@@ -525,6 +525,10 @@
                   "addedRevision": "112"
                 }, {
                   "type": "define",
+                  "name": "PEEK_WIDGET_APP_ICON",
+                  "addedRevision": "112"
+                }, {
+                  "type": "define",
                   "name": "PEEK_WIDGET_SUBTITLE_MAX_LEN",
                   "addedRevision": "112"
                 }, {
