@@ -9,6 +9,7 @@
 #include "kernel/events.h"
 #include "pbl/services/peek_widgets.h"
 #include "pbl/services/timeline/timeline.h"
+#include "pbl/services/timeline/timeline_resources.h"
 
 #define TIMELINE_PEEK_HEIGHT \
     PREFERRED_CONTENT_SIZE_SWITCH(PreferredContentSizeDefault,     \
@@ -116,8 +117,11 @@ bool timeline_peek_is_enabled(void);
 //! ownership; it is typically a synthetic generic-layout item built by the widget arbiter.
 //! @param source The widget source the content belongs to; must not be Timeline or None.
 //! @param item The content to display. Must not be NULL; hide by setting a NULL timeline item.
+//! @param icon_override Already-resolved icon to draw instead of resolving the item's icon
+//! attributes, used to show an app's own icon. NULL to resolve from the item as usual.
 //! @param animated Whether the peek animates into its new state
-void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item, bool animated);
+void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item,
+                                   const AppResourceInfo *icon_override, bool animated);
 
 //! The source of the content currently on screen.
 PeekWidgetSource timeline_peek_get_source(void);

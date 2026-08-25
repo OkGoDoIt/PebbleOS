@@ -69,6 +69,11 @@ typedef struct {
   //! event, num_concurrent is 0. If there are two events overlapping, num_concurrent is 1.
   //! Only valid if the item is being used for the Timeline Peek.
   unsigned int num_concurrent;
+  //! Optional already-resolved icon. When res_id is non-zero, the icon is loaded from this
+  //! resource bank directly instead of resolving a TimelineResourceId, which lets system UI
+  //! render an app's own icon: those live in the app's bank as plain resource ids and have no
+  //! timeline resource id. The caller vouches for the icon fitting the layout's icon box.
+  AppResourceInfo icon_res_info_override;
 } TimelineLayoutInfo;
 
 struct TimelineLayout {

@@ -198,13 +198,17 @@ static void prv_destroy_layout(void) {
 }
 
 static PeekLayout *prv_create_layout(TimelineItem *item, unsigned int num_concurrent,
-                                     PeekWidgetSource source) {
+                                     PeekWidgetSource source,
+                                     const AppResourceInfo *icon_override) {
   PeekLayout *layout = task_zalloc_check(sizeof(PeekLayout));
   item = timeline_item_copy(item);
   layout->item = item;
   layout->source = source;
   timeline_layout_init_info(&layout->info, item, time_util_get_midnight_of(rtc_get_time()));
   layout->info.num_concurrent = num_concurrent;
+  if (icon_override) {
+    layout->info.icon_res_info_override = *icon_override;
+  }
   const LayoutLayerConfig config = {
     .frame = &GRect(0, 0, DISP_COLS, TIMELINE_PEEK_HEIGHT),
     .attributes = &item->attr_list,
@@ -534,7 +538,8 @@ void timeline_peek_set_visible(bool visible, bool animated) {
 }
 
 static void prv_set_content(PeekWidgetSource source, TimelineItem *item, bool started,
-                            unsigned int num_concurrent, bool first, bool animated) {
+                            unsigned int num_concurrent, bool first,
+                            const AppResourceInfo *icon_override, bool animated) {
   TimelinePeek *peek = &s_peek;
   animated = (prv_can_animate() && animated);
   if (!animated) {
@@ -548,7 +553,8 @@ static void prv_set_content(PeekWidgetSource source, TimelineItem *item, bool st
   peek->first = first;
   timeline_peek_set_visible(peek->exists, animated);
 
-  PeekLayout *layout = item ? prv_create_layout(item, num_concurrent, source) : NULL;
+  PeekLayout *layout = item ? prv_create_layout(item, num_concurrent, source, icon_override)
+                            : NULL;
   if (animated && !peek->animation && peek->visible) {
     // Swap the layout in an animation
     prv_transition_concurrent(peek, layout);
@@ -561,15 +567,17 @@ static void prv_set_content(PeekWidgetSource source, TimelineItem *item, bool st
 
 void timeline_peek_set_item(TimelineItem *item, bool started, unsigned int num_concurrent,
                             bool first, bool animated) {
-  prv_set_content(PeekWidgetSource_Timeline, item, started, num_concurrent, first, animated);
+  prv_set_content(PeekWidgetSource_Timeline, item, started, num_concurrent, first,
+                  NULL /* icon_override */, animated);
 }
 
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
-void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item, bool animated) {
+void timeline_peek_set_widget_item(PeekWidgetSource source, TimelineItem *item,
+                                   const AppResourceInfo *icon_override, bool animated) {
   PBL_ASSERTN(item && (source != PeekWidgetSource_Timeline) &&
               (source != PeekWidgetSource_None));
   prv_set_content(source, item, true /* started */, 0 /* num_concurrent */, false /* first */,
-                  animated);
+                  icon_override, animated);
 }
 
 PeekWidgetSource timeline_peek_get_source(void) {

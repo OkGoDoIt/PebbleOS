@@ -259,15 +259,25 @@ static KinoReel *prv_create_kino_reel_with_timeline_resource(
 static void prv_init_icon(TimelineLayout *timeline_layout, const GRect *icon_frame,
                           TimelineResourceSize icon_res_size, TimelineResourceId resource,
                           TimelineResourceId fallback_resource, const Uuid *app_id) {
-  KinoReel *icon_reel = prv_create_kino_reel_with_timeline_resource(
-      timeline_layout, icon_res_size, resource, fallback_resource, app_id);
+  const AppResourceInfo *icon_override = &timeline_layout->info->icon_res_info_override;
+  const bool has_icon_override = (icon_override->res_id != RESOURCE_ID_INVALID);
+  KinoReel *icon_reel;
+  if (has_icon_override) {
+    timeline_layout->icon_res_info = *icon_override;
+    icon_reel = kino_reel_create_with_resource_system(icon_override->res_app_num,
+                                                      icon_override->res_id);
+  } else {
+    icon_reel = prv_create_kino_reel_with_timeline_resource(
+        timeline_layout, icon_res_size, resource, fallback_resource, app_id);
+  }
   if (!icon_reel) {
     return;
   }
 
   GSize icon_size = kino_reel_get_size(icon_reel);
   const GSize max_icon_size = timeline_resources_get_gsize(icon_res_size);
-  if ((icon_size.w > max_icon_size.w) || (icon_size.h > max_icon_size.h)) {
+  if (!has_icon_override &&
+      ((icon_size.w > max_icon_size.w) || (icon_size.h > max_icon_size.h))) {
     // The icon is too large, use the fallback instead
     kino_reel_destroy(icon_reel);
     icon_reel = prv_create_kino_reel_with_timeline_resource(
