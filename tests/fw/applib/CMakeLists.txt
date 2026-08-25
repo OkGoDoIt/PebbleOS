@@ -191,3 +191,11 @@ pbl_clar_test(test_qr_code
   PLATFORMS obelix
   TEST_IMAGES
 )
+
+pbl_clar_test(test_peek_widget
+  SOURCES
+    fw/applib/peek_widget.c
+    fw/syscall/services_syscalls.c
+  DEFINES CONFIG_SERVICE_PEEK_WIDGETS=1
+  OVERRIDES dummy_board
+)
