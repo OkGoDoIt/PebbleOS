@@ -113,6 +113,11 @@ typedef struct {
    * events. Only valid for Timeline Peek.
    */
   unsigned int num_concurrent;
+  //! Optional already-resolved icon. When res_id is non-zero, the icon is loaded from this
+  //! resource bank directly instead of resolving a TimelineResourceId, which lets system UI
+  //! render an app's own icon: those live in the app's bank as plain resource ids and have no
+  //! timeline resource id. The caller vouches for the icon fitting the layout's icon box.
+  AppResourceInfo icon_res_info_override;
 } TimelineLayoutInfo;
 
 /** @brief Layout rendering a pin; can be cast to a LayoutLayer. */
