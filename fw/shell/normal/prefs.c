@@ -8,6 +8,7 @@
 #include <pbl/services/accel_manager.h>
 #include <pbl/services/hrm/hrm_manager.h>
 #include <pbl/services/i18n/i18n.h>
+#include <pbl/services/peek_widgets.h>
 #include <pbl/services/touch/touch.h>
 #include <pbl/services/touch/touch_nav_service.h>
 #include <pbl/util/units.h>
@@ -318,6 +319,17 @@ static uint16_t s_timeline_peek_before_time_m =
 #if TIMELINE_PEEK_WATCHFACE_FIT_SUPPORTED
 #define PREF_KEY_TIMELINE_PEEK_WATCHFACE_FIT "timelineQuickViewWatchfaceFit"
 static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFaceMode_None;
+#endif
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+#define PREF_KEY_QUICK_VIEW_MUSIC_MODE    "quickViewMusicMode"
+#define PREF_KEY_QUICK_VIEW_NOTIF_SECONDS "quickViewNotifSeconds"
+#define PREF_KEY_QUICK_VIEW_APPS_ENABLED  "quickViewAppsEnabled"
+#define PREF_KEY_QUICK_VIEW_BUTTON_MODE   "quickViewButtonMode"
+static uint8_t s_quick_view_music_mode = QuickViewMusicMode_WhilePlaying;
+static uint16_t s_quick_view_notif_seconds = QUICK_VIEW_NOTIF_SECONDS_DEFAULT;
+static bool s_quick_view_apps_enabled = true;
+static uint8_t s_quick_view_button_mode = QuickViewButtonMode_Press;
 #endif
 
 #define PREF_KEY_COREDUMP_ON_REQUEST       "coredumpOnRequest"
@@ -847,6 +859,48 @@ static bool prv_set_s_timeline_peek_unsupported_face_mode(uint8_t *mode) {
     return false;
   }
   s_timeline_peek_unsupported_face_mode = *mode;
+  return true;
+}
+#endif
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+static bool prv_set_s_quick_view_music_mode(uint8_t *mode) {
+  if (*mode >= QuickViewMusicModeCount) {
+    return false;
+  }
+  s_quick_view_music_mode = *mode;
+  peek_widgets_handle_prefs_changed();
+  return true;
+}
+
+static bool prv_set_s_quick_view_notif_seconds(uint16_t *seconds) {
+  switch (*seconds) {
+    case 0:
+    case 5:
+    case 15:
+    case PBL_SEC_PER_MIN:
+    case QUICK_VIEW_NOTIF_SECONDS_PERSISTENT:
+      break;
+    default:
+      return false;
+  }
+  s_quick_view_notif_seconds = *seconds;
+  peek_widgets_handle_prefs_changed();
+  return true;
+}
+
+static bool prv_set_s_quick_view_apps_enabled(bool *enabled) {
+  s_quick_view_apps_enabled = *enabled;
+  peek_widgets_handle_prefs_changed();
+  return true;
+}
+
+static bool prv_set_s_quick_view_button_mode(uint8_t *mode) {
+  if (*mode >= QuickViewButtonModeCount) {
+    return false;
+  }
+  s_quick_view_button_mode = *mode;
+  peek_widgets_handle_prefs_changed();
   return true;
 }
 #endif
@@ -2203,6 +2257,58 @@ void timeline_peek_prefs_set_unsupported_face_mode(TimelinePeekUnsupportedFaceMo
 
 TimelinePeekUnsupportedFaceMode timeline_peek_prefs_get_unsupported_face_mode(void) {
   return (TimelinePeekUnsupportedFaceMode)s_timeline_peek_unsupported_face_mode;
+}
+#endif
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+QuickViewMusicMode quick_view_prefs_get_music_mode(void) {
+  return (QuickViewMusicMode)s_quick_view_music_mode;
+}
+
+void quick_view_prefs_set_music_mode(QuickViewMusicMode mode) {
+  if (mode >= QuickViewMusicModeCount) {
+    return;
+  }
+  uint8_t mode_value = mode;
+  prv_pref_set(PREF_KEY_QUICK_VIEW_MUSIC_MODE, &mode_value, sizeof(mode_value));
+}
+
+uint16_t quick_view_prefs_get_notif_seconds(void) {
+  return s_quick_view_notif_seconds;
+}
+
+void quick_view_prefs_set_notif_seconds(uint16_t seconds) {
+  switch (seconds) {
+    case 0:
+    case 5:
+    case 15:
+    case PBL_SEC_PER_MIN:
+    case QUICK_VIEW_NOTIF_SECONDS_PERSISTENT:
+      break;
+    default:
+      return;
+  }
+  prv_pref_set(PREF_KEY_QUICK_VIEW_NOTIF_SECONDS, &seconds, sizeof(seconds));
+}
+
+bool quick_view_prefs_get_apps_enabled(void) {
+  return s_quick_view_apps_enabled;
+}
+
+void quick_view_prefs_set_apps_enabled(bool enabled) {
+  prv_pref_set(PREF_KEY_QUICK_VIEW_APPS_ENABLED, &enabled, sizeof(enabled));
+}
+
+QuickViewButtonMode quick_view_prefs_get_button_mode(void) {
+  return (QuickViewButtonMode)s_quick_view_button_mode;
+}
+
+void quick_view_prefs_set_button_mode(QuickViewButtonMode mode) {
+  if (mode >= QuickViewButtonModeCount) {
+    return;
+  }
+  uint8_t mode_value = mode;
+  prv_pref_set(PREF_KEY_QUICK_VIEW_BUTTON_MODE, &mode_value, sizeof(mode_value));
 }
 #endif
 
