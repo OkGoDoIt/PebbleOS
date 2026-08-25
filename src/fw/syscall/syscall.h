@@ -17,6 +17,7 @@
 #include "applib/fonts/fonts.h"
 #include "applib/graphics/gtypes.h"
 #include "applib/music_service.h"
+#include "applib/peek_widget_private.h"
 #include "applib/ui/window_stack_animation.h"
 
 #include "comm/ble/gap_le_scan.h"
@@ -363,3 +364,9 @@ bool sys_music_is_command_supported(MusicServiceCommand command);
 
 //! Send a command supported by the connected music service.
 bool sys_music_send_command(MusicServiceCommand command);
+
+//! Publish (or replace) the calling process's Quick View widget.
+PeekWidgetResult sys_peek_widget_publish(const PeekWidgetPublishArgs *args);
+
+//! Withdraw the calling process's Quick View widget, if any.
+void sys_peek_widget_withdraw(void);
