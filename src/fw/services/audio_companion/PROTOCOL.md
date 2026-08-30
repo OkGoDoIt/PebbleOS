@@ -108,6 +108,14 @@ currently authorized session's receiver id).
 `RECEIVER_HEALTH` (`0x06`): `u8 msg_id`, `u8 request_token`, `u8 battery_pct`,
 `u8 app_state` (1 foreground, 2 background, 3 restored), `u32 queue_depth_frames`.
 
+The watch runs a **15-second receiver-liveness watchdog** while streaming: any successfully
+parsed control write refreshes it, so a receiver with nothing else to send should write
+`RECEIVER_HEALTH` roughly every 5 seconds as a keepalive. On expiry the watch presumes the
+receiver gone, stops capture (recording a `TransportReset` gap), and drops out of Streaming —
+the stream itself stays active. The next control write revives it and triggers a RESUME
+re-announcement with a spool rewind, so a receiver that under-sends keepalives sees periodic
+capture pauses and RESUME cycles.
+
 `ENABLE_REQUEST` (`0x07`): `u8 msg_id`, `u8 request_token`. When Background Audio is off, this
 asks the watch to show an on-watch approval prompt. The watch replies with `ACK(ok)` only after the
 user accepts and the setting has been persisted/enabled; decline, timeout, no UI handler, or another
