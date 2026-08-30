@@ -204,9 +204,11 @@ void bt_driver_audio_companion_handle_subscribe(uint16_t conn_handle, uint16_t a
 
   if (notify_enabled) {
     s_conn_handle = conn_handle;
-  } else if (!s_data_subscribed && !s_control_subscribed) {
-    s_conn_handle = AUDIO_COMPANION_INVALID_CONN_HANDLE;
   }
+  // Deliberately NOT invalidated when both subscriptions drop: NimBLE tears down CCCDs
+  // (BLE_GAP_EVENT_SUBSCRIBE, reason TERM) before it dispatches BLE_GAP_EVENT_DISCONNECT, so
+  // clearing the handle here made the disconnect callback below unreachable on every real link
+  // drop and the service-level session state survived disconnects it must not survive.
   audio_companion_handle_subscription_change(s_data_subscribed, s_control_subscribed);
 }
 

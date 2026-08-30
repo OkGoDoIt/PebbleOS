@@ -156,6 +156,8 @@ static bool s_stream_attached;   //!< current ready session has been (re)announc
 static uint32_t s_stream_id;
 static uint32_t s_next_sequence;
 static uint64_t s_next_sample_index;
+static uint64_t s_stream_start_time_ms;       //!< wall clock captured at stream birth
+static uint64_t s_stream_start_monotonic_ms;  //!< uptime captured at stream birth
 static TimerID s_drain_timer = TIMER_INVALID_ID;
 static TimerID s_catch_up_timer = TIMER_INVALID_ID;
 static bool s_catch_up_burst;
@@ -771,8 +773,8 @@ static void prv_send_stream_start_locked(void) {
     .sample_rate_hz = AUDIO_COMPANION_DEFAULT_SAMPLE_RATE_HZ,
     .bit_rate_bps = AUDIO_COMPANION_DEFAULT_BIT_RATE_BPS,
     .frame_duration_ms = AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
-    .start_time_ms = prv_wall_clock_ms(),
-    .start_monotonic_ms = prv_uptime_ms(),
+    .start_time_ms = s_stream_start_time_ms,
+    .start_monotonic_ms = s_stream_start_monotonic_ms,
     .flags = s_stream_resumed ? AUDIO_COMPANION_STREAM_START_FLAG_RESUME : 0,
   };
   uint8_t buf[sizeof(AudioCompanionStreamStartMsg)];
@@ -991,6 +993,10 @@ static void prv_begin_stream_locked(void) {
   s_stream_id = id;
   s_next_sequence = 0;
   s_next_sample_index = 0;
+  // Captured once here and resent verbatim on every re-announcement: a RESUME STREAM_START
+  // must describe the same stream, and the receiver keys reattachment off a stable identity.
+  s_stream_start_time_ms = prv_wall_clock_ms();
+  s_stream_start_monotonic_ms = prv_uptime_ms();
   s_offline_baseline_dropped = 0;
   s_alert_baseline_dropped = 0;
   s_pending_resume_gap_reason = 0;  // a fresh stream carries no pending gap

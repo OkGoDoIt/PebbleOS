@@ -170,9 +170,16 @@ One-byte `msg_id` (`0x80–0x9F`) plus packed struct per notification.
 | 10 | 4 | `sample_rate_hz` (16000) |
 | 14 | 4 | `bit_rate_bps` (9800) |
 | 18 | 2 | `frame_duration_ms` (20) |
-| 20 | 8 | `start_time_ms` — watch wall clock, UTC ms |
-| 28 | 8 | `start_monotonic_ms` — watch monotonic ms |
-| 36 | 4 | `flags` (0) |
+| 20 | 8 | `start_time_ms` — watch wall clock at stream birth, UTC ms |
+| 28 | 8 | `start_monotonic_ms` — watch monotonic ms at stream birth |
+| 36 | 4 | `flags` — bit0 = RESUME (see below) |
+
+`flags` bit0 (`RESUME`): this `STREAM_START` re-announces an ongoing stream to a freshly
+(re)attached receiver rather than beginning a new one. The `stream_id`, codec parameters, and
+both start timestamps are the stream-birth values, resent verbatim; sequence numbering continues
+(the receiver adopts the first frame's sequence as its contiguity base instead of assuming 0),
+and the spool rewinds to the last checkpoint so un-checkpointed frames are re-sent. Receivers
+key reattachment off the stable identity (`stream_id` + codec parameters), not the timestamps.
 
 `STREAM_DATA` (`0x81`) header (20 bytes), followed by `frame_count` frame entries:
 
@@ -237,7 +244,10 @@ Sequence semantics: `sequence` increments per encoded frame within a stream, sta
 5. After `AUTH_RESULT(ok)` the session is authorized for the lifetime of the BLE connection.
    The phone subscribes to Data; the watch streams per policy.
 5. Any disconnect ends the session; reconnect repeats the handshake (silent when the hash
-   matches).
+   matches). On a bonded reconnect the persisted CCCD subscriptions can be restored before the
+   phone re-sends `AUTH_REQUEST`; the session is not ready — and nothing streams — until the
+   re-auth completes. If the stream stayed active across the disconnect (brief-disconnect
+   bridge), the re-announce after re-auth carries the RESUME flag and the same `stream_id`.
 6. Revocation: watch Settings ("Forget Receiver") or `AUTH_REVOKE` → stored identity wiped,
    `REVOKED` pushed, streaming stops, service returns to idle.
 

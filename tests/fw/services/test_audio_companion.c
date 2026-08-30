@@ -667,6 +667,100 @@ void test_audio_companion__reconnect_ios_order_reannounces_with_resume_flag(void
   cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData));
 }
 
+// A RESUME re-announcement must describe the same stream: same id AND the original stream-birth
+// timestamps. Recomputing start_time_ms/start_monotonic_ms at send time made the receiver's
+// matching-parameters reattach test fail on every reconnect, so each transport blip minted a new
+// segment on the phone.
+void test_audio_companion__reannounce_resends_stream_birth_timestamps(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  const CapturedNotification *fresh = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(fresh);
+  AudioCompanionStreamStartMsg fresh_msg;
+  memcpy(&fresh_msg, fresh->data, sizeof(fresh_msg));
+
+  // Time moves on before the reconnect; the re-announcement must not pick it up.
+  s_uptime_seconds += 45;
+  s_rtc_time += 45;
+  s_rtc_ms = 500;
+
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(2);
+  s_data_count = 0;
+
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+
+  const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(resumed);
+  AudioCompanionStreamStartMsg resumed_msg;
+  memcpy(&resumed_msg, resumed->data, sizeof(resumed_msg));
+  cl_assert_equal_i(resumed_msg.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME,
+                    AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
+  cl_assert_equal_i(resumed_msg.stream_id, fresh_msg.stream_id);
+  cl_assert(resumed_msg.start_time_ms == fresh_msg.start_time_ms);
+  cl_assert(resumed_msg.start_monotonic_ms == fresh_msg.start_monotonic_ms);
+
+  // A genuinely new stream captures fresh timestamps, not the cached ones.
+  audio_companion_set_enabled(false);
+  fake_system_task_callbacks_invoke_pending();
+  s_data_count = 0;
+  audio_companion_set_enabled(true);
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(8);
+  const CapturedNotification *next = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(next);
+  AudioCompanionStreamStartMsg next_msg;
+  memcpy(&next_msg, next->data, sizeof(next_msg));
+  cl_assert(next_msg.stream_id != fresh_msg.stream_id);
+  cl_assert(next_msg.start_time_ms > fresh_msg.start_time_ms);
+  cl_assert(next_msg.start_monotonic_ms > fresh_msg.start_monotonic_ms);
+}
+
+// The real NimBLE event order on a link drop is: one subscribe(TERM) per CCCD, THEN the
+// disconnect event. And on a bonded reconnect the persisted CCCDs are restored (subscribe with
+// reason RESTORE) BEFORE the app re-authenticates. Authorization dies with the link, so the
+// restore-subscribe alone must not make the session ready — no re-announce and no data until
+// AUTH arrives, and then the stream resumes with the same id and the RESUME flag.
+void test_audio_companion__nimble_order_unsubscribe_then_disconnect_requires_reauth(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  const uint32_t stream_id = prv_current_stream_id();
+
+  // Real order: CCCD teardown first, then the disconnect callback.
+  prv_subscribe(false, false);
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(2);  // brief-disconnect bridge keeps capturing into the spool
+  s_data_count = 0;
+
+  // Bonded reconnect: CCCD restore lands before the app writes AUTH. Nothing may stream yet.
+  prv_subscribe(true, true);
+  prv_feed_frames(2);
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStart) == NULL);
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData) == NULL);
+
+  // Authorization arrives; only now does the stream re-announce — same id, RESUME flag.
+  prv_authenticate();
+  prv_feed_frames(8);
+  const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(resumed);
+  AudioCompanionStreamStartMsg resumed_msg;
+  memcpy(&resumed_msg, resumed->data, sizeof(resumed_msg));
+  cl_assert_equal_i(resumed_msg.stream_id, stream_id);
+  cl_assert_equal_i(resumed_msg.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME,
+                    AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
+}
+
 void test_audio_companion__pause_resume_records_explicit_gap(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
