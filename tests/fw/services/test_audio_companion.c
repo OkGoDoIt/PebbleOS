@@ -860,6 +860,48 @@ void test_audio_companion__nimble_order_unsubscribe_then_disconnect_requires_rea
                     AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
 }
 
+// The receiver rebuilt its GATT session on a link the watch never saw drop. On iOS this is the
+// common case, not the exotic one: the official Pebble app holds the same ACL, so cancelling and
+// re-establishing OUR connection (a resync, an app relaunch, iOS reclaiming the app) produces a
+// brand-new receiver session with no stream context -- while the watch sees no BLE disconnect and,
+// because iOS may not rewrite an already-enabled CCCD, no subscription change either. The only
+// thing the watch hears is a fresh AUTH_REQUEST.
+//
+// An AUTH_REQUEST is BY DEFINITION a receiver with no stream context, so it must re-announce.
+// Without this the watch stayed "attached" to a session that no longer exists, never re-sent
+// STREAM_START, and streamed frames the phone dropped on the floor for want of a stream context --
+// which is the "watch says Streaming, app says waiting for the watch" deadlock, ended only by the
+// user toggling Background Audio.
+void test_audio_companion__reauth_without_disconnect_reannounces_the_stream(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  const uint32_t stream_id = prv_current_stream_id();
+
+  const CapturedNotification *fresh = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(fresh);
+  AudioCompanionStreamStartMsg fresh_msg;
+  memcpy(&fresh_msg, fresh->data, sizeof(fresh_msg));
+  cl_assert_equal_i(fresh_msg.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME, 0);
+
+  // No disconnect. No unsubscribe. Just a new session authorizing over the surviving link.
+  s_data_count = 0;
+  prv_authenticate();
+  prv_feed_frames(8);
+
+  const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
+  cl_assert(resumed);
+  AudioCompanionStreamStartMsg resumed_msg;
+  memcpy(&resumed_msg, resumed->data, sizeof(resumed_msg));
+  cl_assert_equal_i(resumed_msg.stream_id, stream_id);
+  cl_assert_equal_i(resumed_msg.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME,
+                    AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
+  cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData));
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
 void test_audio_companion__pause_resume_records_explicit_gap(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);

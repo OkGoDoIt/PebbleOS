@@ -1244,6 +1244,10 @@ static void prv_handle_auth_request_locked(const AudioCompanionAuthRequest *req)
       s_session.authorized = true;
       memcpy(s_session.receiver_id, req->receiver_id, sizeof(s_session.receiver_id));
       s_session.granted_proto_version = granted;
+      // An AUTH_REQUEST is by definition a receiver session with NO stream context, so whatever
+      // we announced to the previous one does not count. Detaching here is what makes
+      // prv_reevaluate_locked() re-announce STREAM_START below.
+      s_stream_attached = false;
       prv_send_auth_result_locked(req->request_token, AudioCompanionAuthStatusOk, granted);
       prv_reevaluate_locked();
       break;
@@ -1306,6 +1310,7 @@ void audio_companion_handle_consent_response(bool granted) {
     s_session.authorized = true;
     memcpy(s_session.receiver_id, s_consent.receiver_id, sizeof(s_session.receiver_id));
     s_session.granted_proto_version = granted_version;
+    s_stream_attached = false;  // fresh receiver session; see prv_handle_auth_request_locked
     prv_send_auth_result_locked(token, AudioCompanionAuthStatusOk, granted_version);
     prv_reevaluate_locked();
   } else {
