@@ -5,6 +5,7 @@
 
 #include "apps/system_app_ids.h"
 #include "apps/system/launcher/launcher.h"
+#include "apps/system/notifications.h"
 #include "apps/system/settings/quick_launch.h"
 #include "apps/system/settings/quick_launch_app_menu.h"
 #include "apps/system/settings/quick_launch_setup_menu.h"
@@ -220,11 +221,19 @@ static bool prv_try_launch_peek_widget_app(ButtonId button, QuickViewButtonMode 
   if (!peek_widgets_get_launch(&launch)) {
     return false;
   }
+  const void *args = (const void *)(uintptr_t)launch.launch_code;
+  if (!uuid_is_invalid(&launch.notification_id)) {
+    // The notification widget deep-links into the notification it is showing, the way the
+    // timeline peek deep-links into its pin above. Static because the args outlive this call.
+    static NotificationsAppArgs s_notif_args;
+    s_notif_args = (NotificationsAppArgs) { .notification_id = launch.notification_id };
+    args = &s_notif_args;
+  }
   app_manager_put_launch_app_event(&(AppLaunchEventConfig) {
     .id = launch.app_id,
     .common.reason = APP_LAUNCH_PEEK_WIDGET,
     .common.button = button,
-    .common.args = (void *)(uintptr_t)launch.launch_code,
+    .common.args = args,
   });
   return true;
 }

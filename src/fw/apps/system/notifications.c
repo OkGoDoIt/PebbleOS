@@ -752,7 +752,7 @@ static void prv_window_load(Window *window) {
                                 PBL_IF_RECT_ELSE(MenuRowAlignNone, MenuRowAlignCenter), false);
 }
 
-static void prv_push_window(NotificationsData *data) {
+static void prv_push_window(NotificationsData *data, bool animated) {
   Window *window = &data->window;
   window_init(window, WINDOW_NAME("Notifications"));
   window_set_user_data(window, data);
@@ -762,8 +762,25 @@ static void prv_push_window(NotificationsData *data) {
     .disappear = prv_window_disappear,
   });
 
-  const bool animated = true;
   app_window_stack_push(window, animated);
+}
+
+//! Opens straight to the notification named in the launch args, the way selecting its row in the
+//! list would. Used by the Quick View notification widget: the widget already showed the user
+//! which notification it is about, so landing them on the list to find it again is a step
+//! backwards. The list window stays underneath, so BACK still lands on it.
+//! @return true if the notification window was pushed.
+static bool prv_launch_into_notification(NotificationsData *data, Uuid id) {
+  // The notification may have been dismissed or aged out of storage between the widget being
+  // shown and the button press; fall back to the list rather than opening nothing.
+  if (!prv_find_notification(data->notification_list, &id)) {
+    return false;
+  }
+  if (!prv_push_notification_window(data)) {
+    return false;
+  }
+  notification_window_focus_notification(&id, false /* animated */);
+  return true;
 }
 
 ////////////////////
@@ -781,7 +798,14 @@ static void prv_handle_init(void) {
   event_service_client_subscribe(&data->notification_event_info);
   prv_load_notification_storage(data);
 
-  prv_push_window(data);
+  // Push the list first either way so it is what BACK returns to. When we go straight to a
+  // notification, its own push animation is the only one worth watching.
+  const NotificationsAppArgs *args = process_manager_get_current_process_args();
+  const bool deep_link = (args && !uuid_is_invalid(&args->notification_id));
+  prv_push_window(data, !deep_link /* animated */);
+  if (deep_link) {
+    prv_launch_into_notification(data, args->notification_id);
+  }
 }
 
 static void prv_handle_deinit(void) {

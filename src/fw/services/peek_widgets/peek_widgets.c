@@ -705,12 +705,15 @@ bool peek_widgets_handle_dismiss(void) {
 bool peek_widgets_get_launch(PeekWidgetLaunch *launch_out) {
   AppInstallId app_id = INSTALL_ID_INVALID;
   uint32_t launch_code = 0;
+  Uuid notification_id = UUID_INVALID;
   switch (s_state.shown) {
     case PeekWidgetSource_Music:
       app_id = APP_ID_MUSIC;
       break;
     case PeekWidgetSource_Notification:
       app_id = APP_ID_NOTIFICATIONS;
+      // Deep-link into the notification on screen, not the list it belongs to.
+      notification_id = s_state.notif_id;
       break;
     case PeekWidgetSource_App: {
       mutex_lock(s_state.app_lock);
@@ -734,6 +737,7 @@ bool peek_widgets_get_launch(PeekWidgetLaunch *launch_out) {
     *launch_out = (PeekWidgetLaunch) {
       .app_id = app_id,
       .launch_code = launch_code,
+      .notification_id = notification_id,
     };
   }
   return true;
