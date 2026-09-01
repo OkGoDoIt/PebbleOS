@@ -809,23 +809,45 @@ void test_peek_widgets__get_launch_per_source(void) {
   cl_assert(peek_widgets_get_launch(&launch));
   cl_assert_equal_i(launch.app_id, APP_ID_MUSIC);
   cl_assert_equal_i(launch.launch_code, 0);
+  cl_assert(uuid_is_invalid(&launch.notification_id));
 
   // App widget with a launch code
   prv_publish_app_widget(&s_app_uuid, "Kettle ready", 42, 0);
   cl_assert(peek_widgets_get_launch(&launch));
   cl_assert_equal_i(launch.app_id, 1234);
   cl_assert_equal_i(launch.launch_code, 42);
+  cl_assert(uuid_is_invalid(&launch.notification_id));
 
   // Timeline never provides a widget launch; its deep-link stays in the shell.
   s_test.pin_exists = true;
   prv_send_timeline_event(&s_pin_uuid, TimelinePeekTimeType_ShowStarted);
   cl_assert(!peek_widgets_get_launch(&launch));
 
-  // Notification launches the notifications app
+  // Notification launches the notifications app, carrying the notification it is showing so the
+  // app can open that one instead of its list.
   s_test.notif_exists = true;
   prv_send_notification_added(&s_notif_uuid);
   cl_assert(peek_widgets_get_launch(&launch));
   cl_assert_equal_i(launch.app_id, APP_ID_NOTIFICATIONS);
+  cl_assert_equal_uuid(launch.notification_id, s_notif_uuid);
+}
+
+void test_peek_widgets__get_launch_follows_the_newest_notification(void) {
+  PeekWidgetLaunch launch;
+  static const Uuid s_second_notif_uuid = {
+    0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+  };
+
+  s_test.notif_exists = true;
+  prv_send_notification_added(&s_notif_uuid);
+  // The fake storage holds one notification at a time; the second one supersedes the first.
+  s_test.stored_notif_id = s_second_notif_uuid;
+  prv_send_notification_added(&s_second_notif_uuid);
+
+  // The widget shows the notification that arrived last, so that is the one DOWN must open.
+  cl_assert(peek_widgets_get_launch(&launch));
+  cl_assert_equal_uuid(launch.notification_id, s_second_notif_uuid);
 }
 
 void test_peek_widgets__dismiss_does_nothing_for_timeline(void) {
