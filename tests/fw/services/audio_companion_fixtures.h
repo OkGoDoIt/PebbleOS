@@ -146,6 +146,12 @@ static const uint8_t s_fx_error_malformed[] = {
   0x45, 0x01, 0x00, 0x00, 0x00, 0x00,
 };
 
+// Info read while streaming from firmware that reports send backpressure: flags bit3 set, 1487 refused notifications in what used to be reserved1. Same 20 bytes as info_streaming, whose cleared bit3 means 'not reported' rather than 'never happened'
+static const uint8_t s_fx_info_backpressure[] = {
+  0x01, 0x01, 0x01, 0x03, 0x01, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x02, 0x00, 0x09, 0x04, 0xcf, 0x05, 0x00, 0x00,
+};
+
 // Info read while the feature pref is off and no receiver is bound
 static const uint8_t s_fx_info_disabled[] = {
   0x01, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -415,6 +421,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "data_unknown_id", FixtureChannelData, FixtureExpectIgnore, s_fx_data_unknown_id, 9 },
   { "enable_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_enable_request, 2 },
   { "error_malformed", FixtureChannelControlOut, FixtureExpectParse, s_fx_error_malformed, 6 },
+  { "info_backpressure", FixtureChannelInfo, FixtureExpectParse, s_fx_info_backpressure, 20 },
   { "info_disabled", FixtureChannelInfo, FixtureExpectParse, s_fx_info_disabled, 20 },
   { "info_streaming", FixtureChannelInfo, FixtureExpectParse, s_fx_info_streaming, 20 },
   { "info_truncated", FixtureChannelInfo, FixtureExpectReject, s_fx_info_truncated, 12 },
