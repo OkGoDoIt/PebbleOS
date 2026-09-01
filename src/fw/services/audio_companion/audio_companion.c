@@ -59,6 +59,26 @@
 //! stream produces, so a backlog catches up at a few times real time while leaving the transport
 //! idle between slices.
 #define DRAIN_MAX_BATCHES_PER_CALL (4)
+//! Catch-up ceiling. A backlog that only ever drains at a few times real time never recovers on a
+//! busy day, but the hazard above is *sustained* ring saturation, not burst size as such -- and
+//! bt_driver_audio_companion_notify_data() returning false is the transport saying it is full,
+//! which happens before the spin. So pace the burst additive-increase / multiplicative-decrease:
+//! widen it by DRAIN_BURST_STEP only after a whole slice was accepted while a real backlog
+//! remained, and collapse straight back to the base burst on the first refusal. The link never
+//! gets more than one over-sized slice before we retreat.
+//!
+//! 12 x (MTU-3) per 150 ms is ~19 KB/s, ~10x the ~2 KB/s the 16 kHz/20 ms Speex stream produces,
+//! and it is reached only after four consecutive clean slices (600 ms). The spool holds at most
+//! CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES (~98 s of audio), so the deepest possible backlog
+//! clears in ~8 s of bursting instead of ~23 s, after which the burst falls back to the base and
+//! the radio goes idle between slices again. Steady-state streaming never leaves the base burst,
+//! so ordinary airtime and battery are unchanged.
+#define DRAIN_MAX_BATCHES_CATCH_UP (12)
+#define DRAIN_BURST_STEP (2)
+//! Only widen once the backlog is deeper than a base slice can clear, so a single late frame
+//! cannot buy extra airtime.
+#define DRAIN_BURST_BACKLOG_FRAMES \
+  (AUDIO_COMPANION_MAX_FRAMES_PER_DATA_MSG * DRAIN_MAX_BATCHES_PER_CALL)
 //! Stop capturing if a streaming session goes this long with no control message from the
 //! receiver. The phone checkpoints every ~0.5-2 s while receiving, so a long silence means the
 //! app is gone even when the watch never saw a BLE disconnect (e.g. the receiver shares the link
@@ -161,6 +181,8 @@ static uint64_t s_stream_start_monotonic_ms;  //!< uptime captured at stream bir
 static TimerID s_drain_timer = TIMER_INVALID_ID;
 static TimerID s_catch_up_timer = TIMER_INVALID_ID;
 static bool s_catch_up_burst;
+//! Notifications this drain slice may send; ramps up under backlog, collapses on backpressure.
+static uint32_t s_drain_burst_cap = DRAIN_MAX_BATCHES_PER_CALL;
 static bool s_drain_cb_pending;        //!< a drain callback is queued; coalesces drain posts
 static bool s_capture_parked;          //!< capture stopped after offline overflow
 static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause began
@@ -805,11 +827,8 @@ static void prv_send_stream_stop_locked(uint8_t reason) {
   }
 }
 
-static bool prv_send_pending_gap_locked(void) {
+static bool prv_send_one_pending_gap_locked(void) {
   AudioCompanionSpoolPendingGap gap;
-  if (!audio_companion_spool_has_pending_gap()) {
-    return true;
-  }
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
   if (!audio_companion_spool_take_pending_gap(&gap)) {
@@ -831,6 +850,21 @@ static bool prv_send_pending_gap_locked(void) {
                                      gap.first_missing_sample_index, gap.reason);
     s_send_backpressure_events++;
     return false;
+  }
+  return true;
+}
+
+//! Flush every queued gap record, not one per slice. A gap notification is 26 bytes -- a tenth of
+//! a data batch -- and holding records back is what let the pending table fill up in the first
+//! place, which is where gap ranges used to lose their meaning. Bounded by the table size.
+static bool prv_send_pending_gaps_locked(void) {
+  for (uint32_t i = 0; i < AUDIO_COMPANION_MAX_PENDING_GAPS; i++) {
+    if (!audio_companion_spool_has_pending_gap()) {
+      return true;
+    }
+    if (!prv_send_one_pending_gap_locked()) {
+      return false;
+    }
   }
   return true;
 }
@@ -893,7 +927,28 @@ static void prv_check_receiver_liveness_locked(void) {
   prv_reevaluate_locked();  // session no longer ready -> AuthorizedIdle, drain timer stops
 }
 
-//! Sends at most DRAIN_MAX_BATCHES_PER_CALL notifications and returns. Anything still queued --
+//! AIMD pacing for the per-slice burst (see DRAIN_MAX_BATCHES_CATCH_UP). The transport refusing a
+//! notification is the only honest signal that the link is at its limit, so treat it as the
+//! decrease trigger and retreat all the way to the base burst.
+static void prv_update_drain_burst_locked(bool refused, bool burst_cap_bound) {
+  const uint32_t previous = s_drain_burst_cap;
+  if (refused || !burst_cap_bound ||
+      audio_companion_spool_frames_pending_send() < DRAIN_BURST_BACKLOG_FRAMES) {
+    s_drain_burst_cap = DRAIN_MAX_BATCHES_PER_CALL;
+  } else if (s_drain_burst_cap < DRAIN_MAX_BATCHES_CATCH_UP) {
+    s_drain_burst_cap += DRAIN_BURST_STEP;
+    if (s_drain_burst_cap > DRAIN_MAX_BATCHES_CATCH_UP) {
+      s_drain_burst_cap = DRAIN_MAX_BATCHES_CATCH_UP;
+    }
+  }
+  if (s_drain_burst_cap != previous) {
+    PBL_LOG_DBG("Audio companion drain burst %u -> %u (backlog=%" PRIu32 "%s)",
+                (unsigned)previous, (unsigned)s_drain_burst_cap,
+                audio_companion_spool_frames_pending_send(), refused ? ", refused" : "");
+  }
+}
+
+//! Sends at most s_drain_burst_cap notifications and returns. Anything still queued --
 //! because the batch cap was hit or because we stopped on BLE backpressure -- is picked up by the
 //! repeating drain timer, which is what paces us against the transport.
 static void prv_drain_locked(void) {
@@ -905,21 +960,27 @@ static void prv_drain_locked(void) {
   if (s_need_stream_start) {
     prv_send_stream_start_locked();
     if (s_need_stream_start) {
+      prv_update_drain_burst_locked(true, false);
       return;  // backpressure; retry on next drain
     }
   }
-  if (!prv_send_pending_gap_locked()) {
+  if (!prv_send_pending_gaps_locked()) {
+    prv_update_drain_burst_locked(true, false);
     return;
   }
+  const uint32_t burst_cap = s_drain_burst_cap;
   uint32_t batches_sent = 0;
+  bool refused = false;
   while (audio_companion_spool_frames_pending_send() > 0) {
     if (!prv_send_data_batch_locked()) {
-      break;  // BLE backpressure: the drain timer will retry shortly
+      refused = true;  // BLE backpressure: the drain timer will retry shortly
+      break;
     }
-    if (++batches_sent >= DRAIN_MAX_BATCHES_PER_CALL) {
+    if (++batches_sent >= burst_cap) {
       break;  // Burst cap: the drain timer continues within DRAIN_PERIOD_MS.
     }
   }
+  prv_update_drain_burst_locked(refused, batches_sent >= burst_cap);
   if (s_catch_up_burst && audio_companion_spool_frames_pending_send() == 0) {
     s_catch_up_burst = false;
     if (s_catch_up_timer != TIMER_INVALID_ID) {
@@ -1029,7 +1090,9 @@ static void prv_end_stream_locked(uint8_t stop_reason) {
   }
   prv_record_silence_gap_locked();
   if (prv_session_ready_locked() && !s_need_stream_start) {
-    prv_send_pending_gap_locked();
+    // Flush all of them: the spool reset below discards whatever is left, so a record held back
+    // here is loss the receiver never hears about.
+    prv_send_pending_gaps_locked();
   }
   prv_send_stream_stop_locked(stop_reason);
   s_stream_active = false;
@@ -1530,7 +1593,7 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
     return;
   }
   mutex_lock(s_lock);
-  uint8_t flags = 0;
+  uint8_t flags = AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER;
   if (audio_companion_auth_receiver_exists()) {
     flags |= AUDIO_COMPANION_INFO_FLAG_RECEIVER_BOUND;
   }
@@ -1547,6 +1610,7 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
     .service_state = (uint8_t)s_state,
     .codec_bitmap = 0x01,  // Speex wideband
     .flags = flags,
+    .send_backpressure_events = s_send_backpressure_events,
   };
   *length_in_out = audio_companion_protocol_build_info(buf, *length_in_out, &info);
   mutex_unlock(s_lock);
@@ -1956,6 +2020,7 @@ void audio_companion_test_reset(void) {
   s_drain_timer = TIMER_INVALID_ID;
   s_catch_up_timer = TIMER_INVALID_ID;
   s_catch_up_burst = false;
+  s_drain_burst_cap = DRAIN_MAX_BATCHES_PER_CALL;
   s_drain_cb_pending = false;
   s_capture_parked = false;
   s_pause_started_ms = 0;

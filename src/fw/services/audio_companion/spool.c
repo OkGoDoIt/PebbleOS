@@ -27,10 +27,7 @@
 #endif
 
 #define SPOOL_CHUNK_BYTES (4096)
-//! Records waiting to be notified as STREAM_GAP. Silence-suppression, overflow and pause gaps
-//! interleave while the link is stalled, so a handful of slots fills within seconds; 12 (384 B
-//! of static RAM) keeps the last-resort fold below genuinely rare.
-#define MAX_PENDING_GAPS (12)
+#define MAX_PENDING_GAPS AUDIO_COMPANION_MAX_PENDING_GAPS
 
 typedef struct PACKED {
   uint32_t sequence;
@@ -225,8 +222,8 @@ static void prv_merge_gap(uint32_t first_missing_sequence, uint32_t missing_fram
   prv_normalize_gaps();
 }
 
-//! Detach the oldest chunk, account its untrimmed frames as an overflow gap.
-//! Returns the detached chunk (not freed) or NULL if there is none.
+//! Detach the oldest chunk, accounting its untrimmed frames as one overflow gap per contiguous
+//! run of sequences. Returns the detached chunk (not freed) or NULL if there is none.
 static SpoolChunk *prv_drop_oldest_chunk(void) {
   SpoolChunk *chunk = s_head;
   if (!chunk) {

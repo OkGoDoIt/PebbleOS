@@ -129,6 +129,9 @@ typedef enum {
 #define AUDIO_COMPANION_INFO_FLAG_RECEIVER_BOUND (1u << 0)
 #define AUDIO_COMPANION_INFO_FLAG_ENABLED (1u << 1)
 #define AUDIO_COMPANION_INFO_FLAG_CONSENT_PENDING (1u << 2)
+//! send_backpressure_events carries a real count. Firmware that predates the field leaves those
+//! bytes zero, which is indistinguishable from "no backpressure" without this bit.
+#define AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER (1u << 3)
 
 //! STREAM_START flags. RESUME marks a re-announcement of an already-running stream to a freshly
 //! (re)attached receiver: the receiver must take the first STREAM_DATA/STREAM_GAP sequence as the
@@ -147,7 +150,11 @@ typedef struct PACKED {
   uint16_t reserved0;
   uint32_t watch_capabilities;
   uint32_t fw_version_packed;
-  uint32_t reserved1;
+  //! Notifications the transport refused since service init. Distinguishes airtime loss (this
+  //! climbs while audio is missing: the radio could not keep up) from credit starvation (this
+  //! stays flat: the receiver stopped checkpointing, so the spool never freed). Valid only when
+  //! AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER is set. Was reserved1.
+  uint32_t send_backpressure_events;
 } AudioCompanionInfo;
 
 typedef struct PACKED {

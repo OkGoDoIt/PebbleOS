@@ -592,6 +592,105 @@ void test_audio_companion__checkpoint_trims_durable_frames(void) {
   cl_assert_equal_i(stats.frames_queued, 0);
 }
 
+//! Runs one drain slice and returns how many STREAM_DATA notifications it emitted. A backlog
+//! keeps every fed frame over the push threshold, so feeding one frame posts the next drain.
+static uint32_t prv_run_drain_slice(void) {
+  s_data_count = 0;
+  prv_feed_frame();
+  fake_system_task_callbacks_invoke_pending();
+  uint32_t batches = 0;
+  for (uint32_t i = 0; i < s_data_count; i++) {
+    if (s_data_notifications[i].data[0] == AudioCompanionDataMsgIdStreamData) {
+      batches++;
+    }
+  }
+  return batches;
+}
+
+//! A backlog must be allowed to catch up faster than the steady-state slice, or a watch that fell
+//! behind never recovers. The widening is additive and only while the transport takes everything
+//! offered, so the link is probed rather than flooded.
+void test_audio_companion__drain_burst_widens_under_backlog(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // Build a deep backlog with the transport refusing everything.
+  // Deep enough that the ramp reaches its ceiling with a real backlog still behind it: the
+  // slices below consume 4+6+8+10+12+12 batches of 32 frames.
+  s_notify_data_succeeds = false;
+  for (uint32_t i = 0; i < 6000; i++) {
+    prv_feed_frame();
+  }
+  fake_system_task_callbacks_invoke_pending();
+  s_notify_data_succeeds = true;
+
+  // Slice 1 also carries STREAM_START; the data batches still obey the base burst.
+  cl_assert_equal_i(prv_run_drain_slice(), 4);
+  cl_assert_equal_i(prv_run_drain_slice(), 6);
+  cl_assert_equal_i(prv_run_drain_slice(), 8);
+  cl_assert_equal_i(prv_run_drain_slice(), 10);
+  cl_assert_equal_i(prv_run_drain_slice(), 12);
+  cl_assert_equal_i(prv_run_drain_slice(), 12);  // ceiling holds
+}
+
+//! The transport refusing a notification is the signal that the link is at its limit, so the
+//! burst must collapse to the base immediately rather than keep offering over-sized slices.
+void test_audio_companion__drain_burst_collapses_on_backpressure(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  // Deep enough that the ramp reaches its ceiling with a real backlog still behind it: the
+  // slices below consume 4+6+8+10+12+12 batches of 32 frames.
+  s_notify_data_succeeds = false;
+  for (uint32_t i = 0; i < 6000; i++) {
+    prv_feed_frame();
+  }
+  fake_system_task_callbacks_invoke_pending();
+  s_notify_data_succeeds = true;
+
+  cl_assert_equal_i(prv_run_drain_slice(), 4);
+  cl_assert_equal_i(prv_run_drain_slice(), 6);
+  cl_assert_equal_i(prv_run_drain_slice(), 8);
+  cl_assert_equal_i(prv_run_drain_slice(), 10);
+  cl_assert_equal_i(prv_run_drain_slice(), 12);
+
+  // The link stops accepting: the next slice sends nothing and the burst resets.
+  s_notify_data_succeeds = false;
+  cl_assert_equal_i(prv_run_drain_slice(), 0);
+  s_notify_data_succeeds = true;
+  cl_assert_equal_i(prv_run_drain_slice(), 4);
+}
+
+//! Backpressure is what tells the phone the radio could not keep up, as opposed to the phone
+//! having stopped checkpointing. It has to be readable from Info, not just the on-watch menu.
+void test_audio_companion__info_reports_send_backpressure_events(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  uint8_t buf[AUDIO_COMPANION_INFO_SIZE];
+  size_t length = sizeof(buf);
+  audio_companion_fill_info(buf, &length);
+  cl_assert_equal_i(length, AUDIO_COMPANION_INFO_SIZE);
+  AudioCompanionInfo info;
+  memcpy(&info, buf, sizeof(info));
+  cl_assert_equal_i(info.info_version, 1);
+  cl_assert(info.flags & AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER);
+  cl_assert_equal_i(info.send_backpressure_events, 0);
+
+  s_notify_data_succeeds = false;
+  prv_feed_frames(8);
+  s_notify_data_succeeds = true;
+
+  length = sizeof(buf);
+  audio_companion_fill_info(buf, &length);
+  memcpy(&info, buf, sizeof(info));
+  cl_assert(info.send_backpressure_events > 0);
+}
+
 void test_audio_companion__reconnect_uses_short_catch_up_burst(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);

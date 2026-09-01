@@ -49,11 +49,20 @@ A fixed 20-byte snapshot:
 | 2 | 1 | `protocol_max` | highest protocol version the watch speaks (= 1) |
 | 3 | 1 | `service_state` | enum, Section 7 |
 | 4 | 1 | `codec_bitmap` | bit0 = Speex wideband |
-| 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending |
+| 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending, bit3 = `send_backpressure_events` is meaningful |
 | 6 | 2 | `reserved0` | 0 |
 | 8 | 4 | `watch_capabilities` | reserved bitfield, 0 |
 | 12 | 4 | `fw_version_packed` | `(major << 24) \| (minor << 16) \| patch`, diagnostics only |
-| 16 | 4 | `reserved1` | 0 |
+| 16 | 4 | `send_backpressure_events` | notifications the transport refused since service init; 0 unless `flags` bit3 is set |
+
+`send_backpressure_events` was `reserved1`, so the layout, the 20-byte size and `info_version`
+are unchanged and a receiver that ignores the field is unaffected. It exists so the phone can
+tell two failure modes apart that otherwise look identical from the outside: **airtime loss**
+(this counter climbing while audio goes missing — the radio could not absorb the stream, and the
+answer is a better link or less contention) and **credit starvation** (this counter flat while
+audio still goes missing — the receiver stopped checkpointing, so the spool never freed and the
+fix is on the phone). Because firmware that predates the field leaves those bytes zero, a
+receiver must check `flags` bit3 before trusting a zero.
 
 ## 4. Control Channel
 

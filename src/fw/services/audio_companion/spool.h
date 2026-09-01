@@ -20,6 +20,11 @@
 //! are kept for resend after a reconnect (audio_companion_spool_rewind_unsent).
 //! Not thread-safe; callers hold the service lock.
 
+//! Gap records waiting to be notified as STREAM_GAP. Silence-suppression, overflow and pause gaps
+//! interleave while the link is stalled, so a handful of slots fills within seconds; 12 (384 B of
+//! static RAM) keeps the last-resort fold in prv_coalesce_cheapest_pair() genuinely rare.
+#define AUDIO_COMPANION_MAX_PENDING_GAPS (12)
+
 typedef struct {
   bool valid;
   uint32_t first_missing_sequence;
