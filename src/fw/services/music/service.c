@@ -254,6 +254,24 @@ static void prv_update_string_and_put_event(const char *value, size_t value_leng
   prv_put_now_playing_changed_event();
 }
 
+//! Same as prv_update_string_and_put_event, but for the title/artist/album fields, which identify
+//! the track. Backends that deliver the now playing metadata field-by-field (AMS sends artist,
+//! album and title as three separate entity updates) land here instead of in
+//! music_update_now_playing(), so bump the generation here too. Without this, the generation never
+//! moves on iOS and everything keyed off it - the Quick View music widget's re-render and the Music
+//! app's album art re-request - keeps showing the previous track's data.
+static void prv_update_track_string_and_put_event(const char *value, size_t value_length,
+                                                  off_t offset) {
+  mutex_lock_recursive(s_music_ctx.mutex);
+  char *buffer = ((char *) &s_music_ctx) + offset;
+  if (prv_str_differs(buffer, value, value_length)) {
+    s_music_ctx.now_playing_generation++;
+  }
+  copy_and_truncate(buffer, value, value_length);
+  mutex_unlock_recursive(s_music_ctx.mutex);
+  prv_put_now_playing_changed_event();
+}
+
 void music_update_player_name(const char *player_name, size_t player_name_length) {
   // TODO: actually do something with this
   off_t o = offsetof(__typeof__(s_music_ctx), player_name);
@@ -262,17 +280,17 @@ void music_update_player_name(const char *player_name, size_t player_name_length
 
 void music_update_track_title(const char *title, size_t title_length) {
   off_t o = offsetof(__typeof__(s_music_ctx), title);
-  prv_update_string_and_put_event(title, title_length, o);
+  prv_update_track_string_and_put_event(title, title_length, o);
 }
 
 void music_update_track_artist(const char *artist, size_t artist_length) {
   off_t o = offsetof(__typeof__(s_music_ctx), artist);
-  prv_update_string_and_put_event(artist, artist_length, o);
+  prv_update_track_string_and_put_event(artist, artist_length, o);
 }
 
 void music_update_track_album(const char *album, size_t album_length) {
   off_t o = offsetof(__typeof__(s_music_ctx), album);
-  prv_update_string_and_put_event(album, album_length, o);
+  prv_update_track_string_and_put_event(album, album_length, o);
 }
 
 static void prv_put_pos_changed_event(void) {
