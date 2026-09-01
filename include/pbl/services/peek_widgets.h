@@ -34,6 +34,9 @@ typedef enum PeekWidgetSource {
 typedef struct PeekWidgetLaunch {
   AppInstallId app_id;
   uint32_t launch_code;
+  //! The notification the widget is showing, for PeekWidgetSource_Notification, so the
+  //! Notifications app can open that notification rather than its list. UUID_INVALID otherwise.
+  Uuid notification_id;
 } PeekWidgetLaunch;
 
 //! Longest app-widget title and subtitle, in bytes of UTF-8 excluding the terminator.
