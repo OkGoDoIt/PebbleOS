@@ -84,6 +84,22 @@
 //! app is gone even when the watch never saw a BLE disconnect (e.g. the receiver shares the link
 //! with the official app and only dropped its own GATT connection).
 #define RECEIVER_LIVENESS_TIMEOUT_MS (15 * 1000)
+//! How long a continuously suppressed silence runs before the watch probes its receiver.
+//!
+//! While suppressing, the watch deliberately sends nothing at all -- which is exactly why
+//! prv_check_receiver_liveness_locked() skips its check: on iOS a perfectly healthy receiver is
+//! suspended during the quiet, precisely BECAUSE no notifications are arriving to wake it, and
+//! stopping capture on it would be a bug far worse than the one the check prevents.
+//!
+//! But "skipped" had become "off". prv_drain_locked() -- the only caller of that check -- stops
+//! its own timer once suppressing with nothing pending, so a receiver that really was gone (the
+//! app force-quit, the phone rebooted) left the microphone running and the state reading
+//! "Streaming" indefinitely, which is the one outcome the check exists to prevent.
+//!
+//! So probe rather than assume. One control notification wakes a suspended iOS app, whose
+//! keepalive then re-arms liveness through the ordinary path; capture stops only if the probe
+//! itself goes unanswered.
+#define SILENCE_PROBE_INTERVAL_MS (60 * 1000)
 #define CONSENT_TIMEOUT_MS (AUDIO_COMPANION_CONSENT_TIMEOUT_SECONDS * 1000)
 #define LOW_BATTERY_RESUME_HYSTERESIS_PCT (5)
 //! Alert when this many frames have been lost since the last alert (30 s of audio).
@@ -189,6 +205,8 @@ static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause be
 static uint8_t s_pending_resume_gap_reason;
 static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control message received
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
+static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
+static bool s_silence_probe_outstanding;  //!< a suppressed-silence probe is awaiting an answer
 
 // Policy inputs
 static bool s_mic_conflict_active;
@@ -228,6 +246,8 @@ static void prv_drain_system_task_cb(void *data);
 static void prv_post_drain_cb(void);
 static void prv_start_drain_timer_locked(void);
 static void prv_stop_drain_timer_locked(void);
+static void prv_arm_silence_probe_locked(uint32_t delay_ms);
+static void prv_stop_silence_probe_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
 static void prv_apply_pending(void);
 
@@ -293,6 +313,7 @@ static void prv_reset_silence_suppression_locked(void) {
   s_silence_gap_first_sequence = 0;
   s_silence_gap_first_sample_index = 0;
   if (was_suppressing) {
+    prv_stop_silence_probe_locked();
     prv_update_ble_responsiveness_locked();
   }
 }
@@ -379,6 +400,13 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
 static void prv_note_receiver_activity_locked(void) {
   s_last_receiver_activity_ms = prv_uptime_ms();
   s_receiver_presumed_gone = false;
+  if (s_silence_probe_outstanding) {
+    // The probe did its job: the receiver was asleep, not gone. Go back to the long cadence.
+    s_silence_probe_outstanding = false;
+    if (s_silence_suppressing) {
+      prv_arm_silence_probe_locked(SILENCE_PROBE_INTERVAL_MS);
+    }
+  }
 }
 
 static void prv_notify_control_locked(const uint8_t *data, size_t length) {
@@ -991,6 +1019,12 @@ static void prv_drain_locked(void) {
   if (s_silence_suppressing && audio_companion_spool_frames_pending_send() == 0 &&
       !audio_companion_spool_has_pending_gap()) {
     prv_stop_drain_timer_locked();
+    // Stopping this timer also stops the only caller of prv_check_receiver_liveness_locked().
+    // Hand that job to the probe rather than leaving the microphone unwatched for the whole
+    // quiet, which on a real device is minutes or hours.
+    if (!s_silence_probe_outstanding) {
+      prv_arm_silence_probe_locked(SILENCE_PROBE_INTERVAL_MS);
+    }
   }
 }
 
@@ -1031,6 +1065,8 @@ static void prv_drain_timer_cb(void *data) {
 }
 
 static void prv_start_drain_timer_locked(void) {
+  // The drain timer calls the liveness check itself, so the probe has nothing left to cover.
+  prv_stop_silence_probe_locked();
   if (s_drain_timer == TIMER_INVALID_ID) {
     s_drain_timer = new_timer_create();
   }
@@ -1042,6 +1078,53 @@ static void prv_stop_drain_timer_locked(void) {
   if (s_drain_timer != TIMER_INVALID_ID) {
     new_timer_stop(s_drain_timer);
   }
+}
+
+static void prv_stop_silence_probe_locked(void) {
+  s_silence_probe_outstanding = false;
+  if (s_silence_probe_timer != TIMER_INVALID_ID) {
+    new_timer_stop(s_silence_probe_timer);
+  }
+}
+
+//! Runs on the system task: sends the probe, or acts on one that was never answered.
+static void prv_silence_probe_system_task_cb(void *data) {
+  mutex_lock(s_lock);
+  if (s_state != AudioCompanionServiceStateStreaming || !s_silence_suppressing ||
+      !prv_session_ready_locked()) {
+    // Conditions moved on under us (audio resumed, the session went away). Nothing to probe.
+    prv_stop_silence_probe_locked();
+  } else if (s_silence_probe_outstanding) {
+    // We spoke to the receiver and it did not answer within the liveness window. That is the
+    // case the watchdog exists for: stop the microphone and let the state fall back to
+    // AuthorizedIdle, exactly as the drain-driven check would have.
+    PBL_LOG_WRN("Audio companion: silence probe unanswered; presuming receiver gone");
+    s_silence_probe_outstanding = false;
+    s_receiver_presumed_gone = true;
+    prv_stop_capture_locked();
+    prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
+    prv_reevaluate_locked();
+  } else {
+    PBL_LOG_DBG("Audio companion: probing the receiver during suppressed silence");
+    s_silence_probe_outstanding = true;
+    // Any control notification will do; the state push is the one that also tells a receiver
+    // whose picture has gone stale what we are actually doing.
+    prv_send_state_changed_locked();
+    prv_arm_silence_probe_locked(RECEIVER_LIVENESS_TIMEOUT_MS);
+  }
+  mutex_unlock(s_lock);
+  prv_apply_pending();  // the branch above can drop capture intent
+}
+
+static void prv_silence_probe_timer_cb(void *data) {
+  system_task_add_callback(prv_silence_probe_system_task_cb, NULL);
+}
+
+static void prv_arm_silence_probe_locked(uint32_t delay_ms) {
+  if (s_silence_probe_timer == TIMER_INVALID_ID) {
+    s_silence_probe_timer = new_timer_create();
+  }
+  new_timer_start(s_silence_probe_timer, delay_ms, prv_silence_probe_timer_cb, NULL, 0);
 }
 
 // ---- State machine ----
@@ -1258,6 +1341,19 @@ static void prv_handle_auth_request_locked(const AudioCompanionAuthRequest *req)
       break;
     case AudioCompanionAuthEvalNoReceiver:
       if (s_consent.pending) {
+        // A receiver re-authorizing mid-consent is the SAME receiver on a NEW GATT session -- an
+        // app relaunch, or a resync on an ACL the watch never saw drop, either of which happens
+        // easily inside the 60 s a person takes to answer the prompt. The consent answer is
+        // addressed by request token, so unless we adopt the new one the eventual AUTH_RESULT
+        // names a token the app has already forgotten: the app drops the reply, never authorizes,
+        // and both sides wait forever. Nothing clears it either -- the consent state is cleared
+        // only by a BLE disconnect, which by construction did not happen.
+        if (memcmp(req->receiver_id, s_consent.receiver_id,
+                   AUDIO_COMPANION_RECEIVER_ID_BYTES) == 0) {
+          s_consent.request_token = req->request_token;
+          s_consent.proto_version = req->proto_version;
+          strncpy(s_consent.name, req->name, AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES);
+        }
         prv_send_auth_result_locked(req->request_token,
                                     AudioCompanionAuthStatusPendingUserConsent, 0);
         break;
@@ -1994,6 +2090,9 @@ PebbleMutex *audio_companion_test_get_lock(void) { return s_lock; }
 //! Re-arm the once-per-boot reboot-trace capture so a test can simulate consecutive boots.
 void audio_companion_test_force_reboot_trace_capture(void) { s_reboot_trace_recorded = false; }
 
+//! The suppressed-silence receiver probe's timer, so a test can fire it deterministically.
+TimerID audio_companion_test_get_silence_probe_timer(void) { return s_silence_probe_timer; }
+
 void audio_companion_test_reset(void) {
   audio_companion_spool_reset();
   s_lock = NULL;
@@ -2032,6 +2131,8 @@ void audio_companion_test_reset(void) {
   s_pending_resume_gap_reason = 0;
   s_last_receiver_activity_ms = 0;
   s_receiver_presumed_gone = false;
+  s_silence_probe_timer = TIMER_INVALID_ID;
+  s_silence_probe_outstanding = false;
   s_mic_conflict_active = false;
   s_receiver_pause_requested = false;
   s_low_battery = false;

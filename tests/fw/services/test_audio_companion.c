@@ -25,6 +25,7 @@
 
 void audio_companion_test_reset(void);
 PebbleMutex *audio_companion_test_get_lock(void);
+TimerID audio_companion_test_get_silence_probe_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
 
 #define MAX_CAPTURED_NOTIFICATIONS (32)
@@ -62,6 +63,7 @@ static bool s_auth_store_succeeds;
 static bool s_auth_forget_called;
 static char s_auth_name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES + 1];
 static bool s_enable_prompted;
+static bool s_consent_prompted;
 
 static bool s_voice_speex_initialized;
 static int16_t s_voice_frame_buffer[AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES];
@@ -375,6 +377,19 @@ static void prv_enable_handler(void) {
   s_enable_prompted = true;
 }
 
+static void prv_consent_handler(const char *name) {
+  s_consent_prompted = true;
+}
+
+static void prv_build_receiver_health(uint8_t *buf, size_t *length_out, uint8_t token) {
+  const AudioCompanionReceiverHealthMsg health = {
+    .msg_id = AudioCompanionCtrlMsgIdReceiverHealth,
+    .request_token = token,
+  };
+  memcpy(buf, &health, sizeof(health));
+  *length_out = sizeof(health);
+}
+
 static void prv_send_control(const uint8_t *buf, size_t length) {
   audio_companion_handle_control_write(buf, length);
   fake_system_task_callbacks_invoke_pending();
@@ -383,6 +398,14 @@ static void prv_send_control(const uint8_t *buf, size_t length) {
 static void prv_subscribe(bool data, bool control) {
   audio_companion_handle_subscription_change(data, control);
   fake_system_task_callbacks_invoke_pending();
+}
+
+//! The receiver's idle keepalive, which is what answers a suppressed-silence probe.
+static void prv_send_receiver_health(uint8_t token) {
+  uint8_t buf[sizeof(AudioCompanionReceiverHealthMsg)];
+  size_t length = 0;
+  prv_build_receiver_health(buf, &length, token);
+  prv_send_control(buf, length);
 }
 
 static void prv_authenticate(void) {
@@ -467,6 +490,7 @@ void test_audio_companion__initialize(void) {
   s_auth_forget_called = false;
   strcpy(s_auth_name, "Audio App");
   s_enable_prompted = false;
+  s_consent_prompted = false;
   s_voice_speex_initialized = false;
   s_encoded_counter = 0;
   s_mic_running = false;
@@ -1143,6 +1167,142 @@ void test_audio_companion__light_silence_suppression_resumes_on_quiet_speech(voi
   memcpy(&gap_msg, gap->data, sizeof(gap_msg));
   cl_assert_equal_i(gap_msg.reason, AudioCompanionGapReasonSilenceSuppressed);
   cl_assert(gap_msg.missing_frame_count >= 50);
+}
+
+// While silence suppression is active the watch sends nothing, so the drain timer stops -- and
+// the drain timer is the only caller of the receiver-liveness check. The check itself also skips
+// while suppressing, on purpose: on iOS a healthy receiver is suspended during the quiet PRECISELY
+// because no notifications are arriving to wake it, and stopping capture on a working receiver
+// would be far worse than the bug being prevented.
+//
+// The result was that the watchdog was not merely skipped, it was off. A receiver that really was
+// gone -- app force-quit, phone rebooted -- left the microphone running and the state reading
+// Streaming for as long as the room stayed quiet. So: probe, and stop only if nobody answers.
+void test_audio_companion__silence_probe_asks_before_presuming_the_receiver_gone(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  // Long enough to enter suppression. On a real watch the repeating drain timer is what stands
+  // itself down once the spool has emptied; here it has to be fired explicitly.
+  prv_feed_silence_frames(255);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  stub_new_timer_invoke(1);
+  fake_system_task_callbacks_invoke_pending();
+
+  const TimerID probe = audio_companion_test_get_silence_probe_timer();
+  cl_assert(probe != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
+
+  // First firing PROBES: a control notification (which is what wakes a suspended iOS app).
+  s_control_count = 0;
+  cl_assert_equal_b(stub_new_timer_fire(probe), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(prv_last_control_msg(AudioCompanionCtrlMsgIdStateChanged));
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
+
+  // A receiver that answers is asleep, not gone: capture keeps running and the long cadence
+  // resumes.
+  prv_send_receiver_health(0x40);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
+
+  // Nobody answers the next one, and only then does the microphone stop.
+  cl_assert_equal_b(stub_new_timer_fire(probe), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert_equal_b(stub_new_timer_fire(probe), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
+  cl_assert_equal_b(mic_is_running(NULL), false);
+}
+
+// ...and audio resuming retires the probe outright: the drain timer is running again, and it
+// calls the liveness check itself.
+void test_audio_companion__silence_probe_stands_down_when_audio_resumes(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_silence_frames(255);
+  stub_new_timer_invoke(1);
+  fake_system_task_callbacks_invoke_pending();
+
+  const TimerID probe = audio_companion_test_get_silence_probe_timer();
+  cl_assert(probe != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
+
+  prv_feed_frames(4);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(probe), false);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
+// First pairing, and the only path with a human in the middle of it. A receiver that
+// re-authorizes while the watch is still waiting for the person to answer is the SAME receiver on
+// a NEW GATT session -- an app relaunch, or a resync on an ACL the watch never saw drop, either of
+// which happens easily inside the sixty seconds someone takes to look at their wrist.
+//
+// The consent answer is addressed by request token. Answering the FIRST requester's token names a
+// token the app has already forgotten, so it drops the reply and never authorizes -- and nothing
+// clears that, because the consent state is cleared only by a BLE disconnect that by construction
+// did not happen. Both sides then wait forever.
+void test_audio_companion__consent_answers_the_latest_requester(void) {
+  s_auth_eval = AudioCompanionAuthEvalNoReceiver;
+  audio_companion_set_consent_handler(prv_consent_handler);
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+
+  uint8_t buf[64];
+  size_t length = 0;
+  prv_build_auth_request(buf, &length, 0x11);
+  prv_send_control(buf, length);
+  cl_assert_equal_b(s_consent_prompted, true);
+
+  // The app's session is rebuilt mid-prompt and it asks again with a fresh token.
+  prv_build_auth_request(buf, &length, 0x22);
+  prv_send_control(buf, length);
+
+  s_control_count = 0;
+  audio_companion_handle_consent_response(true);
+  fake_system_task_callbacks_invoke_pending();
+
+  const CapturedNotification *result = prv_last_control_msg(AudioCompanionCtrlMsgIdAuthResult);
+  cl_assert(result);
+  AudioCompanionAuthResultMsg msg;
+  memcpy(&msg, result->data, sizeof(msg));
+  cl_assert_equal_i(msg.status, AudioCompanionAuthStatusOk);
+  cl_assert_equal_i(msg.request_token, 0x22);
+}
+
+// ...and a DIFFERENT receiver asking mid-prompt must not be able to steal the answer the person
+// is about to give to the first one.
+void test_audio_companion__consent_ignores_a_different_receiver_mid_prompt(void) {
+  s_auth_eval = AudioCompanionAuthEvalNoReceiver;
+  audio_companion_set_consent_handler(prv_consent_handler);
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+
+  uint8_t buf[64];
+  size_t length = 0;
+  prv_build_auth_request(buf, &length, 0x11);
+  prv_send_control(buf, length);
+
+  // Same message shape, different receiver id.
+  prv_build_auth_request(buf, &length, 0x33);
+  buf[offsetof(AudioCompanionAuthRequestHeader, receiver_id)] ^= 0xFF;
+  prv_send_control(buf, length);
+
+  s_control_count = 0;
+  audio_companion_handle_consent_response(true);
+  fake_system_task_callbacks_invoke_pending();
+
+  const CapturedNotification *result = prv_last_control_msg(AudioCompanionCtrlMsgIdAuthResult);
+  cl_assert(result);
+  AudioCompanionAuthResultMsg msg;
+  memcpy(&msg, result->data, sizeof(msg));
+  cl_assert_equal_i(msg.request_token, 0x11);
 }
 
 void test_audio_companion__prefs_loaded_restores_settings_after_boot(void) {
