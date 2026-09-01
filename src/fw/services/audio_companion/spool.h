@@ -32,6 +32,10 @@ typedef struct {
   uint32_t pushed_frames;
   uint32_t dropped_overflow_frames;
   uint32_t gap_records;
+  //! Present frames a full pending-gap table forced into a neighbouring record's range, plus
+  //! frames whose reason such a fold changed. Nonzero means reported gap ranges are wider than
+  //! the truth, so it is worth seeing rather than degrading silently.
+  uint32_t gap_coalesced_frames;
   uint32_t frames_queued;       //!< frames currently held (trim point .. newest)
   uint32_t frames_pending_send; //!< frames at/after the drain cursor
   uint32_t current_bytes;       //!< currently allocated chunk bytes
@@ -44,9 +48,10 @@ void audio_companion_spool_deinit(void);
 //! Clears frames, cursors, pending gap, and counters; keeps no memory.
 void audio_companion_spool_reset(void);
 
-//! Append one encoded frame. On overflow the oldest chunk is dropped and the
-//! loss is merged into the pending gap record. Returns false only if the frame
-//! could not be stored at all (allocation failure below the floor).
+//! Append one encoded frame. On overflow the oldest chunk is dropped and each
+//! contiguous run of lost sequences becomes (or extends) a pending gap record.
+//! Returns false only if the frame could not be stored at all (allocation
+//! failure below the floor).
 bool audio_companion_spool_push(uint32_t sequence, uint64_t sample_index,
                                 const uint8_t *payload, uint16_t length);
 
@@ -71,6 +76,9 @@ void audio_companion_spool_trim_through(uint32_t sequence);
 //! Reset the drain cursor back to the oldest retained frame (reconnect resend).
 void audio_companion_spool_rewind_unsent(void);
 
+//! Record a lost span. Merges only into a same-reason record whose range abuts it exactly, so a
+//! record always describes the span it actually covers. Pending records are kept sorted by
+//! sequence and taken oldest-first.
 void audio_companion_spool_record_gap(uint32_t first_missing_sequence,
                                       uint32_t missing_frame_count,
                                       uint64_t first_missing_sample_index, uint8_t reason);

@@ -290,6 +290,144 @@ void test_audio_companion_spool__explicit_gap_records_merge(void) {
   cl_assert_equal_i(stats.gap_records, 1);
 }
 
+//! A ring fill whose sequence space has holes (a pause or suppressed silence consumed sequence
+//! numbers without pushing frames) must report one record per contiguous run of lost frames,
+//! never one span stretched across the hole.
+void test_audio_companion_spool__overflow_gap_splits_at_sequence_holes(void) {
+  audio_companion_spool_test_set_heap_free_bytes(0);  // pin the spool at its 2-chunk floor
+
+  // Three runs separated by 1000-sequence holes, 100 frames each. Only the newest ~126 frames
+  // survive, so the first run and part of the second are dropped by the ring.
+  for (uint32_t run = 0; run < 3; run++) {
+    prv_push_range(run * 1000, 100);
+  }
+
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert(stats.dropped_overflow_frames > 0);
+  cl_assert_equal_i(stats.gap_coalesced_frames, 0);
+
+  // Every reported range must lie inside a run that was actually pushed, and the reported frames
+  // must add up to exactly what the ring dropped.
+  uint32_t reported = 0;
+  AudioCompanionSpoolPendingGap gap;
+  uint32_t previous_end = 0;
+  while (audio_companion_spool_take_pending_gap(&gap)) {
+    cl_assert_equal_i(gap.reason, AudioCompanionGapReasonSpoolOverflow);
+    cl_assert(gap.missing_frame_count > 0);
+    const uint32_t run = gap.first_missing_sequence / 1000;
+    const uint32_t offset_in_run = gap.first_missing_sequence % 1000;
+    cl_assert(run < 3);
+    // The whole claimed range stays within the 100 frames that run actually contained.
+    cl_assert(offset_in_run + gap.missing_frame_count <= 100);
+    cl_assert(gap.first_missing_sample_index == prv_sample_index(gap.first_missing_sequence));
+    cl_assert(gap.first_missing_sequence >= previous_end);  // sorted, non-overlapping
+    previous_end = gap.first_missing_sequence + gap.missing_frame_count;
+    reported += gap.missing_frame_count;
+  }
+  cl_assert_equal_i(reported, stats.dropped_overflow_frames);
+}
+
+//! Loss that arrives while the pending table is full must keep its own range instead of being
+//! added to whatever record happens to be newest.
+void test_audio_companion_spool__full_gap_table_keeps_ranges_truthful(void) {
+  // 12 slots, all distinct reasons-and-ranges, none abutting: fill the table.
+  const uint8_t reasons[] = {
+    AudioCompanionGapReasonMicConflict,   AudioCompanionGapReasonUserDisabled,
+    AudioCompanionGapReasonLowBattery,    AudioCompanionGapReasonCodecError,
+    AudioCompanionGapReasonTransportReset, AudioCompanionGapReasonPowerSave,
+  };
+  for (uint32_t i = 0; i < 12; i++) {
+    const uint32_t start = 100 + i * 100;
+    audio_companion_spool_record_gap(start, 5, prv_sample_index(start),
+                                     reasons[i % 6]);
+  }
+
+  // One more, far away from everything already queued.
+  audio_companion_spool_record_gap(9000, 7, prv_sample_index(9000),
+                                   AudioCompanionGapReasonSpoolOverflow);
+
+  bool found_new = false;
+  uint32_t previous_end = 0;
+  AudioCompanionSpoolPendingGap gap;
+  while (audio_companion_spool_take_pending_gap(&gap)) {
+    cl_assert(gap.first_missing_sequence >= previous_end);
+    previous_end = gap.first_missing_sequence + gap.missing_frame_count;
+    if (gap.reason != AudioCompanionGapReasonSpoolOverflow) {
+      // No pre-existing record may be stretched over the new loss at 9000.
+      cl_assert(previous_end <= 9000);
+      continue;
+    }
+    // The new loss kept its own range exactly.
+    cl_assert_equal_i(gap.first_missing_sequence, 9000);
+    cl_assert_equal_i(gap.missing_frame_count, 7);
+    found_new = true;
+  }
+  cl_assert(found_new);
+
+  // The fold that freed the slot is accounted, not silent.
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert(stats.gap_coalesced_frames > 0);
+}
+
+//! Suppressed silence must never absorb genuine loss: the phone renders silence as "quiet" and
+//! hides it from the coverage timeline, so a fold in that direction would erase real loss.
+void test_audio_companion_spool__fold_never_reports_loss_as_silence(void) {
+  for (uint32_t i = 0; i < 12; i++) {
+    const uint32_t start = 100 + i * 100;
+    // The newest slot holds a silence record: that is the one the old code dumped onto.
+    audio_companion_spool_record_gap(start, 5, prv_sample_index(start),
+                                     (i % 2 == 1) ? AudioCompanionGapReasonSilenceSuppressed
+                                                  : AudioCompanionGapReasonSpoolOverflow);
+  }
+  audio_companion_spool_record_gap(9000, 7, prv_sample_index(9000),
+                                   AudioCompanionGapReasonMicConflict);
+
+  // Sum the frames each reason claims. Folding may widen a loss record over a silence record,
+  // but never the reverse, so the silence total can only shrink.
+  uint32_t silence_frames = 0;
+  AudioCompanionSpoolPendingGap gap;
+  while (audio_companion_spool_take_pending_gap(&gap)) {
+    if (gap.reason == AudioCompanionGapReasonSilenceSuppressed) {
+      silence_frames += gap.missing_frame_count;
+    }
+  }
+  cl_assert(silence_frames <= 6 * 5);
+}
+
+//! Records that abut each other merge exactly, regardless of which slot holds the neighbour and
+//! which side the new loss lands on.
+void test_audio_companion_spool__exact_merge_finds_any_slot_either_direction(void) {
+  audio_companion_spool_record_gap(100, 5, prv_sample_index(100),
+                                   AudioCompanionGapReasonMicConflict);
+  audio_companion_spool_record_gap(500, 5, prv_sample_index(500),
+                                   AudioCompanionGapReasonSilenceSuppressed);
+  // Abuts the *older* record, not the newest one.
+  audio_companion_spool_record_gap(105, 3, prv_sample_index(105),
+                                   AudioCompanionGapReasonMicConflict);
+  // Abuts the silence record from below.
+  audio_companion_spool_record_gap(495, 5, prv_sample_index(495),
+                                   AudioCompanionGapReasonSilenceSuppressed);
+
+  AudioCompanionSpoolPendingGap gap;
+  cl_assert(audio_companion_spool_take_pending_gap(&gap));
+  cl_assert_equal_i(gap.reason, AudioCompanionGapReasonMicConflict);
+  cl_assert_equal_i(gap.first_missing_sequence, 100);
+  cl_assert_equal_i(gap.missing_frame_count, 8);
+
+  cl_assert(audio_companion_spool_take_pending_gap(&gap));
+  cl_assert_equal_i(gap.reason, AudioCompanionGapReasonSilenceSuppressed);
+  cl_assert_equal_i(gap.first_missing_sequence, 495);
+  cl_assert_equal_i(gap.missing_frame_count, 10);
+  cl_assert(gap.first_missing_sample_index == prv_sample_index(495));
+
+  cl_assert(!audio_companion_spool_has_pending_gap());
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert_equal_i(stats.gap_coalesced_frames, 0);
+}
+
 void test_audio_companion_spool__variable_length_payloads_roundtrip(void) {
   // Mix of sizes incl. the maximum; validates packed record framing.
   const uint16_t lengths[] = { 1, 25, 100, AUDIO_COMPANION_MAX_ENCODED_FRAME_BYTES, 7 };

@@ -5,6 +5,7 @@
 #include "pbl/services/audio_companion_private.h"
 
 #include "kernel/pbl_malloc.h"
+#include "pbl/logging/logging.h"
 #include "system/passert.h"
 #include "pbl/util/attributes.h"
 
@@ -26,7 +27,10 @@
 #endif
 
 #define SPOOL_CHUNK_BYTES (4096)
-#define MAX_PENDING_GAPS (8)
+//! Records waiting to be notified as STREAM_GAP. Silence-suppression, overflow and pause gaps
+//! interleave while the link is stalled, so a handful of slots fills within seconds; 12 (384 B
+//! of static RAM) keeps the last-resort fold below genuinely rare.
+#define MAX_PENDING_GAPS (12)
 
 typedef struct PACKED {
   uint32_t sequence;
@@ -54,6 +58,7 @@ static uint8_t s_pending_gap_count;
 static uint32_t s_pushed_frames;
 static uint32_t s_dropped_overflow_frames;
 static uint32_t s_gap_records;
+static uint32_t s_gap_coalesced_frames;
 static uint32_t s_frames_queued;
 static uint32_t s_frames_unsent;
 static uint32_t s_current_bytes;
@@ -83,35 +88,141 @@ static uint16_t prv_record_size(const SpoolRecordHeader *header) {
   return sizeof(*header) + header->length;
 }
 
+static uint32_t prv_gap_end(const AudioCompanionSpoolPendingGap *gap) {
+  return gap->first_missing_sequence + gap->missing_frame_count;
+}
+
+static void prv_remove_gap(uint8_t index) {
+  if ((uint8_t)(index + 1) < s_pending_gap_count) {
+    memmove(&s_pending_gaps[index], &s_pending_gaps[index + 1],
+            (s_pending_gap_count - index - 1) * sizeof(s_pending_gaps[0]));
+  }
+  s_pending_gap_count--;
+  memset(&s_pending_gaps[s_pending_gap_count], 0, sizeof(s_pending_gaps[0]));
+}
+
+//! Order records by sequence and fold neighbours whose ranges touch exactly and share a reason.
+//! Order matters twice: the drain notifies records oldest-sequence first, and the last-resort
+//! fold below is only meaningful between sequence neighbours. Folding here is loss-free -- the
+//! union of two abutting ranges is exactly the sum of their frames.
+static void prv_normalize_gaps(void) {
+  for (uint8_t i = 1; i < s_pending_gap_count; i++) {
+    const AudioCompanionSpoolPendingGap key = s_pending_gaps[i];
+    int j = (int)i - 1;
+    while (j >= 0 && s_pending_gaps[j].first_missing_sequence > key.first_missing_sequence) {
+      s_pending_gaps[j + 1] = s_pending_gaps[j];
+      j--;
+    }
+    s_pending_gaps[j + 1] = key;
+  }
+  for (uint8_t i = 0; (uint8_t)(i + 1) < s_pending_gap_count;) {
+    AudioCompanionSpoolPendingGap *a = &s_pending_gaps[i];
+    const AudioCompanionSpoolPendingGap *b = &s_pending_gaps[i + 1];
+    if (a->reason != b->reason || prv_gap_end(a) != b->first_missing_sequence) {
+      i++;
+      continue;
+    }
+    a->missing_frame_count += b->missing_frame_count;
+    prv_remove_gap(i + 1);
+  }
+}
+
+//! Extend an existing same-reason record whose range abuts the new one, in either direction and
+//! in any slot. Only the newest record used to be considered, but overflow, silence and pause
+//! gaps interleave, so the record a new loss continues is frequently not the newest one.
+static bool prv_try_exact_merge(uint32_t first_missing_sequence, uint32_t missing_frame_count,
+                                uint64_t first_missing_sample_index, uint8_t reason) {
+  for (uint8_t i = 0; i < s_pending_gap_count; i++) {
+    AudioCompanionSpoolPendingGap *rec = &s_pending_gaps[i];
+    if (rec->reason != reason) {
+      continue;
+    }
+    if (prv_gap_end(rec) == first_missing_sequence) {
+      rec->missing_frame_count += missing_frame_count;
+      return true;
+    }
+    if ((first_missing_sequence + missing_frame_count) == rec->first_missing_sequence) {
+      rec->first_missing_sequence = first_missing_sequence;
+      rec->first_missing_sample_index = first_missing_sample_index;
+      rec->missing_frame_count += missing_frame_count;
+      return true;
+    }
+  }
+  return false;
+}
+
+//! Last resort when every slot already holds a distinct, non-abutting range and another one has
+//! to be stored: fold the sequence-neighbour pair that misrepresents the fewest frames, freeing a
+//! slot so the incoming loss still gets its own truthful range.
+//!
+//! A fold costs the frames between the two ranges -- they are present, but the union claims them
+//! missing, and the receiver only refills a claimed range from *re-delivered* frames, so an
+//! over-claim it never sees again is permanent. When the reasons differ it also costs the frames
+//! whose reason changes; charging that makes mixed folds the last ones picked. Genuine loss never
+//! inherits SilenceSuppressed: the phone renders silence as calm "quiet" and hides it from the
+//! coverage timeline, so that direction would erase real loss instead of over-reporting it.
+static void prv_coalesce_cheapest_pair(void) {
+  if (s_pending_gap_count < 2) {
+    return;
+  }
+  uint8_t best = 0;
+  uint64_t best_cost = UINT64_MAX;
+  for (uint8_t i = 0; (uint8_t)(i + 1) < s_pending_gap_count; i++) {
+    const AudioCompanionSpoolPendingGap *a = &s_pending_gaps[i];
+    const AudioCompanionSpoolPendingGap *b = &s_pending_gaps[i + 1];
+    const uint32_t end_a = prv_gap_end(a);
+    uint64_t cost = (b->first_missing_sequence > end_a)
+                        ? (uint64_t)(b->first_missing_sequence - end_a)
+                        : 0;
+    if (a->reason != b->reason) {
+      const bool a_is_silence = (a->reason == AudioCompanionGapReasonSilenceSuppressed);
+      cost += a_is_silence ? a->missing_frame_count : b->missing_frame_count;
+    }
+    if (cost < best_cost) {
+      best_cost = cost;
+      best = i;
+    }
+  }
+
+  AudioCompanionSpoolPendingGap *a = &s_pending_gaps[best];
+  const AudioCompanionSpoolPendingGap *b = &s_pending_gaps[best + 1];
+  const uint32_t end_a = prv_gap_end(a);
+  const uint32_t end_b = prv_gap_end(b);
+  if (a->reason == AudioCompanionGapReasonSilenceSuppressed &&
+      b->reason != AudioCompanionGapReasonSilenceSuppressed) {
+    a->reason = b->reason;
+  }
+  a->missing_frame_count = ((end_b > end_a) ? end_b : end_a) - a->first_missing_sequence;
+  if (best_cost > 0) {
+    s_gap_coalesced_frames += (uint32_t)best_cost;
+    PBL_LOG_WRN("Audio companion spool: gap slots full; folded %u frames into seq %u",
+                (unsigned)best_cost, (unsigned)a->first_missing_sequence);
+  }
+  prv_remove_gap(best + 1);
+}
+
 static void prv_merge_gap(uint32_t first_missing_sequence, uint32_t missing_frame_count,
                           uint64_t first_missing_sample_index, uint8_t reason) {
   if (missing_frame_count == 0) {
     return;
   }
-  if (s_pending_gap_count > 0) {
-    AudioCompanionSpoolPendingGap *last = &s_pending_gaps[s_pending_gap_count - 1];
-    const bool contiguous =
-        (last->first_missing_sequence + last->missing_frame_count) == first_missing_sequence;
-    if (last->reason == reason && contiguous) {
-      last->missing_frame_count += missing_frame_count;
-      return;
-    }
-  }
-  if (s_pending_gap_count < MAX_PENDING_GAPS) {
-    s_pending_gaps[s_pending_gap_count++] = (AudioCompanionSpoolPendingGap){
-      .valid = true,
-      .first_missing_sequence = first_missing_sequence,
-      .missing_frame_count = missing_frame_count,
-      .first_missing_sample_index = first_missing_sample_index,
-      .reason = reason,
-    };
-    s_gap_records++;
+  if (prv_try_exact_merge(first_missing_sequence, missing_frame_count, first_missing_sample_index,
+                          reason)) {
+    prv_normalize_gaps();
     return;
   }
-
-  // Backpressure can temporarily prevent gap notifications. If many distinct gaps queue up,
-  // preserve ordering and account the time by extending the newest record instead of losing it.
-  s_pending_gaps[MAX_PENDING_GAPS - 1].missing_frame_count += missing_frame_count;
+  if (s_pending_gap_count == MAX_PENDING_GAPS) {
+    prv_coalesce_cheapest_pair();
+  }
+  s_pending_gaps[s_pending_gap_count++] = (AudioCompanionSpoolPendingGap){
+    .valid = true,
+    .first_missing_sequence = first_missing_sequence,
+    .missing_frame_count = missing_frame_count,
+    .first_missing_sample_index = first_missing_sample_index,
+    .reason = reason,
+  };
+  s_gap_records++;
+  prv_normalize_gaps();
 }
 
 //! Detach the oldest chunk, account its untrimmed frames as an overflow gap.
@@ -122,22 +233,37 @@ static SpoolChunk *prv_drop_oldest_chunk(void) {
     return NULL;
   }
 
-  // Walk the records being lost so the gap covers them precisely.
+  // Walk the records being lost so each gap covers exactly the span it describes. Sequence
+  // numbers are not dense across a chunk: pauses and suppressed silence consume sequence space
+  // without pushing frames, so one chunk can hold several disjoint runs. Describing them as a
+  // single span would claim frames that were never in this chunk and miss the ones that were,
+  // so emit one record per contiguous run.
   uint32_t dropped = 0;
-  uint32_t first_seq = 0;
-  uint64_t first_sample = 0;
+  uint32_t run_first_seq = 0;
+  uint64_t run_first_sample = 0;
+  uint32_t run_frames = 0;
   for (uint16_t offset = chunk->trim_offset; offset < chunk->used;) {
     const SpoolRecordHeader *header = prv_record_at(chunk, offset);
-    if (dropped == 0) {
-      first_seq = header->sequence;
-      first_sample = header->sample_index;
+    if (run_frames == 0) {
+      run_first_seq = header->sequence;
+      run_first_sample = header->sample_index;
+    } else if (header->sequence != run_first_seq + run_frames) {
+      prv_merge_gap(run_first_seq, run_frames, run_first_sample,
+                    AudioCompanionGapReasonSpoolOverflow);
+      run_first_seq = header->sequence;
+      run_first_sample = header->sample_index;
+      run_frames = 0;
     }
+    run_frames++;
     dropped++;
     offset += prv_record_size(header);
   }
+  if (run_frames > 0) {
+    prv_merge_gap(run_first_seq, run_frames, run_first_sample,
+                  AudioCompanionGapReasonSpoolOverflow);
+  }
 
   if (dropped > 0) {
-    prv_merge_gap(first_seq, dropped, first_sample, AudioCompanionGapReasonSpoolOverflow);
     s_dropped_overflow_frames += dropped;
     PBL_ASSERTN(s_frames_queued >= dropped);
     s_frames_queued -= dropped;
@@ -261,6 +387,7 @@ void audio_companion_spool_reset(void) {
   s_pushed_frames = 0;
   s_dropped_overflow_frames = 0;
   s_gap_records = 0;
+  s_gap_coalesced_frames = 0;
   s_frames_queued = 0;
   s_frames_unsent = 0;
   s_current_bytes = 0;
@@ -445,6 +572,7 @@ void audio_companion_spool_get_stats(AudioCompanionSpoolStats *stats_out) {
     .pushed_frames = s_pushed_frames,
     .dropped_overflow_frames = s_dropped_overflow_frames,
     .gap_records = s_gap_records,
+    .gap_coalesced_frames = s_gap_coalesced_frames,
     .frames_queued = s_frames_queued,
     .frames_pending_send = s_frames_unsent,
     .current_bytes = s_current_bytes,
