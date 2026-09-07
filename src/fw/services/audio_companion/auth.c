@@ -13,6 +13,8 @@
 #include <inttypes.h>
 #include <string.h>
 
+PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LOG_LEVEL);
+
 #define AUTH_RECEIVER_HASH_BYTES (32)
 
 #define AUTH_SETTINGS_FILE_NAME "audiocomp"

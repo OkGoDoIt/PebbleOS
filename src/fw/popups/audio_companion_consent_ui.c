@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <string.h>
 
+PBL_LOG_MODULE_DECLARE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LOG_LEVEL);
+
 typedef struct {
   ConfirmationDialog *dialog;
   bool responded;

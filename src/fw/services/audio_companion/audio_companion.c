@@ -36,6 +36,8 @@
 #include <inttypes.h>
 #include <string.h>
 
+PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LOG_LEVEL);
+
 #ifndef CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT
 #define CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT 20
 #endif
@@ -172,6 +174,14 @@ static TimerID s_enable_timer = TIMER_INVALID_ID;
 //!
 //! So the state machine only records *intent* (s_owns_mic / s_capture_wanted) under s_lock, and
 //! prv_apply_capture() performs the driver calls with s_lock dropped.
+//!
+//! Since upstream v4.36 every pbl_mutex is recursive, where s_lock used to be a non-recursive
+//! PebbleMutex. Re-entering s_lock on one task therefore nests silently instead of deadlocking on
+//! the spot, so the lock no longer catches a violation of the "dropped before the driver call"
+//! rule by itself -- the ordering above is now a convention the tests enforce
+//! (prv_assert_service_lock_not_held in test_audio_companion.c runs on every driver call). Keep it
+//! that way: a nested acquire here would let a re-entrant path observe half-applied state instead
+//! of stopping, and the failure would surface as a watchdog reset with no obvious cause.
 static bool s_owns_mic;                //!< service intends to hold the mic (guarded by s_lock)
 static bool s_capture_wanted;          //!< intent handed to prv_apply_capture() (guarded by s_lock)
 static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()

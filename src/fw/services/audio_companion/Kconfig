@@ -18,6 +18,10 @@ config SERVICE_AUDIO_COMPANION
 
 if SERVICE_AUDIO_COMPANION
 
+module = SERVICE_AUDIO_COMPANION
+module-str = Audio companion
+source "subsys/logging/Kconfig.template.log_level"
+
 config AUDIO_COMPANION_SPOOL_MIN_BYTES
     int "Audio companion spool floor (bytes)"
     default 8192

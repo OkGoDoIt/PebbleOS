@@ -8,6 +8,8 @@
 #include <inttypes.h>
 #include <string.h>
 
+PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LOG_LEVEL);
+
 //! Shares the audio companion settings file with the receiver registry (auth.c);
 //! the reboot trace lives under its own key. One write per boot, so flash wear is
 //! negligible.
