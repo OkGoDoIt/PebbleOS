@@ -1071,6 +1071,42 @@ void test_audio_companion__liveness_watchdog_keeps_capturing_into_the_spool(void
   cl_assert(s_data_count > 0);
 }
 
+// Losing the receiver no longer stops the microphone, so spool saturation is the ONLY thing left
+// bounding battery on a watch whose phone has gone quiet. That makes this path load-bearing in a
+// way it was not before: previously the liveness watchdog stopped capture after fifteen seconds,
+// and the park was a second line of defence behind it. Pin it, because a regression here is a
+// microphone that runs until the battery is flat with nothing on the other end.
+void test_audio_companion__spool_saturation_parks_the_mic_once_the_receiver_is_gone(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+
+  // The receiver goes quiet past the liveness window. The mic deliberately keeps running.
+  s_uptime_seconds += 16;
+  prv_feed_frames(8);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
+  cl_assert(s_mic_running);
+
+  // Starve the heap so the spool cannot grow past its floor, then keep capturing into it. Once it
+  // saturates, the drop counter passes the baseline that prv_note_receiver_gone_locked() rebased
+  // and the mic parks itself. The loop is bounded so a regression that never parks fails here
+  // instead of spinning.
+  audio_companion_spool_test_set_heap_free_bytes(0);
+  for (uint32_t i = 0; i < 400 && s_mic_running; i++) {
+    prv_feed_frames(8);
+  }
+  cl_assert(!s_mic_running);
+
+  // The audio that fell out of the spool is reported as loss, not silently forgotten.
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert(stats.dropped_overflow_frames > 0);
+  cl_assert(audio_companion_spool_has_pending_gap());
+}
+
 void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
