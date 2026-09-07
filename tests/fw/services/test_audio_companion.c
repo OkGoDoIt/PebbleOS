@@ -26,6 +26,7 @@
 void audio_companion_test_reset(void);
 struct pbl_mutex *audio_companion_test_get_lock(void);
 TimerID audio_companion_test_get_silence_probe_timer(void);
+TimerID audio_companion_test_get_power_save_listen_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
 
 #define MAX_CAPTURED_NOTIFICATIONS (32)
@@ -1115,97 +1116,113 @@ void test_audio_companion__spool_saturation_parks_the_mic_once_the_receiver_is_g
   cl_assert(!s_mic_running);
 }
 
-void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) {
+// Stationary pausing is ON, automatically, with no setting — stopping the microphone releases the
+// PDM rails, buffers and clocks that silence suppression cannot, and the Session 17 battery audit
+// found that to be the largest win available. What it must not do is trust wrist motion ALONE.
+//
+// Thirty motionless minutes describes a nightstand, but it equally describes a meeting, a lecture
+// or a film, and the watch was switching its microphone off through all of them — then staying off
+// until someone shook their wrist. So the gate asks for the other half of the evidence the watch
+// already computes: still AND quiet.
+void test_audio_companion__stationary_needs_quiet_as_well_as_stillness(void) {
   audio_companion_set_enabled(true);
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(1);
-  s_data_count = 0;
 
+  // Someone is talking. Sitting still is not a reason to stop recording them.
+  prv_feed_frames(4);
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+
+  // The room goes quiet and the detector engages. NOW stillness means nothing worth recording.
+  audio_companion_set_runlevel(RunLevel_Normal);
+  prv_feed_silence_frames(255);
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
-  cl_assert_equal_i(stub_new_timer_get_next(), TIMER_INVALID_ID);
 
+  // Coming back reports the pause honestly, as a gap. Cleared first: the quiet that triggered the
+  // mute already produced a SilenceSuppressed gap, and this assertion is about the power-save one.
+  s_data_count = 0;
   s_uptime_seconds += 3;
   audio_companion_set_runlevel(RunLevel_Normal);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
-
   prv_feed_frames(8);
-  const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
-  cl_assert(gap);
-  AudioCompanionStreamGapMsg gap_msg;
-  memcpy(&gap_msg, gap->data, sizeof(gap_msg));
-  cl_assert_equal_i(gap_msg.reason, AudioCompanionGapReasonPowerSave);
-  cl_assert(gap_msg.missing_frame_count >= 1);
+  bool saw_power_save_gap = false;
+  for (uint32_t i = 0; i < s_data_count; i++) {
+    if (s_data_notifications[i].length < sizeof(AudioCompanionStreamGapMsg) ||
+        s_data_notifications[i].data[0] != AudioCompanionDataMsgIdStreamGap) {
+      continue;
+    }
+    AudioCompanionStreamGapMsg gap_msg;
+    memcpy(&gap_msg, s_data_notifications[i].data, sizeof(gap_msg));
+    saw_power_save_gap |= (gap_msg.reason == AudioCompanionGapReasonPowerSave);
+  }
+  cl_assert(saw_power_save_gap);
 }
 
-// The stationary pause is a MOTION HEURISTIC, and it is opt-in.
-//
-// RunLevel_Stationary means "the wrist has not moved for thirty minutes, off the charger". For a
-// background audio recorder that describes a meeting, a lecture, a film or a night's sleep — the
-// situations a person most wants recorded. Pausing there was silently ending capture for hours,
-// and it is a large part of "it barely records anything". The pref that controls it has always
-// existed, been persisted, and had a public setter; the gate simply never read it.
-void test_audio_companion__stationary_pause_is_opt_in(void) {
+// The way back. A stationary mute used to end only on a shake or a button press, so a conversation
+// that began while someone sat still was lost outright rather than merely delayed. The watch now
+// reopens the microphone on a slow cadence and asks the detector what it heard.
+void test_audio_companion__a_stationary_mute_reopens_the_mic_to_listen(void) {
   audio_companion_set_enabled(true);
-  audio_companion_set_pause_stationary_enabled(false);
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
   prv_subscribe(true, true);
   prv_authenticate();
 
-  audio_companion_set_runlevel(RunLevel_Stationary);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  cl_assert(s_mic_running);
-
-  // Opting in still works, and still emits the power-save gap.
-  audio_companion_set_pause_stationary_enabled(true);
-  audio_companion_set_runlevel(RunLevel_Normal);
+  prv_feed_silence_frames(255);
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
+
+  const TimerID listen = audio_companion_test_get_power_save_listen_timer();
+  cl_assert(listen != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(listen), true);
+
+  // The window opens: the microphone comes back so the detector can form a view.
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // Still a quiet room at the end of the window, so mute again and keep saving power.
+  prv_feed_silence_frames(255);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+
+  // ...but a window that hears speech keeps the microphone, which is the whole point.
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  prv_feed_frames(8);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 }
 
-// Low power is the genuine critical-battery case rather than a heuristic, so it defaults to
-// pausing — but it is still a pref, and turning it off must be honoured.
-void test_audio_companion__low_power_pause_is_a_pref(void) {
+// The three runlevels that are not heuristics and pause unconditionally: the panic/reset path, a
+// firmware update, and genuine critical battery.
+void test_audio_companion__the_non_negotiable_runlevels_always_stop_the_mic(void) {
   audio_companion_set_enabled(true);
-  audio_companion_set_pause_stationary_enabled(true);
-  audio_companion_set_pause_low_power_enabled(false);
   prv_subscribe(true, true);
   prv_authenticate();
+  prv_feed_frames(1);
 
-  audio_companion_set_runlevel(RunLevel_LowPower);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  cl_assert(s_mic_running);
-
-  // Stationary is a separate pref and is still on here, so it still pauses.
-  audio_companion_set_runlevel(RunLevel_Normal);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  cl_assert(s_mic_running);
-  audio_companion_set_runlevel(RunLevel_Stationary);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
-  cl_assert(!s_mic_running);
-}
-
-// The two runlevels that are not negotiable: the panic/reset path and a firmware update.
-void test_audio_companion__bare_minimum_and_update_always_stop_the_mic(void) {
-  audio_companion_set_enabled(true);
-  audio_companion_set_pause_stationary_enabled(false);
-  audio_companion_set_pause_low_power_enabled(false);
-  prv_subscribe(true, true);
-  prv_authenticate();
-
-  audio_companion_set_runlevel(RunLevel_BareMinimum);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
-  cl_assert(!s_mic_running);
-
-  audio_companion_set_runlevel(RunLevel_Normal);
-  cl_assert(s_mic_running);
-
-  audio_companion_set_runlevel(RunLevel_FirmwareUpdate);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
-  cl_assert(!s_mic_running);
+  const RunLevel always_pause[] = {
+    RunLevel_BareMinimum, RunLevel_FirmwareUpdate, RunLevel_LowPower,
+  };
+  for (size_t i = 0; i < (sizeof(always_pause) / sizeof(always_pause[0])); i++) {
+    audio_companion_set_runlevel(always_pause[i]);
+    cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+    cl_assert(!s_mic_running);
+    audio_companion_set_runlevel(RunLevel_Normal);
+    cl_assert(s_mic_running);
+  }
 }
 
 void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes(void) {
@@ -1458,9 +1475,11 @@ void test_audio_companion__capture_transitions_never_enter_mic_under_service_loc
   cl_assert(s_mic_running);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 
-  // Runlevel changes arrive from KernelMain (stationary service, low power).
+  // Runlevel changes arrive from KernelMain (stationary service, low power). LowPower rather than
+  // Stationary because this test is about LOCK ORDER, and stationary now pauses only when the room
+  // is also quiet — which would make the assertion below depend on the silence detector.
   prv_feed_frame();
-  audio_companion_set_runlevel(RunLevel_Stationary);
+  audio_companion_set_runlevel(RunLevel_LowPower);
   cl_assert(!s_mic_running);
   audio_companion_set_runlevel(RunLevel_Normal);
   cl_assert(s_mic_running);

@@ -95,6 +95,21 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! out of Bluetooth range and back — while still not running the microphone all night for a phone
 //! that has been switched off.
 #define OFFLINE_CAPTURE_PARK_MS (10 * 60 * 1000)
+//! How long the microphone stays off between listen windows while muted for stationary.
+//!
+//! The cost of being wrong in this direction is bounded and small — a couple of minutes at the
+//! head of a conversation that began while the wrist happened to be still — and the saving is the
+//! PDM hardware being off for the other ~97% of the time. Anything much shorter stops being a
+//! power saving at all; anything much longer starts losing the beginning of meetings.
+#define POWER_SAVE_LISTEN_INTERVAL_MS (2 * 60 * 1000)
+//! How long the microphone stays on during a listen window. Long enough for the silence detector
+//! to reach a verdict (its enter threshold is measured in hundreds of milliseconds) and for the
+//! phone to get a liveness signal out of the bargain.
+#define POWER_SAVE_LISTEN_WINDOW_MS (5 * 1000)
+//! How often we re-ask the question while stationary but NOT muted (i.e. the room has voices in
+//! it). Only a timer and a bool — the microphone is already on — so this is about noticing when a
+//! meeting ends, not about power.
+#define POWER_SAVE_RECHECK_MS (30 * 1000)
 //! How long a continuously suppressed silence runs before the watch probes its receiver.
 //!
 //! While suppressing, the watch deliberately sends nothing at all -- which is exactly why
@@ -226,6 +241,8 @@ static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control me
 static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while a receiver is ready
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
+static bool s_stationary_muted;        //!< stationary AND quiet: the mic is off to save the PDM rails
+static TimerID s_power_save_listen_timer = TIMER_INVALID_ID;
 static bool s_silence_probe_outstanding;  //!< a suppressed-silence probe is awaiting an answer
 
 // Policy inputs
@@ -268,6 +285,9 @@ static void prv_start_drain_timer_locked(void);
 static void prv_stop_drain_timer_locked(void);
 static void prv_arm_silence_probe_locked(uint32_t delay_ms);
 static void prv_stop_silence_probe_locked(void);
+static void prv_arm_power_save_listen_locked(uint32_t delay_ms);
+static void prv_stop_power_save_listen_locked(void);
+static void prv_update_stationary_mute_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
 static void prv_apply_pending(void);
 
@@ -292,35 +312,59 @@ static bool prv_session_ready_locked(void) {
 //! holding the mic and the Speex encoder open is exactly the wrong thing to do.
 //! Which runlevels take the microphone away.
 //!
-//! This used to be `s_runlevel != RunLevel_Normal`, which lumped four very different situations
-//! together and, in the process, made s_pause_stationary_enabled and s_pause_low_power_enabled
-//! dead code — both are loaded from prefs, persisted, and have public getters and setters that
-//! nothing consulted.
+//! Three of the four are not negotiable and pause unconditionally: BareMinimum is the panic/reset
+//! path, FirmwareUpdate must not contend for anything, LowPower is genuine critical battery.
 //!
-//! Stationary is the one that mattered. RunLevel_Stationary is a MOTION HEURISTIC: the stationary
-//! service takes a once-a-minute accelerometer reading and, after
-//! STATIONARY_WAIT_BEFORE_ENGAGING_TIME_MINS (30) minutes without meaningful movement off the
-//! charger, drops the runlevel. It is on by default on every shipping build. For a background
-//! audio recorder that is precisely backwards: a wrist that has not moved for half an hour is a
-//! meeting, a lecture, a film, a night's sleep — the situations a person most wants recorded. The
-//! watch was switching its microphone off during all of them and reporting PausedPowerSave, which
-//! is a large part of "it barely records anything".
+//! RunLevel_Stationary is the interesting one, and it is worth keeping: the Session 17 battery
+//! audit found that stopping the microphone is the single largest win available to us, because
+//! mic_start() holds continuous PDM capture, buffers, clocks and PMIC rails that silence
+//! suppression cannot release — suppression only saves the encoder and the radio. So stationary
+//! pausing stays ON, automatically, with no setting.
 //!
-//! The other three keep their unconditional pause, because they are not heuristics:
-//! BareMinimum is the panic/reset path, FirmwareUpdate must not contend for anything, and
-//! LowPower is the genuine critical-battery case (still pref-gated, but defaulting to on).
+//! What it must not do is trust wrist motion ALONE. The stationary service engages after thirty
+//! minutes without meaningful movement off the charger, and for a background audio recorder that
+//! describes a meeting, a lecture, a film — sitting still is not the same as nothing being said,
+//! and the watch was switching its microphone off through exactly the recordings this product
+//! exists to make. Worse, nothing brought it back: stationary only ends on a shake or a button.
+//!
+//! So the gate asks for the OTHER half of the evidence, which the watch already computes. Pause
+//! only when the wrist is still AND the room is quiet — `s_silence_suppressing`, the voice
+//! detector that is already deciding, frame by frame, whether anyone is speaking. Still and quiet
+//! is a nightstand, and the mic should stop. Still and talking is a meeting, and it must not.
+//!
+//! `prv_arm_power_save_listen_locked()` supplies the way back: while muted for stationary the
+//! watch briefly reopens the microphone on a slow cadence, so a conversation that starts while
+//! the wrist stays still is picked up within a couple of minutes instead of never.
 static bool prv_power_save_active_locked(void) {
   switch (s_runlevel) {
     case RunLevel_BareMinimum:
     case RunLevel_FirmwareUpdate:
-      return true;
     case RunLevel_LowPower:
-      return s_pause_low_power_enabled;
+      return true;
     case RunLevel_Stationary:
-      return s_pause_stationary_enabled;
+      return s_stationary_muted;
     default:
       return false;
   }
+}
+
+//! Decides, for the stationary runlevel only, whether we are currently muted.
+//!
+//! Split from the gate above so the listen probe can flip it without the gate needing to know
+//! anything about timers. Called on every runlevel change and at the end of each listen window.
+static void prv_update_stationary_mute_locked(void) {
+  if (s_runlevel != RunLevel_Stationary) {
+    if (s_stationary_muted) {
+      s_stationary_muted = false;
+    }
+    prv_stop_power_save_listen_locked();
+    return;
+  }
+  // Quiet as well as still: mute and start the slow listen cadence. Speech in the room means this
+  // is a false positive for "nothing worth recording", so keep capturing and check again later.
+  s_stationary_muted = s_silence_suppressing;
+  prv_arm_power_save_listen_locked(s_stationary_muted ? POWER_SAVE_LISTEN_INTERVAL_MS
+                                                      : POWER_SAVE_RECHECK_MS);
 }
 
 static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode) {
@@ -449,6 +493,8 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
 static void prv_note_receiver_activity_locked(void) {
   s_last_receiver_activity_ms = prv_uptime_ms();
   s_offline_since_ms = 0;
+  s_stationary_muted = false;
+  s_power_save_listen_timer = TIMER_INVALID_ID;
   s_receiver_presumed_gone = false;
   if (s_silence_probe_outstanding) {
     // The probe did its job: the receiver was asleep, not gone. Go back to the long cadence.
@@ -1228,6 +1274,56 @@ static void prv_silence_probe_system_task_cb(void *data) {
 
 static void prv_silence_probe_timer_cb(void *data) {
   system_task_add_callback(prv_silence_probe_system_task_cb, NULL);
+}
+
+//! The way back out of a stationary mute.
+//!
+//! Alternates two states on one timer. While MUTED it waits POWER_SAVE_LISTEN_INTERVAL_MS and then
+//! unmutes, which lets prv_reevaluate_locked() restart the microphone. While LISTENING it waits
+//! POWER_SAVE_LISTEN_WINDOW_MS and then asks the silence detector what it heard: quiet means this
+//! really is a nightstand, so mute again; speech means the wrist simply was not moving, so stay
+//! up and check again after the next window.
+//!
+//! Without this, a stationary mute could only end on a shake or a button press — so a conversation
+//! that started while someone sat still was lost in its entirety, not merely delayed.
+static void prv_power_save_listen_system_task_cb(void *data) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (s_runlevel != RunLevel_Stationary || !s_enabled) {
+    prv_stop_power_save_listen_locked();
+    pbl_mutex_unlock(&s_lock);
+    prv_apply_pending();
+    return;
+  }
+  if (s_stationary_muted) {
+    PBL_LOG_DBG("Audio companion: power-save listen window opening");
+    s_stationary_muted = false;
+    prv_arm_power_save_listen_locked(POWER_SAVE_LISTEN_WINDOW_MS);
+  } else {
+    // The detector has had a whole window to form a view.
+    prv_update_stationary_mute_locked();
+    PBL_LOG_DBG("Audio companion: power-save listen window closed; muted=%u",
+                (unsigned)s_stationary_muted);
+  }
+  prv_reevaluate_locked();
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+static void prv_power_save_listen_timer_cb(void *data) {
+  system_task_add_callback(prv_power_save_listen_system_task_cb, NULL);
+}
+
+static void prv_arm_power_save_listen_locked(uint32_t delay_ms) {
+  if (s_power_save_listen_timer == TIMER_INVALID_ID) {
+    s_power_save_listen_timer = new_timer_create();
+  }
+  new_timer_start(s_power_save_listen_timer, delay_ms, prv_power_save_listen_timer_cb, NULL, 0);
+}
+
+static void prv_stop_power_save_listen_locked(void) {
+  if (s_power_save_listen_timer != TIMER_INVALID_ID) {
+    new_timer_stop(s_power_save_listen_timer);
+  }
 }
 
 static void prv_arm_silence_probe_locked(uint32_t delay_ms) {
@@ -2049,6 +2145,8 @@ void audio_companion_set_runlevel(RunLevel runlevel) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   if (s_runlevel != runlevel) {
     s_runlevel = runlevel;
+    // Entering or leaving Stationary decides the mute and owns the listen cadence.
+    prv_update_stationary_mute_locked();
     prv_reevaluate_locked();
   }
   pbl_mutex_unlock(&s_lock);
@@ -2194,6 +2292,8 @@ void audio_companion_test_force_reboot_trace_capture(void) { s_reboot_trace_reco
 
 //! The suppressed-silence receiver probe's timer, so a test can fire it deterministically.
 TimerID audio_companion_test_get_silence_probe_timer(void) { return s_silence_probe_timer; }
+
+TimerID audio_companion_test_get_power_save_listen_timer(void) { return s_power_save_listen_timer; }
 
 void audio_companion_test_reset(void) {
   audio_companion_spool_reset();
