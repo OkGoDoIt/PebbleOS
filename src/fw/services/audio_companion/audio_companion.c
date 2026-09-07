@@ -946,9 +946,48 @@ static bool prv_send_data_batch_locked(void) {
   return true;
 }
 
-//! Stop capturing when a streaming session has heard nothing from the receiver for too long.
+//! Bookkeeping shared by every "the receiver is not listening any more" path: a real BLE
+//! disconnect, an unanswered liveness window, an unanswered silence probe.
+//!
+//! Rebasing the overflow baseline is what lets prv_mic_data_handler() tell "the spool is filling
+//! because nobody is draining it" from drops that were already there, so it parks the mic exactly
+//! once, when the spool actually saturates. Rewinding the unsent frames is what makes the audio
+//! buffered during the outage survive: on reattach the stream is re-announced and those frames go
+//! out ahead of anything new. Keeping the two together in one place is deliberate — they were
+//! previously only on the disconnect path, and the liveness path's divergence from it is what
+//! turned a suspended iOS app into a stopped microphone.
+static void prv_note_receiver_gone_locked(void) {
+  if (!s_stream_active) {
+    return;
+  }
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  s_offline_baseline_dropped = stats.dropped_overflow_frames;
+  audio_companion_spool_rewind_unsent();
+}
+
+//! Stop TRANSMITTING when a streaming session has heard nothing from the receiver for too long.
 //! Runs off the drain timer (active only while streaming). Catches the case where the receiver
-//! vanished without the watch seeing a BLE disconnect, so the mic would otherwise run forever.
+//! vanished without the watch seeing a BLE disconnect, so the radio would otherwise talk forever
+//! to nobody.
+//!
+//! It deliberately does NOT stop the microphone, and that distinction is the whole point.
+//!
+//! A silent receiver is not the same thing as an absent one. On iOS the app is regularly
+//! suspended, jettisoned under memory pressure, or relaunched in the background, and in every one
+//! of those cases it comes back within seconds to tens of seconds and reattaches to this stream.
+//! This check used to call prv_stop_capture_locked() outright, so fifteen seconds of phone silence
+//! threw away the microphone — and then the two ends deadlocked, because a suspended
+//! bluetooth-central app is only ever woken BY the notifications that had just stopped. The user
+//! saw a watch that recorded almost nothing unless they were holding the phone with the app open.
+//!
+//! The watch already knows how to survive a receiver that is not listening: an ordinary BLE
+//! disconnect keeps capturing into the spool and parks the mic only once the spool starts dropping
+//! (prv_park_capture_system_task_cb). A suspended receiver deserves exactly that treatment and no
+//! worse, so do the same bookkeeping a disconnect does — rebase the overflow baseline, rewind the
+//! unsent frames so they are resent on reattach — and let prv_reevaluate_locked() fall through to
+//! the brief-disconnect bridge. Battery is still bounded: the drain timer stops immediately, and
+//! the mic stops on its own once the spool saturates.
 static void prv_check_receiver_liveness_locked(void) {
   if (s_state != AudioCompanionServiceStateStreaming || s_receiver_presumed_gone ||
       s_silence_suppressing) {
@@ -957,11 +996,10 @@ static void prv_check_receiver_liveness_locked(void) {
   if ((prv_uptime_ms() - s_last_receiver_activity_ms) < RECEIVER_LIVENESS_TIMEOUT_MS) {
     return;
   }
-  PBL_LOG_WRN("Audio companion: no receiver activity for %ums; presuming receiver gone",
+  PBL_LOG_WRN("Audio companion: no receiver activity for %ums; spooling until it returns",
               (unsigned)RECEIVER_LIVENESS_TIMEOUT_MS);
   s_receiver_presumed_gone = true;
-  prv_stop_capture_locked();
-  prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
+  prv_note_receiver_gone_locked();
   prv_reevaluate_locked();  // session no longer ready -> AuthorizedIdle, drain timer stops
 }
 
@@ -1105,14 +1143,15 @@ static void prv_silence_probe_system_task_cb(void *data) {
     // Conditions moved on under us (audio resumed, the session went away). Nothing to probe.
     prv_stop_silence_probe_locked();
   } else if (s_silence_probe_outstanding) {
-    // We spoke to the receiver and it did not answer within the liveness window. That is the
-    // case the watchdog exists for: stop the microphone and let the state fall back to
-    // AuthorizedIdle, exactly as the drain-driven check would have.
-    PBL_LOG_WRN("Audio companion: silence probe unanswered; presuming receiver gone");
+    // We spoke to the receiver and it did not answer within the liveness window. Stop
+    // transmitting and fall back to AuthorizedIdle, exactly as the drain-driven check does — and
+    // for the same reason, WITHOUT stopping the microphone. An unanswered probe most often means
+    // an iOS app that iOS has suspended or jettisoned, which comes back; the spool bridges the
+    // gap and parks the mic on its own if it does not.
+    PBL_LOG_WRN("Audio companion: silence probe unanswered; spooling until the receiver returns");
     s_silence_probe_outstanding = false;
     s_receiver_presumed_gone = true;
-    prv_stop_capture_locked();
-    prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
+    prv_note_receiver_gone_locked();
     prv_reevaluate_locked();
   } else {
     PBL_LOG_DBG("Audio companion: probing the receiver during suppressed silence");
@@ -1681,12 +1720,7 @@ static void prv_disconnect_system_task_cb(void *data) {
     }
     memset(&s_consent, 0, sizeof(s_consent));
   }
-  if (s_stream_active) {
-    AudioCompanionSpoolStats stats;
-    audio_companion_spool_get_stats(&stats);
-    s_offline_baseline_dropped = stats.dropped_overflow_frames;
-    audio_companion_spool_rewind_unsent();
-  }
+  prv_note_receiver_gone_locked();
   prv_reevaluate_locked();
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();

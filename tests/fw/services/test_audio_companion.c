@@ -1025,7 +1025,18 @@ void test_audio_companion__disconnect_clears_policy_pause(void) {
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 }
 
-void test_audio_companion__liveness_watchdog_stops_silent_stream(void) {
+// The liveness watchdog stops TRANSMITTING, not capturing.
+//
+// A silent receiver is not an absent one. On iOS the app is routinely suspended, jettisoned, or
+// relaunched in the background, and comes back seconds later to reattach to this same stream. The
+// watchdog used to stop the microphone after fifteen seconds of phone silence, which deadlocked
+// the pair: a suspended bluetooth-central app is only ever woken BY the notifications that had
+// just stopped, so nothing restarted either end until the user opened the app by hand. That is
+// the whole of "the watch barely records anything unless I'm holding the phone".
+//
+// So the mic keeps running into the spool, exactly as it does across an ordinary BLE disconnect,
+// and the audio captured while the receiver was away is delivered when it returns.
+void test_audio_companion__liveness_watchdog_keeps_capturing_into_the_spool(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
@@ -1034,20 +1045,30 @@ void test_audio_companion__liveness_watchdog_stops_silent_stream(void) {
   cl_assert(s_mic_running);
   const uint32_t stream_id = prv_current_stream_id();
 
-  // No control traffic for longer than the liveness timeout (15 s). The receiver is presumed
-  // gone even though the watch never saw a BLE disconnect (shared-link / crashed app).
+  // No control traffic for longer than the liveness timeout (15 s). The receiver is presumed gone
+  // even though the watch never saw a BLE disconnect (shared link, suspended app, crashed app).
   s_uptime_seconds += 16;
   prv_feed_frames(8);  // a drain cycle runs the liveness check and trips it
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
-  cl_assert(!s_mic_running);
+  // The radio stands down (asserted below by the absence of data), but the microphone does not.
+  cl_assert(s_mic_running);
 
-  // A control message proves the receiver is back; streaming resumes.
+  // Everything captured while the receiver was away is still ours to send.
+  s_data_count = 0;
+  prv_feed_frames(8);
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(s_data_count, 0);  // nothing is transmitted to a receiver we think is gone
+
+  // A control message proves the receiver is back; streaming resumes and the buffered audio goes
+  // out ahead of anything new.
   uint8_t buf[sizeof(AudioCompanionCheckpointMsg)];
   size_t length = 0;
   prv_build_checkpoint(buf, &length, 0x60, stream_id, 0);
   prv_send_control(buf, length);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
+  prv_feed_frames(1);
+  cl_assert(s_data_count > 0);
 }
 
 void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) {
@@ -1209,14 +1230,16 @@ void test_audio_companion__silence_probe_asks_before_presuming_the_receiver_gone
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
 
-  // Nobody answers the next one, and only then does the microphone stop.
+  // Nobody answers the next one, so the watch stops talking to it — but keeps the microphone, and
+  // spools, because an unanswered probe is most often a suspended app that is about to come back.
+  // Only spool saturation parks the mic, which is the same policy an ordinary disconnect gets.
   cl_assert_equal_b(stub_new_timer_fire(probe), true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert_equal_b(stub_new_timer_fire(probe), true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
-  cl_assert_equal_b(mic_is_running(NULL), false);
+  cl_assert_equal_b(mic_is_running(NULL), true);
 }
 
 // ...and audio resuming retires the probe outright: the drain timer is running again, and it
