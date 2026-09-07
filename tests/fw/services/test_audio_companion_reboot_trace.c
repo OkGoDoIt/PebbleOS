@@ -268,3 +268,43 @@ void test_audio_companion_reboot_trace__stuck_tasks_truncates_safely(void) {
                                            sizeof(small));
   cl_assert_equal_s(small, "KernelBG");
 }
+
+// The consecutive-fault run is what stands background audio down, so what feeds it matters.
+//
+// The counter is not audio-specific: audio_companion_reboot_trace_is_error_reason() returns true
+// for every reason at or above RebootReasonCode_Watchdog -- Assert, StackOverflow, HardFault,
+// LauncherPanic, AppHardFault, EventQueueFull, OutOfMemory and the rest. A fault that happened
+// while the feature was switched OFF cannot have been caused by it.
+void test_audio_companion_reboot_trace__faults_with_the_feature_off_do_not_count(void) {
+  AudioCompanionRebootTrace trace;
+  memset(&trace, 0, sizeof(trace));
+
+  for (int i = 0; i < 5; i++) {
+    audio_companion_reboot_trace_record(&trace, RebootReasonCode_HardFault, false, 10 + i, NULL);
+  }
+  cl_assert_equal_i(trace.consecutive_fault_boots, 0);
+  // Still recorded as history — only the stand-down counter is narrowed.
+  cl_assert_equal_i(trace.total_error_reboots, 5);
+
+  // With the feature on, the same faults do count.
+  audio_companion_reboot_trace_record(&trace, RebootReasonCode_HardFault, true, 20, NULL);
+  cl_assert_equal_i(trace.consecutive_fault_boots, 1);
+}
+
+// A restart someone ASKED for is not evidence of instability, and used to leave a partial run
+// standing across it — so a firmware update in the middle of an unrelated rough patch could let
+// the next fault tip the feature off.
+void test_audio_companion_reboot_trace__a_deliberate_restart_ends_a_fault_run(void) {
+  AudioCompanionRebootTrace trace;
+  memset(&trace, 0, sizeof(trace));
+
+  audio_companion_reboot_trace_record(&trace, RebootReasonCode_HardFault, true, 10, NULL);
+  audio_companion_reboot_trace_record(&trace, RebootReasonCode_HardFault, true, 10, NULL);
+  cl_assert_equal_i(trace.consecutive_fault_boots, 2);
+
+  audio_companion_reboot_trace_record(&trace, RebootReasonCode_SoftwareUpdate, true, 10, NULL);
+  cl_assert_equal_i(trace.consecutive_fault_boots, 0);
+
+  audio_companion_reboot_trace_record(&trace, RebootReasonCode_ShutdownMenuItem, true, 10, NULL);
+  cl_assert_equal_i(trace.consecutive_fault_boots, 0);
+}

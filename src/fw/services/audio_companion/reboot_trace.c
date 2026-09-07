@@ -8,6 +8,23 @@
 
 #include <string.h>
 
+//! Restarts a person asked for. Not evidence of instability either way, so they end a crash run
+//! rather than preserving it across an unrelated gap.
+static bool prv_is_deliberate_restart(uint8_t reason_code) {
+  switch (reason_code) {
+    case RebootReasonCode_SoftwareUpdate:
+    case RebootReasonCode_ResetButtonsHeld:
+    case RebootReasonCode_ShutdownMenuItem:
+    case RebootReasonCode_FactoryResetReset:
+    case RebootReasonCode_FactoryResetShutdown:
+    case RebootReasonCode_MfgShutdown:
+    case RebootReasonCode_RemoteReset:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool audio_companion_reboot_trace_is_error_reason(uint8_t reason_code) {
   // The reboot reason enum groups intentional/benign restarts below
   // RebootReasonCode_Watchdog and crash/fault classes at or above it.
@@ -192,7 +209,14 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
   }
   // A session that survived long enough to look healthy ends any crash run, even if it ultimately
   // ended in a fault -- one crash after a day of uptime is not a loop.
-  if (session_seconds >= AUDIO_COMPANION_HEALTHY_SESSION_SECONDS) {
+  //
+  // A DELIBERATE restart ends it too. The run is what stands background audio down, and it used to
+  // be cleared only by a healthy session -- so a firmware update, a shutdown from the menu or a
+  // buttons-held reset in the middle of an unrelated rough patch left the count standing, and the
+  // next fault could tip a feature the user never touched into being switched off. Those reasons
+  // are someone deciding to restart the watch, which is the opposite of evidence about stability.
+  if (session_seconds >= AUDIO_COMPANION_HEALTHY_SESSION_SECONDS ||
+      prv_is_deliberate_restart(reason_code)) {
     trace->consecutive_fault_boots = 0;
   }
 
@@ -200,7 +224,13 @@ void audio_companion_reboot_trace_record(AudioCompanionRebootTrace *trace, uint8
     if (trace->total_error_reboots < UINT16_MAX) {
       trace->total_error_reboots++;
     }
-    if (trace->consecutive_fault_boots < UINT8_MAX) {
+    // Only count a fault the feature could plausibly have caused. The counter is not
+    // audio-specific -- every reason at or above RebootReasonCode_Watchdog feeds it, which is
+    // Assert, StackOverflow, HardFault, LauncherPanic, AppHardFault, EventQueueFull, OutOfMemory
+    // and the rest -- so a watchface hard-faulting three times used to stand background audio
+    // down. If the pref was off for the session that crashed, this service was not running and
+    // cannot be implicated.
+    if (enabled && trace->consecutive_fault_boots < UINT8_MAX) {
       trace->consecutive_fault_boots++;
     }
     trace->last_fault = entry;
