@@ -324,7 +324,12 @@ static bool s_accel_shake_log_info_enabled = false;
 static bool s_vibe_log_info_enabled = false;
 static bool s_settings_dbs_compacted_v1 = false;
 static bool s_audio_companion_enabled = false;
-static bool s_audio_companion_pause_stationary_enabled = true;
+//! Default OFF, unlike every other power-save pause. RunLevel_Stationary is a motion heuristic —
+//! thirty minutes without wrist movement off the charger — and for a background audio recorder
+//! that describes a meeting, a lecture or a night's sleep, which is exactly when the microphone
+//! should still be running. Left on, it silently ended capture for hours at a time.
+static bool s_audio_companion_pause_stationary_enabled = false;
+//! Default ON: this one is the genuine critical-battery case, not a heuristic.
 static bool s_audio_companion_pause_low_power_enabled = true;
 static bool s_audio_companion_silence_suppression_enabled = true;
 static uint8_t s_audio_companion_silence_mode = AudioCompanionSilenceModeLight;

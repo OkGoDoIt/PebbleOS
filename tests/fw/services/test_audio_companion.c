@@ -1090,21 +1090,29 @@ void test_audio_companion__spool_saturation_parks_the_mic_once_the_receiver_is_g
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
   cl_assert(s_mic_running);
 
-  // Starve the heap so the spool cannot grow past its floor, then keep capturing into it. Once it
-  // saturates, the drop counter passes the baseline that prv_note_receiver_gone_locked() rebased
-  // and the mic parks itself. The loop is bounded so a regression that never parks fails here
-  // instead of spinning.
+  // Starve the heap so the spool cannot grow past its floor, then keep capturing into it. It
+  // saturates and starts shedding its OLDEST frames — and the microphone keeps running, because a
+  // drop-oldest ring that is full is doing exactly its job: holding the most recent window. This
+  // used to park on the very first dropped frame, so an outage a second longer than the ring cost
+  // everything after it, and nothing un-parked capture until a receiver reattached.
   audio_companion_spool_test_set_heap_free_bytes(0);
-  for (uint32_t i = 0; i < 400 && s_mic_running; i++) {
+  for (uint32_t i = 0; i < 400; i++) {
     prv_feed_frames(8);
   }
-  cl_assert(!s_mic_running);
+  cl_assert(s_mic_running);
 
   // The audio that fell out of the spool is reported as loss, not silently forgotten.
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
   cl_assert(stats.dropped_overflow_frames > 0);
   cl_assert(audio_companion_spool_has_pending_gap());
+
+  // Capture stops only after a LONG absence — long enough to outlast any iOS suspension, memory
+  // jettison or walk out of range, and short enough not to run the mic all night for a phone that
+  // has been switched off.
+  s_uptime_seconds += (10 * 60) + 1;
+  prv_feed_frames(8);
+  cl_assert(!s_mic_running);
 }
 
 void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) {
@@ -1133,18 +1141,34 @@ void test_audio_companion__stationary_runlevel_pauses_with_power_save_gap(void) 
   cl_assert(gap_msg.missing_frame_count >= 1);
 }
 
-void test_audio_companion__stationary_pause_is_always_on(void) {
+// The stationary pause is a MOTION HEURISTIC, and it is opt-in.
+//
+// RunLevel_Stationary means "the wrist has not moved for thirty minutes, off the charger". For a
+// background audio recorder that describes a meeting, a lecture, a film or a night's sleep — the
+// situations a person most wants recorded. Pausing there was silently ending capture for hours,
+// and it is a large part of "it barely records anything". The pref that controls it has always
+// existed, been persisted, and had a public setter; the gate simply never read it.
+void test_audio_companion__stationary_pause_is_opt_in(void) {
   audio_companion_set_enabled(true);
   audio_companion_set_pause_stationary_enabled(false);
   prv_subscribe(true, true);
   prv_authenticate();
 
   audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+
+  // Opting in still works, and still emits the power-save gap.
+  audio_companion_set_pause_stationary_enabled(true);
+  audio_companion_set_runlevel(RunLevel_Normal);
+  audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
 }
 
-void test_audio_companion__low_power_pause_is_always_on(void) {
+// Low power is the genuine critical-battery case rather than a heuristic, so it defaults to
+// pausing — but it is still a pref, and turning it off must be honoured.
+void test_audio_companion__low_power_pause_is_a_pref(void) {
   audio_companion_set_enabled(true);
   audio_companion_set_pause_stationary_enabled(true);
   audio_companion_set_pause_low_power_enabled(false);
@@ -1152,13 +1176,34 @@ void test_audio_companion__low_power_pause_is_always_on(void) {
   prv_authenticate();
 
   audio_companion_set_runlevel(RunLevel_LowPower);
-  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
-  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
 
+  // Stationary is a separate pref and is still on here, so it still pauses.
   audio_companion_set_runlevel(RunLevel_Normal);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
   audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
+}
+
+// The two runlevels that are not negotiable: the panic/reset path and a firmware update.
+void test_audio_companion__bare_minimum_and_update_always_stop_the_mic(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_pause_stationary_enabled(false);
+  audio_companion_set_pause_low_power_enabled(false);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  audio_companion_set_runlevel(RunLevel_BareMinimum);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
+
+  audio_companion_set_runlevel(RunLevel_Normal);
+  cl_assert(s_mic_running);
+
+  audio_companion_set_runlevel(RunLevel_FirmwareUpdate);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
 }

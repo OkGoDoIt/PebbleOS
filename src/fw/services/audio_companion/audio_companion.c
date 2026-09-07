@@ -86,6 +86,15 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! app is gone even when the watch never saw a BLE disconnect (e.g. the receiver shares the link
 //! with the official app and only dropped its own GATT connection).
 #define RECEIVER_LIVENESS_TIMEOUT_MS (15 * 1000)
+//! How long capture keeps running for a receiver that is not there before the microphone parks.
+//!
+//! The spool is drop-oldest, so while offline the watch keeps a rolling window of the most recent
+//! audio and reports what it shed as SpoolOverflow gaps. The only reason to stop is battery, and
+//! that is a question of minutes, not of the first dropped frame. Ten minutes comfortably outlasts
+//! every transient the phone produces — an iOS suspension, a memory jettison and relaunch, a walk
+//! out of Bluetooth range and back — while still not running the microphone all night for a phone
+//! that has been switched off.
+#define OFFLINE_CAPTURE_PARK_MS (10 * 60 * 1000)
 //! How long a continuously suppressed silence runs before the watch probes its receiver.
 //!
 //! While suppressing, the watch deliberately sends nothing at all -- which is exactly why
@@ -214,6 +223,7 @@ static bool s_capture_parked;          //!< capture stopped after offline overfl
 static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause began
 static uint8_t s_pending_resume_gap_reason;
 static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control message received
+static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while a receiver is ready
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
 static bool s_silence_probe_outstanding;  //!< a suppressed-silence probe is awaiting an answer
@@ -280,8 +290,37 @@ static bool prv_session_ready_locked(void) {
 //! (deliberate: the pause is not user-overridable), and BareMinimum / FirmwareUpdate must stop the
 //! mic too -- those runlevels are entered for panics, factory resets and firmware updates, where
 //! holding the mic and the Speex encoder open is exactly the wrong thing to do.
+//! Which runlevels take the microphone away.
+//!
+//! This used to be `s_runlevel != RunLevel_Normal`, which lumped four very different situations
+//! together and, in the process, made s_pause_stationary_enabled and s_pause_low_power_enabled
+//! dead code — both are loaded from prefs, persisted, and have public getters and setters that
+//! nothing consulted.
+//!
+//! Stationary is the one that mattered. RunLevel_Stationary is a MOTION HEURISTIC: the stationary
+//! service takes a once-a-minute accelerometer reading and, after
+//! STATIONARY_WAIT_BEFORE_ENGAGING_TIME_MINS (30) minutes without meaningful movement off the
+//! charger, drops the runlevel. It is on by default on every shipping build. For a background
+//! audio recorder that is precisely backwards: a wrist that has not moved for half an hour is a
+//! meeting, a lecture, a film, a night's sleep — the situations a person most wants recorded. The
+//! watch was switching its microphone off during all of them and reporting PausedPowerSave, which
+//! is a large part of "it barely records anything".
+//!
+//! The other three keep their unconditional pause, because they are not heuristics:
+//! BareMinimum is the panic/reset path, FirmwareUpdate must not contend for anything, and
+//! LowPower is the genuine critical-battery case (still pref-gated, but defaulting to on).
 static bool prv_power_save_active_locked(void) {
-  return s_runlevel != RunLevel_Normal;
+  switch (s_runlevel) {
+    case RunLevel_BareMinimum:
+    case RunLevel_FirmwareUpdate:
+      return true;
+    case RunLevel_LowPower:
+      return s_pause_low_power_enabled;
+    case RunLevel_Stationary:
+      return s_pause_stationary_enabled;
+    default:
+      return false;
+  }
 }
 
 static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode) {
@@ -409,6 +448,7 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
 //! arrives. Clears a tripped liveness watchdog.
 static void prv_note_receiver_activity_locked(void) {
   s_last_receiver_activity_ms = prv_uptime_ms();
+  s_offline_since_ms = 0;
   s_receiver_presumed_gone = false;
   if (s_silence_probe_outstanding) {
     // The probe did its job: the receiver was asleep, not gone. Go back to the long cadence.
@@ -799,10 +839,27 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
     schedule_drain = schedule_drain ||
         (audio_companion_spool_frames_pending_send() >= DRAIN_PUSH_THRESHOLD_FRAMES);
   } else {
-    // Offline: buffer until the spool starts dropping, then park the mic.
-    AudioCompanionSpoolStats stats;
-    audio_companion_spool_get_stats(&stats);
-    schedule_park = stats.dropped_overflow_frames > s_offline_baseline_dropped;
+    // Offline: keep the most RECENT audio, and only give up after a long absence.
+    //
+    // This used to park the microphone on the very first overflowed frame, which threw away the
+    // whole point of a drop-oldest ring. The spool recycles its oldest chunk quite happily, so
+    // once it is full it holds a rolling window of the last ~4-67 seconds (the range is wide
+    // because the ring only grows past CONFIG_AUDIO_COMPANION_SPOOL_MIN_BYTES while kernel heap
+    // headroom allows). Parking at the first drop meant an outage a second longer than that
+    // window cost EVERYTHING after it, not just the overflow — and nothing un-parks capture
+    // except a receiver reattaching, so a phone that was suspended for two minutes came back to a
+    // watch that had stopped listening. Cycling instead means the user keeps the most recent
+    // window, which is what a person expects from a background recorder, and the overflow is
+    // already reported honestly as a SpoolOverflow gap.
+    //
+    // The park still exists, because a microphone running for a receiver that is never coming
+    // back is a real battery cost. It is now on a TIMER rather than on the first dropped frame:
+    // OFFLINE_CAPTURE_PARK_MS of continuous absence, which is far longer than any suspension,
+    // jettison or Bluetooth relaunch and short enough to matter overnight.
+    if (s_offline_since_ms == 0) {
+      s_offline_since_ms = prv_uptime_ms();
+    }
+    schedule_park = (prv_uptime_ms() - s_offline_since_ms) >= OFFLINE_CAPTURE_PARK_MS;
   }
   if (schedule_drain && prv_session_ready_locked()) {
     prv_start_drain_timer_locked();
@@ -957,6 +1014,10 @@ static bool prv_send_data_batch_locked(void) {
 //! previously only on the disconnect path, and the liveness path's divergence from it is what
 //! turned a suspended iOS app into a stopped microphone.
 static void prv_note_receiver_gone_locked(void) {
+  // Starts the offline clock; prv_note_receiver_activity_locked() stops it.
+  if (s_offline_since_ms == 0) {
+    s_offline_since_ms = prv_uptime_ms();
+  }
   if (!s_stream_active) {
     return;
   }
@@ -2171,6 +2232,7 @@ void audio_companion_test_reset(void) {
   s_pause_started_ms = 0;
   s_pending_resume_gap_reason = 0;
   s_last_receiver_activity_ms = 0;
+  s_offline_since_ms = 0;
   s_receiver_presumed_gone = false;
   s_silence_probe_timer = TIMER_INVALID_ID;
   s_silence_probe_outstanding = false;
