@@ -110,6 +110,11 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! it). Only a timer and a bool — the microphone is already on — so this is about noticing when a
 //! meeting ends, not about power.
 #define POWER_SAVE_RECHECK_MS (30 * 1000)
+//! Mic-conflict retry backoff. Starts quickly, because the common cause -- dictation holding the
+//! microphone -- clears in seconds; settles slowly, because the other cause is heap pressure and
+//! retrying hard under that makes it worse.
+#define CAPTURE_RETRY_MIN_MS (1000)
+#define CAPTURE_RETRY_MAX_MS (30 * 1000)
 //! How long a continuously suppressed silence runs before the watch probes its receiver.
 //!
 //! While suppressing, the watch deliberately sends nothing at all -- which is exactly why
@@ -243,6 +248,8 @@ static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat ses
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
 static bool s_stationary_muted;        //!< stationary AND quiet: the mic is off to save the PDM rails
 static TimerID s_power_save_listen_timer = TIMER_INVALID_ID;
+static TimerID s_capture_retry_timer = TIMER_INVALID_ID;
+static uint32_t s_capture_retry_delay_ms;  //!< backoff for the mic-conflict retry; 0 = disarmed
 static bool s_silence_probe_outstanding;  //!< a suppressed-silence probe is awaiting an answer
 
 // Policy inputs
@@ -287,6 +294,8 @@ static void prv_arm_silence_probe_locked(uint32_t delay_ms);
 static void prv_stop_silence_probe_locked(void);
 static void prv_arm_power_save_listen_locked(uint32_t delay_ms);
 static void prv_stop_power_save_listen_locked(void);
+static void prv_arm_capture_retry_locked(void);
+static void prv_stop_capture_retry_locked(void);
 static void prv_update_stationary_mute_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
 static void prv_apply_pending(void);
@@ -495,6 +504,8 @@ static void prv_note_receiver_activity_locked(void) {
   s_offline_since_ms = 0;
   s_stationary_muted = false;
   s_power_save_listen_timer = TIMER_INVALID_ID;
+  s_capture_retry_timer = TIMER_INVALID_ID;
+  s_capture_retry_delay_ms = 0;
   s_receiver_presumed_gone = false;
   if (s_silence_probe_outstanding) {
     // The probe did its job: the receiver was asleep, not gone. Go back to the long cadence.
@@ -720,6 +731,9 @@ static void prv_start_capture_locked(void) {
   s_capture_wanted = true;
   s_owns_mic = true;
   s_capture_parked = false;
+  // Whatever the mic-conflict backoff had reached, this is a fresh start: reset it so the next
+  // failure retries promptly rather than inheriting a 30 s delay from an old episode.
+  prv_stop_capture_retry_locked();
 }
 
 //! Record that capture should stop. Like prv_start_capture_locked(), the driver call happens in
@@ -784,13 +798,26 @@ static void prv_apply_capture(void) {
     // Mic already owned by someone else (e.g. dictation) or out of memory. Park on the conflict
     // state directly rather than re-running the state machine: prv_reevaluate_locked() would set
     // the intent straight back to "capture" and spin this loop on a start that cannot succeed.
-    // The next event to reach prv_reevaluate_locked() retries, exactly as before.
+    //
+    // This used to claim "the next event to reach prv_reevaluate_locked() retries". In steady
+    // state there is no such event. Re-evaluation happens on a subscription change, a disconnect,
+    // AUTH/consent/enable, a mic-conflict hook, a runlevel change, a battery event that CROSSES a
+    // threshold, or a checkpoint whose pause flag CHANGED -- and the phone's ordinary traffic
+    // hits none of them: RECEIVER_HEALTH just ACKs, and an unchanged checkpoint returns early.
+    // So a transient failure -- dictation holding the mic for a few seconds, or
+    // voice_speex_init()'s kernel_malloc() losing a race under heap pressure -- became a
+    // permanent PausedConflict. Note it does not even set s_mic_conflict_active, so it is a pure
+    // latch with no tracked input that could clear it.
+    //
+    // So arm a retry. Backed off so a genuinely-held mic is not hammered, and cancelled the
+    // moment capture starts.
     PBL_LOG_WRN("Audio companion: mic unavailable; treating as conflict");
     pbl_mutex_lock(&s_lock, PBL_FOREVER);
     s_capture_wanted = false;
     s_owns_mic = false;
     prv_stop_drain_timer_locked();
     prv_set_state_locked(AudioCompanionServiceStatePausedConflict);
+    prv_arm_capture_retry_locked();
     pbl_mutex_unlock(&s_lock);
   }
   pbl_mutex_unlock(&s_capture_lock);
@@ -1311,6 +1338,49 @@ static void prv_power_save_listen_system_task_cb(void *data) {
 
 static void prv_power_save_listen_timer_cb(void *data) {
   system_task_add_callback(prv_power_save_listen_system_task_cb, NULL);
+}
+
+//! Retries a capture start that failed because the microphone was unavailable.
+//!
+//! Runs the ordinary state machine rather than poking the driver directly: prv_reevaluate_locked()
+//! decides afresh whether capture is wanted (the user may have turned it off, the receiver may
+//! have gone, the runlevel may have changed), and prv_apply_pending() does the start with s_lock
+//! released, which is the only safe lock order.
+static void prv_capture_retry_system_task_cb(void *data) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (s_state != AudioCompanionServiceStatePausedConflict || s_mic_conflict_active) {
+    // Either we recovered by another route, or dictation is genuinely holding the mic and owns
+    // the un-pause. Either way this retry has nothing to do.
+    prv_stop_capture_retry_locked();
+    pbl_mutex_unlock(&s_lock);
+    return;
+  }
+  PBL_LOG_DBG("Audio companion: retrying capture after a mic conflict");
+  prv_reevaluate_locked();
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+static void prv_capture_retry_timer_cb(void *data) {
+  system_task_add_callback(prv_capture_retry_system_task_cb, NULL);
+}
+
+static void prv_arm_capture_retry_locked(void) {
+  if (s_capture_retry_timer == TIMER_INVALID_ID) {
+    s_capture_retry_timer = new_timer_create();
+  }
+  s_capture_retry_delay_ms = (s_capture_retry_delay_ms == 0)
+                                 ? CAPTURE_RETRY_MIN_MS
+                                 : MIN(s_capture_retry_delay_ms * 2, CAPTURE_RETRY_MAX_MS);
+  new_timer_start(s_capture_retry_timer, s_capture_retry_delay_ms, prv_capture_retry_timer_cb,
+                  NULL, 0);
+}
+
+static void prv_stop_capture_retry_locked(void) {
+  s_capture_retry_delay_ms = 0;
+  if (s_capture_retry_timer != TIMER_INVALID_ID) {
+    new_timer_stop(s_capture_retry_timer);
+  }
 }
 
 static void prv_arm_power_save_listen_locked(uint32_t delay_ms) {
@@ -2294,6 +2364,8 @@ void audio_companion_test_force_reboot_trace_capture(void) { s_reboot_trace_reco
 TimerID audio_companion_test_get_silence_probe_timer(void) { return s_silence_probe_timer; }
 
 TimerID audio_companion_test_get_power_save_listen_timer(void) { return s_power_save_listen_timer; }
+
+TimerID audio_companion_test_get_capture_retry_timer(void) { return s_capture_retry_timer; }
 
 void audio_companion_test_reset(void) {
   audio_companion_spool_reset();

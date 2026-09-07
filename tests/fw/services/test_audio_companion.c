@@ -27,6 +27,7 @@ void audio_companion_test_reset(void);
 struct pbl_mutex *audio_companion_test_get_lock(void);
 TimerID audio_companion_test_get_silence_probe_timer(void);
 TimerID audio_companion_test_get_power_save_listen_timer(void);
+TimerID audio_companion_test_get_capture_retry_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
 
 #define MAX_CAPTURED_NOTIFICATIONS (32)
@@ -1509,6 +1510,41 @@ void test_audio_companion__mic_unavailable_settles_on_conflict_and_recovers(void
   audio_companion_mic_conflict_end();
   cl_assert(s_mic_running);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
+// ...and it must recover with NOBODY doing anything, which is the case that actually happens.
+//
+// The comment on this branch used to claim "the next event to reach prv_reevaluate_locked()
+// retries". In steady state there is no such event: re-evaluation needs a subscription change, a
+// disconnect, an AUTH/consent/enable, a mic-conflict hook, a runlevel change, a battery event that
+// CROSSES a threshold, or a checkpoint whose pause flag CHANGED. The phone's ordinary traffic hits
+// none of them -- RECEIVER_HEALTH just ACKs and an unchanged checkpoint returns early. So
+// dictation holding the mic for a few seconds, or voice_speex_init() losing a malloc race, became
+// a permanent PausedConflict.
+void test_audio_companion__a_mic_conflict_retries_itself(void) {
+  audio_companion_set_enabled(true);
+  s_mic_start_succeeds = false;
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+
+  const TimerID retry = audio_companion_test_get_capture_retry_timer();
+  cl_assert(retry != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(retry), true);
+
+  // Still unavailable: it backs off and stays armed rather than giving up.
+  cl_assert_equal_b(stub_new_timer_fire(retry), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(retry), true);
+
+  // The mic frees up. No user gesture, no reconnect, no runlevel change -- just the retry.
+  s_mic_start_succeeds = true;
+  cl_assert_equal_b(stub_new_timer_fire(retry), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(retry), false);
 }
 
 // The boot-time flight recorder is the only thing that survives a watchdog reset, so it has to
