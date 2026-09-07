@@ -5,13 +5,13 @@
 Start a debug session with:
 
 ```shell
-./pbl debug
+pbl debug
 ```
 
 On QEMU boards this attaches GDB to the {doc}`emulator <./qemu>` through a
-proxy (`tools/qemu/qemu_gdb_proxy.py`) that adds FreeRTOS thread awareness,
+proxy (`tools/qemu/qemu_gdb_proxy.py`) that walks the kernel's thread list,
 so `info threads` and per-thread backtraces work. On real hardware,
-`./pbl debug` is available on boards whose runner is OpenOCD (e.g. asterix,
+`pbl debug` is available on boards whose runner is OpenOCD (e.g. asterix,
 configured by `boards/asterix/support/openocd.cfg`); boards flashed via
 sftool do not support it.
 
@@ -40,7 +40,7 @@ Highlights (run `pbl` for the full list):
 
 ## Console and logs
 
-Attach to the firmware console with `./pbl console` (add `--tty` for real
+Attach to the firmware console with `pbl console` (add `--tty` for real
 hardware; see {doc}`./qemu` for the emulator ports). Firmware log messages
 are hashed at compile time — the binary only contains a hash and the
 arguments — and the console dehashes them on the fly using the dictionary
@@ -55,10 +55,8 @@ Logs are also persisted to a circular buffer in flash;
 
 When the firmware crashes, it writes a coredump to SPI flash (see the
 {doc}`architecture overview <../architecture/index>` for the on-flash
-format). Devices reporting to Memfault upload these automatically:
+format).
 
-- `tools/memfault_download_coredumps.py` downloads all coredumps for a
-  Memfault issue together with the matching symbol ELF files.
 - `tools/analyze_coredump.py <symbols.elf> <coredump>` runs GDB in batch
   mode and prints a full report: backtraces for all threads, registers,
   heap and lock statistics, and build metadata.

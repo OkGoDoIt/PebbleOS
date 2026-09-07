@@ -7,6 +7,10 @@
 name: Docs Link Check
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/docs-linkcheck.yml
+      - docs/
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
@@ -22,6 +26,8 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: "docs/requirements.txt"
 
       - name: Install dependencies
         run: pip install -r docs/requirements.txt

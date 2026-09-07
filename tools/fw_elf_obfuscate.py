@@ -11,7 +11,6 @@ import json
 import os
 import struct
 
-
 EXPORTED_SYMBOLS_PATH = os.path.join(
     os.path.dirname(__file__), "generate_native_sdk/exported_symbols.json"
 )
@@ -29,14 +28,14 @@ PRESERVE_SYMBOLS = [
     "app_crashed",
 ]
 
-# I have NO idea why we need to preserve `g_default_draw_implementation`, but we do. It's bizzare.
+# I have NO idea why we need to preserve `g_default_draw_implementation`, but we do. It's bizarre.
 # We can at least obfuscate the name.
 OBFUSCATE_SYMBOLS = [
     "g_default_draw_implementation",
 ]
 
 
-class ELFObjectBase(object):
+class ELFObjectBase:
     def unpack(self, data, offset=0):
         raise NotImplementedError("unpack is not implement")
 
@@ -59,10 +58,10 @@ class ELFFileHeader(ELFObjectBase):
     elf_class = None  # The class of the ELF file (whether it's 32-bit or 64-bit)
     data = None  # The format of the data in the ELF file (endianness)
     version = None  # The version of the ELF file format
-    osabi = None  # The OS- or ABI-specific extensios used in this ELF file
+    osabi = None  # The OS- or ABI-specific extensions used in this ELF file
     abi_version = None  # The version of the ABI this file is targeted for
     type = None  # The object file type
-    machine = None  # The machine artictecture
+    machine = None  # The machine architecture
     entry = None  # The program entry point
     ph_offset = None  # The offset of the program header table in bytes
     sh_offset = None  # The offset of the section header table in bytes
@@ -82,7 +81,7 @@ class ELFFileHeader(ELFObjectBase):
         assert self.elf_class == self.CLASS_32_BIT
         # we only support little-endian files
         assert self.data == self.DATA_2_LSB
-        # current ELF verison
+        # current ELF version
         assert self.version == self.VERSION
         assert self.osabi == self.OS_ABI
         assert self.abi_version == self.ABI_VERSION
@@ -251,7 +250,7 @@ class ELFStringTable(ELFSection):
     def __init__(self, header, content):
         assert header.type == header.TYPE_STRING_TABLE
         assert content[0] == 0 and content[-1] == 0
-        super(ELFStringTable, self).__init__(header, content)
+        super().__init__(header, content)
         self.strings = []
 
     def unpack(self):
@@ -283,7 +282,7 @@ class ELFSymbolTable(ELFSection):
     def __init__(self, header, content):
         assert header.type == header.TYPE_SYMBOL_TABLE
         assert len(content) % header.entry_size == 0
-        super(ELFSymbolTable, self).__init__(header, content)
+        super().__init__(header, content)
         self.symbols = []
 
     def unpack(self):
@@ -419,13 +418,13 @@ class ELFFile(ELFObjectBase):
         for index, section in enumerate(self.sections):
             if section.name == name:
                 return index
-        raise Exception("Could not find section: {}".format(name))
+        raise RuntimeError(f"Could not find section: {name}")
 
     def get_section(self, name):
         for section in self.sections:
             if section.name == name:
                 return section
-        raise Exception("Could not find section: {}".format(name))
+        raise RuntimeError(f"Could not find section: {name}")
 
 
 def _get_preserved_symbols():
@@ -523,7 +522,7 @@ def obfuscate(src_path, dst_path, no_text):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pebble Firmware ELF Obfuscation")
-    parser.add_argument("input_elf", help="The source ELF file to be obfuscaated")
+    parser.add_argument("input_elf", help="The source ELF file to be obfuscated")
     parser.add_argument("output_elf", help="Output file path")
     parser.add_argument(
         "--no-text", help="Removes the .text section", action="store_true"

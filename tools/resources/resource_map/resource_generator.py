@@ -15,13 +15,13 @@ class ResourceGeneratorMetaclass(type):
     type = None
 
     def __init__(cls, name, bases, dict):
-        super(ResourceGeneratorMetaclass, cls).__init__(name, bases, dict)
+        super().__init__(name, bases, dict)
 
         if cls.type:
             _ResourceGenerators[cls.type] = cls
 
 
-# Instatiate the metaclass into a baseclass we can use elsewhere.
+# Instantiate the metaclass into a baseclass we can use elsewhere.
 ResourceGeneratorBase = ResourceGeneratorMetaclass("ResourceGenerator", (object,), {})
 
 
@@ -35,12 +35,12 @@ class ResourceGenerator(ResourceGeneratorBase):
         resource = {
             "name": definition_dict["name"],
             "filename": str(
-                definition_dict["file"] if "file" in definition_dict else None
+                definition_dict.get("file", None)
             ),
         }
         resources = [resource]
 
-        # Now generate ResourceDefintion objects for each resource
+        # Now generate ResourceDefinition objects for each resource
         target_platforms = definition_dict.get("targetPlatforms", None)
         aliases = definition_dict.get("aliases", [])
         builtin = (
@@ -84,7 +84,7 @@ class ResourceGenerator(ResourceGeneratorBase):
         """
         Stub implementation of generate_object. Subclasses must override this method.
         """
-        raise NotImplementedError("%r missing a generate_object implementation" % cls)
+        raise NotImplementedError(f"{cls!r} missing a generate_object implementation")
 
 
 def definitions_from_dict(bld, definition_dict, resource_source_path):

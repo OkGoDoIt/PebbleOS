@@ -22,10 +22,8 @@
 #include "kernel/util/delay.h"
 #include "kernel/util/factory_reset.h"
 #include "kernel/util/sleep.h"
-#include "process_management/app_manager.h"
 #include "process_management/worker_manager.h"
 #include "prompt.h"
-#include "resource/resource_storage_flash.h"
 #include "pbl/services/compositor/compositor.h"
 #include "pbl/services/system_task.h"
 #include "pbl/services/filesystem/pfs.h"
@@ -44,10 +42,6 @@
 
 #include <bluetooth/responsiveness.h>
 #include <bluetooth/gatt_discovery.h>
-
-#if MEMFAULT
-#include "memfault/components.h"
-#endif
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -322,7 +316,6 @@ void command_flash_validate(void) {
   prompt_send_response("OK");
 }
 
-
 //! Some flash chips have an accelerated method of checking for erased sectors. This is a sanity
 //! check against that method. It reads the bytes in raw form and makes sure it is really erased.
 static bool prv_is_really_erased(uint32_t addr, bool is_subsector) {
@@ -558,7 +551,6 @@ bailout:
   }
 }
 
-
 void command_flash_stress(const char *n) {
   int count = atoi(n);
   // WARNING!! Running this test can shorten the life of your flash chip because it violates the
@@ -618,7 +610,6 @@ void command_flash_benchmark() {
   s_flash_benchmark(512);
   s_flash_benchmark(1024);
 }
-
 
 void command_reset() {
   prompt_command_finish();
@@ -1025,7 +1016,7 @@ void command_audit_delay_us(void) {
 // Arms the JDI display driver to drop the next LCDC transfer-complete
 // callback, simulating the silent-loss failure mode (e.g. SiFli HAL ICB
 // overflow). The silent-loss timer should fire ~500ms later and PBL_CROAK,
-// producing a Memfault coredump and a watch reboot.
+// producing a coredump and a watch reboot.
 void command_display_drop_complete(void) {
   display_jdi_test_drop_next_complete();
   prompt_send_response("display: armed drop of next LCDC complete; PBL_CROAK in ~500ms");
@@ -1066,7 +1057,6 @@ static GAPLEConnection *prv_get_le_connection_and_print_info(void) {
     prompt_send_response_fmt(buf, sizeof(buf), "Connected to " BT_DEVICE_ADDRESS_FMT,
                              BT_DEVICE_ADDRESS_XPLODE(conn->device.address));
   }
-
 
   return conn;
 }
@@ -1144,32 +1134,10 @@ void command_ble_logging_get_level(void) {
   }
 }
 
-#if MEMFAULT
-void command_mflt_export(void) {
-  memfault_data_export_dump_chunks();
-}
-
-void command_mflt_collect(void) {
-  void memfault_chunk_collect(void);
-  memfault_chunk_collect();
-}
-
-void command_mflt_metrics_dump(void) {
-  memfault_metrics_heartbeat_debug_print();
-}
-
-void command_mflt_device_info(void) {
-  memfault_build_info_dump();
-  memfault_device_info_dump();
-}
-#endif  // MEMFAULT
-
 #ifdef CONFIG_PERFORMANCE_TESTS
 // for task_watchdog_bit_set_all
 #include <pbl/drivers/task_watchdog.h>
 // For taskYIELD()
-#include "FreeRTOS.h"
-#include "task.h"
 
 // Average this many iterations of the text test for getting useful perf numbers.
 #define PERFTEST_TEXT_ITERATIONS 5

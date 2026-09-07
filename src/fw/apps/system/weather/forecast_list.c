@@ -2,12 +2,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "forecast_list.h"
-#include "weather.h"
 #include "expanded_view.h"
 #include "applib/ui/app_window_stack.h"
 #include "applib/ui/status_bar_layer.h"   // status-bar height/offset constants (top time)
 #include "weather_math.h"
-#include "resource_ids.pin.h"
 #include "pbl/services/clock.h"            // clock_copy_time_string — notification-style top time
 #include "applib/graphics/gdraw_command_transforms.h"
 #include "applib/graphics/gdraw_command.h"
@@ -360,7 +358,7 @@ static void prv_scroll_to(int target) {
 
 // Shared animation boilerplate: create + duration + curve + impl + optional stopped
 // handler + schedule. Every moook here runs a manual curve in its update proc, so
-// the wrapper just parameterizes the pieces that differ. (Shared region: used by
+// the wrapper just parametrizes the pieces that differ. (Shared region: used by
 // both the rect-only squash block below and the round+rect transitions further down.)
 static Animation *prv_start_anim(uint32_t dur_ms, AnimationCurve curve,
                                  const AnimationImplementation *impl,

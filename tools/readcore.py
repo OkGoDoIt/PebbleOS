@@ -21,10 +21,9 @@ from enum import Enum
 # Don't try reading the `construct` readthedocs, the entire API has changed
 # since 2.5 to now...
 import construct as cs
-
-from elftools.elf.structs import ELFStructs
-from elftools.elf.enums import *
 import elftools.construct as ecs  # Sigh...
+from elftools.elf.enums import *
+from elftools.elf.structs import ELFStructs
 
 
 class _CoreDumpChunkKey(Enum):
@@ -225,9 +224,9 @@ class Coredump:
             e_type=ENUM_E_TYPE["ET_CORE"], e_machine=ENUM_E_MACHINE["EM_ARM"]
         )
 
-        # We want to do this all in one pass: figure out where everythign is
+        # We want to do this all in one pass: figure out where everything is
         # going to go, then update some internal variables with where things
-        # actually ended up, and then actually generate the strcuts and
+        # actually ended up, and then actually generate the structs and
         # splatter them out later.  `position` is the thing that measures
         # where we expect to put bytes, and `callbacks` will actually go
         # generate the bytes later.
@@ -485,22 +484,20 @@ class Coredump:
                 )
             )
 
-            callbacks.append(
-                (lambda data: lambda: data)(m.data)
-            )  # avoid capturing m accidentally
+            callbacks.append(lambda data=m.data: data)  # avoid capturing m accidentally
             position += len(m.data)
 
         ### Actually write out program and section headers...
         phoff = position
         for phdr in phdrs:
             d = structs.Elf_Phdr.build(phdr)
-            callbacks.append((lambda data: lambda: data)(d))
+            callbacks.append(lambda data=d: data)
             position += len(d)
 
         shoff = position
         for shdr in shdrs:
             d = structs.Elf_Shdr.build(shdr)
-            callbacks.append((lambda data: lambda: data)(d))
+            callbacks.append(lambda data=d: data)
             position += len(d)
 
         ### ... then write it all out to disk.

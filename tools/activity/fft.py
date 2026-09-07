@@ -14,11 +14,8 @@
 ##################################################################################################
 
 import argparse
-import os
-import sys
 import logging
 import math
-
 
 ###########################################################################################
 g_walk_10_steps = [
@@ -206,7 +203,7 @@ def real_value_fft(x):
 
     # Make sure we have a power of 2 length input
     n = len(x)
-    m = int(math.log(n, 2))
+    m = int(math.log2(n))
     if math.pow(2, m) != n:
         raise RuntimeError("Length must be a power of 2")
 
@@ -294,7 +291,7 @@ def compute_magnitude(x):
 
 
 ###################################################################################################
-def apply_gausian(x, width=0.1):
+def apply_gaussian(x, width=0.1):
     """Multiply x by the gaussian function. Width is a fraction, like 0.1"""
     result = []
     n = len(x)
@@ -324,7 +321,7 @@ def print_graph(x):
     min_value = -extent
 
     for i in range(len(x)):
-        print("%4d:  %10.3f: " % (i, x[i]), end=" ")
+        print(f"{i:4d}:  {x[i]:10.3f}: ", end=" ")
         position = int((x[i] - min_value) * 80 / scale)
         if position < 40:
             print(" " * position, end=" ")
@@ -371,8 +368,8 @@ if __name__ == "__main__":
         print("\n############ INPUT ######################")
         print_graph(input)
 
-        print("\n############ GAUSIAN OF INPUT ############")
-        # input = apply_gausian(input, 0.1)
+        print("\n############ GAUSSIAN OF INPUT ############")
+        # input = apply_gaussian(input, 0.1)
         print_graph(input)
 
         result = real_value_fft(input)
@@ -419,7 +416,7 @@ if __name__ == "__main__":
         input = [x - mean_mag for x in input]
 
         print("\n############ INPUT ######################")
-        # input = apply_gausian(input)
+        # input = apply_gaussian(input)
         print_graph(input)
 
         result = real_value_fft(input)

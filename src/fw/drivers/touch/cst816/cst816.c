@@ -9,14 +9,13 @@
 #include <pbl/drivers/touch/touch_sensor.h>
 #include "kernel/events.h"
 #include "kernel/util/sleep.h"
-#include "pbl/os/tick.h"
+#include "pbl/kernel/types.h"
 #include "pbl/services/analytics/analytics.h"
 #include "pbl/services/regular_timer.h"
 #include "pbl/services/touch/touch.h"
 #include "pbl/services/system_task.h"
 #include <pbl/logging/logging.h>
 #include "system/passert.h"
-#include "pbl/util/math.h"
 
 #include "cst816_fw.h"
 
@@ -72,7 +71,7 @@ static bool s_enabled = false;
 static bool s_reset_scheduled = false;
 static bool s_activity_since_check = false;
 static RtcTicks s_last_irq_ticks = 0;
-static PebbleMutex *s_i2c_lock;
+static PBL_MUTEX_DEFINE(s_i2c_lock);
 
 static void prv_exti_cb(bool *should_context_switch);
 static void cst816_hw_reset(void);
@@ -83,7 +82,7 @@ static RegularTimerInfo s_watchdog_timer = {
 };
 
 static bool prv_read_data(uint16_t register_address, uint8_t *result, uint16_t size, bool is_work_mode) {
-  mutex_lock(s_i2c_lock);
+  pbl_mutex_lock(&s_i2c_lock, PBL_FOREVER);
   I2CSlavePort* port = CST816->i2c;
   uint8_t addr_size = 1;
   if(!is_work_mode) {
@@ -97,12 +96,12 @@ static bool prv_read_data(uint16_t register_address, uint8_t *result, uint16_t s
     rv = i2c_read_block(port, size, result);
   }
   i2c_release(port);
-  mutex_unlock(s_i2c_lock);
+  pbl_mutex_unlock(&s_i2c_lock);
   return rv;
 }
 
 static bool prv_write_data(uint16_t register_address, const uint8_t *datum, uint16_t size, bool is_work_mode) {
-  mutex_lock(s_i2c_lock);
+  pbl_mutex_lock(&s_i2c_lock, PBL_FOREVER);
   I2CSlavePort* port = CST816->i2c;
   uint8_t addr_size = 1;
   if(!is_work_mode) {
@@ -116,7 +115,7 @@ static bool prv_write_data(uint16_t register_address, const uint8_t *datum, uint
   memcpy(data+sizeof(register_address), datum, size);
   bool rv = i2c_write_block(port, size+addr_size, is_work_mode?data+1:data);
   i2c_release(port);
-  mutex_unlock(s_i2c_lock);
+  pbl_mutex_unlock(&s_i2c_lock);
   return rv;
 }
 
@@ -241,7 +240,6 @@ void touch_sensor_init(void) {
   uint8_t fw_version;
   bool rv;
 
-  s_i2c_lock = mutex_create();
 
 #ifndef RESET_PIN_CTRLBY_NPM1300
   gpio_output_init(&CST816->reset, GPIO_OType_PP);
@@ -292,7 +290,7 @@ static void prv_process_pending_messages(void* context) {
 
   // Count interrupts spaced >=2s apart as sleep->awake transitions.
   RtcTicks now = rtc_get_ticks();
-  if (now - s_last_irq_ticks >= milliseconds_to_ticks(CST816_WAKE_SPACING_MS)) {
+  if (now - s_last_irq_ticks >= pbl_ms_to_ticks(CST816_WAKE_SPACING_MS)) {
     PBL_ANALYTICS_ADD(touch_driver_wake_cnt, 1);
   }
   s_last_irq_ticks = now;

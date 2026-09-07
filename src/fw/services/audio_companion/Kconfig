@@ -4,11 +4,17 @@ config SERVICE_AUDIO_COMPANION
     bool "Audio companion background streaming"
     depends on MIC && SERVICE_VOICE
     select AUDIO_COMPANION_SERVICE_ENABLED if BT_FW_NIMBLE
+    select MBEDTLS
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service. The
       transport requires a NimBLE Bluetooth backend; on other backends the
       service compiles but stays inert.
+
+      MBEDTLS is selected for the receiver registry's SHA-256 (see
+      pebble_mbedtls_config.h, which enables the primitive only when this
+      symbol is set). NimBLE selects it too; the select makes the
+      dependency hold on the other backends as well.
 
 if SERVICE_AUDIO_COMPANION
 

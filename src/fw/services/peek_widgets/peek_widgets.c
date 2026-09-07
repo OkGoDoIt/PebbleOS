@@ -12,7 +12,7 @@
 #include "process_management/app_manager.h"
 #include "resource/resource_ids.auto.h"
 #include "resource/timeline_resource_ids.auto.h"
-#include "pbl/os/mutex.h"
+#include "pbl/kernel/mutex.h"
 #include "pbl/services/music.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/notifications/alerts.h"
@@ -87,7 +87,7 @@ typedef struct PeekWidgetsState {
   time_t notif_expires_at; //!< 0 = no expiry (Until Dismissed)
 
   //! App-published widgets. Guarded by lock: publish/withdraw may run on any task.
-  PebbleMutex *app_lock;
+  struct pbl_mutex app_lock;
   AppPeekWidget app_widgets[PEEK_WIDGET_MAX_APP_WIDGETS];
 
   TimerID timer;
@@ -448,7 +448,7 @@ static bool prv_app_widget_is_active(void) {
   if (!quick_view_prefs_get_apps_enabled()) {
     return false;
   }
-  mutex_lock(s_state.app_lock);
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
   AppPeekWidget *widget = prv_pick_app_widget();
   bool active = false;
   if (widget) {
@@ -459,20 +459,20 @@ static bool prv_app_widget_is_active(void) {
       active = true;
     }
   }
-  mutex_unlock(s_state.app_lock);
+  pbl_mutex_unlock(&s_state.app_lock);
   return active;
 }
 
 //! @return false when no live app widget remains.
 static bool prv_show_app_widget(bool animated) {
-  mutex_lock(s_state.app_lock);
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
   AppPeekWidget *widget = prv_pick_app_widget();
   if (!widget) {
-    mutex_unlock(s_state.app_lock);
+    pbl_mutex_unlock(&s_state.app_lock);
     return false;
   }
   const AppPeekWidget copy = *widget;
-  mutex_unlock(s_state.app_lock);
+  pbl_mutex_unlock(&s_state.app_lock);
 
   AttributeList attr_list = {};
   attribute_list_add_cstring(&attr_list, AttributeIdTitle, copy.title);
@@ -514,7 +514,7 @@ bool peek_widgets_publish_app_widget(const PeekWidgetAppPublish *publish) {
       !publish->title || (publish->title[0] == '\0')) {
     return false;
   }
-  mutex_lock(s_state.app_lock);
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
   AppPeekWidget *slot = NULL;
   AppPeekWidget *oldest = NULL;
   for (unsigned int i = 0; i < PEEK_WIDGET_MAX_APP_WIDGETS; i++) {
@@ -546,7 +546,7 @@ bool peek_widgets_publish_app_widget(const PeekWidgetAppPublish *publish) {
   if (publish->subtitle) {
     strncpy(slot->subtitle, publish->subtitle, PEEK_WIDGET_APP_SUBTITLE_MAX_LEN);
   }
-  mutex_unlock(s_state.app_lock);
+  pbl_mutex_unlock(&s_state.app_lock);
 
   s_state.content_dirty = true;
   prv_request_refresh();
@@ -558,7 +558,7 @@ void peek_widgets_withdraw_app_widget(const Uuid *owner) {
     return;
   }
   bool removed = false;
-  mutex_lock(s_state.app_lock);
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
   for (unsigned int i = 0; i < PEEK_WIDGET_MAX_APP_WIDGETS; i++) {
     AppPeekWidget *widget = &s_state.app_widgets[i];
     if (widget->in_use && uuid_equal(&widget->owner, owner)) {
@@ -566,7 +566,7 @@ void peek_widgets_withdraw_app_widget(const Uuid *owner) {
       removed = true;
     }
   }
-  mutex_unlock(s_state.app_lock);
+  pbl_mutex_unlock(&s_state.app_lock);
   if (removed) {
     prv_request_refresh();
   }
@@ -685,12 +685,12 @@ bool peek_widgets_handle_dismiss(void) {
       s_state.music_dismissed_generation = s_state.music_generation;
       break;
     case PeekWidgetSource_App: {
-      mutex_lock(s_state.app_lock);
+      pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
       AppPeekWidget *widget = prv_pick_app_widget();
       if (widget) {
         widget->dismissed = true;
       }
-      mutex_unlock(s_state.app_lock);
+      pbl_mutex_unlock(&s_state.app_lock);
       break;
     }
     case PeekWidgetSource_Timeline:
@@ -716,13 +716,13 @@ bool peek_widgets_get_launch(PeekWidgetLaunch *launch_out) {
       notification_id = s_state.notif_id;
       break;
     case PeekWidgetSource_App: {
-      mutex_lock(s_state.app_lock);
+      pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
       AppPeekWidget *widget = prv_pick_app_widget();
       if (widget) {
         app_id = app_install_get_id_for_uuid(&widget->owner);
         launch_code = widget->launch_code;
       }
-      mutex_unlock(s_state.app_lock);
+      pbl_mutex_unlock(&s_state.app_lock);
       break;
     }
     case PeekWidgetSource_Timeline:
@@ -752,8 +752,8 @@ void peek_widgets_handle_prefs_changed(void) {
 
 void peek_widgets_init(void) {
   s_state = (PeekWidgetsState) {
-    .app_lock = mutex_create(),
     .timer = new_timer_create(),
   };
+  pbl_mutex_init(&s_state.app_lock);
   s_state.initialized = true;
 }

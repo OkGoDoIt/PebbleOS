@@ -4,25 +4,19 @@
 #include <pbl/drivers/display/sf32lb/display_jdi.h>
 
 #include "board/board.h"
-#include "board/display.h"
 #include <pbl/drivers/display/display.h>
 #include <pbl/drivers/gpio.h>
 #include "kernel/events.h"
-#include "kernel/pbl_malloc.h"
 #include "kernel/util/delay.h"
 #include "pbl/soc/sf32lb/sleep.h"
-#include "kernel/coredump_extra_regions.h"
 #include <pbl/drivers/rtc.h>
 #include "pbl/mcu/cache.h"
-#include "pbl/os/mutex.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include <pbl/logging/logging.h>
 #include "system/passert.h"
 
-#include "FreeRTOS.h"
-#include "semphr.h"
+#include "pbl/kernel/sem.h"
 
-#include "bf0_hal.h"
 #include "bf0_hal_lcdc.h"
 #include "bf0_hal_lptim.h"
 #include "bf0_hal_rtc.h"
@@ -53,7 +47,7 @@ static uint16_t s_update_y1;
 static bool s_initialized;
 static bool s_updating;
 static UpdateCompleteCallback s_uccb;
-static SemaphoreHandle_t s_sem;
+static PBL_SEM_DEFINE(s_sem, 0, 1);
 static TimerID s_silent_loss_timer = TIMER_INVALID_ID;
 // Set from HAL_LCDC_SendLayerDataCpltCbk (ISR). The silent-loss handler checks
 // this to distinguish "EOF truly never fired" (real bug → crash) from "EOF
@@ -90,20 +84,6 @@ static volatile DisplayIrqLog s_lcdc_irq_log;
 // Set by HAL_LCDC_SendLayerDataCpltCbk (the EOF callback) so the IRQ logger can
 // record, per interrupt, whether the HAL reached the completion path.
 static volatile bool s_lcdc_eof_cb_fired;
-
-// Called from coredump_extra_regions_init() in main.c boot path so the
-// snapshot buffer rides in Memfault coredumps. The default Memfault
-// reconstruction only forwards thread stacks + log buffers; without this
-// the LCDC register dump captured by prv_silent_loss_handler stays in flash
-// and never reaches Sifli.
-void display_jdi_register_coredump_regions(void) {
-  coredump_extra_regions_register("lcdc_pre_crash_regs",
-                                  (const void *)s_lcdc_pre_crash_regs,
-                                  sizeof(s_lcdc_pre_crash_regs));
-  coredump_extra_regions_register("lcdc_irq_log",
-                                  (const void *)&s_lcdc_irq_log,
-                                  sizeof(s_lcdc_irq_log));
-}
 
 #ifndef CONFIG_RELEASE
 // Test hook: arm a one-shot drop of the next LCDC transfer-complete callback,
@@ -225,8 +205,8 @@ static void prv_snapshot_lcdc_regs(const LCDC_HandleTypeDef *hlcdc) {
 // HAL_LCDC_ERROR_OVERFLOW without invoking XferCpltCallback / XferErrorCallback,
 // so the firmware silently loses the completion and the compositor wedges.
 // Capture LCDC registers into BSS so they ride in the coredump, then crash —
-// the user sees a reboot instead of a frozen screen, and Memfault captures
-// the state Sifli needs to diagnose the underlying HAL bug.
+// the user sees a reboot instead of a frozen screen, and the coredump
+// captures the state Sifli needs to diagnose the underlying HAL bug.
 static void prv_silent_loss_handler(void *data) {
   if (s_eof_observed) {
     // EOF fired between us arming the timer and the timeout — terminate is
@@ -310,8 +290,6 @@ void display_jdi_irq_handler(DisplayJDIDevice *disp) {
 }
 
 void HAL_LCDC_SendLayerDataCpltCbk(LCDC_HandleTypeDef *lcdc) {
-  portBASE_TYPE woken = pdFALSE;
-
   // Tell the IRQ logger the HAL reached the completion path for this interrupt.
   s_lcdc_eof_cb_fired = true;
 
@@ -321,7 +299,6 @@ void HAL_LCDC_SendLayerDataCpltCbk(LCDC_HandleTypeDef *lcdc) {
     // Simulate the lost-completion failure mode: leave s_eof_observed false
     // and don't post the terminate event. The silent-loss timer should fire
     // ~DISPLAY_SILENT_LOSS_TIMEOUT_MS later and PBL_CROAK.
-    portEND_SWITCHING_ISR(woken);
     return;
   }
 #endif
@@ -340,12 +317,11 @@ void HAL_LCDC_SendLayerDataCpltCbk(LCDC_HandleTypeDef *lcdc) {
             },
     };
 
-    woken = event_put_isr(&e) ? pdTRUE : pdFALSE;
+    event_put_isr(&e);
   } else {
-    xSemaphoreGiveFromISR(s_sem, &woken);
+    pbl_sem_give(&s_sem);
   }
 
-  portEND_SWITCHING_ISR(woken);
 }
 
 void display_init(void) {
@@ -383,8 +359,6 @@ void display_init(void) {
 
   HAL_NVIC_SetPriority(DISPLAY->irqn, DISPLAY->irq_priority, 0);
   HAL_NVIC_EnableIRQ(DISPLAY->irqn);
-
-  s_sem = xSemaphoreCreateBinary();
 
   prv_display_on();
 
@@ -510,7 +484,7 @@ void display_update_boot_frame(uint8_t *framebuffer) {
   soc_sf32lb_sleep_block(SOC_SF32LB_DEEPWFI);
   HAL_StatusTypeDef status = prv_display_update_start();
   if (status == HAL_OK) {
-    xSemaphoreTake(s_sem, portMAX_DELAY);
+    pbl_sem_take(&s_sem, PBL_FOREVER);
   } else {
     // Without this guard a failed kickoff would block boot forever on s_sem,
     // since the EOF IRQ that gives the semaphore never fires.

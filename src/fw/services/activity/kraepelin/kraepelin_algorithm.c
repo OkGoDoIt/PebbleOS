@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 This license is taken to apply to any other files in the Project Kraepelin
-Pebble App roject.
+Pebble App project.
 */
 #include <stdbool.h>
 #include <stdint.h>
@@ -171,7 +171,7 @@ typedef struct {
   uint16_t max_wake_minutes_early;        // early in the session
   uint16_t max_wake_minutes_late;         // later in the session
 
-  // Minimum sleep cyle length
+  // Minimum sleep cycle length
   uint16_t min_sleep_cycle_len_minutes;
 
   // If we see a scores less than this value, we consider it a "zero" (no movement)
@@ -383,17 +383,31 @@ static const char* prv_log_time(KAlgState *alg_state, time_t utc) {
 }
 
 // ----------------------------------------------------------------------------------------
-static void prv_reset_step_activity_state(KAlgStepActivityState *state) {
+// Drop the HRM subscription held by a step activity, if it has one. Safe to call on a state that
+// stays in progress: the next active minute re-subscribes.
+static void prv_release_step_activity_hrm(KAlgStepActivityState *state) {
 #ifdef CONFIG_HRM
   if (state->hrm_session != HRM_INVALID_SESSION_REF) {
     sys_hrm_manager_unsubscribe(state->hrm_session);
+    state->hrm_session = HRM_INVALID_SESSION_REF;
   }
 #endif
+}
+
+// ----------------------------------------------------------------------------------------
+static void prv_reset_step_activity_state(KAlgStepActivityState *state) {
+  prv_release_step_activity_hrm(state);
   *state = (KAlgStepActivityState) { };
 }
 
 // ----------------------------------------------------------------------------------------
 static void prv_reset_state(KAlgState *state) {
+  // Release the HRM unconditionally. The state reset below skips in-progress activities, but the
+  // subscription must not outlive the reset: a state machine that stops running can never reach
+  // prv_reset_step_activity_state, leaving the sensor pinned on until reboot.
+  prv_release_step_activity_hrm(&state->walk_state);
+  prv_release_step_activity_hrm(&state->run_state);
+
   // Only reset step activity states if they're not currently in progress to avoid
   // race conditions with the minute handler
   if (state->walk_state.start_time == KALG_START_TIME_NONE) {
@@ -456,7 +470,7 @@ static int32_t prv_integral_abs(int16_t *d, int16_t start, int16_t end) {
 // -----------------------------------------------------------------------------------------
 // Return the sum(abs(x-mean)) for each x in the array
 static uint32_t prv_pim_filter(KAlgState *state, int16_t *d, int16_t dlen, int16_t axis) {
-  // We use a butterworth second order digital fitler with a bandpass
+  // We use a butterworth second order digital filter with a bandpass
   // design of 0.25 to 1.75 hz
   static const Fixed_S64_32 cb[KALG_BUTTERWORTH_NUM_COEFICIENTS] = {
       {0x000000000721d150LL},   //  0.027859766117136
@@ -524,7 +538,7 @@ static uint32_t prv_real_counts_from_raw(uint32_t raw) {
   // 125 = 1G. We have empirically determined that scaling the VMC by
   // KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM / 100 produces values equivalent to the Actigraph values.
   // So, to convert from raw VMC to real VMC, we need
-  // to multiply by KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM/100 and divide by 125 and we acccomplish
+  // to multiply by KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM/100 and divide by 125 and we accomplish
   // this in integer arithmetic by multiplying by KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM and
   // dividing by 12500.
   uint32_t real_counts = raw * KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM / 12500;
@@ -536,13 +550,13 @@ static uint32_t prv_real_counts_from_raw(uint32_t raw) {
 // Real-valued, in-place, 2-radix Fourier transform
 //
 //   This implementation of the fourier transform is taken directly from
-//   Henrik V. Sorensen's 1987 paper "Real-valued Fast Fourier Tranform
+//   Henrik V. Sorensen's 1987 paper "Real-valued Fast Fourier Transform
 //   Algorithms" with slight modifications to allow use of Pebble's cos and
 //   sin lookup functions with input range of 0 to 2*pi angle scaled to
 //   0 to 65536 and output range of -1 to 1 scaled to -65535 to 65536. This
-//   descretization introduces some discrepancies between the results of this
+//   discretization introduces some discrepancies between the results of this
 //   function and the floating point equivalents that are not important for its
-//   use here, but nonetheless documented in the accompaning Julia test code.
+//   use here, but nonetheless documented in the accompanying Julia test code.
 //
 //   INPUT
 //     d = input signal array pointer
@@ -550,7 +564,7 @@ static uint32_t prv_real_counts_from_raw(uint32_t raw) {
 //     width_log_2 the log base 2 of width: 2^width_log_2 = width
 //
 //   OUTPUT
-//     d = fourier tranformed array pointer, with array of real coefficents of form
+//     d = fourier transformed array pointer, with array of real coefficients of form
 //       [Re(0), Re(1),..., Re(N/2-1), Re(N/2), Im(N/2-1),..., Im(1)]
 //
 static void prv_fft_2radix_real(int16_t *d, int16_t width, int16_t width_log_2) {
@@ -620,10 +634,10 @@ static void prv_fft_2radix_real(int16_t *d, int16_t width, int16_t width_log_2) 
 
 
 // -----------------------------------------------------------------------------------------
-// Evaluate the magnitude of the FFT coefficents and write back to the first width/2 elements
+// Evaluate the magnitude of the FFT coefficients and write back to the first width/2 elements
 // NOTE! this function modifies the input array in place
 static void prv_fft_mag(int16_t *d, int16_t width) {
-  // evaluate the fourier coefficent magnitude
+  // evaluate the fourier coefficient magnitude
   // NOTE: coeff @ index 0 and width/2 only have real components
   //    so their magnitude is exactly that
   for (int16_t i = 1; i < (width / 2); i++) {
@@ -714,7 +728,7 @@ static void prv_get_fftmag_0pad_mean0(int16_t *d, int16_t num_samples, int16_t f
   // Compute the FFT coefficients
   prv_fft_2radix_real(d, fft_width, fft_width_log_2);
 
-  // Evaluate the magnitude of the coefficents and write back to the first fft_width/2
+  // Evaluate the magnitude of the coefficients and write back to the first fft_width/2
   // elements
   prv_fft_mag(d, fft_width);
 }
@@ -816,9 +830,9 @@ static uint32_t prv_calc_raw_vmc(uint32_t *pims) {
 // the energy of the walking frequency, the arm frequency, and each of their harmonics.
 // @param[in] d pointer to array of magnitudes
 // @param[in] d_len length of d array
-// @param[in] walk_hz which walking frequency to evalute
+// @param[in] walk_hz which walking frequency to evaluate
 // @param[in] log log debugging information for this specific walking frequency
-// @return the sum of the magntudes of the signal frequencies
+// @return the sum of the magnitudes of the signal frequencies
 static uint32_t prv_compute_signal_energy(int16_t *d, int16_t d_len, uint16_t walk_hz, bool log) {
   static const int k_min_arm_freq = 5;
 
@@ -1026,7 +1040,7 @@ static bool prv_is_stepping(KAlgState *state, uint16_t max_mag_hz, uint16_t scor
   const uint16_t k_partial_min_vmc = 120;
 
   // If the frequency is high (close to running speed), insure that the VMC is also high.
-  // This can filter out some false steps if we get a high freqency and low VMC.
+  // This can filter out some false steps if we get a high frequency and low VMC.
   static const uint32_t k_high_step_freq_threshold = 12;
   static const uint32_t k_high_step_freq_vmc = 1000;
 
@@ -1092,7 +1106,7 @@ static uint16_t prv_calc_steps_in_epoch(KAlgState *state, int16_t num_samples, i
   // 125 = 1G. We have empirically determined that scaling the VMC by
   // KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM / 100 produces values equivalent to the Actigraph values.
   // So, to convert from raw VMC to real VMC, we need
-  // to multiply by KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM/100 and divide by 125 and we acccomplish
+  // to multiply by KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM/100 and divide by 125 and we accomplish
   // this in integer arithmetic by multiplying by KALG_x100_RAW_1G_PIM_CPM_TO_REAL_CPM and
   // dividing by 12500.
   uint32_t real_vmc_5s = prv_real_counts_from_raw(prv_calc_raw_vmc(pim_epoch));
@@ -1128,7 +1142,7 @@ static uint16_t prv_calc_steps_in_epoch(KAlgState *state, int16_t num_samples, i
   const char *type_str = stepping ? "STEP" : (partial_steps ? "HALF" : "----");
   KALG_LOG_DEBUG("%s steps: %2"PRIu16", freq: %2"PRIu16", vmc: %4"PRIu32", score0: %"PRIu16", ",
                  type_str, return_steps, max_mag_hz, real_vmc_5s, score_0);
-  KALG_LOG_DEBUG("score_hf: %"PRIi16", score_lf: %"PRIi16", total_energry: %"PRIi32" ",
+  KALG_LOG_DEBUG("score_hf: %"PRIi16", score_lf: %"PRIi16", total_energy: %"PRIi32" ",
                  score_hf, score_lf, total_energy);
   prv_log_overall_magnitudes("freq", state->work, 0, (fft_width / 2) - 1 /*index of last element*/);
 
@@ -1220,7 +1234,7 @@ static uint32_t prv_analyze_epoch(KAlgState *state) {
     prv_log_axis_magnitudes("accel-before", &state->accel_samples[axis][0], 0,
                             state->num_samples - 1 /*index of last element*/);
 
-    // Apply a cosine filter to the data before we FFT to reduce the chance of introduing
+    // Apply a cosine filter to the data before we FFT to reduce the chance of introducing
     // false high frequency components. See the function comment for prv_filt_cosine_win_mean0()
     // for more info.
     prv_filt_cosine_win_mean0(&state->accel_samples[axis][0], state->num_samples, 1);
@@ -1289,6 +1303,16 @@ bool kalg_init(KAlgState *state, KAlgStatsCallback stats_cb) {
   PBL_ASSERT((KALG_SLEEP_PARAMS.max_wake_minutes_early + KALG_SLEEP_HALF_WIDTH + 1)
                   == KALG_MAX_UNCERTAIN_SLEEP_M, "Invalid value for KALG_MAX_UNCERTAIN_SLEEP_M");
   return true;
+}
+
+
+// -----------------------------------------------------------------------------------------
+// Release resources held by the state. Must be called before the caller frees it, otherwise the
+// HRM subscriptions outlive the only references to them and pin the sensor on until reboot.
+void kalg_deinit(KAlgState *state) {
+  PBL_ASSERTN(state != NULL);
+  prv_release_step_activity_hrm(&state->walk_state);
+  prv_release_step_activity_hrm(&state->run_state);
 }
 
 
@@ -1498,7 +1522,7 @@ static bool prv_not_worn_during_session(KAlgState *alg_state, time_t session_sta
 
 
 // ------------------------------------------------------------------------------------------
-// Register the deep sleep sesions we've found
+// Register the deep sleep sessions we've found
 static void prv_deep_sleep_register_sessions(KAlgState *alg_state, time_t sample_time,
                                              bool abort, bool ongoing,
                                              KAlgActivitySessionCallback sessions_cb,
@@ -1510,7 +1534,7 @@ static void prv_deep_sleep_register_sessions(KAlgState *alg_state, time_t sample
                  ongoing ? "register" : (abort ? "abort" : "end"));
   PBL_ASSERT(state->sleep_start_time != KALG_START_TIME_NONE, "Unexpected call");
 
-  // Register/delete prevous sessions we captured
+  // Register/delete previous sessions we captured
   for (uint8_t i = 0; i < state->num_sessions; i++) {
     time_t start_utc = state->sleep_start_time + state->start_delta_sec[i];
     sessions_cb(context, KAlgActivityType_RestfulSleep, start_utc,
@@ -1541,7 +1565,7 @@ static void prv_deep_sleep_register_sessions(KAlgState *alg_state, time_t sample
 // @param[in] action which action to take:
 //    KAlgDeepSleepAction_Start:    start of a new sleep session, start capturing
 //    KAlgDeepSleepAction_Continue: Another sample for the current sleep session
-//    KAlgDeepSleepAction_End:      current sleep sesion has ended
+//    KAlgDeepSleepAction_End:      current sleep session has ended
 //    KAlgDeepSleepAction_Abort:    Abort the current sleep session
 // @param[in] ok_to_register if true, it is OK to register this as a deep sleep session. We don't
 //    allow registration until we're sure the container sleep session it is in is valid.
@@ -1705,7 +1729,7 @@ static bool prv_sleep_activity_update_stats(KAlgState *alg_state, time_t utc_now
     state->current_stats.consecutive_awake_minutes++;
   }
   if (score > params->min_valid_vmc) {
-    // If there is any movememnt at all, increment the "non-zero" minutes count.
+    // If there is any movement at all, increment the "non-zero" minutes count.
     state->current_stats.num_non_zero_minutes++;
   }
   if (state->current_stats.start_time != KALG_START_TIME_NONE) {
@@ -1901,7 +1925,7 @@ static void prv_sleep_activity_update(KAlgState *alg_state, time_t utc_now, uint
 
       sessions_cb(context, KAlgActivityType_Sleep, state->current_stats.start_time,
                   session_len_m * SECONDS_PER_MINUTE, false /*ongoing*/, false /*delete*/,
-                  0 /*steps*/, 0 /*resting_calories*/, 0 /*active_calories*/, 0 /*distane_mm*/);
+                  0 /*steps*/, 0 /*resting_calories*/, 0 /*active_calories*/, 0 /*distance_mm*/);
 
       // Inform the deep sleep detection logic that the sleep session just ended
       prv_deep_sleep_update(alg_state, sample_utc, score, KAlgDeepSleepAction_End,
@@ -1918,7 +1942,7 @@ static void prv_sleep_activity_update(KAlgState *alg_state, time_t utc_now, uint
       // Delete the previously registered ongoing session
       sessions_cb(context, KAlgActivityType_Sleep, state->current_stats.start_time,
                   session_len_m * SECONDS_PER_MINUTE, true /*ongoing*/, true /*delete*/,
-                  0 /*steps*/, 0 /*resting_calories*/, 0 /*active_calories*/, 0 /*distane_mm*/);
+                  0 /*steps*/, 0 /*resting_calories*/, 0 /*active_calories*/, 0 /*distance_mm*/);
 
       // Inform the deep sleep detection logic that this sleep session was aborted
       prv_deep_sleep_update(alg_state, sample_utc, score, KAlgDeepSleepAction_Abort,
@@ -1940,7 +1964,7 @@ static void prv_sleep_activity_update(KAlgState *alg_state, time_t utc_now, uint
         sessions_cb(context, KAlgActivityType_Sleep, state->current_stats.start_time,
                     minutes_since_sleep_started * SECONDS_PER_MINUTE, true /*ongoing*/,
                     false /*delete*/, 0 /*steps*/, 0 /*resting_calories*/, 0 /*active_calories*/,
-                    0 /*distane_mm*/);
+                    0 /*distance_mm*/);
 
         // Update summary stats
         state->summary_stats.sleep_start_utc = state->current_stats.start_time;
@@ -1965,7 +1989,7 @@ static const KAlgActivityAttributes *prv_get_step_activity_attributes(KAlgActivi
   static const KAlgActivityAttributes k_attributes[KAlgActivityTypeCount] = {
     // min_steps_per_min, max_steps_per_min
     {0, 0},            // KAlgActivityType_Sleep
-    {0, 0},            // KAlgActivityType_ResetfulSleep
+    {0, 0},            // KAlgActivityType_RestfulSleep
     {40,  130},        // KAlgActivityType_Walk
     {130, 255},        // KAlgActivityType_Run
   };
@@ -2021,12 +2045,20 @@ static void prv_step_activity_update(KAlgState *alg_state, KAlgStepActivityState
     uint32_t duration_secs = utc_now - state->start_time;
 
 #ifdef CONFIG_HRM
+    // Bound the subscription and re-arm it each active minute, so it lapses on its own if this
+    // state machine ever stops running. An activity survives k_max_inactive_minutes without
+    // reaching here, so the window has to comfortably exceed that.
+    const uint16_t hrm_expire_s = 10 * SECONDS_PER_MINUTE;
+
     // Make sure we have a couple active minutes in a row before enabling the HRM to save battery
     const unsigned min_duration_for_hrm = 3 * SECONDS_PER_MINUTE;
-    if (duration_secs >= min_duration_for_hrm && state->hrm_session == HRM_INVALID_SESSION_REF &&
-        activity_prefs_hrm_activity_tracking_is_enabled()) {
+    if (state->hrm_session != HRM_INVALID_SESSION_REF) {
+      sys_hrm_manager_set_update_interval(state->hrm_session, 1 /* update interval */,
+                                          hrm_expire_s);
+    } else if (duration_secs >= min_duration_for_hrm &&
+               activity_prefs_hrm_activity_tracking_is_enabled()) {
       state->hrm_session = hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID,
-          1 /* update interval */, 0 /*expire_s*/, HRMFeature_BPM, prv_hrm_subscription_cb, NULL);
+          1 /* update interval */, hrm_expire_s, HRMFeature_BPM, prv_hrm_subscription_cb, NULL);
     }
 #endif
 

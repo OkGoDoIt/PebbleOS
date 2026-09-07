@@ -21,7 +21,7 @@
 #include "util/time/time.h"
 #include "util/units.h"
 
-#include <pbl/os/mutex.h>
+#include "pbl/kernel/mutex.h"
 
 PBL_LOG_MODULE_DECLARE(service_activity, CONFIG_SERVICE_ACTIVITY_LOG_LEVEL);
 
@@ -63,7 +63,7 @@ typedef struct CurrentWorkoutData {
 
 //! Persisted statically in RAM
 typedef struct WorkoutServiceData {
-  PebbleRecursiveMutex *s_workout_mutex;
+  struct pbl_mutex s_workout_mutex;
   RegularTimerInfo second_timer;
   time_t last_workout_end_ts;
   time_t frontend_last_opened_ts;
@@ -75,11 +75,11 @@ typedef struct WorkoutServiceData {
 static WorkoutServiceData s_workout_data;
 
 static void prv_lock(void) {
-  mutex_lock_recursive(s_workout_data.s_workout_mutex);
+  pbl_mutex_lock(&s_workout_data.s_workout_mutex, PBL_FOREVER);
 }
 
 static void prv_unlock(void) {
-  mutex_unlock_recursive(s_workout_data.s_workout_mutex);
+  pbl_mutex_unlock(&s_workout_data.s_workout_mutex);
 }
 
 static void prv_put_event(PebbleWorkoutEventType e_type) {
@@ -218,7 +218,7 @@ T_STATIC void prv_workout_timer_cb(void *unused) {
   // session notification), so a blocking lock here can trip the watchdog and
   // reboot the watch. The cb is purely advisory (duration tick / HR aging),
   // so if the lock is contended just skip this tick — the next one catches up.
-  if (!mutex_lock_recursive_with_timeout(s_workout_data.s_workout_mutex, 0)) {
+  if (pbl_mutex_lock(&s_workout_data.s_workout_mutex, PBL_NO_WAIT) != 0) {
     return;
   }
 
@@ -283,7 +283,7 @@ unlock:
 
 // ---------------------------------------------------------------------------------------
 void workout_service_init(void) {
-  s_workout_data.s_workout_mutex = mutex_create_recursive();
+  pbl_mutex_init(&s_workout_data.s_workout_mutex);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -319,6 +319,10 @@ void workout_service_frontend_closed(void) {
       hr_time_left = WORKOUT_ACTIVE_HR_SUBSCRIPTION_TS_EXPIRE;
     } else if (s_workout_data.frontend_last_opened_ts >= s_workout_data.last_workout_end_ts) {
       // If the app was opened and closed without starting a workout, turn the HR sensor off
+      hr_time_left = 0;
+    } else if (activity_prefs_get_hrm_measurement_interval() == HRMonitoringInterval_Disabled) {
+      // Background HR monitoring is off, so the user expects the sensor to run only while an
+      // activity is in progress. The workout is over, so skip the recovery window entirely.
       hr_time_left = 0;
     } else {
       // We have ended a workout while the app was open. Make sure to keep the HR sensor on for at

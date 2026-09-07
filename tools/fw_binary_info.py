@@ -3,17 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from binascii import crc32
 import os
 import struct
+from binascii import crc32
 from functools import reduce
+from typing import ClassVar
 
 import stm32_crc
 
 
-class PebbleFirmwareBinaryInfo(object):
+class PebbleFirmwareBinaryInfo:
     V1_STRUCT_VERSION = 1
-    V1_STRUCT_DEFINTION = [
+    V1_STRUCT_DEFINITION: ClassVar = [
         ("20s", "build_id"),
         ("L", "version_timestamp"),
         ("32s", "version_tag"),
@@ -23,7 +24,7 @@ class PebbleFirmwareBinaryInfo(object):
         ("B", "metadata_version"),
     ]
     # The platforms which use a legacy defective crc32
-    LEGACY_CRC_PLATFORMS = [
+    LEGACY_CRC_PLATFORMS: ClassVar = [
         0,  # unknown (assume legacy)
         1,  # OneEV1
         2,  # OneEV2
@@ -57,7 +58,7 @@ class PebbleFirmwareBinaryInfo(object):
 
     def _get_footer_struct(self):
         fmt = "<" + reduce(
-            lambda s, t: s + t[0], PebbleFirmwareBinaryInfo.V1_STRUCT_DEFINTION, ""
+            lambda s, t: s + t[0], PebbleFirmwareBinaryInfo.V1_STRUCT_DEFINITION, ""
         )
         return struct.Struct(fmt)
 
@@ -78,7 +79,7 @@ class PebbleFirmwareBinaryInfo(object):
 
     def _parse_footer_data(self, footer_data):
         z = zip(
-            PebbleFirmwareBinaryInfo.V1_STRUCT_DEFINTION,
+            PebbleFirmwareBinaryInfo.V1_STRUCT_DEFINITION,
             self.struct.unpack(footer_data),
         )
         return {entry[1]: data for entry, data in z}

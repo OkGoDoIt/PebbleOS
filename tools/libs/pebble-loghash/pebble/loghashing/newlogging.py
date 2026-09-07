@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # SPDX-FileCopyrightText: 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,12 +10,14 @@ Module for dehashing NewLog input
 import os
 import string
 import struct
+
 from pebble.loghashing.constants import (
+    HEX_FORMAT_SPECIFIER_PATTERN,
+    LENGTH_MODIFIER_PATTERN,
+    NEWLOG_HASHED_INFO_PATTERN,
     NEWLOG_LINE_CONSOLE_PATTERN,
     NEWLOG_LINE_SUPPORT_PATTERN,
-    NEWLOG_HASHED_INFO_PATTERN,
     POINTER_FORMAT_TAG_PATTERN,
-    HEX_FORMAT_SPECIFIER_PATTERN,
 )
 
 hex_digits = set(string.hexdigits)
@@ -90,7 +91,7 @@ def dehash_line(line, log_dict):
 
     timestamp = " ".join(line_dict[key] for key in ("date", "time") if key in line_dict)
     if timestamp:
-        output.append("[{}]".format(timestamp))
+        output.append(f"[{timestamp}]")
 
     if "date" not in line_dict and line_dict.get("re_level"):
         output.append("<{}>".format(line_dict["re_level"]))
@@ -199,7 +200,11 @@ def parse_message(msg, log_dict):
         return None
 
     # Python's 'printf' doesn't support %p. Sigh. Convert to %x and hope for the best
-    safe_output_msg = POINTER_FORMAT_TAG_PATTERN.sub("\g<format>x", output_dict["msg"])
+    safe_output_msg = POINTER_FORMAT_TAG_PATTERN.sub(r"\g<format>x", output_dict["msg"])
+
+    # Python's 'printf' rejects hh/ll/j/z/t length modifiers. Every argument is already a
+    # 32-bit integer, so drop them.
+    safe_output_msg = LENGTH_MODIFIER_PATTERN.sub(r"\g<format>", safe_output_msg)
 
     # Python's 'printf' doesn't handle (negative) 32-bit hex values correct. Build a new
     # arg list from the parsed arg list by searching for %<format>X conversions and masking
@@ -211,11 +216,15 @@ def parse_message(msg, log_dict):
         if index == -1:
             # This is going to cause an error below...
             arg_list.append(arg)
-        elif HEX_FORMAT_SPECIFIER_PATTERN.match(safe_output_msg, index):
+            continue
+        if isinstance(arg, int) and HEX_FORMAT_SPECIFIER_PATTERN.match(
+            safe_output_msg, index
+        ):
             # We found a %<format>X
             arg_list.append(arg & 0xFFFFFFFF)
         else:
             arg_list.append(arg)
+        index += 1
 
     # Use "printf" to generate the reconstructed string. Make sure the arguments are correct
     try:

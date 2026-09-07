@@ -24,7 +24,7 @@
 #include <time.h>
 
 void audio_companion_test_reset(void);
-PebbleMutex *audio_companion_test_get_lock(void);
+struct pbl_mutex *audio_companion_test_get_lock(void);
 TimerID audio_companion_test_get_silence_probe_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
 
@@ -84,8 +84,8 @@ static uint32_t s_rand32_value;
 //! stopping capture, and the watch rebooted on the task watchdog ~7 s later. Assert the invariant
 //! on every driver call so no future change can quietly reintroduce it.
 static void prv_assert_service_lock_not_held(void) {
-  const FakePebbleMutex *lock = (const FakePebbleMutex *)audio_companion_test_get_lock();
-  cl_assert(!lock || lock->lock_count == 0);
+  const struct pbl_mutex *lock = audio_companion_test_get_lock();
+  cl_assert(!lock || !pbl_mutex_is_owner(lock));
 }
 
 bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length) {

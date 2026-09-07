@@ -28,7 +28,7 @@
 
 // Stubs
 #include "stubs_analytics.h"
-#include "stubs_freertos.h"
+#include "stubs_irq.h"
 #include "stubs_hexdump.h"
 #include "stubs_hr_util.h"
 #include "stubs_logging.h"
@@ -250,6 +250,8 @@ uint32_t kalg_state_size(void) {
 bool kalg_init(KAlgState *state, KAlgStatsCallback stats_cb) {
   return true;
 }
+
+void kalg_deinit(KAlgState *state) {}
 
 uint32_t kalg_analyze_samples(KAlgState *state, AccelRawData *data, uint32_t num_samples,
                               uint32_t *consumed_samples) {

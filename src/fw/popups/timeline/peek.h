@@ -8,7 +8,6 @@
 #include "applib/ui/window.h"
 #include "kernel/events.h"
 #include "pbl/services/peek_widgets.h"
-#include "pbl/services/timeline/timeline.h"
 #include "pbl/services/timeline/timeline_resources.h"
 
 #define TIMELINE_PEEK_HEIGHT \
