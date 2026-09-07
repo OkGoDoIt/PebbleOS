@@ -159,7 +159,9 @@ pbl_clar_test(test_template_string
   OVERRIDES dummy_board
 )
 
-pbl_clar_test(test_music_service
+# tests/fw/services has a test_music_service too (the service behind this API);
+# clar takes the suite name from the file, so only the CMake id has to differ.
+pbl_clar_test(test_music_service_applib
   SOURCE test_music_service.c
   SOURCES
     src/fw/applib/music_service.c
