@@ -48,26 +48,29 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! pace the next slice rather than re-posting immediately.
 //!
 //! This is transport backpressure, not just callback length. Notifications reach the BT
-//! controller through a 512-byte SiFli IPC ring, and ipc_queue_write() busy-waits -- with no
-//! yield -- for as long as its timeout while that ring is full. That spin runs on NimbleHost at
-//! priority 3; KernelBG runs at priority 1, so a sustained spin starves KernelBG completely.
-//! KernelBG's watchdog bit is fed only by system_task_idle_timer_callback(), which (correctly)
-//! declines to feed while callbacks are queued, so >6.5 s of that is a watchdog reset that gets
-//! recorded against KernelBG even though KernelBG was merely a starved bystander.
+//! controller through a 512-byte SiFli IPC ring. ipc_queue_write() busy-waits with no
+//! schedule point while that ring is full; the HCI transport now sleeps instead of spinning
+//! (hci_sf32lb52.c:prv_ipc_write), so a full ring can no longer starve KernelBG. The burst
+//! cap still matters: sleeping 1 ms per blocked write keeps NimbleHost off the CPU, but a
+//! huge offered load still fills the ring and delays every other HCI packet. KernelBG's
+//! watchdog bit is fed only at the end of each system-task callback (and by the idle
+//! timer, which correctly declines to feed while callbacks are queued), so a callback that
+//! cannot run for >6.5 s is still a watchdog reset recorded against KernelBG.
 //!
-//! Draining a backlog as fast as NimBLE accepts mbufs keeps that ring permanently full, which is
-//! exactly the sustained spin. So bound each burst to what the link can absorb inside one drain
-//! period: ~4 x (MTU-3) is roughly 6 KB/s, still several times the ~2 KB/s the 16 kHz/20 ms Speex
-//! stream produces, so a backlog catches up at a few times real time while leaving the transport
-//! idle between slices.
+//! Draining a backlog as fast as NimBLE accepts mbufs keeps that ring permanently full.
+//! The HCI path now sleeps rather than spinning, so that no longer watchdog-resets the
+//! watch, but it still stalls every other HCI packet for the duration. Bound each burst to
+//! what the link can absorb inside one drain period: ~4 x (MTU-3) is roughly 6 KB/s, still
+//! several times the ~2 KB/s the 16 kHz/20 ms Speex stream produces, so a backlog catches up
+//! at a few times real time while leaving the transport idle between slices.
 #define DRAIN_MAX_BATCHES_PER_CALL (4)
 //! Catch-up ceiling. A backlog that only ever drains at a few times real time never recovers on a
 //! busy day, but the hazard above is *sustained* ring saturation, not burst size as such -- and
-//! bt_driver_audio_companion_notify_data() returning false is the transport saying it is full,
-//! which happens before the spin. So pace the burst additive-increase / multiplicative-decrease:
-//! widen it by DRAIN_BURST_STEP only after a whole slice was accepted while a real backlog
-//! remained, and collapse straight back to the base burst on the first refusal. The link never
-//! gets more than one over-sized slice before we retreat.
+//! bt_driver_audio_companion_notify_data() returning false means NimBLE would not take another
+//! mbuf, which is a different layer than the 512-byte IPC ring. Pace the burst
+//! additive-increase / multiplicative-decrease: widen it by DRAIN_BURST_STEP only after a whole
+//! slice was accepted while a real backlog remained, and collapse straight back to the base burst
+//! on the first refusal. The link never gets more than one over-sized slice before we retreat.
 //!
 //! 12 x (MTU-3) per 150 ms is ~19 KB/s, ~10x the ~2 KB/s the 16 kHz/20 ms Speex stream produces,
 //! and it is reached only after four consecutive clean slices (600 ms). The spool holds at most
