@@ -26,7 +26,16 @@
 
 #include <ipc_queue.h>
 
-#define IPC_TIMEOUT_TICKS 10
+//! Wall-clock budget for one HCI IPC write, in milliseconds.
+//!
+//! Named for what it is now. ipc_queue_write()'s own `timeout` argument counts
+//! HAL ticks and busy-waits for them with no schedule point, which on this SoC
+//! is fatal: NimbleHost is priority 3 and KernelBG is 1, so a full 512-byte TX
+//! ring turns that spin into a KernelBG watchdog reset (see the 2026-09-08
+//! dump: NimbleHost at ipc_queue_write with r0=0, KernelBG mid-Speex in
+//! prv_mic_data_handler, WD 0x81/0x83). prv_ipc_write() spends this budget in
+//! 1 ms sleeps instead, which deschedules us and lets KernelBG run.
+#define IPC_WRITE_BUDGET_MS 10
 
 #define HCI_TRACE_HEADER_LEN 16
 
@@ -52,6 +61,50 @@ static PBL_SEM_DEFINE(s_ipc_data_ready, 0, 1);
 static PBL_SEM_DEFINE(s_acl_pool_avail, 0, 1);
 static struct hci_h4_sm s_hci_h4sm;
 static ipc_queue_handle_t s_ipc_port;
+
+//! Write to the HCPU→LCPU HCI ring without busy-waiting.
+//!
+//! ipc_queue_write(..., timeout>0) polls circular_buf_put until HAL_GetTick
+//! advances `timeout` times. That loop never blocks, so a full ring keeps
+//! NimbleHost runnable and starves every lower-priority task. A connection
+//! interval of 7.5–15 ms plus a 10 ms spin is a livelock: NUM_COMPLETED_PKTS
+//! keeps arriving, each write spins through the next interval, KernelBG never
+//! gets the CPU, and the task watchdog fires at 6.5 s blaming KernelBG.
+//!
+//! timeout=0 is exactly one non-blocking circular_buf_put: the callee's loop
+//! runs its body once and then breaks on `cnt >= timeout` with cnt still 0. If
+//! the ring cannot take the rest, sleep 1 ms (which *does* deschedule us) and
+//! retry until the budget is spent. Yielding is safe because the ring is
+//! drained by the LCPU, not by anything waiting behind us on this core.
+//!
+//! KNOWN HAZARD, pre-existing and unchanged by this function: a short return
+//! leaves a partial H4 packet in the ring, which desynchronises the LCPU's
+//! framing until the link is reset. The old code had the same exposure (a
+//! timed-out ipc_queue_write also returns a partial count) and the callers
+//! still only log and return BLE_ERR_MEM_CAPACITY. Fixing it properly means
+//! reserving ring space for a whole packet before writing any of it, which the
+//! ipc_queue API does not currently expose.
+static size_t prv_ipc_write(const void *buffer, size_t size) {
+  const uint8_t *p = (const uint8_t *)buffer;
+  size_t remaining = size;
+  uint32_t waited_ms = 0;
+
+  while (remaining > 0) {
+    const size_t written = ipc_queue_write(s_ipc_port, p, remaining, 0);
+    if (written > 0) {
+      p += written;
+      remaining -= written;
+      continue;
+    }
+    if (waited_ms >= IPC_WRITE_BUDGET_MS) {
+      break;
+    }
+    pbl_thread_sleep(PBL_MSEC(1));
+    waited_ms++;
+  }
+
+  return size - remaining;
+}
 
 static struct os_mbuf *prv_alloc_acl_from_ll(void) {
   struct os_mbuf *om = ble_transport_alloc_acl_from_ll();
@@ -353,15 +406,14 @@ int ble_transport_to_ll_cmd_impl(void *buf) {
 
   prv_hci_trace(HCI_H4_CMD, (uint8_t *)cmd, sizeof(*cmd) + cmd->length, H4TL_PACKET_HOST);
 
-  written = ipc_queue_write(s_ipc_port, &h4_cmd, 1, IPC_TIMEOUT_TICKS);
+  written = prv_ipc_write(&h4_cmd, 1);
   if (written != 1U) {
     PBL_LOG_ERR("Failed to write HCI CMD header");
     err = BLE_ERR_MEM_CAPACITY;
     goto exit;
   }
 
-  written = ipc_queue_write(s_ipc_port, cmd, sizeof(*cmd) + cmd->length,
-                            IPC_TIMEOUT_TICKS);
+  written = prv_ipc_write(cmd, sizeof(*cmd) + cmd->length);
   if (written != sizeof(*cmd) + cmd->length) {
     PBL_LOG_ERR("Failed to write HCI CMD data");
     err = BLE_ERR_MEM_CAPACITY;
@@ -382,7 +434,7 @@ int ble_transport_to_ll_acl_impl(struct os_mbuf *om) {
 
   prv_hci_trace_mbuf(HCI_H4_ACL, om, H4TL_PACKET_HOST);
 
-  written = ipc_queue_write(s_ipc_port, &h4_cmd, 1U, IPC_TIMEOUT_TICKS);
+  written = prv_ipc_write(&h4_cmd, 1U);
   if (written != 1U) {
     PBL_LOG_ERR("Failed to write HCI ACL header");
     err = BLE_ERR_MEM_CAPACITY;
@@ -391,7 +443,7 @@ int ble_transport_to_ll_acl_impl(struct os_mbuf *om) {
 
   x = om;
   while (x != NULL) {
-    written = ipc_queue_write(s_ipc_port, x->om_data, x->om_len, IPC_TIMEOUT_TICKS);
+    written = prv_ipc_write(x->om_data, x->om_len);
     if (written != x->om_len) {
       PBL_LOG_ERR("Failed to write HCI ACL data");
       err = BLE_ERR_MEM_CAPACITY;
@@ -415,7 +467,7 @@ int ble_transport_to_ll_iso_impl(struct os_mbuf *om) {
 
   prv_hci_trace_mbuf(HCI_H4_ISO, om, H4TL_PACKET_HOST);
 
-  written = ipc_queue_write(s_ipc_port, &h4_cmd, 1, IPC_TIMEOUT_TICKS);
+  written = prv_ipc_write(&h4_cmd, 1);
   if (written != 1U) {
     PBL_LOG_ERR("Failed to write HCI ISO header");
     err = BLE_ERR_MEM_CAPACITY;
@@ -424,7 +476,7 @@ int ble_transport_to_ll_iso_impl(struct os_mbuf *om) {
 
   x = om;
   while (x != NULL) {
-    written = ipc_queue_write(s_ipc_port, x->om_data, x->om_len, IPC_TIMEOUT_TICKS);
+    written = prv_ipc_write(x->om_data, x->om_len);
     if (written != x->om_len) {
       PBL_LOG_ERR("Failed to write HCI ISO data");
       err = BLE_ERR_MEM_CAPACITY;
