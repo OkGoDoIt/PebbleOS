@@ -515,6 +515,16 @@ pbl_clar_test(test_audio_companion_protocol
     src/fw/services/audio_companion/protocol.c
 )
 
+# The heartbeat the official Core Devices app's Battery screen is built from. See
+# UPSTREAM_MERGE_CHECKLIST.md Trap 1: the schema guard checks the record's shape, this checks the
+# bytes the firmware actually hands to DLS.
+pbl_clar_test(test_analytics_native_heartbeat
+  SOURCES
+    src/fw/services/analytics/native.c
+    src/fw/util/time/time.c
+    tests/fakes/fake_rtc.c
+)
+
 pbl_clar_test(test_audio_companion_spool
   SOURCES
     src/fw/services/audio_companion/spool.c

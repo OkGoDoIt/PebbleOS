@@ -8,6 +8,7 @@
 #include <pbl/drivers/rtc.h>
 #include "pbl/kernel/mutex.h"
 #include "pbl/services/analytics/backend.h"
+#include "pbl/services/analytics/native_heartbeat_stats.h"
 #include "pbl/services/data_logging/data_logging_service.h"
 #include <pbl/logging/logging.h>
 #include "system/passert.h"
@@ -15,6 +16,7 @@
 #include "pbl/util/build_id.h"
 #include "pbl/util/math.h"
 #include "pbl/util/uuid.h"
+#include "util/time/time.h"
 
 PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
 
@@ -297,6 +299,9 @@ static const uint8_t s_string_lens[] = {
 
 static PBL_MUTEX_DEFINE(s_mutex);
 static DataLoggingSession *s_dls_session;
+static NativeHeartbeatStats s_heartbeat_stats = {
+    .last_result = NATIVE_HEARTBEAT_RESULT_NONE,
+};
 
 extern const ElfExternalNote TINTIN_BUILD_ID;
 
@@ -367,6 +372,9 @@ void pbl_analytics__native_heartbeat(void) {
 
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   prv_record_metrics(&record, true);
+  s_heartbeat_stats.attempts++;
+  s_heartbeat_stats.last_battery_soc_pct =
+      (uint8_t)(record.metric_battery_soc_pct / record.metric_battery_soc_pct_scale);
   pbl_mutex_unlock(&s_mutex);
 
   if (s_dls_session == NULL) {
@@ -374,17 +382,59 @@ void pbl_analytics__native_heartbeat(void) {
 
     /* This session must stay unbuffered: buffered DLS sessions cap items at
      * DLS_SESSION_MAX_BUFFERED_ITEM_SIZE (300), far below the heartbeat record, so a buffered
-     * dls_create here returns NULL and the assert below reboots the watch every heartbeat. */
+     * dls_create returns NULL here. */
     s_dls_session = dls_create(DlsSystemTagAnalyticsNativeHeartbeat, DATA_LOGGING_BYTE_ARRAY,
                                NATIVE_HEARTBEAT_TRANSMIT_SIZE, false, false, &system_uuid);
-    PBL_ASSERTN(s_dls_session != NULL);
+    if (s_dls_session == NULL) {
+      /* Upstream asserts here, which reboots the watch. We do not: this session is recreated
+       * after any logging failure (below), so a transient DLS/PFS error would turn an hourly
+       * heartbeat into an hourly reboot. Losing one heartbeat is the lesser failure, and the
+       * counter below is what makes the loss visible instead of silent. */
+      s_heartbeat_stats.failures++;
+      s_heartbeat_stats.last_result = NATIVE_HEARTBEAT_RESULT_NO_SESSION;
+      PBL_LOG_ERR("Native analytics DLS session could not be created");
+      return;
+    }
   }
 
   DataLoggingResult result = dls_log(s_dls_session, &record, 1);
+  s_heartbeat_stats.last_result = (int8_t)result;
   if (result != DATA_LOGGING_SUCCESS) {
+    s_heartbeat_stats.failures++;
     PBL_LOG_ERR("Native analytics DLS log failed: %d", result);
+    /* Drop the handle so the next heartbeat builds a fresh session. DATA_LOGGING_CLOSED means
+     * this one is gone for good, and nothing else ever recreates it -- so without this a single
+     * failure silently ends heartbeat reporting until the watch reboots, and the official app's
+     * Battery screen shows an empty 0% with no error anywhere. */
+    s_dls_session = NULL;
+    return;
   }
+
+  s_heartbeat_stats.logged++;
+  s_heartbeat_stats.last_logged_uptime_s = time_get_uptime_seconds();
 }
+
+void pbl_analytics_native_get_heartbeat_stats(NativeHeartbeatStats *stats_out) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  *stats_out = s_heartbeat_stats;
+  pbl_mutex_unlock(&s_mutex);
+}
+
+#ifdef UNITTEST
+/* Clar runs a suite's tests in one process, so the cached session and the period storage would
+ * otherwise carry across cases. */
+void pbl_analytics__native_test_reset(void) {
+  s_dls_session = NULL;
+  memset(s_integer_values, 0, sizeof(s_integer_values));
+  memset(s_timers, 0, sizeof(s_timers));
+  for (size_t i = 0; i < NATIVE_STRING_COUNT; i++) {
+    s_string_ptrs[i][0] = '\0';
+  }
+  s_heartbeat_stats = (NativeHeartbeatStats){
+      .last_result = NATIVE_HEARTBEAT_RESULT_NONE,
+  };
+}
+#endif
 
 static void prv_set_signed(enum pbl_analytics_key key, int32_t signed_value) {
   int8_t idx = s_key_to_integer[key];
