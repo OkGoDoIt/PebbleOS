@@ -12,6 +12,7 @@
 #include "applib/ui/dialogs/expandable_dialog.h"
 #include "applib/ui/menu_layer.h"
 #include "kernel/pbl_malloc.h"
+#include "pbl/services/analytics/native_heartbeat_stats.h"
 #include "pbl/services/audio_companion.h"
 #include "pbl/services/i18n/i18n.h"
 #include "services/audio_companion/reboot_trace.h"
@@ -116,6 +117,19 @@ static uint32_t prv_frames_to_seconds(uint32_t frames) {
   return (uint32_t)(((uint64_t)frames * AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS) / 1000u);
 }
 
+//! The run level, which decides both whether we may capture and -- through services_normal's
+//! table -- whether data logging is allowed to upload anything at all.
+static const char *prv_runlevel_name(RunLevel runlevel) {
+  switch (runlevel) {
+    case RunLevel_BareMinimum: return "bare";
+    case RunLevel_FirmwareUpdate: return "fw update";
+    case RunLevel_LowPower: return "low power";
+    case RunLevel_Stationary: return "stationary";
+    case RunLevel_Normal: return "normal";
+    default: return "?";
+  }
+}
+
 static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   AudioCompanionDiagnostics diag;
   audio_companion_get_diagnostics(&diag);
@@ -141,6 +155,20 @@ static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   }
   prv_format_duration(diag.uptime_seconds, uptime, sizeof(uptime));
 
+  // The analytics heartbeat behind the official Core Devices app's Battery screen. Every part of
+  // that path is invisible from here -- the record goes to data logging, data logging decides when
+  // to send it, the cloud decodes it -- so when that screen shows a nonsense percentage there has
+  // never been a way to tell whether the watch even produced a record. Four separate
+  // investigations (Sessions 29, 83, 91 and 2026-09-09) each started by re-deriving that from
+  // source. These two lines answer it: if the count is climbing and the percent is right, the
+  // record is fine and the fault is downstream of the watch.
+  NativeHeartbeatStats hb;
+  pbl_analytics_native_get_heartbeat_stats(&hb);
+  char hb_last[12] = "never";
+  if (hb.last_logged_uptime_s > 0) {
+    prv_format_duration(diag.uptime_seconds - hb.last_logged_uptime_s, hb_last, sizeof(hb_last));
+  }
+
   char *text = app_zalloc_check(DETAIL_TEXT_MAX_LEN);
   // The silence block is deliberately near the top. It is the only place on the watch that says
   // what the voice detector is doing, and for three months the answer was "nothing" with no way
@@ -155,12 +183,15 @@ static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   // arming window is currently quiet, so a room that never quite arms shows a number stalling
   // short of the mode's bar rather than no evidence at all.
   sniprintf(text, DETAIL_TEXT_MAX_LEN,
-            "State: %s\nMic on: %s of %s\nQuiet skipped: %s\nQuiet runs: %" PRIu32 "\nLevel: %"
+            "State: %s (%s)\nMic on: %s of %s\nHeartbeat: %" PRIu32 " ok %" PRIu32 " lost"
+            "\n  last %s ago at %u%%\nQuiet skipped: %s\nQuiet runs: %" PRIu32 "\nLevel: %"
             PRIu32 " (raw %" PRIu32 ")\nQuiet<%" PRIu32 " resume>=%" PRIu32 "%s\nWindow: %u%%"
             "\nCaptured: %" PRIu32 "\nSent: %" PRIu32 "\nBuffered: %" PRIu32
             " B\nPeak: %" PRIu32 " B\nDropped: %" PRIu32 "\nGaps: %" PRIu32
             "\nBackpressure: %" PRIu32 "\nMic conflicts: %" PRIu32 "\nFree heap: %" PRIu32 " B",
-            i18n_get(prv_state_name(diag.state), data), mic_on, uptime, skipped,
+            i18n_get(prv_state_name(diag.state), data), prv_runlevel_name(diag.runlevel),
+            mic_on, uptime, hb.logged, hb.failures, hb_last,
+            (unsigned)hb.last_battery_soc_pct, skipped,
             diag.silence_runs,
             diag.silence_level, diag.silence_raw_level, diag.silence_enter_threshold,
             diag.silence_resume_threshold, diag.silence_suppressing ? " (skipping)" : "",
