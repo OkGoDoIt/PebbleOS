@@ -57,6 +57,11 @@ typedef struct {
   //! the one number that turns a battery-percent-per-hour reading into a judgement of a build.
   uint32_t mic_on_seconds;
   uint32_t uptime_seconds;
+  //! The power run level the service is currently seeing. Worth surfacing because it decides more
+  //! than capture: services_normal's table also gates DATA LOGGING uploads on RunLevel_Normal, so
+  //! a watch parked in Stationary stops handing the official app its analytics heartbeat -- which
+  //! is what an unexplained "0%" on that app's Battery screen looks like from the cloud side.
+  RunLevel runlevel;
 } AudioCompanionDiagnostics;
 
 void audio_companion_init(void);

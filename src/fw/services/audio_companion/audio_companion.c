@@ -17,6 +17,7 @@
 #include "pbl/kernel/mutex.h"
 #include "pbl/services/battery/battery_state.h"
 #include "pbl/services/new_timer/new_timer.h"
+#include "pbl/services/data_logging/data_logging_service.h"
 #include "pbl/services/runlevel.h"
 #include "pbl/services/system_task.h"
 #include "pbl/services/voice/voice_speex.h"
@@ -484,6 +485,7 @@ static void prv_stop_capture_retry_locked(void);
 static void prv_update_stationary_mute_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
 static void prv_apply_pending(void);
+static void prv_apply_dls_sends(void);
 static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode);
 static bool prv_room_is_quiet_locked(void);
 
@@ -1218,12 +1220,40 @@ static void prv_apply_capture(void) {
   pbl_mutex_unlock(&s_capture_lock);
 }
 
+//! Keep data logging uploads alive for as long as the microphone is running.
+//!
+//! services_normal's run-level table enables DLS sends at RunLevel_Normal ONLY, so in Stationary
+//! the watch keeps logging records to flash and stops handing them to the phone -- no five-minute
+//! flush check, no fifteen-minute forced flush. On a stock watch that is nearly free: Stationary
+//! ends on the next wrist movement and the backlog goes out minutes later.
+//!
+//! It is not free here. This fork deliberately records THROUGH Stationary (that runlevel is a
+//! motion heuristic, and a still wrist is a meeting, a lecture, a film, a night's sleep -- the
+//! recordings this product exists for), so the watch now spends hours at a time in a run level
+//! that silently withholds telemetry. The hourly analytics heartbeat is the only thing feeding the
+//! official app's Battery screen, so those hours read as "0%" and "Empty in: --" there while the
+//! watch itself is perfectly healthy -- with nothing logged as an error anywhere.
+//!
+//! Withholding a 563-byte upload every fifteen minutes cannot be justified on a link that is
+//! already carrying a continuous Speex stream, so while the mic is running we hold sends on. The
+//! table's decision stands untouched whenever we are not capturing, which is every build with
+//! CONFIG_SERVICE_AUDIO_COMPANION off and every watch with the feature switched off.
+static void prv_apply_dls_sends(void) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool runlevel_normal = (s_runlevel == RunLevel_Normal);
+  pbl_mutex_unlock(&s_lock);
+
+  dls_set_send_enable_run_level(runlevel_normal || s_mic_started);
+}
+
 //! Flush everything the state machine deferred because it could not be done under s_lock.
 //! MUST be called with s_lock released, and never from prv_mic_data_handler(): that runs with the
 //! mic driver's mutex held, and prv_apply_capture() waits on that same mutex from other tasks.
 static void prv_apply_pending(void) {
   prv_apply_capture();
   prv_apply_ble_responsiveness();
+  // After prv_apply_capture(), so s_mic_started reflects the intent we just applied.
+  prv_apply_dls_sends();
 }
 
 //! Begin a pause that will become a STREAM_GAP when capture resumes.
@@ -2781,6 +2811,7 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
     .mic_on_seconds = (s_mic_on_ms_total +
                        (s_mic_on_since_ms ? (prv_uptime_ms() - s_mic_on_since_ms) : 0)) / 1000,
     .uptime_seconds = time_get_uptime_seconds(),
+    .runlevel = s_runlevel,
   };
   pbl_mutex_unlock(&s_lock);
 }
