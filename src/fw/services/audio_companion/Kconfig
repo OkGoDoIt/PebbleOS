@@ -5,6 +5,7 @@ config SERVICE_AUDIO_COMPANION
     depends on MIC && SERVICE_VOICE
     select AUDIO_COMPANION_SERVICE_ENABLED if BT_FW_NIMBLE
     select MBEDTLS
+    select MIC_SF32LB_CAPTURE_DEEP_WFI if MIC_SF32LB
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service. The
@@ -15,6 +16,11 @@ config SERVICE_AUDIO_COMPANION
       pebble_mbedtls_config.h, which enables the primitive only when this
       symbol is set). NimBLE selects it too; the select makes the
       dependency hold on the other backends as well.
+
+      MIC_SF32LB_CAPTURE_DEEP_WFI is selected because a background
+      recorder keeps the microphone open for hours at a time: without it
+      the core cannot sleep deeper than plain WFI at full clock for the
+      whole of that, which is the single largest power cost of the feature.
 
 if SERVICE_AUDIO_COMPANION
 

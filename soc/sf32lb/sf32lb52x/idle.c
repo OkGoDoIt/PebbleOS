@@ -11,9 +11,11 @@
 #include "drivers/sf32lb52/rc10k.h"
 #include "drivers/task_watchdog.h"
 #include "kernel/util/idle.h"
+#include "pbl/kernel/irq.h"
 #include "pbl/services/analytics/analytics.h"
 #include "pbl/soc/sf32lb/sleep.h"
 #include "pbl/util/math.h"
+#include "system/passert.h"
 
 #include <bf0_hal.h>
 
@@ -51,6 +53,43 @@ static const uint32_t MIN_DEEPSLEEP_TICKS = RTC_TICKS_HZ / 20;
 static const uint32_t MAX_LPTIM_CNT = 0xFFFFFFUL;
 
 static uint32_t s_iser_bak[16];
+
+//! Audio DMA users that need the deep-WFI clock profile described in sleep.h.
+static uint32_t s_audio_profile_holders;
+
+//! Program the clock tree for the next deep WFI. Called with IRQs locked, and once at boot.
+static void prv_apply_deep_wfi_profile(void) {
+  if (s_audio_profile_holders > 0) {
+    // Audio DMA is running. This is the vendor's own PM_SCENARIO_AUDIO recipe
+    // (SiFli-SDK middleware/system/bf0_pm.c): keep HCLK at the full 48 MHz deep-WFI
+    // source (PCLK1 = 48 MHz, PCLK2 = 24 MHz) and force the HP clock on, so the PDM /
+    // audprc DMA keeps moving while the core has its pipeline stopped.
+    HAL_RCC_HCPU_SetDeepWFIDiv(1, 0, 1);
+    hwp_hpsys_rcc->DBGR |= HPSYS_RCC_DBGR_FORCE_HP;
+  } else {
+    // configure clock dividers for deep WFI:
+    // HCLK = 48MHz / 12 = 4MHz
+    // PCLK1 = 4MHz / 2^0 = 4MHz
+    // PCLK2 = 4MHz / 2^1 = 2MHz
+    hwp_hpsys_rcc->DBGR &= ~HPSYS_RCC_DBGR_FORCE_HP;
+    HAL_RCC_HCPU_SetDeepWFIDiv(12, 0, 1);
+  }
+}
+
+void soc_sf32lb_deep_wfi_audio_profile_acquire(void) {
+  pbl_irq_lock();
+  ++s_audio_profile_holders;
+  prv_apply_deep_wfi_profile();
+  pbl_irq_unlock();
+}
+
+void soc_sf32lb_deep_wfi_audio_profile_release(void) {
+  pbl_irq_lock();
+  PBL_ASSERTN(s_audio_profile_holders > 0);
+  --s_audio_profile_holders;
+  prv_apply_deep_wfi_profile();
+  pbl_irq_unlock();
+}
 
 static void prv_wdt_feed(uint16_t elapsed_ticks) {
   static uint32_t wdt_feed_ticks;
@@ -305,15 +344,10 @@ bool pbl_soc_tick_enable(void) {
 
   SysTick->CTRL |= (SysTick_CTRL_ENABLE_Msk | SysTick_CTRL_TICKINT_Msk);
 
-  // configure clock dividers for deep WFI:
-  // HCLK = 48MHz / 12 = 4MHz
-  // PCLK1 = 4MHz / 2^0 = 4MHz
-  // PCLK2 = 4MHz / 2^1 = 2MHz
-  HAL_RCC_HCPU_SetDeepWFIDiv(12, 0, 1);
-
-  // TODO(SF32LB52): to use deep WFI when audio is ON, HCLK needs to remain
-  // at 48MHz (div=1). Also, clock needs to be forced ON during deep WFI
-  // (FORCE_HP bit in HPSYS_RCC_DBGR register)
+  // Deep-WFI clock dividers. Nobody holds the audio profile this early, so this programs the
+  // low-power defaults; an audio driver re-programs them through
+  // soc_sf32lb_deep_wfi_audio_profile_acquire() for as long as its DMA runs.
+  prv_apply_deep_wfi_profile();
 
   return true;
 }

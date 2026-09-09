@@ -24,6 +24,20 @@ config MIC_SF32LB
     help
       Support for the SiFli SF32LB PDM microphone interface.
 
+config MIC_SF32LB_CAPTURE_DEEP_WFI
+    bool "Allow deep WFI while the SF32LB microphone is capturing"
+    depends on MIC_SF32LB
+    help
+      By default the PDM driver forbids deep WFI for the whole of a capture,
+      so the core idles in plain WFI with the 240 MHz DLL and the full-speed
+      bus clocks running for as long as the microphone is on. With this set
+      the driver asks the SoC for its audio deep-WFI profile instead (HCLK
+      held at the 48 MHz deep-WFI source and the HP clock forced on -- the
+      recipe the vendor SDK uses for its own audio scenario) and only forbids
+      deep sleep, which would power HPSYS and the PDM down. Off by default
+      until it has been characterised on every SF32LB board; the audio
+      companion selects it.
+
 config MIC_QEMU
     bool "QEMU stub"
     default y if SOC_QEMU

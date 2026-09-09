@@ -23,7 +23,13 @@ PBL_LOG_MODULE_DEFINE(driver_mic_sf32lb, CONFIG_DRIVER_MIC_LOG_LEVEL);
 #define PDM_POWER_NPM1300_LDO2 1
 #endif
 
-#define PDM_AUDIO_RECORD_PIPE_SIZE         (288)
+// DMA ring, in samples per channel. The HAL raises an interrupt at each half, so this is what
+// sets how often the core has to wake: 288 samples was 9 ms per half, 111 interrupts a second
+// for the whole of a capture. 1280 samples is 40 ms per half -- exactly two 20 ms Speex frames,
+// 25 interrupts a second -- and the only cost is 31 ms more latency to the first sample, which
+// nothing that uses the microphone can notice. Each half must stay a multiple of the cache line
+// (see the dcache_invalidate() in the DMA callback); 1280 x 2 B is a multiple of 64.
+#define PDM_AUDIO_RECORD_PIPE_SIZE         (1280)
 #define PDM_AUDIO_RECORD_GAIN_DEFAULT      (90)
 #define PDM_AUDIO_RECORD_GAIN_MAX          (120)
 
@@ -286,6 +292,38 @@ void pdm1_l_dma_handler(MicDevice *this)
   HAL_DMA_IRQHandler(this->state->hpdm->hdmarx);
 }
 
+//! What idling looks like while the PDM is running.
+//!
+//! Deep sleep powers HPSYS down, and the PDM and its DMA live there, so it is always forbidden
+//! for the duration of a capture. Deep WFI is the interesting one. By default it divides HCLK to
+//! 4 MHz and lets the HPSYS clock gate itself while the core sleeps, which stalls the PDM DMA --
+//! so upstream forbids it too, and the core spends the whole capture in plain WFI with the
+//! 240 MHz DLL and the full-speed bus clocks running. For a dictation that is a few seconds; for
+//! a background recorder it is most of the day, and it is the feature's largest power cost.
+//!
+//! CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI takes the vendor's own way out (SiFli-SDK bf0_pm.c,
+//! PM_SCENARIO_AUDIO): keep HCLK at the 48 MHz deep-WFI source and force the HP clock on, then
+//! let the core drop into deep WFI between DMA interrupts. The profile is acquired before the
+//! PDM starts and released after it has stopped, so the DMA never runs against the low-power
+//! dividers.
+static void prv_sleep_block_for_capture(void) {
+#ifdef CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI
+  soc_sf32lb_sleep_block(SOC_SF32LB_DEEPSLEEP);
+  soc_sf32lb_deep_wfi_audio_profile_acquire();
+#else
+  soc_sf32lb_sleep_block(SOC_SF32LB_DEEPWFI);
+#endif
+}
+
+static void prv_sleep_release_after_capture(void) {
+#ifdef CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI
+  soc_sf32lb_deep_wfi_audio_profile_release();
+  soc_sf32lb_sleep_release(SOC_SF32LB_DEEPSLEEP);
+#else
+  soc_sf32lb_sleep_release(SOC_SF32LB_DEEPWFI);
+#endif
+}
+
 static bool prv_start_pdm_capture(const MicDevice *this)
 {
   PDM_HandleTypeDef* hpdm = this->state->hpdm;
@@ -373,8 +411,8 @@ bool mic_start(const MicDevice *this, MicDataHandlerCB data_handler, void *conte
   // Set is_running to true BEFORE starting PDM, since the event handler will be called immediately
   state->is_running = true;
 
-  // Prevent CPU from entering deep sleep during audio capture
-  soc_sf32lb_sleep_block(SOC_SF32LB_DEEPWFI);
+  // Deep sleep would power the PDM down; deep WFI is negotiated (see prv_sleep_block_for_capture).
+  prv_sleep_block_for_capture();
 
   // Start PDM capture
   if (!prv_start_pdm_capture(this)) {
@@ -388,7 +426,7 @@ bool mic_start(const MicDevice *this, MicDataHandlerCB data_handler, void *conte
     state->raw_dma_buffer = NULL;
     hpdm->pRxBuffPtr = NULL;
 
-    soc_sf32lb_sleep_release(SOC_SF32LB_DEEPWFI);
+    prv_sleep_release_after_capture();
     state->is_running = false;  // Reset on failure
 #if PDM_POWER_NPM1300_LDO2
   (void)NPM1300_OPS.ldo2_set_enabled(false);
@@ -442,7 +480,7 @@ void mic_stop(const MicDevice *this) {
 #endif
 
   // Allow CPU to enter deep sleep again
-  soc_sf32lb_sleep_release(SOC_SF32LB_DEEPWFI);
+  prv_sleep_release_after_capture();
 
   pbl_mutex_unlock(&state->mutex);
 }
