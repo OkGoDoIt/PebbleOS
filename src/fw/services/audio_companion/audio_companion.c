@@ -1894,6 +1894,21 @@ static void prv_reevaluate_locked(void) {
     s_stream_attached = false;
   }
 
+  // A ready session that has not been told about the active stream must hear STREAM_START
+  // before any frame or gap record -- WHATEVER the capture state. This used to live only in the
+  // streaming branch at the bottom, so a receiver that authorized while capture was paused
+  // (power save, low battery, a policy pause, a mic conflict) returned from one of the pause
+  // branches with `s_stream_attached` false and `s_need_stream_start` false, and the next
+  // drain handed it the spool's frames and pending gaps for a stream it had never heard of.
+  // The phone (a fresh process on the same BLE connection, re-authorizing into a stationary
+  // mute on 2026-09-09) had nothing to attach 686 frames to, dropped six gap notices, and
+  // rebuilt the whole link to recover. Announcing here costs nothing: the drain sends the
+  // start before anything else, and the pause branches below still stop capture as before.
+  if (prv_session_ready_locked() && s_stream_active && !s_stream_attached) {
+    prv_request_stream_reannounce_locked();
+    s_stream_attached = true;
+  }
+
   if (!s_enabled) {
     prv_stop_capture_locked();
     prv_end_stream_locked(AudioCompanionStopReasonUserDisabled);
@@ -1954,14 +1969,10 @@ static void prv_reevaluate_locked(void) {
   if (prv_session_ready_locked()) {
     if (!s_stream_active) {
       prv_begin_stream_locked();
-    } else if (!s_stream_attached) {
-      // A ready session is (re)attaching to an ongoing stream (reconnect or liveness revival).
-      // The receiver is a fresh GATT session with no stream context, so re-announce STREAM_START
-      // and resend buffered frames before any new data; finish the disconnect gap (if capture had
-      // parked) so loss is reported exactly once.
-      prv_request_stream_reannounce_locked();
-      prv_finish_gap_pause_locked();
     } else {
+      // A fresh session's re-announcement (reconnect or liveness revival) was requested above,
+      // ahead of the pause branches. Finish the disconnect gap (if capture had parked) so loss
+      // is reported exactly once.
       prv_finish_gap_pause_locked();
     }
     s_stream_attached = true;
@@ -2806,6 +2817,10 @@ void audio_companion_test_force_reboot_trace_capture(void) { s_reboot_trace_reco
 
 //! The suppressed-silence receiver probe's timer, so a test can fire it deterministically.
 TimerID audio_companion_test_get_silence_probe_timer(void) { return s_silence_probe_timer; }
+
+//! Whether the next drain will lead with STREAM_START for the attached session. A fresh
+//! receiver session must never be handed a frame or a gap record before that announcement.
+bool audio_companion_test_stream_reannounce_pending(void) { return s_need_stream_start; }
 
 TimerID audio_companion_test_get_power_save_listen_timer(void) { return s_power_save_listen_timer; }
 

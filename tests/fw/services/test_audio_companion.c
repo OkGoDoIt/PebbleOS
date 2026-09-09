@@ -26,6 +26,7 @@
 void audio_companion_test_reset(void);
 struct pbl_mutex *audio_companion_test_get_lock(void);
 TimerID audio_companion_test_get_silence_probe_timer(void);
+bool audio_companion_test_stream_reannounce_pending(void);
 TimerID audio_companion_test_get_power_save_listen_timer(void);
 TimerID audio_companion_test_get_capture_retry_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
@@ -2253,4 +2254,49 @@ void test_audio_companion__quiet_does_not_keep_the_mic_alive_for_a_receiver_that
   s_uptime_seconds += (10 * 60) + 1;
   prv_feed_frames_at_level(TEST_QUIET_LEVEL, 10);
   cl_assert(!s_mic_running);
+}
+
+// A receiver that (re)authorizes while capture is paused must still be told about the stream
+// before it is handed a single frame or gap record. The re-announcement used to be requested
+// only from the streaming branch of the state machine, so a session that attached during a
+// power-save pause left with `need_stream_start` clear -- and the next drain, whenever it came,
+// sent the spool's frames and pending gaps for a stream the receiver had never heard of. On
+// 2026-09-09 that was a fresh phone process re-authorizing on the same BLE connection into a
+// stationary mute: 686 frames with nowhere to go, six gap notices dropped, and a full link
+// rebuild to recover.
+void test_audio_companion__reauth_during_a_pause_reannounces_before_any_data(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(!audio_companion_test_stream_reannounce_pending());
+
+  // Capture pauses for power save; the stream itself stays active.
+  audio_companion_set_runlevel(RunLevel_LowPower);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
+
+  // The receiver process dies and a new one attaches on the same connection: it re-subscribes
+  // and re-authorizes while the watch is still paused.
+  prv_subscribe(false, false);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+
+  // The fresh session's first data message is now the stream's re-announcement.
+  cl_assert(audio_companion_test_stream_reannounce_pending());
+
+  // ...and when capture resumes, that is exactly what it hears first, flagged as a RESUME.
+  s_data_count = 0;
+  audio_companion_set_runlevel(RunLevel_Normal);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+  cl_assert(s_data_count > 0);
+  cl_assert_equal_i(s_data_notifications[0].data[0], AudioCompanionDataMsgIdStreamStart);
+  AudioCompanionStreamStartMsg start;
+  memcpy(&start, s_data_notifications[0].data, sizeof(start));
+  cl_assert_equal_i(start.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME,
+                    AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
+  cl_assert(!audio_companion_test_stream_reannounce_pending());
 }

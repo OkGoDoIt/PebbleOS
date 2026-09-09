@@ -472,3 +472,64 @@ void test_audio_companion_spool__reset_clears_everything(void) {
   cl_assert(!audio_companion_spool_has_pending_gap());
   cl_assert_equal_i(audio_companion_spool_frames_pending_send(), 0);
 }
+
+// Recycling a chunk is not loss when the drain already sent everything in it. In steady state
+// the spool sits at its floor with the head chunk full of frames the receiver holds and has
+// simply not checkpoint-trimmed yet; reporting those as an overflow gap told the phone it had
+// lost audio it was storing -- ~30 frames every 300 on 2026-09-09, 10% of the day drawn as
+// missing while every sequence number was on disk.
+void test_audio_companion_spool__recycling_sent_frames_records_no_gap(void) {
+  audio_companion_spool_test_set_heap_free_bytes(0);  // pin the spool at its 2-chunk floor
+  prv_push_range(0, FRAMES_PER_CHUNK * 2);
+
+  // The receiver took all of it (sent, not yet trimmed by a checkpoint).
+  uint32_t first_seq = 0;
+  while (prv_drain_batch(1 << 20, &first_seq) > 0) {
+  }
+  cl_assert_equal_i(audio_companion_spool_frames_pending_send(), 0);
+
+  // More audio recycles the head chunk: delivered frames, so no gap and no drop.
+  prv_push_range(FRAMES_PER_CHUNK * 2, FRAMES_PER_CHUNK);
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert_equal_i(stats.dropped_overflow_frames, 0);
+  cl_assert(!audio_companion_spool_has_pending_gap());
+
+  // The new frames drain in order, straight after what was already sent.
+  cl_assert(prv_drain_batch(1 << 20, &first_seq) > 0);
+  cl_assert_equal_i(first_seq, FRAMES_PER_CHUNK * 2);
+}
+
+// ...and when the recycled chunk is only partly sent, the gap names exactly the unsent tail.
+void test_audio_companion_spool__recycling_reports_only_the_unsent_tail(void) {
+  audio_companion_spool_test_set_heap_free_bytes(0);
+  prv_push_range(0, FRAMES_PER_CHUNK * 2);
+
+  // Send some, but not all, of the head chunk: small messages so the cursor stops inside it.
+  const size_t small_message = DATA_HEADER_SIZE + 4 * (sizeof(uint16_t) + TEST_PAYLOAD_LEN);
+  uint32_t sent = 0;
+  uint32_t first_seq = 0;
+  while (sent < FRAMES_PER_CHUNK / 2) {
+    const uint8_t count = prv_drain_batch(small_message, &first_seq);
+    cl_assert(count > 0);
+    sent += count;
+  }
+  cl_assert(sent < FRAMES_PER_CHUNK);
+
+  prv_push_range(FRAMES_PER_CHUNK * 2, FRAMES_PER_CHUNK);
+  AudioCompanionSpoolStats stats;
+  audio_companion_spool_get_stats(&stats);
+  cl_assert_equal_i(stats.dropped_overflow_frames, FRAMES_PER_CHUNK - sent);
+
+  AudioCompanionSpoolPendingGap gap;
+  cl_assert(audio_companion_spool_take_pending_gap(&gap));
+  cl_assert_equal_i(gap.reason, AudioCompanionGapReasonSpoolOverflow);
+  cl_assert_equal_i(gap.first_missing_sequence, sent);
+  cl_assert_equal_i(gap.missing_frame_count, FRAMES_PER_CHUNK - sent);
+  cl_assert(gap.first_missing_sample_index == prv_sample_index(sent));
+  cl_assert(!audio_companion_spool_has_pending_gap());
+
+  // The drain resumes at the first surviving frame: the start of the second chunk.
+  cl_assert(prv_drain_batch(1 << 20, &first_seq) > 0);
+  cl_assert_equal_i(first_seq, FRAMES_PER_CHUNK);
+}

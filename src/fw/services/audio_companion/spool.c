@@ -237,24 +237,38 @@ static SpoolChunk *prv_drop_oldest_chunk(void) {
   // without pushing frames, so one chunk can hold several disjoint runs. Describing them as a
   // single span would claim frames that were never in this chunk and miss the ones that were,
   // so emit one record per contiguous run.
+  //
+  // Only records the drain cursor has NOT sent are loss. A chunk is recycled whenever the spool
+  // cannot grow, and in steady state that is the head chunk holding frames already delivered to
+  // the receiver and merely not yet checkpoint-trimmed. Reporting those as an overflow gap told
+  // the phone it had lost audio it was holding: measured on 2026-09-09, a ~30-frame "spool
+  // overflow" every 300 frames in segments where every sequence number was on the phone's
+  // disk -- 10% of the day drawn as missing, none of it lost. A sent-but-unacknowledged frame
+  // that really did die in transit is still caught by the receiver's own sequence check.
+  const bool drain_here = (s_drain_chunk == chunk);
+  const uint16_t unsent_from = drain_here ? s_drain_offset : chunk->used;
   uint32_t dropped = 0;
+  uint32_t unsent_dropped = 0;
   uint32_t run_first_seq = 0;
   uint64_t run_first_sample = 0;
   uint32_t run_frames = 0;
   for (uint16_t offset = chunk->trim_offset; offset < chunk->used;) {
     const SpoolRecordHeader *header = prv_record_at(chunk, offset);
-    if (run_frames == 0) {
-      run_first_seq = header->sequence;
-      run_first_sample = header->sample_index;
-    } else if (header->sequence != run_first_seq + run_frames) {
-      prv_merge_gap(run_first_seq, run_frames, run_first_sample,
-                    AudioCompanionGapReasonSpoolOverflow);
-      run_first_seq = header->sequence;
-      run_first_sample = header->sample_index;
-      run_frames = 0;
-    }
-    run_frames++;
     dropped++;
+    if (offset >= unsent_from) {
+      if (run_frames == 0) {
+        run_first_seq = header->sequence;
+        run_first_sample = header->sample_index;
+      } else if (header->sequence != run_first_seq + run_frames) {
+        prv_merge_gap(run_first_seq, run_frames, run_first_sample,
+                      AudioCompanionGapReasonSpoolOverflow);
+        run_first_seq = header->sequence;
+        run_first_sample = header->sample_index;
+        run_frames = 0;
+      }
+      run_frames++;
+      unsent_dropped++;
+    }
     offset += prv_record_size(header);
   }
   if (run_frames > 0) {
@@ -263,20 +277,13 @@ static SpoolChunk *prv_drop_oldest_chunk(void) {
   }
 
   if (dropped > 0) {
-    s_dropped_overflow_frames += dropped;
     PBL_ASSERTN(s_frames_queued >= dropped);
     s_frames_queued -= dropped;
-    // Frames the drain cursor had not reached yet are also gone.
-    if (s_drain_chunk == chunk) {
-      uint32_t unsent_dropped = 0;
-      for (uint16_t offset = s_drain_offset; offset < chunk->used;) {
-        const SpoolRecordHeader *header = prv_record_at(chunk, offset);
-        unsent_dropped++;
-        offset += prv_record_size(header);
-      }
-      PBL_ASSERTN(s_frames_unsent >= unsent_dropped);
-      s_frames_unsent -= unsent_dropped;
-    }
+  }
+  if (unsent_dropped > 0) {
+    s_dropped_overflow_frames += unsent_dropped;
+    PBL_ASSERTN(s_frames_unsent >= unsent_dropped);
+    s_frames_unsent -= unsent_dropped;
   }
 
   s_head = chunk->next;
