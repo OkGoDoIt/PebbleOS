@@ -1295,6 +1295,87 @@ void test_audio_companion__stationary_needs_quiet_as_well_as_stillness(void) {
   cl_assert(saw_power_save_gap);
 }
 
+// The stationary verdict borrows the suppression detector's 98% bar, and measured against the
+// real recordings a 6 s window clears that bar only 12% of the time -- a breath or a sleeve is
+// enough to fail it -- so a still wrist mostly kept its microphone on all night. Stillness keeps
+// accumulating, though, and two motionless hours is a nightstand far more often than a lecture.
+// The bar therefore steps down with time spent in Stationary: 98% at first, 95% after half an
+// hour there, 90% after ninety minutes. The suppression detector itself is untouched.
+void test_audio_companion__the_stationary_verdict_relaxes_with_time_still(void) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  // A room that is quiet 96% of the time: one loud frame in every twenty-five. That never arms
+  // suppression (which wants 98%), and it is exactly the room the old verdict could not sleep in.
+  for (uint32_t i = 0; i < TEST_LIGHT_WINDOW_FRAMES + 5; i++) {
+    prv_feed_frame_at_level((i % 25 == 0) ? 900 : TEST_QUIET_LEVEL);
+  }
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+
+  // Freshly still: the bar is the mode's own 98%, so the microphone stays on and the question is
+  // re-asked on the recheck cadence.
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  cl_assert(s_mic_running);
+  const TimerID listen = audio_companion_test_get_power_save_listen_timer();
+  cl_assert(listen != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_is_scheduled(listen), true);
+
+  // Twenty-nine minutes in Stationary: still the strict bar, still on. (The receiver keeps
+  // talking across every jump in time here, so the liveness watchdog -- a different policy --
+  // does not trip on a phone this test is not simulating.)
+  s_uptime_seconds += 29 * 60;
+  prv_send_receiver_health(0x31);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  // Past half an hour the bar is 95%, and this 96%-quiet room now counts as empty: mute.
+  s_uptime_seconds += 2 * 60;
+  prv_send_receiver_health(0x32);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+
+  // The next listen window hears a busier room -- one loud frame in twelve, 92% quiet -- which
+  // fails the 95% bar, so the microphone stays on...
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);  // window opens
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  for (uint32_t i = 0; i < TEST_LIGHT_WINDOW_FRAMES + 5; i++) {
+    prv_feed_frame_at_level((i % 12 == 0) ? 900 : TEST_QUIET_LEVEL);
+  }
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);  // window closes: verdict
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+
+  // ...until ninety minutes of stillness lowers the bar to 90%, where 92% quiet is a nightstand.
+  s_uptime_seconds += 60 * 60;
+  prv_send_receiver_health(0x33);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+
+  // Leaving Stationary forgets the stillness clock: back in Normal, then Stationary again, the
+  // strict bar applies from scratch.
+  audio_companion_set_runlevel(RunLevel_Normal);
+  cl_assert(s_mic_running);
+  for (uint32_t i = 0; i < TEST_LIGHT_WINDOW_FRAMES + 5; i++) {
+    prv_feed_frame_at_level((i % 25 == 0) ? 900 : TEST_QUIET_LEVEL);
+  }
+  fake_system_task_callbacks_invoke_pending();
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
 // The way back. A stationary mute used to end only on a shake or a button press, so a conversation
 // that began while someone sat still was lost outright rather than merely delayed. The watch now
 // reopens the microphone on a slow cadence and asks the detector what it heard.

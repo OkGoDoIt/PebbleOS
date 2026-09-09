@@ -142,6 +142,27 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! it). Only a timer and a bool — the microphone is already on — so this is about noticing when a
 //! meeting ends, not about power.
 #define POWER_SAVE_RECHECK_MS (30 * 1000)
+//! How the stationary mute's quiet bar relaxes the longer the wrist has been still.
+//!
+//! The verdict reuses the suppression detector's bar (98% of a window under the quiet threshold),
+//! which was chosen so that suppression never clips speech. Measured against 116.5 h of this
+//! watch's own recordings, non-speech audio sits above that threshold in roughly 3-5% of frames --
+//! a chair, a breath, a sleeve -- so a 6 s listen window meets the 98% bar only 12% of the time,
+//! and no more often in the small hours than at noon. Left at that bar the mute engages rarely and
+//! is undone by the first listen window that hears a rustle, and the microphone runs for most of a
+//! night the wrist never moved.
+//!
+//! Stillness is the other half of the evidence, and it keeps accumulating after the runlevel
+//! service's thirty minutes. An hour without wrist motion is still possibly a lecture; two hours
+//! is a nightstand or a film, and the cost of being wrong there is one two-minute listen interval
+//! of a conversation the next window then picks up. So the bar steps down with time in the
+//! Stationary runlevel: 98% for the first half hour there (an hour still in total), 95% for the
+//! next hour, 90% after that. The suppression detector itself is untouched; this only decides
+//! whether a still wrist may switch the microphone off.
+#define STATIONARY_VERDICT_RELAX_1_MS (30 * 60 * 1000)
+#define STATIONARY_VERDICT_RELAX_1_PERMILLE (950)
+#define STATIONARY_VERDICT_RELAX_2_MS (90 * 60 * 1000)
+#define STATIONARY_VERDICT_RELAX_2_PERMILLE (900)
 //! Mic-conflict retry backoff. Starts quickly, because the common cause -- dictation holding the
 //! microphone -- clears in seconds; settles slowly, because the other cause is heap pressure and
 //! retrying hard under that makes it worse.
@@ -352,6 +373,7 @@ static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
 static bool s_stationary_muted;        //!< stationary AND quiet: the mic is off to save the PDM rails
+static uint32_t s_stationary_since_ms; //!< uptime the Stationary runlevel was entered; 0 outside it
 static TimerID s_power_save_listen_timer = TIMER_INVALID_ID;
 static TimerID s_capture_retry_timer = TIMER_INVALID_ID;
 static uint32_t s_capture_retry_delay_ms;  //!< backoff for the mic-conflict retry; 0 = disarmed
@@ -630,6 +652,22 @@ static uint16_t prv_silence_window_permille_locked(void) {
 //! conversation which the next listen window then picks up. So it judges the same threshold at the
 //! same 98% bar over however much the listen window actually heard -- which keeps the microphone
 //! on for 6 s of every 2 minutes instead of 22.
+//! The quiet bar the stationary verdict applies right now: the mode's own bar at first, stepping
+//! down with time spent still (see STATIONARY_VERDICT_RELAX_*). Never above the mode's bar, so a
+//! mode that already asks for less is not made stricter by this.
+static uint32_t prv_stationary_quiet_permille_locked(const SilenceModeConfig *config) {
+  uint32_t permille = config->quiet_permille;
+  if (s_stationary_since_ms != 0) {
+    const uint32_t still_ms = prv_uptime_ms() - s_stationary_since_ms;
+    if (still_ms >= STATIONARY_VERDICT_RELAX_2_MS) {
+      permille = MIN(permille, STATIONARY_VERDICT_RELAX_2_PERMILLE);
+    } else if (still_ms >= STATIONARY_VERDICT_RELAX_1_MS) {
+      permille = MIN(permille, STATIONARY_VERDICT_RELAX_1_PERMILLE);
+    }
+  }
+  return permille;
+}
+
 static bool prv_room_is_quiet_locked(void) {
   const SilenceModeConfig *config = prv_silence_mode_config(s_silence_mode);
   if (!config) {
@@ -642,7 +680,7 @@ static bool prv_room_is_quiet_locked(void) {
     return false;
   }
   return ((uint32_t)s_silence_window_quiet * 1000u) >=
-         ((uint32_t)s_silence_window_filled * config->quiet_permille);
+         ((uint32_t)s_silence_window_filled * prv_stationary_quiet_permille_locked(config));
 }
 
 //! End the current suppression run WITHOUT touching the trailing window.
@@ -2330,8 +2368,11 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   };
   *length_in_out = audio_companion_protocol_build_info(buf, *length_in_out, &info);
   pbl_mutex_unlock(&s_lock);
-  PBL_LOG_INFO("Audio companion info read (state=%u flags=0x%02x)", info.service_state,
-               info.flags);
+  // Debug, not info: the phone re-reads Info every 20 s for as long as the watch is suppressing
+  // silence, and an INFO line is a flash write each time -- thousands a day for a fact the
+  // phone's own log already records.
+  PBL_LOG_DBG("Audio companion info read (state=%u flags=0x%02x)", info.service_state,
+              info.flags);
 }
 
 // ---- Mic arbitration (called from the voice service) ----
@@ -2559,6 +2600,9 @@ void audio_companion_set_runlevel(RunLevel runlevel) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   if (s_runlevel != runlevel) {
     s_runlevel = runlevel;
+    // The stillness clock the verdict's bar relaxes on. Uptime is whole seconds, so a boot-time
+    // entry is nudged off zero, which means "not stationary".
+    s_stationary_since_ms = (runlevel == RunLevel_Stationary) ? MAX(prv_uptime_ms(), 1u) : 0;
     // Entering or leaving Stationary decides the mute and owns the listen cadence.
     prv_update_stationary_mute_locked();
     prv_reevaluate_locked();
@@ -2779,6 +2823,7 @@ void audio_companion_test_reset(void) {
   s_capture_retry_timer = TIMER_INVALID_ID;
   s_capture_retry_delay_ms = 0;
   s_stationary_muted = false;
+  s_stationary_since_ms = 0;
   s_mic_conflict_active = false;
   s_receiver_pause_requested = false;
   s_low_battery = false;
