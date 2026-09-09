@@ -23,7 +23,27 @@ typedef struct {
   uint32_t gap_records;
   uint32_t dropped_overflow_frames;
   uint32_t mic_conflicts;
+  //! 20 ms frames the silence detector skipped, and how many separate runs produced them.
   uint32_t suppressed_silence_frames;
+  uint32_t silence_runs;
+  //! Live detector readout, so a person holding the watch in a quiet room can see WHY it is or is
+  //! not suppressing. Without these the counter above is unfalsifiable: it read zero for three
+  //! months and nothing on the watch could say whether the room was too loud or the rule was
+  //! unsatisfiable. `silence_level` is the high-passed mean absolute PCM of the last 20 ms frame,
+  //! measured before Speex's x3 gain; `silence_enter_threshold` is what the active mode compares
+  //! it against (0 when Skip Silence is Off); `silence_quiet_permille` is how much of the arming
+  //! window is currently under that threshold, out of 1000.
+  uint32_t silence_level;
+  //! Mean-abs of the same frame WITHOUT the high-pass. Shown beside `silence_level` because the
+  //! gap between them is the one measurement no recording can supply: everything the high-pass
+  //! removes lives below 40 Hz, which Speex discards, so a wrist that is drowning the detector in
+  //! sub-audio rumble looks identical to a quiet one in every stored segment.
+  uint32_t silence_raw_level;
+  uint32_t silence_enter_threshold;
+  //! Level at or above which suppression ends. Deliberately below the quiet threshold.
+  uint32_t silence_resume_threshold;
+  uint16_t silence_quiet_permille;
+  bool silence_suppressing;
   uint32_t spool_bytes;
   uint32_t spool_high_water_bytes;
   uint32_t loss_alerts_posted;

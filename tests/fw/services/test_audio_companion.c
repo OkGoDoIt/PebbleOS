@@ -70,6 +70,7 @@ static bool s_consent_prompted;
 static bool s_voice_speex_initialized;
 static int16_t s_voice_frame_buffer[AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES];
 static uint8_t s_encoded_counter;
+static uint32_t s_encoded_frames;
 
 static bool s_mic_running;
 static bool s_mic_start_succeeds;
@@ -291,6 +292,10 @@ int voice_speex_encode_frame(int16_t *samples, uint8_t *encoded_data, size_t max
   encoded_data[1] = 0x50;
   encoded_data[2] = 0x58;
   encoded_data[3] = s_encoded_counter++;
+  // s_encoded_counter doubles as a payload byte and wraps at 256, which is fewer frames than
+  // arming the silence detector legitimately takes. Count separately for the tests that need to
+  // know exactly how many frames survived the detector.
+  s_encoded_frames++;
   return 4;
 }
 
@@ -443,6 +448,122 @@ static void prv_feed_silence_frames(uint32_t count) {
   fake_system_task_callbacks_invoke_pending();
 }
 
+// ---- Silence-detector harness ----
+//
+// The old silence tests fed literal amplitudes of 0 and 500 and asserted only that *something*
+// happened, so they would have passed with the enter threshold set to 1 and with an arming window
+// of any length -- including the one that could never complete on a real wrist. Everything below
+// drives the detector with levels and frame counts chosen against the shipped constants, so a
+// wrong threshold, a wrong window length or a clipped resume makes a test fail rather than pass
+// more quietly.
+//
+// Mirrored deliberately from audio_companion.c: if a constant there changes, these fail and the
+// change has to be justified.
+#define TEST_LIGHT_QUIET_THRESHOLD (20)
+#define TEST_LIGHT_RESUME_THRESHOLD (16)
+#define TEST_LIGHT_WINDOW_FRAMES (1000)      // 20,000 ms / 20 ms
+#define TEST_LIGHT_REARM_FRAMES (100)        // 2,000 ms / 20 ms
+#define TEST_LIGHT_MAX_LOUD_IN_WINDOW (20)   // 1000 - (1000 * 980 / 1000)
+#define TEST_BALANCED_QUIET_THRESHOLD (24)
+#define TEST_BALANCED_RESUME_THRESHOLD (20)
+#define TEST_BALANCED_WINDOW_FRAMES (750)    // 15,000 ms / 20 ms
+#define TEST_AGGRESSIVE_QUIET_THRESHOLD (24)
+#define TEST_AGGRESSIVE_RESUME_THRESHOLD (22)
+#define TEST_AGGRESSIVE_WINDOW_FRAMES (250)  // 5,000 ms / 20 ms
+#define TEST_BLE_RELAX_FRAMES (1500)         // 30,000 ms / 20 ms
+//! Comfortably below every mode's resume threshold, so it is quiet at any level.
+#define TEST_QUIET_LEVEL (6)
+//! Frames the power-save mute verdict must hear before it is allowed to conclude anything.
+#define TEST_POWER_SAVE_LISTEN_MIN_FRAMES (250)
+
+//! A frame whose high-passed mean absolute level is `amplitude`, alternating in sign every sample.
+//!
+//! Alternating at Nyquist is deliberate: the detector high-passes before it measures, so a DC or
+//! very-low-frequency test signal would be attenuated to nothing and every threshold assertion
+//! below would be measuring the filter rather than the rule. At Nyquist the one-pole blocker is
+//! essentially transparent, so `amplitude` in and `amplitude` out.
+static void prv_feed_frame_at_level(uint32_t amplitude) {
+  cl_assert(s_mic_handler);
+  for (size_t i = 0; i < AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES; i++) {
+    s_voice_frame_buffer[i] = (i & 1) ? -(int16_t)amplitude : (int16_t)amplitude;
+  }
+  s_mic_handler(s_voice_frame_buffer, AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES, s_mic_context);
+}
+
+static void prv_feed_frames_at_level(uint32_t amplitude, uint32_t count) {
+  for (uint32_t i = 0; i < count; i++) {
+    prv_feed_frame_at_level(amplitude);
+  }
+  fake_system_task_callbacks_invoke_pending();
+}
+
+//! A quiet room with one short transient in it: `burst_samples` at `burst`, the rest at `floor`.
+//! A door, a chair, a knock against a desk. This is what a real 20 ms frame of "silence" looks
+//! like, and the reason a peak-based rule can never suppress anything on a wrist.
+static void prv_feed_frame_with_transient(uint32_t floor_level, uint32_t burst,
+                                          size_t burst_samples) {
+  cl_assert(s_mic_handler);
+  cl_assert(burst_samples <= AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES);
+  for (size_t i = 0; i < AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES; i++) {
+    const uint32_t level = (i < burst_samples) ? burst : floor_level;
+    s_voice_frame_buffer[i] = (i & 1) ? -(int16_t)level : (int16_t)level;
+  }
+  s_mic_handler(s_voice_frame_buffer, AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES, s_mic_context);
+}
+
+//! Empty the spool the way the repeating 150 ms drain timer does on a real watch, until it stands
+//! itself down and hands the receiver-liveness job to the silence probe.
+//!
+//! Arming the detector now legitimately takes a thousand frames, which is more than one drain
+//! callback's burst cap can send and more notifications than the capture buffer holds -- hence the
+//! discard as we go. Returns the armed probe timer, or TIMER_INVALID_ID.
+static TimerID prv_drain_until_silence_probe_armed(void) {
+  for (int i = 0; i < 64; i++) {
+    const TimerID probe = audio_companion_test_get_silence_probe_timer();
+    if (probe != TIMER_INVALID_ID && stub_new_timer_is_scheduled(probe)) {
+      return probe;
+    }
+    s_data_count = 0;
+    stub_new_timer_invoke(1);
+    fake_system_task_callbacks_invoke_pending();
+  }
+  return TIMER_INVALID_ID;
+}
+
+static AudioCompanionDiagnostics prv_diag(void) {
+  AudioCompanionDiagnostics diag;
+  audio_companion_get_diagnostics(&diag);
+  return diag;
+}
+
+static void prv_start_capture_with_mode(AudioCompanionSilenceMode mode) {
+  audio_companion_set_enabled(true);
+  audio_companion_set_silence_mode(mode);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  s_encoded_frames = 0;
+  s_data_count = 0;
+}
+
+//! The most recent gap record of a given reason, so a test can assert on the run it just ended
+//! rather than on whichever gap happened to be captured first.
+static bool prv_last_gap_with_reason(uint8_t reason, AudioCompanionStreamGapMsg *out) {
+  bool found = false;
+  for (uint32_t i = 0; i < s_data_count; i++) {
+    if (s_data_notifications[i].length < sizeof(AudioCompanionStreamGapMsg) ||
+        s_data_notifications[i].data[0] != AudioCompanionDataMsgIdStreamGap) {
+      continue;
+    }
+    AudioCompanionStreamGapMsg msg;
+    memcpy(&msg, s_data_notifications[i].data, sizeof(msg));
+    if (msg.reason == reason) {
+      *out = msg;
+      found = true;
+    }
+  }
+  return found;
+}
+
 static const CapturedNotification *prv_find_data_msg(uint8_t msg_id) {
   for (uint32_t i = 0; i < s_data_count; i++) {
     if (s_data_notifications[i].length > 0 && s_data_notifications[i].data[0] == msg_id) {
@@ -495,6 +616,7 @@ void test_audio_companion__initialize(void) {
   s_consent_prompted = false;
   s_voice_speex_initialized = false;
   s_encoded_counter = 0;
+  s_encoded_frames = 0;
   s_mic_running = false;
   s_mic_start_succeeds = true;
   s_mic_handler = NULL;
@@ -1139,7 +1261,7 @@ void test_audio_companion__stationary_needs_quiet_as_well_as_stillness(void) {
 
   // The room goes quiet and the detector engages. NOW stillness means nothing worth recording.
   audio_companion_set_runlevel(RunLevel_Normal);
-  prv_feed_silence_frames(255);
+  prv_feed_silence_frames(1005);
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
@@ -1174,7 +1296,7 @@ void test_audio_companion__a_stationary_mute_reopens_the_mic_to_listen(void) {
   prv_subscribe(true, true);
   prv_authenticate();
 
-  prv_feed_silence_frames(255);
+  prv_feed_silence_frames(1005);
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
   cl_assert(!s_mic_running);
@@ -1190,7 +1312,7 @@ void test_audio_companion__a_stationary_mute_reopens_the_mic_to_listen(void) {
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 
   // Still a quiet room at the end of the window, so mute again and keep saving power.
-  prv_feed_silence_frames(255);
+  prv_feed_silence_frames(1005);
   cl_assert_equal_b(stub_new_timer_fire(listen), true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert(!s_mic_running);
@@ -1232,11 +1354,15 @@ void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes
   prv_subscribe(true, true);
   prv_authenticate();
 
-  // Light mode keeps roughly the first five quiet seconds so quiet speech is not clipped.
-  prv_feed_silence_frames(255);
+  // Light keeps the whole arming window of quiet before it stops sending, so quiet speech at the
+  // head of a stretch is never clipped.
+  prv_feed_silence_frames(1005);
   const uint8_t encoded_before_resume = s_encoded_counter;
   cl_assert(encoded_before_resume > 0);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+  // The connection interval is deliberately NOT relaxed on the suppression edge any more -- that
+  // is gated on the run lasting 30 s, and this run is a few frames old. See
+  // test_audio_companion__short_quiet_runs_do_not_renegotiate_the_connection.
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
 
   // Once suppression is active, more quiet frames should not create recurring BLE updates.
   s_data_count = 0;
@@ -1264,18 +1390,20 @@ void test_audio_companion__light_silence_suppression_resumes_on_quiet_speech(voi
   prv_subscribe(true, true);
   prv_authenticate();
 
-  prv_feed_silence_frames(255);
+  prv_feed_silence_frames(1005);
   const uint8_t encoded_before_resume = s_encoded_counter;
   cl_assert(encoded_before_resume > 0);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
 
   s_data_count = 0;
   prv_feed_silence_frames(50);
   cl_assert_equal_i(s_encoded_counter, encoded_before_resume);
 
-  // This is above Light's "definite quiet" threshold but below the old exit threshold, so it
-  // used to remain suppressed and drop audible low-level speech until a louder spike arrived.
-  prv_feed_frame_with_sample(48);
+  // Quiet, audible speech: above the resume threshold but nowhere near the old exit threshold of
+  // 64, which used to keep the watch silent through it until a louder spike arrived. Fed as an AC
+  // frame because the detector high-passes -- a constant offset at this level is wrist noise, not
+  // a voice, and is correctly ignored.
+  prv_feed_frame_at_level(48);
   fake_system_task_callbacks_invoke_pending();
 
   cl_assert_equal_i(s_encoded_counter, encoded_before_resume + 1);
@@ -1306,12 +1434,10 @@ void test_audio_companion__silence_probe_asks_before_presuming_the_receiver_gone
 
   // Long enough to enter suppression. On a real watch the repeating drain timer is what stands
   // itself down once the spool has emptied; here it has to be fired explicitly.
-  prv_feed_silence_frames(255);
+  prv_feed_silence_frames(1005);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  stub_new_timer_invoke(1);
-  fake_system_task_callbacks_invoke_pending();
 
-  const TimerID probe = audio_companion_test_get_silence_probe_timer();
+  const TimerID probe = prv_drain_until_silence_probe_armed();
   cl_assert(probe != TIMER_INVALID_ID);
   cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
 
@@ -1348,11 +1474,8 @@ void test_audio_companion__silence_probe_stands_down_when_audio_resumes(void) {
   audio_companion_set_silence_mode(AudioCompanionSilenceModeLight);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_silence_frames(255);
-  stub_new_timer_invoke(1);
-  fake_system_task_callbacks_invoke_pending();
-
-  const TimerID probe = audio_companion_test_get_silence_probe_timer();
+  prv_feed_silence_frames(1005);
+  const TimerID probe = prv_drain_until_silence_probe_armed();
   cl_assert(probe != TIMER_INVALID_ID);
   cl_assert_equal_b(stub_new_timer_is_scheduled(probe), true);
 
@@ -1655,4 +1778,388 @@ void test_audio_companion__benign_reboots_never_stand_down(void) {
 
   cl_assert_equal_b(s_pref_enabled, true);
   cl_assert_equal_i(s_saved_reboot_trace.consecutive_fault_boots, 0);
+}
+
+// ================================================================================================
+// Silence detector
+//
+// Context for everything below: this feature shipped default-on, was wired end to end, and
+// produced exactly ZERO suppressed-silence gaps across 88 days and 116 hours of real recording.
+// The cause was arithmetic, not plumbing -- the entry rule asked for 250 CONSECUTIVE 20 ms frames
+// under the threshold and reset its counter on the first frame at or above it, and a room that a
+// person calls silent still produces a transient every few seconds. These tests pin the rule that
+// replaced it, and each is written so that a wrong constant fails rather than passes.
+// ================================================================================================
+
+//! Arming takes one whole window and not one frame less. Fails if window_frames moves, if the
+//! old off-by-one comes back, or if the window is counted from the wrong place.
+void test_audio_companion__light_arms_after_exactly_one_window_of_quiet(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES - 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+  cl_assert_equal_i(s_encoded_frames, TEST_LIGHT_WINDOW_FRAMES - 1);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+  // The frame that completes the window is itself skipped: the evidence was already in.
+  cl_assert_equal_i(s_encoded_frames, TEST_LIGHT_WINDOW_FRAMES - 1);
+  cl_assert_equal_i(prv_diag().suppressed_silence_frames, 1);
+  cl_assert_equal_i(prv_diag().silence_runs, 1);
+}
+
+//! The 88-day bug, as a regression test. One loud frame in the middle of a quiet stretch used to
+//! send the counter back to zero; now it costs one bit out of the window.
+void test_audio_companion__a_single_loud_frame_no_longer_restarts_the_quiet_window(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 100);
+  prv_feed_frames_at_level(900, 1);  // a door, a chair, a knock against the desk
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES - 102);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+}
+
+//! ...but the tolerance is 2% and not more. Both halves matter: the first assertion fails if the
+//! quiet fraction is loosened, the second if it is tightened.
+void test_audio_companion__the_quiet_window_tolerates_two_percent_and_no_more(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  prv_feed_frames_at_level(900, TEST_LIGHT_MAX_LOUD_IN_WINDOW + 1);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL,
+                           TEST_LIGHT_WINDOW_FRAMES - (TEST_LIGHT_MAX_LOUD_IN_WINDOW + 1));
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);  // 979/1000 is not 98%
+
+  // One more quiet frame ages the oldest loud one out of the window: 980/1000 is exactly 98%.
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+}
+
+//! Resume is a SEPARATE and LOWER threshold than quiet, and one frame is always enough.
+//!
+//! The shipped code resumed at `exit_threshold` (64) -- above the quiet threshold -- after up to
+//! five confirming frames. Simulated over 116.5 h of this watch's own recordings that clipped the
+//! onset of 52% of utterances following a quiet stretch and destroyed 206 of them outright. With
+//! resume below quiet and no confirmation, the same corpus gives zero destroyed and a p99 clip of
+//! 0 ms. This test pins both halves: a frame under the resume threshold stays suppressed, and the
+//! frame that reaches it is ENCODED rather than spent confirming.
+void test_audio_companion__light_resumes_below_the_quiet_threshold_and_keeps_that_frame(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 50);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  const uint32_t encoded_before = s_encoded_frames;
+  s_data_count = 0;
+
+  prv_feed_frames_at_level(TEST_LIGHT_RESUME_THRESHOLD - 1, 1);
+  cl_assert_equal_i(s_encoded_frames, encoded_before);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  // Still below the QUIET threshold, so this frame is not "speech" by the entry rule -- and it
+  // resumes anyway. That asymmetry is the whole design.
+  cl_assert(TEST_LIGHT_RESUME_THRESHOLD < TEST_LIGHT_QUIET_THRESHOLD);
+  prv_feed_frames_at_level(TEST_LIGHT_RESUME_THRESHOLD, 1);
+  cl_assert_equal_i(s_encoded_frames, encoded_before + 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+
+  // 1 arming frame + 50 + the frame below the resume threshold, and the gap claims exactly those.
+  AudioCompanionStreamGapMsg gap;
+  cl_assert(prv_last_gap_with_reason(AudioCompanionGapReasonSilenceSuppressed, &gap));
+  cl_assert_equal_i(gap.missing_frame_count, 52);
+  cl_assert_equal_i(prv_diag().suppressed_silence_frames, 52);
+}
+
+//! Why a mean over 20 ms and not a peak. Every frame here contains a 0.125 ms knock at amplitude
+//! 800 -- forty times the quiet threshold -- and the frame average dilutes it to 10, so the room
+//! reads as quiet. Swap this rule for anything peak-based and suppression stops firing on a real
+//! wrist, which is precisely the failure being fixed.
+void test_audio_companion__a_short_transient_inside_a_quiet_frame_is_not_speech(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  for (uint32_t i = 0; i < TEST_LIGHT_WINDOW_FRAMES; i++) {
+    prv_feed_frame_with_transient(5, 800, 2);
+  }
+  fake_system_task_callbacks_invoke_pending();
+
+  cl_assert(prv_diag().silence_level < TEST_LIGHT_QUIET_THRESHOLD);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+}
+
+//! What the detector must NOT measure. A steady offset is the shape wrist movement, sleeve
+//! contact and body-conducted thump make: loud by any raw measure, entirely below the frequencies
+//! a person speaks at, and discarded by Speex -- so no recording can ever show it and no threshold
+//! derived from one would be meaningful. Simulation could not reconcile "never fires at threshold
+//! 40" with the decoded audio by a factor of nine, and this is the leading explanation.
+void test_audio_companion__the_detector_ignores_sub_audio_rumble(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  for (uint32_t i = 0; i < TEST_LIGHT_WINDOW_FRAMES; i++) {
+    prv_feed_frame_with_sample(200);
+  }
+  fake_system_task_callbacks_invoke_pending();
+
+  const AudioCompanionDiagnostics diag = prv_diag();
+  cl_assert_equal_i(diag.silence_raw_level, 200);
+  cl_assert(diag.silence_level < TEST_LIGHT_QUIET_THRESHOLD);
+  cl_assert_equal_b(diag.silence_suppressing, true);
+}
+
+//! The high-pass has to DECAY, from either sign, and integer state is where that goes wrong.
+//!
+//! With the filter memory held as a plain int and a pole at 0.99, `(A * y) >> 15` is an arithmetic
+//! shift: it floors, so y = -99 maps back to -99 and stays there. A single negative-going step --
+//! an arm coming to rest on a desk -- would then pin the reported level at ~99, five times the
+//! quiet threshold, for the rest of the session, and the detector would never fire again. That is
+//! the same shape of failure this whole change exists to fix, one layer down.
+void test_audio_companion__the_high_pass_decays_after_a_negative_step(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  for (uint32_t i = 0; i < 4; i++) {
+    prv_feed_frame_with_sample(500);  // rumble on
+  }
+  for (uint32_t i = 0; i < 8; i++) {
+    prv_feed_frame_with_sample(0);  // ...and off again
+  }
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_diag().silence_level, 0);
+
+  // ...and the detector still arms afterwards, which is exactly what a latched filter prevented.
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+}
+
+//! The window is deliberately NOT emptied on resume -- a cough costs the frames it occupies plus
+//! the re-arm hangover, not a fresh 20 s window. The hangover is what stops the rule collapsing
+//! into a per-frame transmit gate that suppresses the pauses between words ~2,700 times an hour.
+void test_audio_companion__re_arming_costs_the_hangover_and_not_a_whole_window(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  prv_feed_frames_at_level(900, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_REARM_FRAMES - 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+  cl_assert_equal_i(prv_diag().silence_runs, 2);
+}
+
+//! Balanced is a different threshold AND a different window, and changing mode ends whatever run
+//! was in progress. It used to end one only when switching to Off, which left a live run and a
+//! half-filled window being judged by rules they were not collected under.
+void test_audio_companion__changing_mode_ends_the_run_and_re_arms_from_scratch(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  s_data_count = 0;
+  const uint32_t suppressed_by_light = prv_diag().suppressed_silence_frames;
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeBalanced);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+  cl_assert_equal_i(prv_diag().silence_enter_threshold, TEST_BALANCED_QUIET_THRESHOLD);
+  cl_assert_equal_i(prv_diag().silence_resume_threshold, TEST_BALANCED_RESUME_THRESHOLD);
+
+  // 22 is speech to Light and quiet to Balanced, so this stretch also proves the new threshold is
+  // in force rather than the old one, and that the window restarted rather than carrying over.
+  cl_assert(TEST_LIGHT_QUIET_THRESHOLD <= 22 && 22 < TEST_BALANCED_QUIET_THRESHOLD);
+  prv_feed_frames_at_level(22, TEST_BALANCED_WINDOW_FRAMES - 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+  prv_feed_frames_at_level(22, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  // The Light run was closed honestly rather than merged into the Balanced one: the gap the mode
+  // change produced covers exactly what Light skipped. (It reaches the phone on the next drain
+  // tick, which the frames above provide.)
+  AudioCompanionStreamGapMsg gap;
+  cl_assert(prv_last_gap_with_reason(AudioCompanionGapReasonSilenceSuppressed, &gap));
+  cl_assert_equal_i(gap.missing_frame_count, suppressed_by_light);
+}
+
+//! Aggressive is the short-window level, and its resume threshold sits closest to its quiet
+//! threshold -- which is what buys the extra airtime and what costs the occasional 20 ms trim.
+void test_audio_companion__aggressive_uses_a_short_window_and_a_higher_resume(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeAggressive);
+  prv_feed_frames_at_level(10, TEST_AGGRESSIVE_WINDOW_FRAMES - 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+  prv_feed_frames_at_level(10, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  // A level that would have resumed Light stays suppressed here.
+  cl_assert(TEST_LIGHT_RESUME_THRESHOLD < TEST_AGGRESSIVE_RESUME_THRESHOLD);
+  prv_feed_frames_at_level(TEST_AGGRESSIVE_RESUME_THRESHOLD - 1, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  const uint32_t encoded_before = s_encoded_frames;
+  prv_feed_frames_at_level(TEST_AGGRESSIVE_RESUME_THRESHOLD, 1);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+  cl_assert_equal_i(s_encoded_frames, encoded_before + 1);
+}
+
+//! The BLE connection interval is renegotiated on DURATION, not on the suppression flag.
+//!
+//! At the measured 60-200 suppression episodes an hour, doing it on every edge is 120-400
+//! connection-parameter renegotiations an hour -- more radio time than the payload those short
+//! episodes save. Short runs stay at the streaming interval; only runs worth relaxing for get it.
+void test_audio_companion__short_quiet_runs_do_not_renegotiate_the_connection(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_BLE_RELAX_FRAMES - 2);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 1);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+
+  // ...and speech puts it straight back.
+  prv_feed_frames_at_level(900, 1);
+  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+}
+
+//! The stationary power-save mute reads the detector at the end of each listen window, so the
+//! verdict has to be reachable inside that window. It was `s_silence_suppressing` against a
+//! 5,000 ms window while the default mode needed 5,000 ms of quiet to become true, so it could
+//! never be reached and the mute -- the ONLY thing that stops mic_start() -- could not re-engage
+//! after its first listen.
+//!
+//! The fix is on the verdict rather than the window: arming windows are 5-20 s and stretching
+//! every listen to fit the longest would leave the microphone on for a sixth of each cycle, which
+//! is most of what the mute saves. The mute asks the narrower question over what it did hear.
+void test_audio_companion__the_power_save_listen_window_can_reach_a_verdict(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+  cl_assert(!s_mic_running);
+
+  const TimerID listen = audio_companion_test_get_power_save_listen_timer();
+  cl_assert(listen != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);  // the window opens
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+
+  const uint32_t window_frames =
+      stub_new_timer_timeout(listen) / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS;
+  cl_assert(window_frames > TEST_POWER_SAVE_LISTEN_MIN_FRAMES);
+
+  // A quiet room for the whole window: the mute must re-engage when it closes.
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, window_frames);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);  // the window closes
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedPowerSave);
+
+  // ...and a window that hears speech keeps the microphone, which is the point of asking.
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  prv_feed_frames_at_level(900, window_frames);
+  cl_assert_equal_b(stub_new_timer_fire(listen), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+}
+
+//! Receiver traffic used to assign TIMER_INVALID_ID over the power-save and capture-retry handles
+//! instead of stopping the timers. That forgets a timer rather than stopping it: the old one
+//! stays scheduled and its slot in task_timer.c's fixed pool is never returned, while the next
+//! arm allocates a fresh one. The phone talks to the watch every 0.5-2 s, so this ran constantly,
+//! and exhausting that pool is a PBL_ASSERTN -- a watch reset with no obvious cause.
+void test_audio_companion__receiver_traffic_does_not_leak_the_power_save_timer(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  const TimerID listen = audio_companion_test_get_power_save_listen_timer();
+  cl_assert(listen != TIMER_INVALID_ID);
+  const int creates_before = s_num_new_timer_create_calls;
+
+  for (int i = 0; i < 5; i++) {
+    prv_send_receiver_health((uint8_t)(0x50 + i));
+    fake_system_task_callbacks_invoke_pending();
+    // The handle survives the keepalive, and so does the timer behind it.
+    cl_assert_equal_i(audio_companion_test_get_power_save_listen_timer(), listen);
+    cl_assert_equal_b(stub_new_timer_is_scheduled(listen), true);
+    audio_companion_set_runlevel(RunLevel_Normal);
+    audio_companion_set_runlevel(RunLevel_Stationary);
+  }
+  cl_assert_equal_i(s_num_new_timer_create_calls, creates_before);
+}
+
+//! The counter existed for three months and was never displayed, so "it has never fired" was
+//! indistinguishable from "nobody looked". Diagnostics now carry the whole picture: how much was
+//! skipped, how many runs, the live level with and without the high-pass, both thresholds it is
+//! judged against, and how full the window is.
+void test_audio_companion__diagnostics_report_what_the_detector_is_doing(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+
+  prv_feed_frames_at_level(120, 10);
+  AudioCompanionDiagnostics diag = prv_diag();
+  cl_assert_equal_i(diag.silence_level, 120);
+  cl_assert_equal_i(diag.silence_enter_threshold, TEST_LIGHT_QUIET_THRESHOLD);
+  cl_assert_equal_i(diag.silence_resume_threshold, TEST_LIGHT_RESUME_THRESHOLD);
+  cl_assert_equal_i(diag.silence_quiet_permille, 0);
+  cl_assert_equal_i(diag.suppressed_silence_frames, 0);
+  cl_assert_equal_b(diag.silence_suppressing, false);
+
+  // Ten loud frames then ninety quiet ones: 90% of what has been seen so far.
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 90);
+  diag = prv_diag();
+  cl_assert_equal_i(diag.silence_level, TEST_QUIET_LEVEL);
+  cl_assert_equal_i(diag.silence_quiet_permille, 900);
+
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  diag = prv_diag();
+  cl_assert_equal_b(diag.silence_suppressing, true);
+  cl_assert(diag.suppressed_silence_frames > 0);
+  cl_assert_equal_i(diag.silence_runs, 1);
+
+  // Off means off: no thresholds to report and no detector running.
+  audio_companion_set_silence_mode(AudioCompanionSilenceModeOff);
+  fake_system_task_callbacks_invoke_pending();
+  diag = prv_diag();
+  cl_assert_equal_i(diag.silence_enter_threshold, 0);
+  cl_assert_equal_i(diag.silence_resume_threshold, 0);
+  cl_assert_equal_b(diag.silence_suppressing, false);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES + 10);
+  cl_assert_equal_b(prv_diag().silence_suppressing, false);
+}
+
+//! Suppression saves the encoder and the radio; it does NOT release the microphone's PDM rails,
+//! buffers and clocks, which the Session 17 battery audit found to be the dominant cost. The
+//! offline park used to be driven only from the encoded path, so a quiet room plus a receiver
+//! that was never coming back would have held the microphone open until the battery was flat --
+//! a hazard that could not happen while the detector was unable to fire, and can now.
+void test_audio_companion__quiet_does_not_keep_the_mic_alive_for_a_receiver_that_is_gone(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES + 5);
+  cl_assert_equal_b(prv_diag().silence_suppressing, true);
+  cl_assert(s_mic_running);
+
+  // The probe goes out during the quiet and nobody answers, so the receiver really is gone.
+  const TimerID probe = prv_drain_until_silence_probe_armed();
+  cl_assert(probe != TIMER_INVALID_ID);
+  cl_assert_equal_b(stub_new_timer_fire(probe), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_b(stub_new_timer_fire(probe), true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
+  // Still capturing on purpose: an unanswered probe is usually an iOS app that iOS suspended.
+  cl_assert(s_mic_running);
+
+  // The room stays quiet, so nothing is ever encoded and the spool never saturates. Time is the
+  // only thing left that can stop the microphone.
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 10);
+  cl_assert(s_mic_running);
+  s_uptime_seconds += (10 * 60) + 1;
+  prv_feed_frames_at_level(TEST_QUIET_LEVEL, 10);
+  cl_assert(!s_mic_running);
 }

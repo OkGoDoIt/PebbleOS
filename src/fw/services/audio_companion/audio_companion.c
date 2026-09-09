@@ -105,10 +105,26 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! PDM hardware being off for the other ~97% of the time. Anything much shorter stops being a
 //! power saving at all; anything much longer starts losing the beginning of meetings.
 #define POWER_SAVE_LISTEN_INTERVAL_MS (2 * 60 * 1000)
-//! How long the microphone stays on during a listen window. Long enough for the silence detector
-//! to reach a verdict (its enter threshold is measured in hundreds of milliseconds) and for the
-//! phone to get a liveness signal out of the bargain.
-#define POWER_SAVE_LISTEN_WINDOW_MS (5 * 1000)
+//! How long the microphone stays on during a listen window, and how much of that the mute verdict
+//! needs to hear.
+//!
+//! BUG: the window was 5,000 ms and the verdict was `s_silence_suppressing`, which at the default
+//! mode needed 5,000 ms of quiet to become true -- so the verdict could never be reached inside
+//! the window that existed to collect it, and the stationary mute could not re-engage after its
+//! first listen. That mute is the ONLY path that stops mic_start(): suppression saves the encoder
+//! and the radio, but the PDM rails, clocks and buffers come down only here. The arithmetic
+//! switched off the largest saving the service has.
+//!
+//! The fix is on the verdict, not the window. Arming windows are now 5-20 s long (see the mode
+//! table), and stretching every listen to fit the longest would leave the microphone on for a
+//! sixth of each cycle -- most of what the mute was saving. So the listen window stays short and
+//! the mute asks the narrower question it actually needs answered: of what this window heard, was
+//! the mode's quiet fraction of it quiet? Same threshold, same bar, less evidence, and being
+//! wrong costs at most one listen interval of a conversation that the next window picks up.
+#define POWER_SAVE_LISTEN_WINDOW_MS (6 * 1000)
+//! Frames the verdict must actually have heard, leaving ~1 s of the window for the mic to start.
+#define POWER_SAVE_LISTEN_MIN_FRAMES \
+  (5000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 //! How often we re-ask the question while stationary but NOT muted (i.e. the room has voices in
 //! it). Only a timer and a bool — the microphone is already on — so this is about noticing when a
 //! meeting ends, not about power.
@@ -139,20 +155,79 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! Alert when this many frames have been lost since the last alert (30 s of audio).
 #define LOSS_ALERT_THRESHOLD_FRAMES (30 * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 #define LOSS_ALERT_MIN_INTERVAL_SECONDS (6 * 60 * 60)
-//! Lightweight silence suppression uses mean absolute PCM level before Speex's gain stage.
-//! Thresholds are intentionally low because dropping quiet speech is worse than sending noise.
-#define SILENCE_MODE_LIGHT_ENTER_THRESHOLD (40)
-#define SILENCE_MODE_LIGHT_EXIT_THRESHOLD (64)
-#define SILENCE_MODE_LIGHT_ENTER_MS (5000)
-#define SILENCE_MODE_LIGHT_WEAK_EXIT_FRAMES (1)
-#define SILENCE_MODE_BALANCED_ENTER_THRESHOLD (64)
-#define SILENCE_MODE_BALANCED_EXIT_THRESHOLD (96)
-#define SILENCE_MODE_BALANCED_ENTER_MS (3500)
-#define SILENCE_MODE_BALANCED_WEAK_EXIT_FRAMES (3)
-#define SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD (95)
-#define SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD (150)
-#define SILENCE_MODE_AGGRESSIVE_ENTER_MS (2000)
-#define SILENCE_MODE_AGGRESSIVE_WEAK_EXIT_FRAMES (5)
+//! Silence suppression: how the watch decides nobody is talking.
+//!
+//! Two properties of the measured statistic, both easy to get wrong:
+//!
+//! 1. It is taken BEFORE voice_speex.c's SPEEX_AUDIO_GAIN (x3) stage, so a threshold here is
+//!    three times lower than the level of the audio that ships.
+//! 2. It is a MEAN over 320 samples, not a peak. A 3 ms door click inside a 20 ms frame raises
+//!    the mean by roughly a seventh of its amplitude. That dilution is what the entry rule below
+//!    depends on: transients are attenuated once by the frame average and again by the window.
+//!
+//! BUG: the entry rule used to require `enter_frames` CONSECUTIVE frames under the threshold and
+//! reset the counter to zero on the first frame at or above it. On a wrist that is unsatisfiable,
+//! and the feature produced zero suppressed-silence gaps in 88 days of use. The rule is now "at
+//! least `quiet_permille` of the last `window_frames`".
+//!
+//! BUG, and the more expensive one: resume used to be gated on `exit_threshold` (64/96/150), i.e.
+//! ABOVE the quiet threshold, plus up to 5 confirming frames. Simulating the shipped constants
+//! over 116.5 h of this watch's own recordings (stream FVR) put that at 52% of utterances after a
+//! quiet stretch clipped, p95 clip 420 ms, and 206 utterances destroyed outright. Resume and
+//! quiet are separate questions and are now separate fields: onset clipping turns out to depend
+//! almost entirely on `resume_threshold`, and airtime saved almost entirely on `quiet_threshold`.
+//! `resume_threshold` is BELOW `quiet_threshold`, one frame is always enough, and the resuming
+//! frame is encoded and sent -- so nothing of the onset is lost. Measured cost of the alternative:
+//! requiring 3 or 5 confirming frames moves p90 clip from 300 to 420 to 500 ms.
+//!
+//! Levels differ mainly in HOW LONG THE ROOM MUST STAY QUIET before the watch stops sending:
+//! 20 s / 15 s / 5 s. On the corpus that is 4.1% / 8.7% / 13.8% of airtime saved, with zero
+//! utterances destroyed at any level and a p99 onset clip of at most 40 ms.
+//!
+//! Thresholds are in HIGH-PASSED units (prv_silence_level): a wrist-worn mic at PDM gain 90
+//! carries arm movement, sleeve contact and body-conducted noise almost entirely below 40 Hz,
+//! which Speex discards and which therefore cannot be calibrated from any recording. Measuring it
+//! would let the threshold be set by how the wearer moves their arm.
+#define SILENCE_MODE_LIGHT_QUIET_THRESHOLD (20)
+#define SILENCE_MODE_LIGHT_RESUME_THRESHOLD (16)
+#define SILENCE_MODE_LIGHT_WINDOW_MS (20000)
+#define SILENCE_MODE_LIGHT_QUIET_PERMILLE (980)
+#define SILENCE_MODE_LIGHT_REARM_MS (2000)
+#define SILENCE_MODE_BALANCED_QUIET_THRESHOLD (24)
+#define SILENCE_MODE_BALANCED_RESUME_THRESHOLD (20)
+#define SILENCE_MODE_BALANCED_WINDOW_MS (15000)
+#define SILENCE_MODE_BALANCED_QUIET_PERMILLE (980)
+#define SILENCE_MODE_BALANCED_REARM_MS (1000)
+#define SILENCE_MODE_AGGRESSIVE_QUIET_THRESHOLD (24)
+#define SILENCE_MODE_AGGRESSIVE_RESUME_THRESHOLD (22)
+#define SILENCE_MODE_AGGRESSIVE_WINDOW_MS (5000)
+#define SILENCE_MODE_AGGRESSIVE_QUIET_PERMILLE (980)
+#define SILENCE_MODE_AGGRESSIVE_REARM_MS (1000)
+//! One-pole DC/rumble blocker applied before the mean: y[n] = x[n] - x[n-1] + (A*y[n-1]) >> 15.
+//! A = 32440 puts the corner near 20 Hz at 16 kHz, which is below anything a person says and
+//! above the wrist noise the threshold must not be measuring.
+#define SILENCE_HP_COEFF_Q15 (32440)
+//! How long a suppression run must last before it is worth renegotiating the BLE connection
+//! interval for.
+//!
+//! BUG: this was done on the suppression edge itself. At the measured 60-200 suppression episodes
+//! an hour that is 120-400 connection-parameter renegotiations an hour, which costs more radio
+//! time than the payload the short episodes save. Runs shorter than this simply stay at the
+//! streaming interval; the ones long enough to matter still get the relaxed one.
+#define SILENCE_BLE_RELAX_MS (30 * 1000)
+#define SILENCE_BLE_RELAX_FRAMES \
+  (SILENCE_BLE_RELAX_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
+//! Longest arming window any mode asks for, which sizes the ring below (one bit per frame).
+#define SILENCE_MODE_MAX_WINDOW_MS                                            \
+  (SILENCE_MODE_LIGHT_WINDOW_MS > SILENCE_MODE_BALANCED_WINDOW_MS             \
+       ? (SILENCE_MODE_LIGHT_WINDOW_MS > SILENCE_MODE_AGGRESSIVE_WINDOW_MS    \
+              ? SILENCE_MODE_LIGHT_WINDOW_MS                                  \
+              : SILENCE_MODE_AGGRESSIVE_WINDOW_MS)                            \
+       : (SILENCE_MODE_BALANCED_WINDOW_MS > SILENCE_MODE_AGGRESSIVE_WINDOW_MS \
+              ? SILENCE_MODE_BALANCED_WINDOW_MS                               \
+              : SILENCE_MODE_AGGRESSIVE_WINDOW_MS))
+#define SILENCE_WINDOW_MAX_FRAMES \
+  (SILENCE_MODE_MAX_WINDOW_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 
 typedef struct {
   bool data_subscribed;
@@ -176,10 +251,19 @@ typedef struct {
 } EnableRequest;
 
 typedef struct {
-  uint32_t enter_threshold;
-  uint32_t exit_threshold;
-  uint32_t enter_frames;
-  uint32_t weak_exit_frames;
+  //! Level below which a frame counts as quiet, for the entry rule.
+  uint32_t quiet_threshold;
+  //! Level at or above which suppression ends. BELOW quiet_threshold on purpose: it is the knob
+  //! that decides how much speech gets clipped, and it should be as low as the noise floor allows.
+  uint32_t resume_threshold;
+  //! Trailing window the entry rule looks at, in 20 ms frames.
+  uint32_t window_frames;
+  //! Fraction of that window (per mille) that must be quiet to suppress.
+  uint32_t quiet_permille;
+  //! Consecutive quiet frames required before (re-)arming, on top of the window test. Without it
+  //! the rule degenerates into a per-frame transmit gate that suppresses the pauses between words
+  //! ~2,700 times an hour.
+  uint32_t rearm_quiet_frames;
 } SilenceModeConfig;
 
 static PBL_MUTEX_DEFINE(s_lock);
@@ -275,12 +359,33 @@ static uint32_t s_loss_alerts_posted;
 static uint32_t s_alert_baseline_dropped;
 static uint32_t s_last_alert_uptime_s;
 static uint32_t s_offline_baseline_dropped;
-static uint32_t s_silence_candidate_frames;
-static uint32_t s_silence_resume_candidate_frames;
 static bool s_silence_suppressing;
 static uint32_t s_silence_gap_frames;
 static uint32_t s_silence_gap_first_sequence;
 static uint64_t s_silence_gap_first_sample_index;
+//! Number of suppression runs started since init, and the mean-abs of the most recent frame.
+//! Both exist to be READ: the counter above was recorded for three months and never displayed
+//! anywhere, so nobody could tell a detector that was working from one that could not fire.
+static uint32_t s_silence_runs;
+static uint32_t s_silence_last_level;      //!< high-passed mean-abs of the most recent frame
+//! Raw (not high-passed) mean-abs of the same frame, kept ONLY so a person can read both numbers
+//! off the watch. Simulation against 116.5 h of these recordings could not reconcile the observed
+//! "never fires" with the thresholds by a factor of 9 (19 dB), and sub-40 Hz wrist noise -- which
+//! Speex discards, so no recording can show it -- is the leading explanation. Two numbers side by
+//! side in Settings settle it in one glance. It costs two instructions per sample inside a loop
+//! that already loads every sample.
+static uint32_t s_silence_last_raw_level;
+static uint32_t s_silence_quiet_run;       //!< consecutive quiet frames, for the re-arm hangover
+static int32_t s_silence_hp_x1;            //!< one-pole high-pass memory: previous input sample
+static int32_t s_silence_hp_y_q8;          //!< ...and previous output, held in Q8 (see below)
+
+//! Trailing "was this frame quiet" ring for the entry rule, one bit per 20 ms frame, plus the
+//! running population count so the test is O(1) per frame rather than a rescan. 32 bytes of .bss
+//! for the longest window any mode configures.
+static uint8_t s_silence_window_bits[(SILENCE_WINDOW_MAX_FRAMES + 7) / 8];
+static uint16_t s_silence_window_head;    //!< next bit index to overwrite
+static uint16_t s_silence_window_filled;  //!< frames seen since the last re-arm, capped at window
+static uint16_t s_silence_window_quiet;   //!< quiet frames currently inside the window
 
 static EventServiceInfo s_battery_event_info;
 
@@ -302,6 +407,8 @@ static void prv_stop_capture_retry_locked(void);
 static void prv_update_stationary_mute_locked(void);
 static void prv_update_ble_responsiveness_locked(void);
 static void prv_apply_pending(void);
+static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode);
+static bool prv_room_is_quiet_locked(void);
 
 // ---- Small helpers ----
 
@@ -364,6 +471,11 @@ static bool prv_power_save_active_locked(void) {
 //!
 //! Split from the gate above so the listen probe can flip it without the gate needing to know
 //! anything about timers. Called on every runlevel change and at the end of each listen window.
+//!
+//! Note the coupling this creates, which is deliberate but worth knowing: with Skip Silence set
+//! to Off the detector never suppresses, so the stationary mute never engages either and the
+//! microphone runs through every still moment. Off costs battery for exactly the reason it is
+//! safe — the watch has no evidence the room is empty, so it does not act as if it were.
 static void prv_update_stationary_mute_locked(void) {
   if (s_runlevel != RunLevel_Stationary) {
     if (s_stationary_muted) {
@@ -374,7 +486,7 @@ static void prv_update_stationary_mute_locked(void) {
   }
   // Quiet as well as still: mute and start the slow listen cadence. Speech in the room means this
   // is a false positive for "nothing worth recording", so keep capturing and check again later.
-  s_stationary_muted = s_silence_suppressing;
+  s_stationary_muted = prv_room_is_quiet_locked();
   prv_arm_power_save_listen_locked(s_stationary_muted ? POWER_SAVE_LISTEN_INTERVAL_MS
                                                       : POWER_SAVE_RECHECK_MS);
 }
@@ -382,37 +494,148 @@ static void prv_update_stationary_mute_locked(void) {
 static const SilenceModeConfig *prv_silence_mode_config(AudioCompanionSilenceMode mode) {
   static const SilenceModeConfig s_configs[] = {
     [AudioCompanionSilenceModeLight] = {
-      .enter_threshold = SILENCE_MODE_LIGHT_ENTER_THRESHOLD,
-      .exit_threshold = SILENCE_MODE_LIGHT_EXIT_THRESHOLD,
-      .enter_frames =
-          SILENCE_MODE_LIGHT_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
-      .weak_exit_frames = SILENCE_MODE_LIGHT_WEAK_EXIT_FRAMES,
+      .quiet_threshold = SILENCE_MODE_LIGHT_QUIET_THRESHOLD,
+      .resume_threshold = SILENCE_MODE_LIGHT_RESUME_THRESHOLD,
+      .window_frames = SILENCE_MODE_LIGHT_WINDOW_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+      .quiet_permille = SILENCE_MODE_LIGHT_QUIET_PERMILLE,
+      .rearm_quiet_frames =
+          SILENCE_MODE_LIGHT_REARM_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
     },
     [AudioCompanionSilenceModeBalanced] = {
-      .enter_threshold = SILENCE_MODE_BALANCED_ENTER_THRESHOLD,
-      .exit_threshold = SILENCE_MODE_BALANCED_EXIT_THRESHOLD,
-      .enter_frames =
-          SILENCE_MODE_BALANCED_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
-      .weak_exit_frames = SILENCE_MODE_BALANCED_WEAK_EXIT_FRAMES,
+      .quiet_threshold = SILENCE_MODE_BALANCED_QUIET_THRESHOLD,
+      .resume_threshold = SILENCE_MODE_BALANCED_RESUME_THRESHOLD,
+      .window_frames = SILENCE_MODE_BALANCED_WINDOW_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+      .quiet_permille = SILENCE_MODE_BALANCED_QUIET_PERMILLE,
+      .rearm_quiet_frames =
+          SILENCE_MODE_BALANCED_REARM_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
     },
     [AudioCompanionSilenceModeAggressive] = {
-      .enter_threshold = SILENCE_MODE_AGGRESSIVE_ENTER_THRESHOLD,
-      .exit_threshold = SILENCE_MODE_AGGRESSIVE_EXIT_THRESHOLD,
-      .enter_frames =
-          SILENCE_MODE_AGGRESSIVE_ENTER_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
-      .weak_exit_frames = SILENCE_MODE_AGGRESSIVE_WEAK_EXIT_FRAMES,
+      .quiet_threshold = SILENCE_MODE_AGGRESSIVE_QUIET_THRESHOLD,
+      .resume_threshold = SILENCE_MODE_AGGRESSIVE_RESUME_THRESHOLD,
+      .window_frames =
+          SILENCE_MODE_AGGRESSIVE_WINDOW_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
+      .quiet_permille = SILENCE_MODE_AGGRESSIVE_QUIET_PERMILLE,
+      .rearm_quiet_frames =
+          SILENCE_MODE_AGGRESSIVE_REARM_MS / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS,
     },
   };
+  _Static_assert(SILENCE_MODE_LIGHT_RESUME_THRESHOLD <= SILENCE_MODE_LIGHT_QUIET_THRESHOLD &&
+                 SILENCE_MODE_BALANCED_RESUME_THRESHOLD <= SILENCE_MODE_BALANCED_QUIET_THRESHOLD &&
+                 SILENCE_MODE_AGGRESSIVE_RESUME_THRESHOLD <=
+                     SILENCE_MODE_AGGRESSIVE_QUIET_THRESHOLD,
+                 "resume_threshold above quiet_threshold clips speech for no saving");
   if (mode <= AudioCompanionSilenceModeOff || mode >= AudioCompanionSilenceModeCount) {
     return NULL;
   }
   return &s_configs[mode];
 }
 
-static void prv_reset_silence_suppression_locked(void) {
+//! Empty the trailing window. Called whenever suppression ends or capture restarts, which is what
+//! makes re-entry cost a full fresh window of real audio.
+//!
+//! That is the flap guard. Exit is instant by design (no clipped speech), so without it a single
+//! loud frame inside a quiet room would leave the window still 99% quiet, re-enter on the very
+//! next frame, and produce an endless stream of one-frame gap records — each of which also
+//! renegotiates the BLE connection interval (prv_update_ble_responsiveness_locked). Requiring the
+//! window to refill bounds a suppression run, and therefore that renegotiation, to at most one
+//! per arming window.
+static void prv_silence_window_reset_locked(void) {
+  s_silence_quiet_run = 0;
+  if (s_silence_window_filled == 0) {
+    return;  // already empty; this runs on the 50 Hz mic path with Skip Silence off
+  }
+  memset(s_silence_window_bits, 0, sizeof(s_silence_window_bits));
+  s_silence_window_head = 0;
+  s_silence_window_filled = 0;
+  s_silence_window_quiet = 0;
+}
+
+//! The window plus the high-pass memory. Only for the points where the audio itself stops (capture
+//! stopping, a stream beginning): clearing the filter mid-stream would inject a transient of its
+//! own into the very measurement it feeds.
+static void prv_silence_detector_reset_locked(void) {
+  prv_silence_window_reset_locked();
+  s_silence_hp_x1 = 0;
+  s_silence_hp_y_q8 = 0;
+}
+
+//! Record one frame's verdict. O(1): evict one bit, store one bit, adjust one counter.
+static void prv_silence_window_push_locked(bool quiet, uint32_t window_frames) {
+  if (s_silence_window_filled > window_frames || s_silence_window_head >= window_frames) {
+    // The window shrank under us -- a mode change that did not reset. The bits are still there but
+    // they no longer mean what the new configuration would read them to mean, so start over rather
+    // than arm on a count collected under a different rule.
+    prv_silence_window_reset_locked();
+  }
+  const uint16_t head = s_silence_window_head;
+  uint8_t *const byte = &s_silence_window_bits[head >> 3];
+  const uint8_t mask = (uint8_t)(1u << (head & 7));
+  if (s_silence_window_filled >= window_frames) {
+    if (*byte & mask) {
+      s_silence_window_quiet--;
+    }
+  } else {
+    s_silence_window_filled++;
+  }
+  if (quiet) {
+    *byte = (uint8_t)(*byte | mask);
+    s_silence_window_quiet++;
+  } else {
+    *byte = (uint8_t)(*byte & (uint8_t)~mask);
+  }
+  s_silence_window_head = (uint16_t)(((head + 1u) >= window_frames) ? 0u : (head + 1u));
+}
+
+//! Integer-only fraction test: quiet/window >= permille/1000, with no division and no overflow
+//! (window <= 250 frames, permille <= 1000, so the products stay well inside uint32_t).
+static bool prv_silence_window_armed_locked(const SilenceModeConfig *config) {
+  if (s_silence_window_filled < config->window_frames) {
+    return false;
+  }
+  return ((uint32_t)s_silence_window_quiet * 1000u) >=
+         (config->window_frames * config->quiet_permille);
+}
+
+//! Quiet fraction of the window so far, per mille, for the diagnostics readout.
+static uint16_t prv_silence_window_permille_locked(void) {
+  if (s_silence_window_filled == 0) {
+    return 0;
+  }
+  return (uint16_t)(((uint32_t)s_silence_window_quiet * 1000u) / s_silence_window_filled);
+}
+
+//! "Is this room quiet", for the stationary power-save mute only.
+//!
+//! Narrower than the suppression question, deliberately. Suppression must not stop transmitting
+//! until it is very sure, so its window runs 5-20 s; the mute only has to decide whether to sleep
+//! the microphone for one listen interval, and being wrong costs at most that interval of a
+//! conversation which the next listen window then picks up. So it judges the same threshold at the
+//! same 98% bar over however much the listen window actually heard -- which keeps the microphone
+//! on for 6 s of every 2 minutes instead of 22.
+static bool prv_room_is_quiet_locked(void) {
+  const SilenceModeConfig *config = prv_silence_mode_config(s_silence_mode);
+  if (!config) {
+    return false;  // Skip Silence off: no evidence, so never sleep the microphone on a guess
+  }
+  if (s_silence_suppressing) {
+    return true;
+  }
+  if (s_silence_window_filled < POWER_SAVE_LISTEN_MIN_FRAMES) {
+    return false;
+  }
+  return ((uint32_t)s_silence_window_quiet * 1000u) >=
+         ((uint32_t)s_silence_window_filled * config->quiet_permille);
+}
+
+//! End the current suppression run WITHOUT touching the trailing window.
+//!
+//! The window deliberately survives a resume. A cough or a door then costs only the frames it
+//! occupies plus `rearm_quiet_frames`, rather than a whole fresh 15-20 s window -- which on this
+//! corpus is the difference between 1.6 and 4.2 hours of long suppression episodes. The full
+//! detector reset belongs where capture actually stops (prv_stop_capture_locked) and where a
+//! stream begins, because that is where the audio it describes goes away.
+static void prv_end_silence_run_locked(void) {
   const bool was_suppressing = s_silence_suppressing;
-  s_silence_candidate_frames = 0;
-  s_silence_resume_candidate_frames = 0;
   s_silence_suppressing = false;
   s_silence_gap_frames = 0;
   s_silence_gap_first_sequence = 0;
@@ -423,9 +646,14 @@ static void prv_reset_silence_suppression_locked(void) {
   }
 }
 
+static void prv_reset_silence_suppression_locked(void) {
+  prv_end_silence_run_locked();
+  prv_silence_detector_reset_locked();
+}
+
 static void prv_record_silence_gap_locked(void) {
   if (!s_silence_suppressing || s_silence_gap_frames == 0) {
-    prv_reset_silence_suppression_locked();
+    prv_end_silence_run_locked();
     return;
   }
   audio_companion_spool_record_gap(s_silence_gap_first_sequence, s_silence_gap_frames,
@@ -434,16 +662,47 @@ static void prv_record_silence_gap_locked(void) {
   // Suppressed silence intentionally has no receiver traffic. Re-arm liveness when traffic
   // resumes so the receiver gets a fresh window to persist and checkpoint the next notification.
   s_last_receiver_activity_ms = prv_uptime_ms();
-  prv_reset_silence_suppression_locked();
+  prv_end_silence_run_locked();
 }
 
-static uint32_t prv_mean_abs_pcm(const int16_t *samples, size_t sample_count) {
-  uint32_t sum = 0;
+//! Mean absolute level of one frame, after a one-pole high-pass.
+//!
+//! The high-pass is not cosmetic. Without it the detector measures whatever the wrist is doing --
+//! arm movement, sleeve contact, body-conducted thump, all of it below 40 Hz at PDM digital gain
+//! 90 -- and none of that survives Speex, so it is invisible in every recording we have and no
+//! threshold derived from one is meaningful. Simulation over 116.5 h could not reconcile "fires
+//! zero times at threshold 40" with the decoded audio by a factor of 9 (19 dB), and this is the
+//! leading explanation. y[n] = x[n] - x[n-1] + (A * y[n-1]) >> 15, ~20 Hz corner at 16 kHz.
+//!
+//! The raw mean is accumulated in the same pass (two extra instructions per sample, no second
+//! load) purely so the watch can show both numbers and settle that question on a real wrist.
+static uint32_t prv_silence_level(const int16_t *samples, size_t sample_count,
+                                  uint32_t *raw_mean_out) {
+  int32_t x1 = s_silence_hp_x1;
+  int32_t y_q8 = s_silence_hp_y_q8;
+  uint32_t sum_q4 = 0;
+  uint32_t raw_sum = 0;
   for (size_t i = 0; i < sample_count; i++) {
-    const int32_t sample = samples[i];
-    sum += (sample < 0) ? (uint32_t)-sample : (uint32_t)sample;
+    const int32_t x = samples[i];
+    // Whole-integer state would LATCH here, which is the same class of bug as the one this whole
+    // change exists to fix. With y held as a plain int and a pole at 0.99, `(A * y) >> 15` is an
+    // arithmetic shift: it floors, so for y = -99 it returns -99 and the filter never decays. A
+    // single negative-going DC step -- an arm dropping to a desk -- would pin the reported level
+    // at ~99, five times the quiet threshold, for the rest of the session. Q8 state plus a
+    // truncating divide decays to zero from either sign.
+    y_q8 = (int32_t)(((x - x1) << 8) +
+                     (int32_t)(((int64_t)SILENCE_HP_COEFF_Q15 * y_q8) / 32768));
+    x1 = x;
+    const int32_t magnitude = (y_q8 < 0) ? -y_q8 : y_q8;
+    sum_q4 += (uint32_t)magnitude >> 4;  // Q4: 320 x (2^24 >> 4) still leaves 12x uint32 headroom
+    raw_sum += (x < 0) ? (uint32_t)-x : (uint32_t)x;
   }
-  return sample_count ? (sum / sample_count) : 0;
+  s_silence_hp_x1 = x1;
+  s_silence_hp_y_q8 = y_q8;
+  if (raw_mean_out) {
+    *raw_mean_out = sample_count ? (raw_sum / sample_count) : 0;
+  }
+  return sample_count ? ((sum_q4 / sample_count) >> 4) : 0;
 }
 
 static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sample_count,
@@ -457,39 +716,50 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
     return false;
   }
 
-  const uint32_t mean_abs = prv_mean_abs_pcm(samples, sample_count);
+  const uint32_t level = prv_silence_level(samples, sample_count, &s_silence_last_raw_level);
+  s_silence_last_level = level;
+  const bool quiet = (level < config->quiet_threshold);
+  s_silence_quiet_run = quiet ? (s_silence_quiet_run + 1) : 0;
+
   if (s_silence_suppressing) {
-    const bool strong_resume = mean_abs >= config->exit_threshold;
-    const bool weak_resume = mean_abs >= config->enter_threshold &&
-        ++s_silence_resume_candidate_frames >= config->weak_exit_frames;
-    if (strong_resume || weak_resume) {
+    if (level >= config->resume_threshold) {
+      // One frame is always enough, and THIS frame is encoded and sent -- so the only speech at
+      // risk is whatever preceded the first frame above resume_threshold. Requiring confirmation
+      // frames instead measured at 300-500 ms of p90 onset clipping.
       prv_record_silence_gap_locked();
+      // The window keeps running across the resume; feed it this frame and carry on.
+      prv_silence_window_push_locked(quiet, config->window_frames);
       if (out_schedule_drain) {
         *out_schedule_drain = true;
       }
       return false;
     }
-    if (mean_abs < config->enter_threshold) {
-      s_silence_resume_candidate_frames = 0;
-    }
-  } else if (mean_abs < config->enter_threshold) {
-    s_silence_candidate_frames++;
-    if (s_silence_candidate_frames <= config->enter_frames) {
+  } else {
+    // The window only ever describes audio we actually sent, so it is not fed while suppressing.
+    prv_silence_window_push_locked(quiet, config->window_frames);
+    // Never arm on a frame we would then suppress: that would clip 20 ms for nothing. Redundant
+    // while every mode's rearm_quiet_frames is at least 1 (a loud frame zeroes the run), and kept
+    // because a mode that ever set it to 0 would otherwise silently start clipping.
+    if (!quiet || s_silence_quiet_run < config->rearm_quiet_frames ||
+        !prv_silence_window_armed_locked(config)) {
       return false;
     }
     s_silence_suppressing = true;
+    s_silence_runs++;
     s_silence_gap_frames = 0;
     s_silence_gap_first_sequence = s_next_sequence;
     s_silence_gap_first_sample_index = s_next_sample_index;
-    prv_update_ble_responsiveness_locked();
+    PBL_LOG_DBG("Audio companion: suppressing silence (mode %u, level %" PRIu32 "/%" PRIu32
+                " hp/raw, quiet < %" PRIu32 ")",
+                (unsigned)s_silence_mode, level, s_silence_last_raw_level,
+                config->quiet_threshold);
     if (out_schedule_drain) {
-      // Entering suppression relaxes the connection interval, but the mic path cannot apply that
-      // itself (it holds the mic driver mutex). Posting a drain hands it to the system task.
+      // The mic path cannot touch the transport itself (it holds the mic driver mutex). Posting a
+      // drain hands the bookkeeping -- standing the drain timer down, arming the silence probe --
+      // to the system task. The connection interval deliberately does NOT change here; see
+      // SILENCE_BLE_RELAX_FRAMES below.
       *out_schedule_drain = true;
     }
-  } else {
-    s_silence_candidate_frames = 0;
-    return false;
   }
 
   s_next_sequence++;
@@ -497,6 +767,13 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
   s_captured_frames++;
   s_suppressed_silence_frames++;
   s_silence_gap_frames++;
+  if (s_silence_gap_frames == SILENCE_BLE_RELAX_FRAMES) {
+    // Long enough to be worth a connection-parameter renegotiation. Short runs never pay for one.
+    prv_update_ble_responsiveness_locked();
+    if (out_schedule_drain) {
+      *out_schedule_drain = true;
+    }
+  }
   return true;
 }
 
@@ -505,10 +782,17 @@ static bool prv_maybe_suppress_silence_locked(const int16_t *samples, size_t sam
 static void prv_note_receiver_activity_locked(void) {
   s_last_receiver_activity_ms = prv_uptime_ms();
   s_offline_since_ms = 0;
-  s_stationary_muted = false;
-  s_power_save_listen_timer = TIMER_INVALID_ID;
-  s_capture_retry_timer = TIMER_INVALID_ID;
-  s_capture_retry_delay_ms = 0;
+  // BUG: this used to assign TIMER_INVALID_ID to the power-save listen and capture-retry handles.
+  // That does not stop a timer, it forgets one. The timer stayed scheduled and its slot in
+  // task_timer.c's fixed pool was never returned, while the next arm allocated a fresh slot with
+  // new_timer_create(); pool exhaustion there is a PBL_ASSERTN, so a watch that entered
+  // RunLevel_Stationary often enough would eventually panic on a timer allocation. The receiver
+  // talks to us every 0.5-2 s while streaming, so this ran constantly. Stop the retry properly.
+  prv_stop_capture_retry_locked();
+  // The stationary mute is deliberately NOT cleared here. It is a statement about the room (still
+  // AND quiet), not about the phone, and clearing it without re-arming the listen cadence left
+  // the state machine stranded: unmuted, no timer, and nothing to re-ask until the runlevel
+  // happened to change again.
   s_receiver_presumed_gone = false;
   if (s_silence_probe_outstanding) {
     // The probe did its job: the receiver was asleep, not gone. Go back to the long cadence.
@@ -551,7 +835,8 @@ static void prv_update_ble_responsiveness_locked(void) {
   if (s_state == AudioCompanionServiceStateStreaming && s_catch_up_burst) {
     state = ResponseTimeMin;
     period = MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS;
-  } else if (s_state == AudioCompanionServiceStateStreaming && !s_silence_suppressing) {
+  } else if (s_state == AudioCompanionServiceStateStreaming &&
+             !(s_silence_suppressing && s_silence_gap_frames >= SILENCE_BLE_RELAX_FRAMES)) {
     state = ResponseTimeMiddle;
     period = MAX_PERIOD_RUN_FOREVER;
   }
@@ -744,6 +1029,9 @@ static void prv_start_capture_locked(void) {
 static void prv_stop_capture_locked(void) {
   s_capture_wanted = false;
   s_owns_mic = false;
+  // The trailing window and the high-pass memory describe audio that is about to stop arriving.
+  // Carrying them across a pause would let a verdict be formed from two different rooms.
+  prv_silence_detector_reset_locked();
 }
 
 //! Reconcile the mic driver with the intent recorded under s_lock.
@@ -864,13 +1152,52 @@ static void prv_finish_gap_pause_locked(void) {
 static void prv_park_capture_system_task_cb(void *data) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   if (s_owns_mic && !prv_session_ready_locked()) {
-    PBL_LOG_DBG("Audio companion: spool saturated while offline; parking capture");
+    PBL_LOG_DBG("Audio companion: offline too long; parking capture");
+    // Close any suppression run first, exactly as every other pause path does. Leaving one open
+    // would let the TransportReset pause below consume the sequence range the silence gap still
+    // claims, and the receiver would be told two different stories about the same frames.
+    prv_record_silence_gap_locked();
     prv_stop_capture_locked();
     s_capture_parked = true;
     prv_begin_gap_pause_locked(AudioCompanionGapReasonTransportReset);
   }
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
+}
+
+//! Offline bookkeeping for one captured frame; true when capture should park.
+//!
+//! Shared by the encoded and the suppressed paths. It used to run only on the encoded path, which
+//! was harmless while the detector could never fire and is not any more: suppression stops the
+//! encoder and the radio but NOT the PDM rails, buffers and clocks, which the Session 17 battery
+//! audit found to be the dominant cost. A quiet room plus a receiver that is never coming back
+//! would otherwise hold the microphone open indefinitely -- precisely the outcome this park was
+//! written to prevent.
+static bool prv_note_offline_frame_locked(void) {
+  if (prv_session_ready_locked()) {
+    return false;
+  }
+  // Offline: keep the most RECENT audio, and only give up after a long absence.
+  //
+  // This used to park the microphone on the very first overflowed frame, which threw away the
+  // whole point of a drop-oldest ring. The spool recycles its oldest chunk quite happily, so once
+  // it is full it holds a rolling window of the last ~4-67 seconds (the range is wide because the
+  // ring only grows past CONFIG_AUDIO_COMPANION_SPOOL_MIN_BYTES while kernel heap headroom
+  // allows). Parking at the first drop meant an outage a second longer than that window cost
+  // EVERYTHING after it, not just the overflow -- and nothing un-parks capture except a receiver
+  // reattaching, so a phone that was suspended for two minutes came back to a watch that had
+  // stopped listening. Cycling instead means the user keeps the most recent window, which is what
+  // a person expects from a background recorder, and the overflow is already reported honestly as
+  // a SpoolOverflow gap.
+  //
+  // The park still exists, because a microphone running for a receiver that is never coming back
+  // is a real battery cost. It is on a TIMER rather than on the first dropped frame:
+  // OFFLINE_CAPTURE_PARK_MS of continuous absence, which is far longer than any suspension,
+  // jettison or Bluetooth relaunch and short enough to matter overnight.
+  if (s_offline_since_ms == 0) {
+    s_offline_since_ms = prv_uptime_ms();
+  }
+  return (prv_uptime_ms() - s_offline_since_ms) >= OFFLINE_CAPTURE_PARK_MS;
 }
 
 static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context) {
@@ -887,9 +1214,13 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
 
   bool schedule_drain = false;
   if (prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain)) {
+    const bool park_suppressed = prv_note_offline_frame_locked();
     pbl_mutex_unlock(&s_lock);
     if (schedule_drain) {
       prv_post_drain_cb();
+    }
+    if (park_suppressed) {
+      system_task_add_callback(prv_park_capture_system_task_cb, NULL);
     }
     return;
   }
@@ -907,36 +1238,14 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   s_captured_frames++;
   audio_companion_spool_push(sequence, sample_index, encoded, (uint16_t)encoded_bytes);
 
-  bool schedule_park = false;
   if (prv_session_ready_locked()) {
     // Keep any drain already requested by silence suppression: exiting suppression must flush the
     // recorded gap (and the resuming frame) promptly. The drain timer is stopped while suppressing,
     // so overwriting this would strand the gap until enough frames re-accumulate.
     schedule_drain = schedule_drain ||
         (audio_companion_spool_frames_pending_send() >= DRAIN_PUSH_THRESHOLD_FRAMES);
-  } else {
-    // Offline: keep the most RECENT audio, and only give up after a long absence.
-    //
-    // This used to park the microphone on the very first overflowed frame, which threw away the
-    // whole point of a drop-oldest ring. The spool recycles its oldest chunk quite happily, so
-    // once it is full it holds a rolling window of the last ~4-67 seconds (the range is wide
-    // because the ring only grows past CONFIG_AUDIO_COMPANION_SPOOL_MIN_BYTES while kernel heap
-    // headroom allows). Parking at the first drop meant an outage a second longer than that
-    // window cost EVERYTHING after it, not just the overflow — and nothing un-parks capture
-    // except a receiver reattaching, so a phone that was suspended for two minutes came back to a
-    // watch that had stopped listening. Cycling instead means the user keeps the most recent
-    // window, which is what a person expects from a background recorder, and the overflow is
-    // already reported honestly as a SpoolOverflow gap.
-    //
-    // The park still exists, because a microphone running for a receiver that is never coming
-    // back is a real battery cost. It is now on a TIMER rather than on the first dropped frame:
-    // OFFLINE_CAPTURE_PARK_MS of continuous absence, which is far longer than any suspension,
-    // jettison or Bluetooth relaunch and short enough to matter overnight.
-    if (s_offline_since_ms == 0) {
-      s_offline_since_ms = prv_uptime_ms();
-    }
-    schedule_park = (prv_uptime_ms() - s_offline_since_ms) >= OFFLINE_CAPTURE_PARK_MS;
   }
+  const bool schedule_park = prv_note_offline_frame_locked();
   if (schedule_drain && prv_session_ready_locked()) {
     prv_start_drain_timer_locked();
   }
@@ -1310,9 +1619,9 @@ static void prv_silence_probe_timer_cb(void *data) {
 //!
 //! Alternates two states on one timer. While MUTED it waits POWER_SAVE_LISTEN_INTERVAL_MS and then
 //! unmutes, which lets prv_reevaluate_locked() restart the microphone. While LISTENING it waits
-//! POWER_SAVE_LISTEN_WINDOW_MS and then asks the silence detector what it heard: quiet means this
-//! really is a nightstand, so mute again; speech means the wrist simply was not moving, so stay
-//! up and check again after the next window.
+//! POWER_SAVE_LISTEN_WINDOW_MS and then asks prv_room_is_quiet_locked() what it heard: quiet means
+//! this really is a nightstand, so mute again; speech means the wrist simply was not moving, so
+//! stay up and check again after the next window.
 //!
 //! Without this, a stationary mute could only end on a shake or a button press — so a conversation
 //! that started while someone sat still was lost in its entirety, not merely delayed.
@@ -1325,6 +1634,9 @@ static void prv_power_save_listen_system_task_cb(void *data) {
     return;
   }
   if (s_stationary_muted) {
+    // Empty the detector before listening: the verdict must come from THIS window's audio, not
+    // from whatever was left in the ring when the microphone was switched off.
+    prv_reset_silence_suppression_locked();
     PBL_LOG_DBG("Audio companion: power-save listen window opening");
     s_stationary_muted = false;
     prv_arm_power_save_listen_locked(POWER_SAVE_LISTEN_WINDOW_MS);
@@ -2291,11 +2603,19 @@ void audio_companion_set_silence_mode(AudioCompanionSilenceMode mode) {
       mode != AudioCompanionSilenceModeOff);
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   if (s_silence_mode != mode) {
-    if (mode == AudioCompanionSilenceModeOff) {
-      prv_record_silence_gap_locked();
-      if (prv_session_ready_locked()) {
-        prv_start_drain_timer_locked();
-      }
+    // BUG: this used to end the run only when switching TO Off, so Light -> Aggressive left a
+    // suppression run and a half-full trailing window in place while the rule under them changed
+    // — the window's frame count and quiet population now mean something different, and the head
+    // index can be past the end of the new window. Any mode change ends the run and re-arms from
+    // scratch, which is also the honest reading: the user changed the rule, so the old verdict
+    // stops applying.
+    prv_record_silence_gap_locked();
+    // ...and the trailing window with it. Its frame count and quiet population were collected
+    // against the old mode's threshold and length; read under the new one they mean something
+    // else, and a shorter window would leave the ring head past its own end.
+    prv_silence_window_reset_locked();
+    if (prv_session_ready_locked()) {
+      prv_start_drain_timer_locked();
     }
     s_silence_mode = mode;
   }
@@ -2316,6 +2636,7 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   AudioCompanionSpoolStats stats;
   audio_companion_spool_get_stats(&stats);
+  const SilenceModeConfig *silence_config = prv_silence_mode_config(s_silence_mode);
   *diag_out = (AudioCompanionDiagnostics){
     .state = s_state,
     .captured_frames = s_captured_frames,
@@ -2325,6 +2646,13 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
     .dropped_overflow_frames = stats.dropped_overflow_frames,
     .mic_conflicts = s_mic_conflicts,
     .suppressed_silence_frames = s_suppressed_silence_frames,
+    .silence_runs = s_silence_runs,
+    .silence_level = s_silence_last_level,
+    .silence_enter_threshold = silence_config ? silence_config->quiet_threshold : 0,
+    .silence_resume_threshold = silence_config ? silence_config->resume_threshold : 0,
+    .silence_raw_level = s_silence_last_raw_level,
+    .silence_quiet_permille = prv_silence_window_permille_locked(),
+    .silence_suppressing = s_silence_suppressing,
     .spool_bytes = stats.current_bytes,
     .spool_high_water_bytes = stats.high_water_bytes,
     .loss_alerts_posted = s_loss_alerts_posted,
@@ -2411,6 +2739,12 @@ void audio_companion_test_reset(void) {
   s_receiver_presumed_gone = false;
   s_silence_probe_timer = TIMER_INVALID_ID;
   s_silence_probe_outstanding = false;
+  // These four leaked between test cases: a mute or a pending retry left over from the previous
+  // case changed what the next one measured.
+  s_power_save_listen_timer = TIMER_INVALID_ID;
+  s_capture_retry_timer = TIMER_INVALID_ID;
+  s_capture_retry_delay_ms = 0;
+  s_stationary_muted = false;
   s_mic_conflict_active = false;
   s_receiver_pause_requested = false;
   s_low_battery = false;
@@ -2424,6 +2758,8 @@ void audio_companion_test_reset(void) {
   s_send_backpressure_events = 0;
   s_mic_conflicts = 0;
   s_suppressed_silence_frames = 0;
+  s_silence_runs = 0;
+  s_silence_last_level = 0;
   s_loss_alerts_posted = 0;
   s_alert_baseline_dropped = 0;
   s_last_alert_uptime_s = 0;
