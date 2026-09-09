@@ -42,8 +42,19 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 #define CONFIG_AUDIO_COMPANION_LOW_BATTERY_PERCENT 20
 #endif
 
-#define DRAIN_PERIOD_MS (150)
-#define DRAIN_PUSH_THRESHOLD_FRAMES (8)
+//! How often the transport is serviced while streaming, and how much audio has to be waiting
+//! before the capture path asks for a slice ahead of the timer.
+//!
+//! These used to be 150 ms and 8 frames -- one notification's worth -- so the watch woke the
+//! NewTimers and KernelBG tasks, the HCI IPC and the LCPU, and the phone's Core Bluetooth
+//! delegate, about seven times a second, each time for a single 253-byte notification. The
+//! notification COUNT is set by the MTU and cannot change here; what can is how they are grouped.
+//! 400 ms / 20 frames sends the same audio as two or three back-to-back notifications in one
+//! slice: a third of the wake-ups at both ends, and a connection event that carries several LL
+//! packets instead of one. The audio arrives 0.4 s later than it did, against a spool that holds
+//! a minute and a half.
+#define DRAIN_PERIOD_MS (400)
+#define DRAIN_PUSH_THRESHOLD_FRAMES (20)
 //! Cap the BLE notifications sent in a single drain callback, and let the repeating drain timer
 //! pace the next slice rather than re-posting immediately.
 //!
@@ -60,10 +71,11 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! Draining a backlog as fast as NimBLE accepts mbufs keeps that ring permanently full.
 //! The HCI path now sleeps rather than spinning, so that no longer watchdog-resets the
 //! watch, but it still stalls every other HCI packet for the duration. Bound each burst to
-//! what the link can absorb inside one drain period: ~4 x (MTU-3) is roughly 6 KB/s, still
-//! several times the ~2 KB/s the 16 kHz/20 ms Speex stream produces, so a backlog catches up
-//! at a few times real time while leaving the transport idle between slices.
-#define DRAIN_MAX_BATCHES_PER_CALL (4)
+//! what the link can absorb inside one drain period: 6 x (MTU-3) per 400 ms is roughly
+//! 3.8 KB/s, still a few times the ~1.4 KB/s the 16 kHz/20 ms Speex stream produces, so a
+//! backlog catches up at a few times real time while leaving the transport idle between slices.
+//! (It was 4 per 150 ms; the slice grew with the period so the base rate is about the same.)
+#define DRAIN_MAX_BATCHES_PER_CALL (6)
 //! Catch-up ceiling. A backlog that only ever drains at a few times real time never recovers on a
 //! busy day, but the hazard above is *sustained* ring saturation, not burst size as such -- and
 //! bt_driver_audio_companion_notify_data() returning false means NimBLE would not take another
@@ -72,12 +84,13 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! slice was accepted while a real backlog remained, and collapse straight back to the base burst
 //! on the first refusal. The link never gets more than one over-sized slice before we retreat.
 //!
-//! 12 x (MTU-3) per 150 ms is ~19 KB/s, ~10x the ~2 KB/s the 16 kHz/20 ms Speex stream produces,
-//! and it is reached only after four consecutive clean slices (600 ms). The spool holds at most
-//! CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES (~98 s of audio), so the deepest possible backlog
-//! clears in ~8 s of bursting instead of ~23 s, after which the burst falls back to the base and
-//! the radio goes idle between slices again. Steady-state streaming never leaves the base burst,
-//! so ordinary airtime and battery are unchanged.
+//! 12 x (MTU-3) per 400 ms is ~7.6 KB/s, ~5x the ~1.4 KB/s the 16 kHz/20 ms Speex stream
+//! produces, and it is reached only after three consecutive clean slices (1.2 s). The spool holds
+//! at most CONFIG_AUDIO_COMPANION_SPOOL_MAX_BYTES (~98 s of audio), so the deepest possible
+//! backlog clears in under half a minute of bursting, after which the burst falls back to the
+//! base and the radio goes idle between slices again. Twelve is also where NimBLE's 12-block msys
+//! pool runs out, so a wider slice would only be refused. Steady-state streaming never leaves the
+//! base burst, so ordinary airtime and battery are unchanged.
 #define DRAIN_MAX_BATCHES_CATCH_UP (12)
 #define DRAIN_BURST_STEP (2)
 //! Only widen once the backlog is deeper than a base slice can clear, so a single late frame
@@ -301,6 +314,11 @@ static TimerID s_enable_timer = TIMER_INVALID_ID;
 static bool s_owns_mic;                //!< service intends to hold the mic (guarded by s_lock)
 static bool s_capture_wanted;          //!< intent handed to prv_apply_capture() (guarded by s_lock)
 static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()
+//! Microphone duty accounting, for the diagnostics screen: total milliseconds the driver has been
+//! running, plus the uptime at which the current run began (0 while stopped). Owned by
+//! prv_apply_capture() like s_mic_started; read under s_lock by the diagnostics getter.
+static uint32_t s_mic_on_ms_total;
+static uint32_t s_mic_on_since_ms;
 static PBL_MUTEX_DEFINE(s_capture_lock);    //!< serializes appliers; never held while taking s_lock
 //! Desired BLE responsiveness, applied outside s_lock by prv_apply_ble_responsiveness().
 static ResponseTimeState s_response_state_desired = ResponseTimeMax;
@@ -1062,6 +1080,12 @@ static void prv_apply_capture(void) {
         voice_speex_deinit();
       }
       s_mic_started = false;
+      pbl_mutex_lock(&s_lock, PBL_FOREVER);
+      if (s_mic_on_since_ms != 0) {
+        s_mic_on_ms_total += prv_uptime_ms() - s_mic_on_since_ms;
+        s_mic_on_since_ms = 0;
+      }
+      pbl_mutex_unlock(&s_lock);
       PBL_LOG_INFO("Audio companion: capture stopped");
       continue;  // intent may have flipped again while the driver call ran
     }
@@ -1082,6 +1106,11 @@ static void prv_apply_capture(void) {
     s_mic_started = started;
 
     if (started) {
+      pbl_mutex_lock(&s_lock, PBL_FOREVER);
+      // Uptime is whole seconds here, so a run that starts inside the same second as it ends
+      // would read as zero; nudge the origin so a stopped run always counts at least a moment.
+      s_mic_on_since_ms = prv_uptime_ms() ? prv_uptime_ms() : 1;
+      pbl_mutex_unlock(&s_lock);
       PBL_LOG_INFO("Audio companion: capture started");
       continue;
     }
@@ -2657,6 +2686,9 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
     .spool_high_water_bytes = stats.high_water_bytes,
     .loss_alerts_posted = s_loss_alerts_posted,
     .kernel_heap_free_bytes = audio_companion_spool_heap_free_bytes(),
+    .mic_on_seconds = (s_mic_on_ms_total +
+                       (s_mic_on_since_ms ? (prv_uptime_ms() - s_mic_on_since_ms) : 0)) / 1000,
+    .uptime_seconds = time_get_uptime_seconds(),
   };
   pbl_mutex_unlock(&s_lock);
 }
@@ -2716,6 +2748,8 @@ void audio_companion_test_reset(void) {
   s_owns_mic = false;
   s_capture_wanted = false;
   s_mic_started = false;
+  s_mic_on_ms_total = 0;
+  s_mic_on_since_ms = 0;
   s_response_state_desired = ResponseTimeMax;
   s_response_period_desired = 0;
   s_response_dirty = false;

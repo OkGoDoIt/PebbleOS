@@ -30,7 +30,9 @@ TimerID audio_companion_test_get_power_save_listen_timer(void);
 TimerID audio_companion_test_get_capture_retry_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
 
-#define MAX_CAPTURED_NOTIFICATIONS (32)
+//! Sixty-four, not thirty-two: a drain slice now sends up to twelve data batches under backlog,
+//! and the silence tests build a backlog of hundreds of frames before they start asserting.
+#define MAX_CAPTURED_NOTIFICATIONS (64)
 #define MAX_CAPTURED_NOTIFICATION_BYTES (512)
 #define TEST_MAX_PERIOD_RUN_FOREVER ((uint16_t)(~0))
 
@@ -471,6 +473,9 @@ static void prv_feed_silence_frames(uint32_t count) {
 #define TEST_AGGRESSIVE_RESUME_THRESHOLD (22)
 #define TEST_AGGRESSIVE_WINDOW_FRAMES (250)  // 5,000 ms / 20 ms
 #define TEST_BLE_RELAX_FRAMES (1500)         // 30,000 ms / 20 ms
+//! Frames the capture path lets accumulate before it asks for a drain slice ahead of the timer
+//! (DRAIN_PUSH_THRESHOLD_FRAMES). Feeding exactly this many is how a test forces one drain.
+#define TEST_DRAIN_PUSH_FRAMES (20)
 //! Comfortably below every mode's resume threshold, so it is quiet at any level.
 #define TEST_QUIET_LEVEL (6)
 //! Frames the power-save mute verdict must hear before it is allowed to conclude anything.
@@ -511,7 +516,7 @@ static void prv_feed_frame_with_transient(uint32_t floor_level, uint32_t burst,
   s_mic_handler(s_voice_frame_buffer, AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES, s_mic_context);
 }
 
-//! Empty the spool the way the repeating 150 ms drain timer does on a real watch, until it stands
+//! Empty the spool the way the repeating 400 ms drain timer does on a real watch, until it stands
 //! itself down and hands the receiver-liveness job to the silence probe.
 //!
 //! Arming the detector now legitimately takes a thousand frames, which is more than one drain
@@ -684,7 +689,7 @@ void test_audio_companion__streams_only_after_authorized_session(void) {
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
 
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
 
   cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStart));
   const CapturedNotification *data = prv_find_data_msg(AudioCompanionDataMsgIdStreamData);
@@ -692,7 +697,9 @@ void test_audio_companion__streams_only_after_authorized_session(void) {
   AudioCompanionStreamDataHeader header;
   memcpy(&header, data->data, sizeof(header));
   cl_assert_equal_i(header.first_sequence, 0);
-  cl_assert_equal_i(header.frame_count, 8);
+  // The fake encoder's 4-byte frames all fit one notification, so the first batch carries
+  // everything the push threshold let accumulate.
+  cl_assert_equal_i(header.frame_count, TEST_DRAIN_PUSH_FRAMES);
 }
 
 void test_audio_companion__drain_callbacks_coalesce(void) {
@@ -721,11 +728,12 @@ void test_audio_companion__checkpoint_trims_durable_frames(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
 
   uint8_t buf[sizeof(AudioCompanionCheckpointMsg)];
   size_t length = 0;
-  prv_build_checkpoint(buf, &length, 0x22, prv_current_stream_id(), 7);
+  prv_build_checkpoint(buf, &length, 0x22, prv_current_stream_id(),
+                       TEST_DRAIN_PUSH_FRAMES - 1);
   prv_send_control(buf, length);
 
   const CapturedNotification *ack = prv_last_control_msg(AudioCompanionCtrlMsgIdAck);
@@ -766,7 +774,7 @@ void test_audio_companion__drain_burst_widens_under_backlog(void) {
 
   // Build a deep backlog with the transport refusing everything.
   // Deep enough that the ramp reaches its ceiling with a real backlog still behind it: the
-  // slices below consume 4+6+8+10+12+12 batches of 32 frames.
+  // slices below consume 6+8+10+12+12+12 batches of 32 frames.
   s_notify_data_succeeds = false;
   for (uint32_t i = 0; i < 6000; i++) {
     prv_feed_frame();
@@ -775,12 +783,12 @@ void test_audio_companion__drain_burst_widens_under_backlog(void) {
   s_notify_data_succeeds = true;
 
   // Slice 1 also carries STREAM_START; the data batches still obey the base burst.
-  cl_assert_equal_i(prv_run_drain_slice(), 4);
   cl_assert_equal_i(prv_run_drain_slice(), 6);
   cl_assert_equal_i(prv_run_drain_slice(), 8);
   cl_assert_equal_i(prv_run_drain_slice(), 10);
   cl_assert_equal_i(prv_run_drain_slice(), 12);
   cl_assert_equal_i(prv_run_drain_slice(), 12);  // ceiling holds
+  cl_assert_equal_i(prv_run_drain_slice(), 12);
 }
 
 //! The transport refusing a notification is the signal that the link is at its limit, so the
@@ -791,7 +799,7 @@ void test_audio_companion__drain_burst_collapses_on_backpressure(void) {
   prv_authenticate();
 
   // Deep enough that the ramp reaches its ceiling with a real backlog still behind it: the
-  // slices below consume 4+6+8+10+12+12 batches of 32 frames.
+  // slices below consume 6+8+10+12+12 batches of 32 frames.
   s_notify_data_succeeds = false;
   for (uint32_t i = 0; i < 6000; i++) {
     prv_feed_frame();
@@ -799,17 +807,17 @@ void test_audio_companion__drain_burst_collapses_on_backpressure(void) {
   fake_system_task_callbacks_invoke_pending();
   s_notify_data_succeeds = true;
 
-  cl_assert_equal_i(prv_run_drain_slice(), 4);
   cl_assert_equal_i(prv_run_drain_slice(), 6);
   cl_assert_equal_i(prv_run_drain_slice(), 8);
   cl_assert_equal_i(prv_run_drain_slice(), 10);
+  cl_assert_equal_i(prv_run_drain_slice(), 12);
   cl_assert_equal_i(prv_run_drain_slice(), 12);
 
   // The link stops accepting: the next slice sends nothing and the burst resets.
   s_notify_data_succeeds = false;
   cl_assert_equal_i(prv_run_drain_slice(), 0);
   s_notify_data_succeeds = true;
-  cl_assert_equal_i(prv_run_drain_slice(), 4);
+  cl_assert_equal_i(prv_run_drain_slice(), 6);
 }
 
 //! Backpressure is what tells the phone the radio could not keep up, as opposed to the phone
@@ -830,7 +838,7 @@ void test_audio_companion__info_reports_send_backpressure_events(void) {
   cl_assert_equal_i(info.send_backpressure_events, 0);
 
   s_notify_data_succeeds = false;
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   s_notify_data_succeeds = true;
 
   length = sizeof(buf);
@@ -880,7 +888,7 @@ void test_audio_companion__reconnect_ios_order_reannounces_with_resume_flag(void
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 
   // The fresh stream announces with no RESUME flag.
@@ -904,7 +912,7 @@ void test_audio_companion__reconnect_ios_order_reannounces_with_resume_flag(void
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 
   // Draining now re-announces the stream as a RESUME and resends the buffered frames.
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
   cl_assert(resumed);
   AudioCompanionStreamStartMsg resumed_msg;
@@ -922,7 +930,7 @@ void test_audio_companion__reannounce_resends_stream_birth_timestamps(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 
   const CapturedNotification *fresh = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
@@ -942,7 +950,7 @@ void test_audio_companion__reannounce_resends_stream_birth_timestamps(void) {
 
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
 
   const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
   cl_assert(resumed);
@@ -960,7 +968,7 @@ void test_audio_companion__reannounce_resends_stream_birth_timestamps(void) {
   s_data_count = 0;
   audio_companion_set_enabled(true);
   fake_system_task_callbacks_invoke_pending();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   const CapturedNotification *next = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
   cl_assert(next);
   AudioCompanionStreamStartMsg next_msg;
@@ -979,7 +987,7 @@ void test_audio_companion__nimble_order_unsubscribe_then_disconnect_requires_rea
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   const uint32_t stream_id = prv_current_stream_id();
 
@@ -998,7 +1006,7 @@ void test_audio_companion__nimble_order_unsubscribe_then_disconnect_requires_rea
 
   // Authorization arrives; only now does the stream re-announce — same id, RESUME flag.
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
   cl_assert(resumed);
   AudioCompanionStreamStartMsg resumed_msg;
@@ -1024,7 +1032,7 @@ void test_audio_companion__reauth_without_disconnect_reannounces_the_stream(void
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   const uint32_t stream_id = prv_current_stream_id();
 
@@ -1037,7 +1045,7 @@ void test_audio_companion__reauth_without_disconnect_reannounces_the_stream(void
   // No disconnect. No unsubscribe. Just a new session authorizing over the surviving link.
   s_data_count = 0;
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
 
   const CapturedNotification *resumed = prv_find_data_msg(AudioCompanionDataMsgIdStreamStart);
   cl_assert(resumed);
@@ -1072,7 +1080,7 @@ void test_audio_companion__pause_resume_records_explicit_gap(void) {
   cl_assert(s_mic_running);
   cl_assert(stub_new_timer_get_next() != TIMER_INVALID_ID);
 
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
   cl_assert(gap);
   AudioCompanionStreamGapMsg gap_msg;
@@ -1101,7 +1109,7 @@ void test_audio_companion__user_pause_ends_stream_and_restart_is_fresh(void) {
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStart));
   const uint32_t first_stream_id = prv_current_stream_id();
 
@@ -1118,7 +1126,7 @@ void test_audio_companion__user_pause_ends_stream_and_restart_is_fresh(void) {
   s_data_count = 0;
   prv_build_resume(buf, &length, 0x41);
   prv_send_control(buf, length);
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
   const uint32_t second_stream_id = prv_current_stream_id();
@@ -1164,7 +1172,7 @@ void test_audio_companion__liveness_watchdog_keeps_capturing_into_the_spool(void
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);  // first drain sends STREAM_START + data
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);  // first drain sends STREAM_START + data
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
   const uint32_t stream_id = prv_current_stream_id();
@@ -1172,14 +1180,14 @@ void test_audio_companion__liveness_watchdog_keeps_capturing_into_the_spool(void
   // No control traffic for longer than the liveness timeout (15 s). The receiver is presumed gone
   // even though the watch never saw a BLE disconnect (shared link, suspended app, crashed app).
   s_uptime_seconds += 16;
-  prv_feed_frames(8);  // a drain cycle runs the liveness check and trips it
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);  // a drain cycle runs the liveness check and trips it
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
   // The radio stands down (asserted below by the absence of data), but the microphone does not.
   cl_assert(s_mic_running);
 
   // Everything captured while the receiver was away is still ours to send.
   s_data_count = 0;
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert(s_mic_running);
   cl_assert_equal_i(s_data_count, 0);  // nothing is transmitted to a receiver we think is gone
 
@@ -1204,13 +1212,13 @@ void test_audio_companion__spool_saturation_parks_the_mic_once_the_receiver_is_g
   audio_companion_set_enabled(true);
   prv_subscribe(true, true);
   prv_authenticate();
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
 
   // The receiver goes quiet past the liveness window. The mic deliberately keeps running.
   s_uptime_seconds += 16;
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
   cl_assert(s_mic_running);
 
@@ -1221,7 +1229,7 @@ void test_audio_companion__spool_saturation_parks_the_mic_once_the_receiver_is_g
   // everything after it, and nothing un-parked capture until a receiver reattached.
   audio_companion_spool_test_set_heap_free_bytes(0);
   for (uint32_t i = 0; i < 400; i++) {
-    prv_feed_frames(8);
+    prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   }
   cl_assert(s_mic_running);
 
@@ -1235,7 +1243,7 @@ void test_audio_companion__spool_saturation_parks_the_mic_once_the_receiver_is_g
   // jettison or walk out of range, and short enough not to run the mic all night for a phone that
   // has been switched off.
   s_uptime_seconds += (10 * 60) + 1;
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert(!s_mic_running);
 }
 
@@ -1273,7 +1281,7 @@ void test_audio_companion__stationary_needs_quiet_as_well_as_stillness(void) {
   audio_companion_set_runlevel(RunLevel_Normal);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert(s_mic_running);
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   bool saw_power_save_gap = false;
   for (uint32_t i = 0; i < s_data_count; i++) {
     if (s_data_notifications[i].length < sizeof(AudioCompanionStreamGapMsg) ||
@@ -1321,7 +1329,7 @@ void test_audio_companion__a_stationary_mute_reopens_the_mic_to_listen(void) {
   cl_assert_equal_b(stub_new_timer_fire(listen), true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert(s_mic_running);
-  prv_feed_frames(8);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
   cl_assert_equal_b(stub_new_timer_fire(listen), true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert(s_mic_running);

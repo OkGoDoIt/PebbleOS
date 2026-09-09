@@ -50,6 +50,13 @@ typedef struct {
   //! Free kernel heap. Capture churns 4 KB spool chunks and a ~10 KB mic buffer continuously, so
   //! a downward drift here over a long session is the signal for a leak or heap fragmentation.
   uint32_t kernel_heap_free_bytes;
+  //! Seconds the microphone driver has actually been running since boot, against seconds of
+  //! uptime. The microphone is the feature's dominant power cost (PDM rails, DMA, and a core
+  //! that cannot sleep deeply while it runs), so this pair is the duty cycle every power policy
+  //! -- silence suppression, the stationary mute, the quiet-room mute -- exists to lower, and
+  //! the one number that turns a battery-percent-per-hour reading into a judgement of a build.
+  uint32_t mic_on_seconds;
+  uint32_t uptime_seconds;
 } AudioCompanionDiagnostics;
 
 void audio_companion_init(void);

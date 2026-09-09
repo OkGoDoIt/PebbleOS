@@ -132,6 +132,15 @@ static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
     }
   }
 
+  // Microphone duty since boot: the number that says whether a power policy is doing anything.
+  // Zero is a fact here too ("the mic has not run this boot"), not an unknown.
+  char mic_on[12] = "0s";
+  char uptime[12];
+  if (diag.mic_on_seconds > 0) {
+    prv_format_duration(diag.mic_on_seconds, mic_on, sizeof(mic_on));
+  }
+  prv_format_duration(diag.uptime_seconds, uptime, sizeof(uptime));
+
   char *text = app_zalloc_check(DETAIL_TEXT_MAX_LEN);
   // The silence block is deliberately near the top. It is the only place on the watch that says
   // what the voice detector is doing, and for three months the answer was "nothing" with no way
@@ -146,12 +155,13 @@ static void prv_show_diagnostics(SettingsAudioCompanionData *data) {
   // arming window is currently quiet, so a room that never quite arms shows a number stalling
   // short of the mode's bar rather than no evidence at all.
   sniprintf(text, DETAIL_TEXT_MAX_LEN,
-            "State: %s\nQuiet skipped: %s\nQuiet runs: %" PRIu32 "\nLevel: %" PRIu32 " (raw %"
-            PRIu32 ")\nQuiet<%" PRIu32 " resume>=%" PRIu32 "%s\nWindow: %u%%\nCaptured: %" PRIu32
-            "\nSent: %" PRIu32 "\nBuffered: %" PRIu32
+            "State: %s\nMic on: %s of %s\nQuiet skipped: %s\nQuiet runs: %" PRIu32 "\nLevel: %"
+            PRIu32 " (raw %" PRIu32 ")\nQuiet<%" PRIu32 " resume>=%" PRIu32 "%s\nWindow: %u%%"
+            "\nCaptured: %" PRIu32 "\nSent: %" PRIu32 "\nBuffered: %" PRIu32
             " B\nPeak: %" PRIu32 " B\nDropped: %" PRIu32 "\nGaps: %" PRIu32
             "\nBackpressure: %" PRIu32 "\nMic conflicts: %" PRIu32 "\nFree heap: %" PRIu32 " B",
-            i18n_get(prv_state_name(diag.state), data), skipped, diag.silence_runs,
+            i18n_get(prv_state_name(diag.state), data), mic_on, uptime, skipped,
+            diag.silence_runs,
             diag.silence_level, diag.silence_raw_level, diag.silence_enter_threshold,
             diag.silence_resume_threshold, diag.silence_suppressing ? " (skipping)" : "",
             (unsigned)(diag.silence_quiet_permille / 10), diag.captured_frames, diag.sent_frames,
