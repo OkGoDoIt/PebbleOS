@@ -461,23 +461,25 @@ static void prv_feed_silence_frames(uint32_t count) {
 //
 // Mirrored deliberately from audio_companion.c: if a constant there changes, these fail and the
 // change has to be justified.
-#define TEST_LIGHT_QUIET_THRESHOLD (20)
-#define TEST_LIGHT_RESUME_THRESHOLD (16)
+#define TEST_LIGHT_QUIET_THRESHOLD (8)
+#define TEST_LIGHT_RESUME_THRESHOLD (6)
 #define TEST_LIGHT_WINDOW_FRAMES (1000)      // 20,000 ms / 20 ms
 #define TEST_LIGHT_REARM_FRAMES (100)        // 2,000 ms / 20 ms
 #define TEST_LIGHT_MAX_LOUD_IN_WINDOW (20)   // 1000 - (1000 * 980 / 1000)
-#define TEST_BALANCED_QUIET_THRESHOLD (24)
-#define TEST_BALANCED_RESUME_THRESHOLD (20)
+#define TEST_BALANCED_QUIET_THRESHOLD (10)
+#define TEST_BALANCED_RESUME_THRESHOLD (8)
 #define TEST_BALANCED_WINDOW_FRAMES (750)    // 15,000 ms / 20 ms
-#define TEST_AGGRESSIVE_QUIET_THRESHOLD (24)
-#define TEST_AGGRESSIVE_RESUME_THRESHOLD (22)
+#define TEST_AGGRESSIVE_QUIET_THRESHOLD (12)
+#define TEST_AGGRESSIVE_RESUME_THRESHOLD (10)
 #define TEST_AGGRESSIVE_WINDOW_FRAMES (250)  // 5,000 ms / 20 ms
 #define TEST_BLE_RELAX_FRAMES (1500)         // 30,000 ms / 20 ms
 //! Frames the capture path lets accumulate before it asks for a drain slice ahead of the timer
 //! (DRAIN_PUSH_THRESHOLD_FRAMES). Feeding exactly this many is how a test forces one drain.
 #define TEST_DRAIN_PUSH_FRAMES (20)
 //! Comfortably below every mode's resume threshold, so it is quiet at any level.
-#define TEST_QUIET_LEVEL (6)
+// Below every mode's RESUME threshold (6/8/10), not merely below the quiet ones: a fixture at or
+// above resume would re-open the stream on the first frame after it suppressed.
+#define TEST_QUIET_LEVEL (2)
 //! Frames the power-save mute verdict must hear before it is allowed to conclude anything.
 #define TEST_POWER_SAVE_LISTEN_MIN_FRAMES (250)
 
@@ -1962,14 +1964,14 @@ void test_audio_companion__light_resumes_below_the_quiet_threshold_and_keeps_tha
 }
 
 //! Why a mean over 20 ms and not a peak. Every frame here contains a 0.125 ms knock at amplitude
-//! 800 -- forty times the quiet threshold -- and the frame average dilutes it to 10, so the room
-//! reads as quiet. Swap this rule for anything peak-based and suppression stops firing on a real
-//! wrist, which is precisely the failure being fixed.
+//! 800 -- a hundred times the quiet threshold -- and the frame average dilutes it to 7, so the
+//! room reads as quiet. Swap this rule for anything peak-based and suppression stops firing on a
+//! real wrist, which is precisely the failure being fixed.
 void test_audio_companion__a_short_transient_inside_a_quiet_frame_is_not_speech(void) {
   prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
 
   for (uint32_t i = 0; i < TEST_LIGHT_WINDOW_FRAMES; i++) {
-    prv_feed_frame_with_transient(5, 800, 2);
+    prv_feed_frame_with_transient(2, 800, 2);
   }
   fake_system_task_callbacks_invoke_pending();
 
@@ -2054,12 +2056,12 @@ void test_audio_companion__changing_mode_ends_the_run_and_re_arms_from_scratch(v
   cl_assert_equal_i(prv_diag().silence_enter_threshold, TEST_BALANCED_QUIET_THRESHOLD);
   cl_assert_equal_i(prv_diag().silence_resume_threshold, TEST_BALANCED_RESUME_THRESHOLD);
 
-  // 22 is speech to Light and quiet to Balanced, so this stretch also proves the new threshold is
+  // 9 is speech to Light and quiet to Balanced, so this stretch also proves the new threshold is
   // in force rather than the old one, and that the window restarted rather than carrying over.
-  cl_assert(TEST_LIGHT_QUIET_THRESHOLD <= 22 && 22 < TEST_BALANCED_QUIET_THRESHOLD);
-  prv_feed_frames_at_level(22, TEST_BALANCED_WINDOW_FRAMES - 1);
+  cl_assert(TEST_LIGHT_QUIET_THRESHOLD <= 9 && 9 < TEST_BALANCED_QUIET_THRESHOLD);
+  prv_feed_frames_at_level(9, TEST_BALANCED_WINDOW_FRAMES - 1);
   cl_assert_equal_b(prv_diag().silence_suppressing, false);
-  prv_feed_frames_at_level(22, 1);
+  prv_feed_frames_at_level(9, 1);
   cl_assert_equal_b(prv_diag().silence_suppressing, true);
 
   // The Light run was closed honestly rather than merged into the Balanced one: the gap the mode

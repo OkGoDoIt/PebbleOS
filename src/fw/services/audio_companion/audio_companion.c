@@ -215,25 +215,62 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! requiring 3 or 5 confirming frames moves p90 clip from 300 to 420 to 500 ms.
 //!
 //! Levels differ mainly in HOW LONG THE ROOM MUST STAY QUIET before the watch stops sending:
-//! 20 s / 15 s / 5 s. On the corpus that is 4.1% / 8.7% / 13.8% of airtime saved, with zero
-//! utterances destroyed at any level and a p99 onset clip of at most 40 ms.
+//! 20 s / 15 s / 5 s.
 //!
-//! Thresholds are in HIGH-PASSED units (prv_silence_level): a wrist-worn mic at PDM gain 90
-//! carries arm movement, sleeve contact and body-conducted noise almost entirely below 40 Hz,
-//! which Speex discards and which therefore cannot be calibrated from any recording. Measuring it
-//! would let the threshold be set by how the wearer moves their arm.
-#define SILENCE_MODE_LIGHT_QUIET_THRESHOLD (20)
-#define SILENCE_MODE_LIGHT_RESUME_THRESHOLD (16)
+//! Thresholds are in HIGH-PASSED units (prv_silence_level).
+//!
+//! BUG, reported from the wrist as "it's skipping quiet conversations as well": the previous
+//! values (20/16, 24/20, 24/22) sat ABOVE the level of ordinary speech on this hardware, so the
+//! feature suppressed people talking.
+//!
+//! The earlier note here said this could not be calibrated from a recording, because the wrist
+//! noise the threshold must not measure is sub-40 Hz and Speex discards it. That is true of the
+//! RAW level and false of this one: the 20 Hz high-pass above removes the same band the codec
+//! does, so what is left is in the band a decoded recording still carries. Replaying
+//! `prv_silence_level` over 25.7 h of this watch's own audio (145 segments, decoded, un-gained by
+//! the x3 in voice_speex.c, frames labelled speech/non-speech by the app's own word timings):
+//!
+//!            speech frames    p25  5   p50 10   p75 20   p95 52
+//!            non-speech       p25  3   p50  5   p75 13   p95 44
+//!
+//! The two distributions OVERLAP almost entirely -- speech's p25 is non-speech's p50 -- which is
+//! the real finding, and the reason this feature can never be aggressive on this microphone.
+//! Against that corpus the old constants cost, per level:
+//!
+//!            Light        13.2% airtime saved,  6.4% of all speech frames destroyed
+//!            Balanced     20.0% airtime saved, 10.9% of all speech frames destroyed
+//!            Aggressive   30.5% airtime saved, 18.6% of all speech frames destroyed
+//!
+//! -- 6.6% / 11.2% / 19.0% of utterances more than half suppressed. The values below were chosen
+//! off the same sweep for a cost that rounds to nothing:
+//!
+//!            Light         1.0% airtime saved, 0.04% of speech frames  (60 onsets in 153,530)
+//!            Balanced      2.5% airtime saved, 0.46% of speech frames
+//!            Aggressive    4.4% airtime saved, 1.10% of speech frames
+//!
+//! The saving is small because at this microphone's level there is no operating point where it is
+//! large and honest at the same time. That is a fact about a mic mounted on the BACK of the
+//! watch, not a tuning failure, and the product's promise -- loss is always explicit, quiet is
+//! never silently dropped speech -- is worth more than 12% of radio airtime.
+//!
+//! One caveat kept deliberately visible: the corpus is post-Speex, so it can only ESTIMATE what
+//! the detector sees on live mic samples. If the true level runs higher than the estimate, these
+//! thresholds simply fire less often -- the feature degrades toward doing nothing, which is the
+//! behaviour it had for its first 88 days. There is no value of that error that makes these
+//! constants eat more speech than the ones they replace. The Status screen reports the live level
+//! beside the threshold, which settles the scale in ten seconds on a real wrist.
+#define SILENCE_MODE_LIGHT_QUIET_THRESHOLD (8)
+#define SILENCE_MODE_LIGHT_RESUME_THRESHOLD (6)
 #define SILENCE_MODE_LIGHT_WINDOW_MS (20000)
 #define SILENCE_MODE_LIGHT_QUIET_PERMILLE (980)
 #define SILENCE_MODE_LIGHT_REARM_MS (2000)
-#define SILENCE_MODE_BALANCED_QUIET_THRESHOLD (24)
-#define SILENCE_MODE_BALANCED_RESUME_THRESHOLD (20)
+#define SILENCE_MODE_BALANCED_QUIET_THRESHOLD (10)
+#define SILENCE_MODE_BALANCED_RESUME_THRESHOLD (8)
 #define SILENCE_MODE_BALANCED_WINDOW_MS (15000)
 #define SILENCE_MODE_BALANCED_QUIET_PERMILLE (980)
 #define SILENCE_MODE_BALANCED_REARM_MS (1000)
-#define SILENCE_MODE_AGGRESSIVE_QUIET_THRESHOLD (24)
-#define SILENCE_MODE_AGGRESSIVE_RESUME_THRESHOLD (22)
+#define SILENCE_MODE_AGGRESSIVE_QUIET_THRESHOLD (12)
+#define SILENCE_MODE_AGGRESSIVE_RESUME_THRESHOLD (10)
 #define SILENCE_MODE_AGGRESSIVE_WINDOW_MS (5000)
 #define SILENCE_MODE_AGGRESSIVE_QUIET_PERMILLE (980)
 #define SILENCE_MODE_AGGRESSIVE_REARM_MS (1000)
