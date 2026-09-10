@@ -126,9 +126,18 @@ static bool prv_notify(uint16_t attr_handle, bool subscribed, const uint8_t *dat
     return false;
   }
 
+  // ble_gatts_notify_custom() CONSUMES `om` on every path: ble_att_clt_tx_notify() frees it on
+  // its own error paths and hands it to ble_att_tx() otherwise, and the caller nulls its copy
+  // before its `done:` free. Freeing it here again on failure was a double free into the msys
+  // mempool -- one corrupted free-list node per refused notification, which is exactly the
+  // backpressure this counter (send_backpressure_events) counts, so it clustered on reconnects
+  // and catch-up bursts. The corruption surfaced later as os_memblock_get() walking a cyclic
+  // free list inside a critical section (KernelBG "stuck" in the drain callback, the 2026-09-09
+  // watchdog loop that stood the feature down) and as a hard fault in os_memblock_get()
+  // (2026-09-10 14:28, pc symbolized against the slot-0 image). The mbuf is not ours after the
+  // call, whatever it returned.
   const int rc = ble_gatts_notify_custom(s_conn_handle, attr_handle, om);
   if (rc != 0) {
-    os_mbuf_free_chain(om);
     PBL_LOG_DBG("Audio companion notify failed attr=%u rc=0x%04x", attr_handle, (uint16_t)rc);
     return false;
   }
