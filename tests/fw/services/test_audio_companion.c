@@ -32,6 +32,14 @@ void audio_companion_test_reset(void);
 struct pbl_mutex *audio_companion_test_get_lock(void);
 TimerID audio_companion_test_get_silence_probe_timer(void);
 bool audio_companion_test_stream_reannounce_pending(void);
+
+// The Info snapshot now carries the running firmware version; the host build has no metadata.
+void version_get_major_minor_patch(unsigned int *major, unsigned int *minor,
+                                   char const **patch_ptr) {
+  if (major) *major = 4;
+  if (minor) *minor = 36;
+  if (patch_ptr) *patch_ptr = "0-test";
+}
 TimerID audio_companion_test_get_power_save_listen_timer(void);
 TimerID audio_companion_test_get_capture_retry_timer(void);
 void audio_companion_test_force_reboot_trace_capture(void);
@@ -841,9 +849,14 @@ void test_audio_companion__info_reports_send_backpressure_events(void) {
   cl_assert_equal_i(length, AUDIO_COMPANION_INFO_SIZE);
   AudioCompanionInfo info;
   memcpy(&info, buf, sizeof(info));
-  cl_assert_equal_i(info.info_version, 1);
+  cl_assert_equal_i(info.info_version, 2);
   cl_assert(info.flags & AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER);
   cl_assert_equal_i(info.send_backpressure_events, 0);
+  // Version 2: the running firmware and the last restart travel with every Info read, so a
+  // crash loop is visible from the phone rather than only as an unexplained "disabled".
+  cl_assert_equal_i(info.fw_version_packed, (4u << 24) | (36u << 16) | 0u);
+  cl_assert_equal_i(info.stood_down, 0);
+  cl_assert_equal_i(info.fault_boots, 0);
 
   s_notify_data_succeeds = false;
   prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);

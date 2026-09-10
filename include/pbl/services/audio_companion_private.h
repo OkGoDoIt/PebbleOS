@@ -22,7 +22,9 @@
 #define AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES (24)
 #define AUDIO_COMPANION_RECEIVER_ID_BYTES (32)
 #define AUDIO_COMPANION_CONSENT_TIMEOUT_SECONDS (60)
-#define AUDIO_COMPANION_INFO_SIZE (20)
+//! A version-1 snapshot is the first 20 bytes; the builder emits only those for info_version 1.
+#define AUDIO_COMPANION_INFO_V1_SIZE (20)
+#define AUDIO_COMPANION_INFO_SIZE (32)
 
 //! Phone -> watch control message ids (writes to the Control characteristic).
 typedef enum {
@@ -155,6 +157,20 @@ typedef struct PACKED {
   //! stays flat: the receiver stopped checkpointing, so the spool never freed). Valid only when
   //! AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER is set. Was reserved1.
   uint32_t send_backpressure_events;
+  //! info_version >= 2 (32 bytes): the watch's last restart, so the phone can see a crash loop
+  //! that the fault-loop guard would otherwise only ever report as "disabled". On 2026-09-09
+  //! the watch restarted three times in 100 s, stood down, and the phone's only record of it
+  //! was AUTH_RESULT status 3 for two hours. `last_reboot_reason` is a RebootReasonCode;
+  //! `fault_boots` is the guard's consecutive-fault counter (0 again after a stand-down);
+  //! `error_reboots` is the lifetime fault count, saturated; `stood_down` is 1 when the guard
+  //! turned background audio off at this boot; `fault_pc`/`fault_lr` come from the newest
+  //! reboot-trace entry (watchdog stuck-task PC/LR, or the fault address).
+  uint8_t last_reboot_reason;
+  uint8_t fault_boots;
+  uint8_t error_reboots;
+  uint8_t stood_down;
+  uint32_t fault_pc;
+  uint32_t fault_lr;
 } AudioCompanionInfo;
 
 typedef struct PACKED {

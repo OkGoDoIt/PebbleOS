@@ -5,7 +5,6 @@ config SERVICE_AUDIO_COMPANION
     depends on MIC && SERVICE_VOICE
     select AUDIO_COMPANION_SERVICE_ENABLED if BT_FW_NIMBLE
     select MBEDTLS
-    select MIC_SF32LB_CAPTURE_DEEP_WFI if MIC_SF32LB
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service. The
@@ -17,10 +16,15 @@ config SERVICE_AUDIO_COMPANION
       symbol is set). NimBLE selects it too; the select makes the
       dependency hold on the other backends as well.
 
-      MIC_SF32LB_CAPTURE_DEEP_WFI is selected because a background
-      recorder keeps the microphone open for hours at a time: without it
-      the core cannot sleep deeper than plain WFI at full clock for the
-      whole of that, which is the single largest power cost of the feature.
+      MIC_SF32LB_CAPTURE_DEEP_WFI is NOT selected any more. It is the
+      single largest power win available to a background recorder, but the
+      first firmware to carry it on a wrist (v4.36.0-282, 2026-09-09)
+      restarted the watch five times in its first three hours, three of
+      them within 100 s of each other, until the fault-loop guard turned
+      background audio off. Nothing else in that build touched the core's
+      sleep, and the reboot trace was not yet visible from the phone. It
+      stays off until it has been characterised on a PT2 with the trace
+      in hand; turn it on per build with CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI=y.
 
 if SERVICE_AUDIO_COMPANION
 

@@ -53,7 +53,9 @@ void test_audio_companion_protocol__cleanup(void) {}
 // ---- Struct size lock-in ----
 
 void test_audio_companion_protocol__struct_sizes(void) {
-  cl_assert_equal_i(sizeof(AudioCompanionInfo), 20);
+  cl_assert_equal_i(sizeof(AudioCompanionInfo), AUDIO_COMPANION_INFO_SIZE);
+  cl_assert_equal_i(AUDIO_COMPANION_INFO_V1_SIZE, 20);
+  cl_assert_equal_i(AUDIO_COMPANION_INFO_SIZE, 32);
   cl_assert_equal_i(sizeof(AudioCompanionAuthRequestHeader), 36);
   cl_assert_equal_i(sizeof(AudioCompanionAuthRevokeMsg), 34);
   cl_assert_equal_i(sizeof(AudioCompanionCheckpointMsg), 26);
@@ -217,6 +219,28 @@ void test_audio_companion_protocol__build_info(void) {
   };
   len = audio_companion_protocol_build_info(buf, sizeof(buf), &disabled);
   prv_assert_builder_matches("info_disabled", buf, len);
+
+  // Version 2 carries the last restart: a watchdog reset, then the guard stood down. The phone
+  // reads this instead of an unexplained "disabled".
+  const AudioCompanionInfo after_fault = {
+    .info_version = 2,
+    .protocol_min = 1,
+    .protocol_max = 1,
+    .service_state = AudioCompanionServiceStateDisabled,
+    .codec_bitmap = 0x01,
+    .flags = AUDIO_COMPANION_INFO_FLAG_RECEIVER_BOUND | AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER,
+    .fw_version_packed = (4u << 24) | (36u << 16) | 0u,
+    .send_backpressure_events = 7,
+    .last_reboot_reason = 16,  // RebootReasonCode_Watchdog
+    .fault_boots = 0,
+    .error_reboots = 5,
+    .stood_down = 1,
+    .fault_pc = 0x1000ABCDu,
+    .fault_lr = 0x1000EF01u,
+  };
+  len = audio_companion_protocol_build_info(buf, sizeof(buf), &after_fault);
+  cl_assert_equal_i(len, AUDIO_COMPANION_INFO_SIZE);
+  prv_assert_builder_matches("info_v2_after_fault", buf, len);
 }
 
 void test_audio_companion_protocol__build_control_out(void) {

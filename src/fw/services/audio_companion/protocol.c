@@ -96,11 +96,14 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
 
 size_t audio_companion_protocol_build_info(uint8_t *buf, size_t buf_size,
                                            const AudioCompanionInfo *info) {
-  if (!buf || !info || buf_size < sizeof(*info)) {
+  // A version-1 snapshot stays byte-exact at 20 bytes; version 2 appends the restart fields.
+  const size_t size = (info && info->info_version >= 2) ? sizeof(*info)
+                                                        : AUDIO_COMPANION_INFO_V1_SIZE;
+  if (!buf || !info || buf_size < size) {
     return 0;
   }
-  memcpy(buf, info, sizeof(*info));
-  return sizeof(*info);
+  memcpy(buf, info, size);
+  return size;
 }
 
 size_t audio_companion_protocol_build_auth_result(uint8_t *buf, size_t buf_size,

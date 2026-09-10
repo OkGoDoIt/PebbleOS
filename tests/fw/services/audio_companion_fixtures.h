@@ -169,6 +169,13 @@ static const uint8_t s_fx_info_truncated[] = {
   0x01, 0x01, 0x01, 0x03, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+// Info v2 after a watchdog restart that made the fault-loop guard stand down: 32 bytes, a v1 parser reads the first 20
+static const uint8_t s_fx_info_v2_after_fault[] = {
+  0x02, 0x01, 0x01, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x24, 0x04, 0x07, 0x00, 0x00, 0x00, 0x10, 0x00, 0x05, 0x01,
+  0xcd, 0xab, 0x00, 0x10, 0x01, 0xef, 0x00, 0x10,
+};
+
 // Receiver requests pause for low storage
 static const uint8_t s_fx_pause_request[] = {
   0x04, 0x2a, 0x01,
@@ -425,6 +432,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "info_disabled", FixtureChannelInfo, FixtureExpectParse, s_fx_info_disabled, 20 },
   { "info_streaming", FixtureChannelInfo, FixtureExpectParse, s_fx_info_streaming, 20 },
   { "info_truncated", FixtureChannelInfo, FixtureExpectReject, s_fx_info_truncated, 12 },
+  { "info_v2_after_fault", FixtureChannelInfo, FixtureExpectParse, s_fx_info_v2_after_fault, 32 },
   { "pause_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_pause_request, 3 },
   { "receiver_health", FixtureChannelControlIn, FixtureExpectParse, s_fx_receiver_health, 8 },
   { "resume_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_resume_request, 2 },

@@ -25,6 +25,7 @@
 #include "pbl/logging/logging.h"
 #include "system/passert.h"
 #include "system/reboot_reason.h"
+#include "system/version.h"
 #include "util/rand.h"
 #include "util/time/time.h"
 
@@ -470,6 +471,8 @@ static EventServiceInfo s_battery_event_info;
 // Reboot flight recorder (cached copy of the persisted ring; populated once at boot).
 static AudioCompanionRebootTrace s_reboot_trace;
 static bool s_reboot_trace_recorded;
+//! The fault-loop guard turned background audio off at this boot (reported in Info).
+static bool s_stood_down_at_boot;
 
 static void prv_reevaluate_locked(void);
 static void prv_drain_system_task_cb(void *data);
@@ -2420,6 +2423,19 @@ void audio_companion_handle_disconnect(void) {
   system_task_add_callback(prv_disconnect_system_task_cb, NULL);
 }
 
+//! major.minor.patch as the phone's fixtures spell it: (major << 24) | (minor << 16) | patch.
+static uint32_t prv_fw_version_packed(void) {
+  unsigned int major = 0;
+  unsigned int minor = 0;
+  const char *patch_str = NULL;
+  version_get_major_minor_patch(&major, &minor, &patch_str);
+  unsigned int patch = 0;
+  for (const char *c = patch_str; c && *c >= '0' && *c <= '9'; c++) {
+    patch = patch * 10 + (unsigned int)(*c - '0');
+  }
+  return ((major & 0xFF) << 24) | ((minor & 0xFF) << 16) | (patch & 0xFFFF);
+}
+
 void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   if (!buf || !length_in_out) {
     return;
@@ -2435,14 +2451,23 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   if (s_consent.pending) {
     flags |= AUDIO_COMPANION_INFO_FLAG_CONSENT_PENDING;
   }
+  const AudioCompanionRebootTraceEntry *newest =
+      audio_companion_reboot_trace_newest(&s_reboot_trace);
   const AudioCompanionInfo info = {
-    .info_version = 1,
+    .info_version = 2,
     .protocol_min = AUDIO_COMPANION_PROTOCOL_VERSION,
     .protocol_max = AUDIO_COMPANION_PROTOCOL_VERSION,
     .service_state = (uint8_t)s_state,
     .codec_bitmap = 0x01,  // Speex wideband
     .flags = flags,
+    .fw_version_packed = prv_fw_version_packed(),
     .send_backpressure_events = s_send_backpressure_events,
+    .last_reboot_reason = newest ? newest->reason_code : 0,
+    .fault_boots = s_reboot_trace.consecutive_fault_boots,
+    .error_reboots = (uint8_t)MIN(s_reboot_trace.total_error_reboots, UINT8_MAX),
+    .stood_down = s_stood_down_at_boot ? 1 : 0,
+    .fault_pc = newest ? newest->fault_pc : 0,
+    .fault_lr = newest ? newest->fault_lr : 0,
   };
   *length_in_out = audio_companion_protocol_build_info(buf, *length_in_out, &info);
   pbl_mutex_unlock(&s_lock);
@@ -2564,6 +2589,7 @@ static void prv_record_boot_reboot_trace(void) {
   pbl_mutex_unlock(&s_lock);
 
   if (stand_down) {
+    s_stood_down_at_boot = true;
     audio_companion_apply_enabled(false);
     prv_post_stand_down_alert();
   }
