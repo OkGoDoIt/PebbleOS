@@ -17,10 +17,6 @@
 #include "fake_mutex.h"
 #include "fake_new_timer.h"
 #include "fake_system_task.h"
-// The service holds data logging uploads on while the mic runs (prv_apply_dls_sends), so the
-// run-level table's decision does not silently withhold the analytics heartbeat for the hours
-// this fork spends recording in RunLevel_Stationary.
-void dls_set_send_enable_run_level(bool setting) {}
 
 #include "stubs_logging.h"
 #include "stubs_passert.h"
