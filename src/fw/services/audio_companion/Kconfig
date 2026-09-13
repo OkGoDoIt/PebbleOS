@@ -5,6 +5,7 @@ config SERVICE_AUDIO_COMPANION
     depends on MIC && SERVICE_VOICE
     select AUDIO_COMPANION_SERVICE_ENABLED if BT_FW_NIMBLE
     select MBEDTLS
+    select MIC_SF32LB_CAPTURE_DEEP_WFI if MIC_SF32LB
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service. The
@@ -16,15 +17,22 @@ config SERVICE_AUDIO_COMPANION
       symbol is set). NimBLE selects it too; the select makes the
       dependency hold on the other backends as well.
 
-      MIC_SF32LB_CAPTURE_DEEP_WFI is NOT selected any more. It is the
-      single largest power win available to a background recorder, but the
-      first firmware to carry it on a wrist (v4.36.0-282, 2026-09-09)
-      restarted the watch five times in its first three hours, three of
-      them within 100 s of each other, until the fault-loop guard turned
-      background audio off. Nothing else in that build touched the core's
-      sleep, and the reboot trace was not yet visible from the phone. It
-      stays off until it has been characterised on a PT2 with the trace
-      in hand; turn it on per build with CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI=y.
+      MIC_SF32LB_CAPTURE_DEEP_WFI is selected again: it is the single
+      largest power win available to a background recorder (the core
+      otherwise idles in plain WFI with the 240 MHz DLL and full-speed bus
+      clocks up for the whole of every capture). The first firmware to
+      carry it on a wrist (v4.36.0-282, 2026-09-09) restarted the watch
+      five times in three hours and it was switched off on suspicion. The
+      watch then hard-faulted again WITHOUT it (v4.36.0-287, 2026-09-10),
+      and the trace named the real cause: a double free in the notify path
+      on every refused notification, present since the service's first
+      commit and fixed in v4.36.0-288, which has since run three days with
+      no fault restart. Deep WFI is exonerated of the crashes; what it has
+      never had is a measured watch %/h on a wrist, which is what the first
+      build carrying this line exists to produce. If audio is garbled or
+      the log shows "Dropping N bytes of old audio", or the fault counter
+      moves, CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI=n restores plain-WFI
+      capture in one line.
 
 if SERVICE_AUDIO_COMPANION
 
