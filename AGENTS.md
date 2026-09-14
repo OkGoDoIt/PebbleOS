@@ -58,6 +58,22 @@ machinery), `docs/development/qemu.md` (emulator workflow).
 - Build firmware: `pbl build`
 - Run tests: `pbl test`
 
+## Submodules in agent workspaces
+
+The submodules are large. In disposable or isolated agent workspaces, do not
+initialize every submodule recursively. Initialize only the submodule needed
+for the current build or task, using a shallow clone:
+
+```
+git submodule update --init --depth 1 -- path/to/submodule
+```
+
+Add `--recursive` only when that specific submodule requires its own nested
+submodules. If a task needs submodule history, deepen only that submodule.
+Workspace providers should reuse local Git object stores and copy-on-write
+checkouts when available; agents must not symlink a writable submodule checkout
+from another workspace because that breaks workspace isolation.
+
 ## Adding a new SDK function
 
 Exposing a function to third-party apps requires three coordinated changes

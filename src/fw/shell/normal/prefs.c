@@ -1954,6 +1954,7 @@ ShellLanguage shell_prefs_get_language(void) {
 
 uint32_t shell_prefs_get_language_resource_id(void) {
   switch (shell_prefs_get_language()) {
+#ifdef CONFIG_SERVICE_I18N_BUILTIN_LANGUAGES
     case ShellLanguageCatalan:
       return RESOURCE_ID_STRINGS_CA_ES;
     case ShellLanguageGerman:
@@ -1970,6 +1971,7 @@ uint32_t shell_prefs_get_language_resource_id(void) {
       return RESOURCE_ID_STRINGS_PT_PT;
     case ShellLanguagePolish:
       return RESOURCE_ID_STRINGS_PL_PL;
+#endif
     case ShellLanguageEnglish:
     case ShellLanguageInstalledPack:
     case ShellLanguageCount:
