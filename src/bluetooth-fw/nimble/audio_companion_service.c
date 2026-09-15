@@ -114,10 +114,38 @@ static const struct ble_gatt_svc_def s_audio_companion_svcs[] = {
   { 0 },
 };
 
+//! msys blocks the audio companion must leave for everyone else on the shared link.
+//!
+//! Every outbound packet the host builds -- our notifications, PPoGATT data and ACKs to the
+//! official app, ATT responses to its reads, and the watch's own GATT-client traffic to the phone
+//! (service discovery after a reconnect, the PPoGATT subscribe, AMS media commands, ANCS requests)
+//! -- is an mbuf from the one msys pool. ble_hs_mbuf_from_flat() takes a block per notification,
+//! so a drain slice that runs the pool dry starves all of them at once, and two of those consumers
+//! do not survive it: an AMS write is dropped ("Couldn't write command"), and a service-discovery
+//! step that fails to start never completes, which wedges every later GATT-client procedure until
+//! the stack restarts (gatt_client_discovery.c). The 2026-09-14 bug report shows the result on the
+//! official app: stuck at "negotiating" for hours, waiting for a PPoGATT ResetRequest the watch
+//! could no longer subscribe to send, while this service streamed on untouched.
+//!
+//! So refuse to allocate below a floor and let the drain's AIMD pacing treat it as backpressure.
+//! Data gets the higher floor: a lost control notification is a lost keepalive answer, which the
+//! phone counts as the watch being gone and answers with a resync, so control may dip further.
+//! Sized against MSYS_1_BLOCK_COUNT (24 with this service, see third_party/nimble/CMakeLists.txt):
+//! a discovery step, a PPoGATT packet and its ACK, an AMS command and an ATT response each need
+//! one, with room for a burst of two.
+#define AUDIO_COMPANION_MSYS_FLOOR_DATA (8)
+#define AUDIO_COMPANION_MSYS_FLOOR_CONTROL (3)
+
 static bool prv_notify(uint16_t attr_handle, bool subscribed, const uint8_t *data,
-                       size_t length) {
+                       size_t length, int msys_floor) {
   if (s_conn_handle == AUDIO_COMPANION_INVALID_CONN_HANDLE || !subscribed || !data ||
       length == 0) {
+    return false;
+  }
+
+  // Unlocked read of the pool's free count: a stale value costs at most one block either way,
+  // and the floor has room for that.
+  if (os_msys_num_free() <= msys_floor) {
     return false;
   }
 
@@ -158,11 +186,13 @@ void bt_driver_audio_companion_service_init(void) {
 }
 
 bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length) {
-  return prv_notify(s_data_attr_handle, s_data_subscribed, data, length);
+  return prv_notify(s_data_attr_handle, s_data_subscribed, data, length,
+                    AUDIO_COMPANION_MSYS_FLOOR_DATA);
 }
 
 bool bt_driver_audio_companion_notify_control(const uint8_t *data, size_t length) {
-  return prv_notify(s_control_attr_handle, s_control_subscribed, data, length);
+  return prv_notify(s_control_attr_handle, s_control_subscribed, data, length,
+                    AUDIO_COMPANION_MSYS_FLOOR_CONTROL);
 }
 
 uint16_t bt_driver_audio_companion_get_effective_mtu(void) {

@@ -67,6 +67,17 @@ elseif(CONFIG_SOC_SF32LB52)
   )
   list(PREPEND includes port/include/sf32lb52)
 
+  if(CONFIG_AUDIO_COMPANION_SERVICE_ENABLED)
+    # The audio companion streams notifications out of the same msys pool every other outbound
+    # packet on the link is built from (PPoGATT, ATT responses, the watch's GATT-client traffic to
+    # the phone). The port's default of 12 blocks is sized for a stack that never has a steady
+    # producer; the companion's drain takes up to 6 per slice and 12 while catching up, and its
+    # notify path now refuses to allocate below a floor (audio_companion_service.c) so the rest of
+    # the stack always has blocks. Double the pool so that floor still leaves the drain its full
+    # catch-up burst: 12 x 292 B = 3.5 KB of RAM. Only os_msys.c reads this value.
+    list(APPEND defines MYNEWT_VAL_MSYS_1_BLOCK_COUNT=24)
+  endif()
+
   if(CONFIG_NIMBLE_HCI_SF32LB52_TRACE_BINARY)
     pbl_compile_definitions(NIMBLE_HCI_SF32LB52_TRACE NIMBLE_HCI_SF32LB52_TRACE_BINARY)
   elseif(CONFIG_NIMBLE_HCI_SF32LB52_TRACE_LOG)
