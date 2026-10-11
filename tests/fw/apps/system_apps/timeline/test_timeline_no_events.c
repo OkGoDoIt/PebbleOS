@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "apps/system/timeline/timeline.h"
-#include "resource/resource.h"
-#include "resource/resource_ids.auto.h"
-#include "pbl/services/timeline/timeline_resources.h"
-
 #include "test_timeline_app_includes.h"
 
+#include <pbl/services/timeline/timeline_resources.h>
+
+#include <apps/system/timeline/timeline.h>
+#include <resource/resource.h>
+#include <resource/resource_ids.auto.h>
 
 // Setup and Teardown
 ////////////////////////////////////
@@ -22,7 +22,7 @@ void test_timeline_no_events__initialize(void) {
   fake_app_state_init();
   load_system_resources_fixture();
 
-  s_data = (TimelineTestData) {};
+  s_data = (TimelineTestData){};
 }
 
 void test_timeline_no_events__cleanup(void) {

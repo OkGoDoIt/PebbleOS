@@ -1,0 +1,139 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <pbl/drivers/battery.h>
+#include <pbl/drivers/rtc.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/analytics/analytics.h>
+#include <pbl/services/firmware_update.h>
+#include <pbl/services/notifications/alerts.h>
+#include <pbl/services/notifications/alerts_preferences_private.h>
+#include <pbl/services/notifications/alerts_private.h>
+#include <pbl/services/notifications/do_not_disturb.h>
+
+#include <kernel/low_power.h>
+
+PBL_LOG_MODULE_DEFINE(service_alerts, CONFIG_SERVICE_ALERTS_LOG_LEVEL);
+
+static const int NOTIFICATION_VIBE_HOLDOFF_MS = 3000;
+static RtcTicks s_notification_vibe_tick_timestamp = 0;
+
+//////////////////
+// Private Functions
+//////////////////
+
+static int64_t prv_get_ms_since_last_notification_vibe(void) {
+  RtcTicks current_ticks = rtc_get_ticks();
+  int64_t millis_since_last_vibe =
+      (current_ticks - s_notification_vibe_tick_timestamp) * 1000 / RTC_TICKS_HZ; // x1000 for ms
+  return millis_since_last_vibe;
+}
+
+//////////////////
+// Public Functions
+//////////////////
+
+void alerts_incoming_alert_analytics() {
+  if (do_not_disturb_is_active()) {
+    PBL_ANALYTICS_ADD(notification_received_dnd_count, 1);
+  }
+}
+
+bool alerts_should_notify_for_type(AlertType type) {
+  if (low_power_is_active()) {
+    PBL_LOG_DBG("Alert suppressed: type=%d, low power", type);
+    return false;
+  }
+
+  if (firmware_update_is_in_progress()) {
+    PBL_LOG_DBG("Alert suppressed: type=%d, firmware update", type);
+    return false;
+  }
+
+  const AlertMask mask = alerts_preferences_get_alert_mask();
+  if (!(mask & type)) {
+    PBL_LOG_DBG("Alert suppressed: type=%d, mask=%d", type, mask);
+  }
+  return mask & type;
+}
+
+bool alerts_should_enable_backlight_for_type(AlertType type) {
+  if (!alerts_preferences_get_notification_backlight()) {
+    return false;
+  }
+
+  if (do_not_disturb_is_active() && !(alerts_preferences_dnd_get_mask() & type)) {
+    return false;
+  }
+
+  return alerts_should_notify_for_type(type);
+}
+
+bool alerts_should_vibrate_for_type(AlertType type) {
+  if (do_not_disturb_is_active() && !(alerts_preferences_dnd_get_mask() & type)) {
+    PBL_LOG_DBG("Alert vibe suppressed: type=%d, DND", type);
+    return false;
+  }
+
+  if (!alerts_should_notify_for_type(type)) {
+    return false;
+  }
+
+  if (battery_is_usb_connected()) {
+    PBL_LOG_DBG("Alert vibe suppressed: type=%d, USB connected", type);
+    return false;
+  }
+
+  const int64_t elapsed_ms = prv_get_ms_since_last_notification_vibe();
+  if (elapsed_ms < NOTIFICATION_VIBE_HOLDOFF_MS) {
+    PBL_LOG_DBG("Alert vibe suppressed: type=%d, holdoff elapsed=%dms", type, (int)elapsed_ms);
+    return false;
+  }
+
+  const bool vibrate = alerts_preferences_get_vibrate();
+  PBL_LOG_DBG("Alert vibe decision: type=%d, vibrate=%d", type, vibrate);
+  return vibrate;
+}
+
+bool alerts_get_vibrate(void) {
+  return alerts_preferences_get_vibrate();
+}
+
+AlertMask alerts_get_mask(void) {
+  return alerts_preferences_get_alert_mask();
+}
+
+AlertMask alerts_get_dnd_mask(void) {
+  return alerts_preferences_dnd_get_mask();
+}
+
+uint32_t alerts_get_notification_window_timeout_ms(void) {
+  return alerts_preferences_get_notification_window_timeout_ms();
+}
+
+void alerts_set_vibrate(bool enable) {
+  alerts_preferences_set_vibrate(enable);
+}
+
+void alerts_set_mask(AlertMask mask) {
+  alerts_preferences_set_alert_mask(mask);
+}
+
+void alerts_set_dnd_mask(AlertMask mask) {
+  alerts_preferences_dnd_set_mask(mask);
+}
+
+void alerts_set_notification_vibe_timestamp() {
+  // if we do vibrate, update timestamp of last vibration
+  s_notification_vibe_tick_timestamp = rtc_get_ticks();
+}
+
+void alerts_set_notification_window_timeout_ms(uint32_t timeout_ms) {
+  alerts_preferences_set_notification_window_timeout_ms(timeout_ms);
+}
+
+void alerts_init() {
+  alerts_preferences_init();
+  do_not_disturb_init();
+  vibe_intensity_init();
+}

@@ -1,19 +1,18 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "apps/system/timeline/text_node.h"
-
-#include "clar.h"
-#include "pebble_asserts.h"
+#include <apps/system/timeline/text_node.h>
+#include <clar.h>
+#include <pebble_asserts.h>
 
 // Stubs
 /////////////////////
 
-#include "stubs_app_state.h"
-#include "stubs_heap.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_process_manager.h"
+#include <stubs_app_state.h>
+#include <stubs_heap.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_process_manager.h>
 
 // TODO: PBL-22271 Complete timeline text node unit tests
 
@@ -29,10 +28,10 @@ typedef struct GTextNodeTestData {
 
 GTextNodeTestData s_data;
 
-#define TEST_TEXT "DUMMY TEXT"
-#define TEST_FONT ((void *)0xf0a7f0a7)
+#define TEST_TEXT      "DUMMY TEXT"
+#define TEST_FONT      ((void *)0xf0a7f0a7)
 #define TEST_TEXT_SIZE GSize(50, 18)
-#define TEST_TEXT_BOX GRect(10, 10, 140, 200)
+#define TEST_TEXT_BOX  GRect(10, 10, 140, 200)
 
 void graphics_draw_text(GContext *ctx, const char *text, GFont const font, const GRect box,
                         const GTextOverflowMode overflow_mode, const GTextAlignment alignment,
@@ -50,9 +49,8 @@ void graphics_draw_text(GContext *ctx, const char *text, GFont const font, const
   layout->max_used_size = s_data.max_used_size;
 }
 
-GSize graphics_text_layout_get_max_used_size(GContext *ctx, const char *text,
-                                             GFont const font, const GRect box,
-                                             const GTextOverflowMode overflow_mode,
+GSize graphics_text_layout_get_max_used_size(GContext *ctx, const char *text, GFont const font,
+                                             const GRect box, const GTextOverflowMode overflow_mode,
                                              const GTextAlignment alignment,
                                              GTextLayoutCacheRef layout_ref) {
   GTextNodeText *text_node = (GTextNodeText *)s_data.text_node;
@@ -73,7 +71,7 @@ GSize graphics_text_layout_get_max_used_size(GContext *ctx, const char *text,
 ////////////////////////////////////
 
 void test_graphics_text_node__initialize(void) {
-  s_data = (GTextNodeTestData) {};
+  s_data = (GTextNodeTestData){};
 }
 
 void test_graphics_text_node__cleanup(void) {
@@ -206,7 +204,8 @@ void test_graphics_text_node__destroy(void) {
   cl_assert(vertical_a->container.node.free_on_destroy);
   cl_assert_equal_i(vertical_a->container.max_nodes, 2);
   cl_assert_equal_i(vertical_a->container.num_nodes, 0);
-  cl_assert(graphics_text_node_container_add_child(&vertical_a->container, &horizontal_a->container.node));
+  cl_assert(graphics_text_node_container_add_child(&vertical_a->container,
+                                                   &horizontal_a->container.node));
   cl_assert(graphics_text_node_container_add_child(&vertical_a->container, &custom_a->node));
   cl_assert(!graphics_text_node_container_add_child(&vertical_a->container, &text_c.node));
   cl_assert_equal_i(vertical_a->container.num_nodes, 2);
@@ -216,9 +215,8 @@ void test_graphics_text_node__destroy(void) {
   task_free((char *)str_b);
 }
 
-static void prv_draw_custom_clip(GContext *ctx, const GRect *box,
-                                 const GTextNodeDrawConfig *config, bool render, GSize *size_out,
-                                 void *user_data) {
+static void prv_draw_custom_clip(GContext *ctx, const GRect *box, const GTextNodeDrawConfig *config,
+                                 bool render, GSize *size_out, void *user_data) {
   cl_assert_equal_grect(ctx->draw_state.clip_box, s_data.clip_box);
 }
 

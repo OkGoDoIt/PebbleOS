@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "kernel/memory_layout.h"
+#include <kernel/memory_layout.h>
 
 const uint32_t __app_stack_start__;
 const uint32_t __app_stack_end__;
@@ -29,8 +29,8 @@ void mpu_enable(void) {
 }
 
 MpuRegion mpu_get_region(int region_num) {
-  return (MpuRegion) { 0 };
+  return (MpuRegion){0};
 }
 
-void mpu_set_region(const MpuRegion* region) {
+void mpu_set_region(const MpuRegion *region) {
 }

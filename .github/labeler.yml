@@ -1,0 +1,15 @@
+pending:hw-validation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - drivers/**
+          - kernel/**
+          - soc/**
+          - subsys/bluetooth/**
+          - third_party/hal_nordic/**
+          - third_party/hal_sifli/**
+          - third_party/nimble/**
+
+pending:sdk-review:
+  - changed-files:
+      - any-glob-to-any-file:
+          - tools/generate_native_sdk/exported_symbols.json

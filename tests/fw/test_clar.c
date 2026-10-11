@@ -1,18 +1,17 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-#include "pebble_asserts.h"
+#include <pbl/util/uuid.h>
 
-#include "pbl/util/uuid.h"
-#include "applib/graphics/graphics_circle_private.h"
-
-#include "stubs_compiled_with_legacy2_sdk.h"
-#include "stubs_passert.h"
-#include "stubs_heap.h"
-#include "stubs_app_state.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_rand_ptr.h"
+#include <applib/graphics/graphics_circle_private.h>
+#include <clar.h>
+#include <pebble_asserts.h>
+#include <stubs_app_state.h>
+#include <stubs_compiled_with_legacy2_sdk.h>
+#include <stubs_heap.h>
+#include <stubs_passert.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_rand_ptr.h>
 
 //! Welcome to the test file for all of our additional cl_assert macros.
 //! You will find very basic tests, and only ones that pass (because a failure
@@ -130,8 +129,10 @@ void test_clar__equal_gsize(void) {
 // Uuid
 /////////////////////////
 
-#define EX_UUID ((Uuid) { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, \
-                          0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff })
+#define EX_UUID                                                                                    \
+  ((Uuid){                                                                                         \
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff \
+  })
 
 static Uuid prv_get_uuid(void) {
   return EX_UUID;
@@ -150,17 +151,15 @@ void test_clar__equal_uuid(void) {
 // EllipsisDrawConfig
 /////////////////////////
 
-#define EX_QDC ((EllipsisDrawConfig) { \
-                 .start_quadrant = { \
-                     .angle = 1000, \
-                     .quadrant = 1 \
-                 }, \
-                 .full_quadrants = GCornersAll, \
-                 .end_quadrant = { \
-                     .angle = 3000, \
-                     .quadrant = 2, \
-                 } \
-               })
+#define EX_QDC                                        \
+  ((EllipsisDrawConfig){                              \
+    .start_quadrant = {.angle = 1000, .quadrant = 1}, \
+    .full_quadrants = GCornersAll,                    \
+    .end_quadrant = {                                 \
+      .angle = 3000,                                  \
+      .quadrant = 2,                                  \
+    }                                                 \
+  })
 
 static EllipsisDrawConfig prv_get_edc(void) {
   return EX_QDC;
@@ -174,5 +173,4 @@ void test_clar__equal_qdc(void) {
 
   // test with reference
   cl_assert_equal_edc(prv_get_edc(), prv_get_edc());
-
 }

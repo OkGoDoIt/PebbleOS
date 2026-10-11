@@ -1,37 +1,47 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/graphics_circle.h"
-#include "pbl/util/trig.h"
-
-#include "clar.h"
-#include "pebble_asserts.h"
-
 #include <stdio.h>
 
-// stubs
-#include "stubs_process_manager.h"
-#include "stubs_passert.h"
-#include "stubs_logging.h"
-#include "stubs_app_state.h"
-#include "stubs_heap.h"
+#include <pbl/util/trig.h>
 
-GBitmap* graphics_capture_frame_buffer(GContext* ctx) {
+#include <applib/graphics/graphics_circle.h>
+#include <clar.h>
+#include <pebble_asserts.h>
+
+// stubs
+#include <stubs_app_state.h>
+#include <stubs_heap.h>
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_process_manager.h>
+
+GBitmap *graphics_capture_frame_buffer(GContext *ctx) {
   return NULL;
 }
-bool graphics_release_frame_buffer(GContext* ctx, GBitmap* buffer) {
+bool graphics_release_frame_buffer(GContext *ctx, GBitmap *buffer) {
   return true;
 }
 
-void graphics_draw_pixel(GContext* ctx, GPoint point) {}
-void graphics_fill_rect(GContext* ctx, const GRect *rect) {}
-void graphics_private_draw_horizontal_line(){}
-void graphics_private_draw_vertical_line(){}
-void graphics_private_plot_pixel(){}
-void graphics_private_set_pixel(){}
+void graphics_draw_pixel(GContext *ctx, GPoint point) {
+}
+void graphics_fill_rect(GContext *ctx, const GRect *rect) {
+}
+static int16_t s_hline_max_x;
+void graphics_private_draw_horizontal_line(GContext *ctx, int16_t y, Fixed_S16_3 x1,
+                                           Fixed_S16_3 x2) {
+  if (x2.integer > s_hline_max_x) {
+    s_hline_max_x = x2.integer;
+  }
+}
+void graphics_private_draw_vertical_line() {
+}
+void graphics_private_plot_pixel() {
+}
+void graphics_private_set_pixel() {
+}
 
 /////////////////////////////
-
 
 static GPointPrecise s_center;
 static Fixed_S16_3 s_radius;
@@ -129,8 +139,8 @@ void test_graphics_circle__grect_centered_from_polar(void) {
 
   // Odd-length width and height for container rect, 180 degree angle
   const GRect container_rect3 = GRect(2, 2, 5, 5);
-  const GRect resulting_rect3 = grect_centered_from_polar(container_rect3, mode,
-                                                          DEG_TO_TRIGANGLE(180), GSize(2, 4));
+  const GRect resulting_rect3 =
+      grect_centered_from_polar(container_rect3, mode, DEG_TO_TRIGANGLE(180), GSize(2, 4));
   cl_assert_equal_grect(resulting_rect3, GRect(3, 4, 2, 4));
 }
 
@@ -190,11 +200,10 @@ void test_graphics_circle__grect_centered_internal(void) {
   cl_assert_equal_i((v).raw_value, (int)((f) * FIXED_S16_3_ONE.raw_value))
 
 #define cl_assert_gpoint_precise(p, px, py) \
-  do { \
-    cl_assert_fixedS16_3(p.x, px); \
-    cl_assert_fixedS16_3(p.y, py); \
-  } while(0)
-
+  do {                                      \
+    cl_assert_fixedS16_3(p.x, px);          \
+    cl_assert_fixedS16_3(p.y, py);          \
+  } while (0)
 
 void test_graphics_circle__grect_polar_calc_values_handles_null(void) {
   GPointPrecise center = {};
@@ -298,8 +307,7 @@ void test_graphics_circle__grect_polar_calc_values_mode(void) {
   cl_assert_fixedS16_3(radius, 168 / 2 - 0.5);
 }
 
-void graphics_draw_arc_precise_internal(GContext *ctx, GPointPrecise center,
-                                        Fixed_S16_3 radius,
+void graphics_draw_arc_precise_internal(GContext *ctx, GPointPrecise center, Fixed_S16_3 radius,
                                         int32_t angle_start, int32_t angle_end) {
   s_center = center;
   s_radius = radius;
@@ -355,7 +363,6 @@ void graphics_fill_radial_precise_internal(GContext *ctx, GPointPrecise center,
   s_angle_end = angle_end;
 }
 
-
 void test_graphics_circle__fill_radial(void) {
   GContext *ctx = (GContext *)&ctx;
   cl_assert_gpoint_precise(s_center, 0, 0);
@@ -366,6 +373,15 @@ void test_graphics_circle__fill_radial(void) {
   cl_assert_gpoint_precise(s_center, 4.5, 5.5);
   cl_assert_fixedS16_3(s_radius_outer, 4.5);
   cl_assert_fixedS16_3(s_radius_inner, 1.5);
+}
+
+void test_graphics_circle__stroke_large_radius(void) {
+  GContext ctx = {
+    .draw_state = {.stroke_width = 5, .antialiased = false},
+  };
+  s_hline_max_x = 0;
+  graphics_draw_circle(&ctx, GPointZero, 254);
+  cl_assert(s_hline_max_x >= 254);
 }
 
 void test_graphics_circle__DEG_TO_TRIGANGLE(void) {

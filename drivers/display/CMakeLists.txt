@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+set(sources)
+if(CONFIG_DISPLAY_QEMU)
+  list(APPEND sources qemu.c)
+elseif(CONFIG_DISPLAY_SDL)
+  list(APPEND sources sdl/display_sdl.c)
+  pbl_host_sources(sdl/display_sdl_bottom.c)
+elseif(CONFIG_DISPLAY_JDI_SF32LB)
+  list(APPEND sources sf32lb/display_jdi.c)
+  if(CONFIG_SHELL)
+    list(APPEND sources sf32lb/display_jdi_shell.c)
+  endif()
+elseif(CONFIG_DISPLAY_SHARP_LS013B7DH01_NRF5)
+  list(APPEND sources sharp_ls013b7dh01/sharp_ls013b7dh01_nrf5.c)
+endif()
+pbl_library()
+pbl_library_sources(${sources})

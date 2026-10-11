@@ -1,14 +1,13 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/util/string.h"
-
-#include "clar.h"
-
-#include "stubs_logging.h"
-#include "stubs_passert.h"
-
 #include <string.h>
+
+#include <pbl/util/string.h>
+
+#include <clar.h>
+#include <stubs_logging.h>
+#include <stubs_passert.h>
 
 void test_string__initialize(void) {
 }
@@ -63,6 +62,35 @@ void test_string__test_concat_str_int(void) {
 
   concat_str_int("res_bank", 255, buf, sizeof(buf));
   cl_assert_equal_s(buf, "res_bank255");
+
+  concat_str_int("app", UINT32_MAX, buf, sizeof(buf));
+  cl_assert_equal_s(buf, "app4294967295");
+
+  memset(buf, 'x', sizeof(buf));
+  concat_str_int("app", 12345, buf, 6);
+  cl_assert_equal_s(buf, "app12");
+  cl_assert_equal_i(buf[6], 'x');
+}
+
+void test_string__test_safe_strcat(void) {
+  char buf[8];
+
+  memset(buf, 'x', sizeof(buf));
+  strcpy(buf, "ab");
+  safe_strcat(buf, "cd", 6);
+  cl_assert_equal_s(buf, "abcd");
+
+  memset(buf, 'x', sizeof(buf));
+  strcpy(buf, "ab");
+  safe_strcat(buf, "cdefgh", 6);
+  cl_assert_equal_s(buf, "abcde");
+  cl_assert_equal_i(buf[6], 'x');
+
+  memset(buf, 'x', sizeof(buf));
+  strcpy(buf, "abcde");
+  safe_strcat(buf, "f", 6);
+  cl_assert_equal_s(buf, "abcde");
+  cl_assert_equal_i(buf[6], 'x');
 }
 
 void test_string__test_itoa_int(void) {
@@ -103,14 +131,14 @@ void test_string__test_byte_stream_to_hex_string(void) {
   const char *expected_result_bkwd = "09080706050403020100";
 
   // check that fwd decoding byte streams work
-  byte_stream_to_hex_string(&result_buf[0], sizeof(result_buf),
-      byte_stream, sizeof(byte_stream), false);
+  byte_stream_to_hex_string(&result_buf[0], sizeof(result_buf), byte_stream, sizeof(byte_stream),
+                            false);
   int res = strcmp(&result_buf[0], expected_result_fwd);
   cl_assert(res == 0);
 
   // check that bkwd decoding bytes streams work
-  byte_stream_to_hex_string(&result_buf[0], sizeof(result_buf),
-      byte_stream, sizeof(byte_stream), true);
+  byte_stream_to_hex_string(&result_buf[0], sizeof(result_buf), byte_stream, sizeof(byte_stream),
+                            true);
   res = strcmp(&result_buf[0], expected_result_bkwd);
   cl_assert(res == 0);
 
@@ -118,8 +146,8 @@ void test_string__test_byte_stream_to_hex_string(void) {
   // in this case lets make it so there is not enough space for the '\0' byte
   size_t truncated_size = sizeof(byte_stream) * 2;
   memset(result_buf, 0x00, sizeof(result_buf)); // reset buffer
-  byte_stream_to_hex_string(&result_buf[0], truncated_size, byte_stream,
-      sizeof(byte_stream), false);
+  byte_stream_to_hex_string(&result_buf[0], truncated_size, byte_stream, sizeof(byte_stream),
+                            false);
   res = memcmp(&result_buf[0], expected_result_fwd, strlen(expected_result_fwd) - 2);
   cl_assert(res == 0 && result_buf[truncated_size - 1] == '\0');
 }

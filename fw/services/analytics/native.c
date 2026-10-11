@@ -1,0 +1,548 @@
+/* SPDX-FileCopyrightText: 2026 Core Devices LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <stddef.h>
+#include <string.h>
+
+#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/mutex.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/analytics/backend.h>
+#include <pbl/services/analytics/native_heartbeat_stats.h>
+#include <pbl/services/data_logging/data_logging_service.h>
+#include <pbl/util/build_id.h>
+#include <pbl/util/math.h>
+#include <pbl/util/uuid.h>
+
+PBL_LOG_MODULE_DEFINE(service_analytics, CONFIG_SERVICE_ANALYTICS_LOG_LEVEL);
+
+#define NATIVE_HEARTBEAT_RECORD_VERSION 3
+
+/* Wire size the official backend decodes for each record version. The version byte at offset 0 is
+ * the only thing it keys the layout off, so a layout change must come with a version bump. */
+#define NATIVE_HEARTBEAT_WIRE_SIZE_V1 527
+#define NATIVE_HEARTBEAT_WIRE_SIZE_V2 523
+#define NATIVE_HEARTBEAT_WIRE_SIZE_V3 563
+
+/* sizeof() the struct upstream declares; grows whenever upstream appends a metric (v4.33:
+ * touch_gated_touchdown_count; v4.40: display_update_count, display_flush_time_ms,
+ * touch_driver_awake_time_ms), each time without bumping the version byte. */
+#define NATIVE_HEARTBEAT_RECORD_WIRE_SIZE 579
+
+/* What we put on the wire: the prefix the emitted version byte promises. Sending the whole struct
+ * makes the watch advertise version 3 while emitting extra bytes; the backend slices batches at
+ * 563, so every record after the first decodes shifted: battery_soc_pct reads a zero metric and
+ * watchface_name turns to mojibake. Transmit the version-3 prefix until the backend decodes a
+ * newer version. */
+#define NATIVE_HEARTBEAT_TRANSMIT_SIZE NATIVE_HEARTBEAT_WIRE_SIZE_V3
+
+/* Heartbeat record logged to DLS */
+struct PBL_PACKED native_heartbeat_record {
+  uint8_t version;
+  uint64_t timestamp;
+  uint8_t build_id[BUILD_ID_EXPECTED_LEN];
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key) uint32_t metric_##key;
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)   int32_t metric_##key;
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) \
+  uint32_t metric_##key;                                        \
+  uint16_t metric_##key##_scale;
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale) \
+  int32_t metric_##key;                                       \
+  uint16_t metric_##key##_scale;
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)       uint32_t metric_##key;
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len) char metric_##key[(len) + 1];
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+};
+
+/* The record is logged as a raw byte blob, so it must have no padding. */
+_Static_assert(sizeof(struct native_heartbeat_record) ==
+                   sizeof(uint8_t) + sizeof(uint64_t) + BUILD_ID_EXPECTED_LEN
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)               +sizeof(uint32_t)
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)                 +sizeof(int32_t)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) +sizeof(uint32_t) + sizeof(uint16_t)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)   +sizeof(int32_t) + sizeof(uint16_t)
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)                  +sizeof(uint32_t)
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)            +((len) + 1)
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+               ,
+               "native_heartbeat_record must be packed (no padding)");
+
+/* Keep the raw DLS payload compatible with the official app/backend decoder. */
+_Static_assert(sizeof(struct native_heartbeat_record) == NATIVE_HEARTBEAT_RECORD_WIRE_SIZE,
+               "native_heartbeat_record wire size changed");
+_Static_assert(offsetof(struct native_heartbeat_record, version) == 0,
+               "native_heartbeat_record version offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, timestamp) == 1,
+               "native_heartbeat_record timestamp offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, build_id) == 9,
+               "native_heartbeat_record build_id offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct) == 102,
+               "native_heartbeat_record battery_soc_pct offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_scale) == 106,
+               "native_heartbeat_record battery_soc_pct scale offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_drop) == 108,
+               "native_heartbeat_record battery_soc_pct_drop offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_voltage) == 114,
+               "native_heartbeat_record battery_voltage offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_tte_s) == 126,
+               "native_heartbeat_record battery_tte_s offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_time_ms) == 326,
+               "native_heartbeat_record watchface_time_ms offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_name) == 330,
+               "native_heartbeat_record watchface_name offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_watchface_uuid) == 363,
+               "native_heartbeat_record watchface_uuid offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_ppog_reversed) == 467,
+               "native_heartbeat_record ppog_reversed offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_settings_touch_enabled) == 499,
+               "native_heartbeat_record settings_touch_enabled offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_connectivity_expected_time_ms) ==
+                   519,
+               "native_heartbeat_record connectivity_expected_time_ms offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_battery_soc_pct_min) == 557,
+               "native_heartbeat_record battery_soc_pct_min offset changed");
+_Static_assert(offsetof(struct native_heartbeat_record, metric_touch_gated_touchdown_count) == 563,
+               "native_heartbeat_record first untransmitted metric offset changed");
+
+/* Transmitted size and version byte must move together; the backend has no other layout selector.
+ * If an upstream merge trips these, do not just update the numbers: confirm what the official
+ * backend decodes for the new version first. Getting this wrong reports 0% battery and a garbled
+ * watchface name on the official Battery screen, with no error anywhere. */
+_Static_assert(NATIVE_HEARTBEAT_RECORD_VERSION == 3,
+               "heartbeat version byte changed: add its backend wire size, then point "
+               "NATIVE_HEARTBEAT_TRANSMIT_SIZE at it only once the backend decodes that version");
+_Static_assert(NATIVE_HEARTBEAT_TRANSMIT_SIZE == NATIVE_HEARTBEAT_WIRE_SIZE_V3,
+               "transmitted heartbeat size must match the layout its version byte promises");
+_Static_assert(NATIVE_HEARTBEAT_TRANSMIT_SIZE <= sizeof(struct native_heartbeat_record),
+               "transmitted heartbeat size must not exceed the record");
+/* Only metrics appended after version 3 was defined may fall outside the transmitted prefix, so
+ * truncating can never cut a field the backend reads. */
+_Static_assert(offsetof(struct native_heartbeat_record, metric_touch_gated_touchdown_count) ==
+                   NATIVE_HEARTBEAT_TRANSMIT_SIZE,
+               "truncation would cut a metric the version-3 backend layout includes");
+
+/* Type-specific internal index enums (dense, no gaps) */
+
+enum native_integer_index {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)               NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)                 NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)   NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+  NATIVE_INTEGER_COUNT,
+};
+
+enum native_timer_index {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key) NATIVE_TIMER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+  NATIVE_TIMER_COUNT,
+};
+
+enum native_string_index {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len) NATIVE_STRING_IDX_##key,
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+  NATIVE_STRING_COUNT,
+};
+
+/* Mapping tables: global key enum -> type-specific index (-1 if N/A) */
+
+static const int8_t s_key_to_integer[] = {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)               NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)                 NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)   NATIVE_INTEGER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)                  -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)            -1,
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+};
+
+static const int8_t s_key_to_timer[] = {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)               -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)                 -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)   -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)                  NATIVE_TIMER_IDX_##key,
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)            -1,
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+};
+
+static const int8_t s_key_to_string[] = {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)               -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)                 -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)   -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)                  -1,
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)            NATIVE_STRING_IDX_##key,
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+};
+
+/* Type-specific storage */
+
+static int32_t s_integer_values[NATIVE_INTEGER_COUNT];
+
+static struct {
+  uint32_t value_ms;
+  bool running;
+  RtcTicks start_ticks;
+} s_timers[NATIVE_TIMER_COUNT];
+
+/* Per-string dedicated buffers (sized to declared length) */
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len) static char s_string_##key[(len) + 1];
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+
+/* String pointer and length lookup tables */
+
+static char *const s_string_ptrs[] = {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len) s_string_##key,
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+};
+
+static const uint8_t s_string_lens[] = {
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key)
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len) (len),
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+};
+
+static PBL_MUTEX_DEFINE(s_mutex);
+static DataLoggingSession *s_dls_session;
+static NativeHeartbeatStats s_heartbeat_stats = {
+  .last_result = NATIVE_HEARTBEAT_RESULT_NONE,
+};
+
+extern const ElfExternalNote TINTIN_BUILD_ID;
+
+static void prv_record_metrics(struct native_heartbeat_record *record, bool reset) {
+  uint32_t timer_value_ms[NATIVE_TIMER_COUNT];
+
+  memset(record, 0, sizeof(*record));
+
+  record->version = NATIVE_HEARTBEAT_RECORD_VERSION;
+  record->timestamp = rtc_get_time();
+  memcpy(record->build_id, &TINTIN_BUILD_ID.data[TINTIN_BUILD_ID.name_length],
+         MIN(BUILD_ID_EXPECTED_LEN, TINTIN_BUILD_ID.data_length));
+
+  RtcTicks now = rtc_get_ticks();
+  for (size_t i = 0; i < NATIVE_TIMER_COUNT; i++) {
+    timer_value_ms[i] = s_timers[i].value_ms;
+    if (s_timers[i].running) {
+      RtcTicks elapsed = now - s_timers[i].start_ticks;
+      timer_value_ms[i] += (elapsed * 1000) / RTC_TICKS_HZ;
+      if (reset) {
+        s_timers[i].value_ms = timer_value_ms[i];
+        s_timers[i].start_ticks = now;
+      }
+    }
+  }
+
+  /* Build heartbeat record from type-specific storage */
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key) \
+  record->metric_##key = (uint32_t)s_integer_values[NATIVE_INTEGER_IDX_##key];
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key) \
+  record->metric_##key = s_integer_values[NATIVE_INTEGER_IDX_##key];
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)                \
+  record->metric_##key = (uint32_t)s_integer_values[NATIVE_INTEGER_IDX_##key]; \
+  record->metric_##key##_scale = (scale);
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)        \
+  record->metric_##key = s_integer_values[NATIVE_INTEGER_IDX_##key]; \
+  record->metric_##key##_scale = (scale);
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key) \
+  record->metric_##key = timer_value_ms[NATIVE_TIMER_IDX_##key];
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len)    \
+  strncpy(record->metric_##key, s_string_##key, (len)); \
+  record->metric_##key[(len)] = '\0';
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+
+  if (reset) {
+    /* Reset storage for next heartbeat period, keeping running timers active */
+    memset(s_integer_values, 0, sizeof(s_integer_values));
+    for (size_t i = 0; i < NATIVE_TIMER_COUNT; i++) {
+      s_timers[i].value_ms = 0;
+    }
+    for (size_t i = 0; i < NATIVE_STRING_COUNT; i++) {
+      s_string_ptrs[i][0] = '\0';
+    }
+  }
+}
+
+void pbl_analytics__native_init(void) {
+}
+
+void pbl_analytics__native_heartbeat(void) {
+  struct native_heartbeat_record record;
+
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  prv_record_metrics(&record, true);
+  s_heartbeat_stats.attempts++;
+  s_heartbeat_stats.last_battery_soc_pct =
+      (uint8_t)(record.metric_battery_soc_pct / record.metric_battery_soc_pct_scale);
+  pbl_mutex_unlock(&s_mutex);
+
+  if (s_dls_session == NULL) {
+    Uuid system_uuid = UUID_SYSTEM;
+
+    /* This session must stay unbuffered: buffered DLS sessions cap items at
+     * DLS_SESSION_MAX_BUFFERED_ITEM_SIZE (300), far below the heartbeat record, so a buffered
+     * dls_create returns NULL here. The item size is the transmitted prefix, not sizeof. */
+    s_dls_session = dls_create(DlsSystemTagAnalyticsNativeHeartbeat, DATA_LOGGING_BYTE_ARRAY,
+                               NATIVE_HEARTBEAT_TRANSMIT_SIZE, false, false, &system_uuid);
+    if (s_dls_session == NULL) {
+      /* The session is recreated after any logging failure (below), so a transient DLS/PFS error
+       * costs one heartbeat; the counter makes the loss visible instead of silent. */
+      s_heartbeat_stats.failures++;
+      s_heartbeat_stats.last_result = NATIVE_HEARTBEAT_RESULT_NO_SESSION;
+      PBL_LOG_ERR("Native analytics DLS session could not be created");
+      return;
+    }
+  }
+
+  DataLoggingResult result = dls_log(s_dls_session, &record, 1);
+  s_heartbeat_stats.last_result = (int8_t)result;
+  if (result != DATA_LOGGING_SUCCESS) {
+    s_heartbeat_stats.failures++;
+    PBL_LOG_ERR("Native analytics DLS log failed: %d", result);
+    /* Drop the handle so the next heartbeat builds a fresh session. DATA_LOGGING_CLOSED means
+     * this one is gone for good, and nothing else ever recreates it, so without this a single
+     * failure silently ends heartbeat reporting until the watch reboots and the official app's
+     * Battery screen shows an empty 0% with no error anywhere. */
+    s_dls_session = NULL;
+    return;
+  }
+
+  s_heartbeat_stats.logged++;
+  s_heartbeat_stats.last_logged_uptime_s = (uint32_t)(rtc_get_ticks() / RTC_TICKS_HZ);
+}
+
+void pbl_analytics_native_get_heartbeat_stats(NativeHeartbeatStats *stats_out) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  *stats_out = s_heartbeat_stats;
+  pbl_mutex_unlock(&s_mutex);
+}
+
+#ifdef UNITTEST
+/* Clar runs a suite's tests in one process, so the cached session and the period storage would
+ * otherwise carry across cases. */
+void pbl_analytics__native_test_reset(void) {
+  s_dls_session = NULL;
+  memset(s_integer_values, 0, sizeof(s_integer_values));
+  memset(s_timers, 0, sizeof(s_timers));
+  for (size_t i = 0; i < NATIVE_STRING_COUNT; i++) {
+    s_string_ptrs[i][0] = '\0';
+  }
+  s_heartbeat_stats = (NativeHeartbeatStats){
+    .last_result = NATIVE_HEARTBEAT_RESULT_NONE,
+  };
+}
+#endif
+
+static void prv_set_signed(enum pbl_analytics_key key, int32_t signed_value) {
+  int8_t idx = s_key_to_integer[key];
+  if (idx < 0) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  s_integer_values[idx] = signed_value;
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_set_unsigned(enum pbl_analytics_key key, uint32_t unsigned_value) {
+  int8_t idx = s_key_to_integer[key];
+  if (idx < 0) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  s_integer_values[idx] = (int32_t)unsigned_value;
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_set_string(enum pbl_analytics_key key, const char *value) {
+  int8_t idx = s_key_to_string[key];
+  if (idx < 0) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  strncpy(s_string_ptrs[idx], value, s_string_lens[idx]);
+  s_string_ptrs[idx][s_string_lens[idx]] = '\0';
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_timer_start(enum pbl_analytics_key key) {
+  int8_t idx = s_key_to_timer[key];
+  if (idx < 0) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  if (!s_timers[idx].running) {
+    s_timers[idx].running = true;
+    s_timers[idx].start_ticks = rtc_get_ticks();
+  }
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_timer_stop(enum pbl_analytics_key key) {
+  int8_t idx = s_key_to_timer[key];
+  if (idx < 0) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  if (s_timers[idx].running) {
+    RtcTicks elapsed = rtc_get_ticks() - s_timers[idx].start_ticks;
+    s_timers[idx].value_ms += (int32_t)((elapsed * 1000) / RTC_TICKS_HZ);
+    s_timers[idx].running = false;
+  }
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_add(enum pbl_analytics_key key, int32_t amount) {
+  int8_t idx = s_key_to_integer[key];
+  if (idx < 0) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  s_integer_values[idx] += amount;
+  pbl_mutex_unlock(&s_mutex);
+}
+
+const struct pbl_analytics_backend_ops pbl_analytics__native_ops = {
+  .set_signed = prv_set_signed,
+  .set_unsigned = prv_set_unsigned,
+  .set_string = prv_set_string,
+  .timer_start = prv_timer_start,
+  .timer_stop = prv_timer_stop,
+  .add = prv_add,
+};
+
+#ifdef CONFIG_SHELL
+#include <pbl/shell/shell.h>
+
+static int prv_cmd_metrics(const struct pbl_shell *sh, size_t argc, char **argv) {
+  struct native_heartbeat_record record;
+
+  prv_record_metrics(&record, false);
+
+#define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key) \
+  pbl_shell_print(sh, STRINGIFY(key) "=%" PRIu32, record.metric_##key);
+#define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key) \
+  pbl_shell_print(sh, STRINGIFY(key) "=%" PRId32, record.metric_##key);
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale)                              \
+  pbl_shell_print(sh, STRINGIFY(key) "=%" PRIu32 ".%" PRIu32, record.metric_##key / (scale), \
+                  record.metric_##key - (record.metric_##key / (scale)) * (scale));
+#define PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED(key, scale)                                \
+  pbl_shell_print(sh, STRINGIFY(key) "=%" PRId32 ".%" PRIu32, record.metric_##key / (scale), \
+                  (uint32_t)(record.metric_##key - (record.metric_##key / (scale)) * (scale)));
+#define PBL_ANALYTICS_METRIC_DEFINE_TIMER(key) \
+  pbl_shell_print(sh, STRINGIFY(key) "=%" PRId32 " ms", record.metric_##key);
+#define PBL_ANALYTICS_METRIC_DEFINE_STRING(key, len) \
+  pbl_shell_print(sh, STRINGIFY(key) "=%s", record.metric_##key);
+#include <pbl/services/analytics/analytics.def>
+#undef PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
+#undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
+#undef PBL_ANALYTICS_METRIC_DEFINE_STRING
+
+  return 0;
+}
+
+PBL_SHELL_SUBCMD_ADD(sub_analytics, metrics, NULL, "Dump the current metrics", prv_cmd_metrics, 0,
+                     0);
+#endif

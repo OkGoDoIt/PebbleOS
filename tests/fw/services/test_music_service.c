@@ -54,6 +54,16 @@ static uint8_t prv_generation_delta(void) {
   return (uint8_t)(music_get_now_playing_generation() - s_generation_mark);
 }
 
+//! What KernelMain does with a media event before any consumer runs. NowPlayingChanged is
+//! coalesced to one in flight until it is taken, so the next update only posts after this.
+static void prv_deliver_last_event(void) {
+  const PebbleEvent event = fake_event_get_last();
+  if (event.type == PEBBLE_MEDIA_EVENT) {
+    music_handle_media_event(&event.media);
+  }
+  fake_event_clear_last();
+}
+
 static void prv_assert_now_playing(const char *title, const char *artist, const char *album) {
   char actual_title[MUSIC_BUFFER_LENGTH];
   char actual_artist[MUSIC_BUFFER_LENGTH];
@@ -70,6 +80,7 @@ void test_music_service__initialize(void) {
   music_init();
   // Start every test from a known, empty track.
   music_update_now_playing(NULL, 0, NULL, 0, NULL, 0);
+  prv_deliver_last_event();
   prv_mark_generation();
 }
 
@@ -178,14 +189,34 @@ void test_music_service__ams_style_track_change_is_visible_after_every_field(voi
 
 void test_music_service__now_playing_changed_event_fires_for_every_field(void) {
   // The generation gates re-reads, but the event is what wakes the consumers up in the first place,
-  // so it must still fire even when nothing changed.
-  fake_event_clear_last();
+  // so it must still fire even when nothing changed, once the previous one has been taken.
   prv_set_title("Safe & Sound");
   cl_assert_equal_i(fake_event_get_last().type, PEBBLE_MEDIA_EVENT);
   cl_assert_equal_i(fake_event_get_last().media.type, PebbleMediaEventTypeNowPlayingChanged);
+  prv_deliver_last_event();
 
-  fake_event_clear_last();
   prv_set_title("Safe & Sound");
   cl_assert_equal_i(fake_event_get_last().type, PEBBLE_MEDIA_EVENT);
   cl_assert_equal_i(fake_event_get_last().media.type, PebbleMediaEventTypeNowPlayingChanged);
+}
+
+void test_music_service__track_field_events_coalesce_until_taken(void) {
+  // A burst of per-field AMS updates posts one event, not one per field: they land in the
+  // from_kernel queue only KernelMain drains, and filling it resets the watch. The consumer reads
+  // the state when it runs, so it still sees every field and the generation still moved.
+  prv_set_title("Cold Feet");
+  const PebbleEvent in_flight = fake_event_get_last();
+  cl_assert_equal_i(in_flight.type, PEBBLE_MEDIA_EVENT);
+  fake_event_clear_last();
+
+  prv_set_artist("Fiji Blue");
+  prv_set_album("Sunkissed");
+  cl_assert_equal_i(fake_event_get_last().type, PEBBLE_NULL_EVENT);
+  cl_assert_equal_i(prv_generation_delta(), 3);
+  prv_assert_now_playing("Cold Feet", "Fiji Blue", "Sunkissed");
+
+  // KernelMain takes the one in flight; the next update posts again.
+  music_handle_media_event(&in_flight.media);
+  prv_set_album("Cold Feet");
+  cl_assert_equal_i(fake_event_get_last().type, PEBBLE_MEDIA_EVENT);
 }

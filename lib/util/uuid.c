@@ -1,22 +1,22 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/util/uuid.h"
-#include "pbl/util/rand32.h"
-
 #include <inttypes.h>
-#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include <pbl/util/rand32.h>
+#include <pbl/util/uuid.h>
 
 static const Uuid system_uuid = UUID_SYSTEM;
 static const Uuid invalid_uuid = UUID_INVALID_INIT;
 
 void uuid_generate(Uuid *uuid_out) {
   uint8_t uuid_bytes[UUID_SIZE];
-  uint32_t *uuid_words = (uint32_t*)uuid_bytes;
+  uint32_t *uuid_words = (uint32_t *)uuid_bytes;
   for (size_t i = 0; i < UUID_SIZE / sizeof(uint32_t); i++) {
-    uuid_words[i] = rand32();
+    uuid_words[i] = pbl_rand32();
   }
   // set the version bits
   uuid_bytes[6] = (uuid_bytes[6] & ~0xF0) | 0x40;
@@ -57,7 +57,7 @@ void uuid_to_string(const Uuid *uuid, char *buffer) {
       *buffer++ = '-';
     }
 
-    buffer += snprintf(buffer, 3, "%02"PRIx8, ((uint8_t *)uuid)[i]);
+    buffer += snprintf(buffer, 3, "%02" PRIx8, ((uint8_t *)uuid)[i]);
   }
   *buffer++ = '}';
   *buffer = '\0';

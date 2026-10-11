@@ -5,8 +5,8 @@
 
 #include "fake_graphics_context.h"
 
-#include "applib/graphics/graphics.h"
-#include "applib/graphics/framebuffer.h"
+#include <applib/graphics/framebuffer.h>
+#include <applib/graphics/graphics.h>
 
 extern GContext *s_app_state_get_graphics_context;
 
@@ -26,7 +26,7 @@ FrameBuffer *fake_graphics_context_get_framebuffer(void) {
 }
 
 void fake_graphics_context_init(void) {
-  framebuffer_init(&s_fb, &(GSize) {DISP_COLS, DISP_ROWS});
+  framebuffer_init(&s_fb, &(GSize){DISP_COLS, DISP_ROWS});
   framebuffer_clear(&s_fb);
   graphics_context_init(&s_ctx, &s_fb, GContextInitializationMode_App);
   s_app_state_get_graphics_context = &s_ctx;

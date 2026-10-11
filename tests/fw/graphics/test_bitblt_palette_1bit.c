@@ -1,35 +1,36 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/graphics.h"
-#include "applib/graphics/graphics_private.h"
-#include "applib/graphics/bitblt.h"
-#include "applib/graphics/bitblt_private.h"
-#include "applib/graphics/1_bit/framebuffer.h"
-#include "applib/graphics/gtypes.h"
-
-#include "clar.h"
 #include "util.h"
 
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
+
+#include <applib/graphics/1_bit/framebuffer.h>
+#include <applib/graphics/bitblt.h>
+#include <applib/graphics/bitblt_private.h>
+#include <applib/graphics/graphics.h>
+#include <applib/graphics/graphics_private.h>
+#include <applib/graphics/gtypes.h>
+#include <clar.h>
 
 // Stubs
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
-#include "stubs_applib_resource.h"
 #include "test_graphics.h"
+
+#include <stubs_applib_resource.h>
 
 extern void prv_apply_tint_color(GColor *color, GColor tint_color);
 
 static uint8_t s_dest_data[100 * 100];
 static GBitmap s_dest_bitmap = {
-    .addr = s_dest_data,
-    .row_size_bytes = 16,
-    .info.format = GBitmapFormat1Bit,
-    .info.version = GBITMAP_VERSION_CURRENT,
-    .bounds = GRect(0, 0, 100, 100)
-  };
+  .addr = s_dest_data,
+  .row_size_bytes = 16,
+  .info.format = GBitmapFormat1Bit,
+  .info.version = GBITMAP_VERSION_CURRENT,
+  .bounds = GRect(0, 0, 100, 100)
+};
 // Tests
 ////////////////////////////////////
 
@@ -52,12 +53,11 @@ void test_bitblt_palette_1bit__cleanup(void) {
 // Result:
 //   - All dithered gray.
 void test_bitblt_palette_1bit__1bit_palette_to_1bit_assign(void) {
-  GBitmap *src_bitmap =
-    get_gbitmap_from_pbi("test_bitblt_palette_1bit__1bit_palette_to_1bit.pbi");
+  GBitmap *src_bitmap = get_gbitmap_from_pbi("test_bitblt_palette_1bit__1bit_palette_to_1bit.pbi");
 
   bitblt_bitmap_into_bitmap(&s_dest_bitmap, src_bitmap, GPointZero, GCompOpAssign, GColorWhite);
   cl_assert(gbitmap_pbi_eq(&s_dest_bitmap,
-                  "test_bitblt_palette_1bit__1bit_palette_to_1bit_assign-expect.pbi"));
+                           "test_bitblt_palette_1bit__1bit_palette_to_1bit_assign-expect.pbi"));
 
   gbitmap_destroy(src_bitmap);
 }
@@ -72,12 +72,11 @@ void test_bitblt_palette_1bit__1bit_palette_to_1bit_assign(void) {
 // Result:
 //   - The left half will be white and the right half will be dithered gray.
 void test_bitblt_palette_1bit__1bit_palette_to_1bit_set(void) {
-  GBitmap *src_bitmap =
-    get_gbitmap_from_pbi("test_bitblt_palette_1bit__1bit_palette_to_1bit.pbi");
+  GBitmap *src_bitmap = get_gbitmap_from_pbi("test_bitblt_palette_1bit__1bit_palette_to_1bit.pbi");
 
   bitblt_bitmap_into_bitmap(&s_dest_bitmap, src_bitmap, GPointZero, GCompOpSet, GColorWhite);
   cl_assert(gbitmap_pbi_eq(&s_dest_bitmap,
-                  "test_bitblt_palette_1bit__1bit_palette_to_1bit_set-expect.pbi"));
+                           "test_bitblt_palette_1bit__1bit_palette_to_1bit_set-expect.pbi"));
 
   gbitmap_destroy(src_bitmap);
 }
@@ -92,12 +91,11 @@ void test_bitblt_palette_1bit__1bit_palette_to_1bit_set(void) {
 //   - The top half will be alternating between dithered gray and black lines
 //     The bottom half consists of a diagonal white line  on a black background
 void test_bitblt_palette_1bit__2bit_palette_to_1bit_assign(void) {
-  GBitmap *src_bitmap =
-    get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
+  GBitmap *src_bitmap = get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
 
   bitblt_bitmap_into_bitmap(&s_dest_bitmap, src_bitmap, GPointZero, GCompOpAssign, GColorWhite);
-  cl_assert(gbitmap_pbi_eq(&s_dest_bitmap,
-                  "test_bitblt_palette_1bit__2bit_palette_to_1bit-expect.pbi"));
+  cl_assert(
+      gbitmap_pbi_eq(&s_dest_bitmap, "test_bitblt_palette_1bit__2bit_palette_to_1bit-expect.pbi"));
 
   gbitmap_destroy(src_bitmap);
 }
@@ -113,12 +111,11 @@ void test_bitblt_palette_1bit__2bit_palette_to_1bit_assign(void) {
 //     The bottom right half consists of a diagonal white line  on a black background
 //     The left half will be completely white
 void test_bitblt_palette_1bit__2bit_palette_to_1bit_set(void) {
-  GBitmap *src_bitmap =
-    get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
+  GBitmap *src_bitmap = get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
 
   bitblt_bitmap_into_bitmap(&s_dest_bitmap, src_bitmap, GPointZero, GCompOpSet, GColorWhite);
   cl_assert(gbitmap_pbi_eq(&s_dest_bitmap,
-                  "test_bitblt_palette_1bit__2bit_palette_to_1bit_set-expect.pbi"));
+                           "test_bitblt_palette_1bit__2bit_palette_to_1bit_set-expect.pbi"));
 
   gbitmap_destroy(src_bitmap);
 }
@@ -135,12 +132,12 @@ void test_bitblt_palette_1bit__2bit_palette_to_1bit_set(void) {
 //     The bottom right half consists of a diagonal white line  on a black background
 //     The left half will be completely white
 void test_bitblt_palette_1bit__2bit_palette_to_1bit_wrap(void) {
-  GBitmap *src_bitmap =
-    get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
+  GBitmap *src_bitmap = get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
 
-  bitblt_bitmap_into_bitmap_tiled(&s_dest_bitmap, src_bitmap, s_dest_bitmap.bounds, GPointZero, GCompOpAssign, GColorWhite);
+  bitblt_bitmap_into_bitmap_tiled(&s_dest_bitmap, src_bitmap, s_dest_bitmap.bounds, GPointZero,
+                                  GCompOpAssign, GColorWhite);
   cl_assert(gbitmap_pbi_eq(&s_dest_bitmap,
-                  "test_bitblt_palette_1bit__2bit_palette_to_1bit_wrap-expect.pbi"));
+                           "test_bitblt_palette_1bit__2bit_palette_to_1bit_wrap-expect.pbi"));
 
   gbitmap_destroy(src_bitmap);
 }
@@ -157,12 +154,11 @@ void test_bitblt_palette_1bit__2bit_palette_to_1bit_wrap(void) {
 //     The bottom right half consists of a diagonal white line  on a black background
 //     The left half will be completely white
 void test_bitblt_palette_1bit__2bit_palette_to_1bit_offset(void) {
-  GBitmap *src_bitmap =
-    get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
+  GBitmap *src_bitmap = get_gbitmap_from_pbi("test_bitblt_palette_1bit__2bit_palette_to_1bit.pbi");
 
-  bitblt_bitmap_into_bitmap(&s_dest_bitmap, src_bitmap, GPoint(20,20), GCompOpAssign, GColorWhite);
+  bitblt_bitmap_into_bitmap(&s_dest_bitmap, src_bitmap, GPoint(20, 20), GCompOpAssign, GColorWhite);
   cl_assert(gbitmap_pbi_eq(&s_dest_bitmap,
-                  "test_bitblt_palette_1bit__2bit_palette_to_1bit_offset-expect.pbi"));
+                           "test_bitblt_palette_1bit__2bit_palette_to_1bit_offset-expect.pbi"));
 
   gbitmap_destroy(src_bitmap);
 }
@@ -194,6 +190,4 @@ void test_bitblt_palette_1bit__prv_apply_tint_color(void) {
   color.a = 1;
   prv_apply_tint_color(&color, GColorRed);
   cl_assert_equal_i(color.argb, tinted_color.argb);
-
 }
-

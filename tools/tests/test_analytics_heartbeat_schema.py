@@ -14,10 +14,11 @@ from analytics_heartbeat_schema import field_offsets, native_heartbeat_layout
 from analytics_heartbeat_schema import parse_analytics_def, parse_native_wire_constants, wire_size
 from analytics_heartbeat_schema import parse_dls_session_size_caps
 from analytics_heartbeat_schema import parse_heartbeat_dls_create_buffered
+from analytics_heartbeat_schema import parse_heartbeat_dls_create_item_size
 
 
 ANALYTICS_DEF = os.path.join(repo_dir, "include", "pbl", "services", "analytics", "analytics.def")
-NATIVE_C = os.path.join(repo_dir, "src", "fw", "services", "analytics", "native.c")
+NATIVE_C = os.path.join(repo_dir, "fw", "services", "analytics", "native.c")
 DLS_PRIVATE_H = os.path.join(repo_dir, "include", "pbl", "services", "data_logging",
                              "dls_private.h")
 COMM_PROTOCOL_H = os.path.join(repo_dir, "include", "pbl", "services", "comm_session",
@@ -37,8 +38,10 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.fields = native_heartbeat_layout(self.metrics)
         self.offsets = field_offsets(self.fields)
 
-    def test_matches_official_v4_33_1_wire_layout(self):
-        self.assertEqual(wire_size(self.fields), 567)
+    def test_matches_official_v4_40_wire_layout(self):
+        # 563 bytes are version 3; v4.33 and v4.40 appended four metrics after it without a
+        # version bump, and those are never transmitted (test_truncated_tail_is_only_post_v3_appends).
+        self.assertEqual(wire_size(self.fields), 579)
         self.assertEqual(self.offsets["version"], 0)
         self.assertEqual(self.offsets["timestamp"], 1)
         self.assertEqual(self.offsets["build_id"], 9)
@@ -57,6 +60,19 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.assertEqual(self.offsets["metric_ble_conn_slave_lat0_time_ms"], 523)
         self.assertEqual(self.offsets["metric_battery_soc_pct_min"], 557)
         self.assertEqual(self.offsets["metric_touch_gated_touchdown_count"], 563)
+        self.assertEqual(self.offsets["metric_display_update_count"], 567)
+        self.assertEqual(self.offsets["metric_display_flush_time_ms"], 571)
+        self.assertEqual(self.offsets["metric_touch_driver_awake_time_ms"], 575)
+
+    def test_dls_session_item_size_is_the_transmitted_prefix(self):
+        """dls_create's item size is what goes on the wire: it must be the transmit constant.
+
+        Upstream's native.c passes sizeof(struct native_heartbeat_record), which grows with every
+        appended metric while the version byte stays 3. Taking that line on a merge ships the
+        whole struct as "version 3" -- the Battery-screen bug -- with every other check here green.
+        """
+        self.assertEqual(parse_heartbeat_dls_create_item_size(NATIVE_C),
+                         "NATIVE_HEARTBEAT_TRANSMIT_SIZE")
 
     def test_transmitted_size_matches_the_emitted_version_byte(self):
         """The backend picks a layout purely from the version byte, so the two must agree.

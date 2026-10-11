@@ -5,11 +5,9 @@
 
 #include <stdint.h>
 
-#include "pbl/services/timeline/item.h"
+#include <pbl/services/timeline/item.h>
 
 void notifications_handle_ancs_message(TimelineItem *notification);
-
-void notifications_handle_ancs_notification_removed(uint32_t ancs_uid);
 
 void notifications_add_notification(TimelineItem *notification);
 

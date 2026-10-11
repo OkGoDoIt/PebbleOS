@@ -33,8 +33,14 @@ set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 # The toolchain and the device tools come from the installed SDK.
 include(pebbleos_sdk)
 
+# Boards that do not run on ARM bring their own toolchain.
+string(REGEX REPLACE "@.*$" "" board_name "${BOARD}")
 if(NOT CMAKE_TOOLCHAIN_FILE)
-  set(CMAKE_TOOLCHAIN_FILE ${PBL_BASE}/cmake/toolchain/arm-none-eabi.cmake)
+  if(EXISTS ${PBL_BASE}/boards/${board_name}/toolchain.cmake)
+    set(CMAKE_TOOLCHAIN_FILE ${PBL_BASE}/boards/${board_name}/toolchain.cmake)
+  else()
+    set(CMAKE_TOOLCHAIN_FILE ${PBL_BASE}/cmake/toolchain/arm-none-eabi.cmake)
+  endif()
 endif()
 
 # ccache, when it is around.
@@ -68,6 +74,7 @@ include(compiler)
 include(libc)
 include(linker)
 include(gettext)
+include(nanopb)
 include(resources)
 include(native_sdk)
 include(sdk)
@@ -76,16 +83,38 @@ include(firmware)
 message(STATUS "Board: ${PBL_BOARD} (${PBL_PLATFORM_NAME}), variant: ${VARIANT}")
 
 pbl_init()
+if(PBL_LIBC_DEFINITIONS)
+  pbl_compile_definitions(${PBL_LIBC_DEFINITIONS})
+endif()
 
 # The generated headers every firmware library may include.
 add_custom_target(pbl_generated_headers)
 
 # FIXME: remove include/pbl once all modules use the prefix
 pbl_include_directories(include include/pbl)
+pbl_include_directories(${CMAKE_BINARY_DIR}/generated/include)
+
+# The firmware reports the version it was built from.
+set(version_h ${CMAKE_BINARY_DIR}/generated/include/pbl/version.h)
+add_custom_command(
+  OUTPUT ${version_h} ${CMAKE_BINARY_DIR}/generated/version.stamp
+  COMMAND ${PBL_TOOLCHAIN_ENV} ${PYTHON_EXECUTABLE} ${PBL_BASE}/tools/cmake/generate.py version
+          --template ${PBL_BASE}/include/pbl/version.h.in
+          --output ${version_h}
+  DEPENDS ${PBL_BASE}/include/pbl/version.h.in
+  WORKING_DIRECTORY ${PBL_BASE}
+  COMMENT "Checking the firmware version"
+  VERBATIM
+)
+# The stamp is never written, so the version is re-checked on every build;
+# the header itself is only rewritten when it actually changes.
+add_custom_target(pbl_version DEPENDS ${version_h})
+add_dependencies(pbl_generated_headers pbl_version)
 
 # The recovery firmware has no third-party apps, so it needs neither the
-# SDK shims nor the stored apps.
-if(NOT CONFIG_RECOVERY_FW)
+# SDK shims nor the stored apps. Neither does a native build, which cannot
+# load ARM app binaries.
+if(NOT CONFIG_RECOVERY_FW AND NOT CONFIG_SOC_POSIX)
   pbl_native_sdk()
   pbl_sdk()
   add_dependencies(pbl_generated_headers pbl_native_sdk)
@@ -97,8 +126,9 @@ add_subdirectory(lib)
 add_subdirectory(kernel)
 add_subdirectory(soc)
 add_subdirectory(subsys)
-add_subdirectory(src)
-if(NOT CONFIG_RECOVERY_FW)
+add_subdirectory(drivers)
+add_subdirectory(fw)
+if(NOT CONFIG_RECOVERY_FW AND NOT CONFIG_SOC_POSIX)
   add_subdirectory(apps/stored)
 endif()
 

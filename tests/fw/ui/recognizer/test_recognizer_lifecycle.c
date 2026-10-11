@@ -1,38 +1,37 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-
-#include "applib/ui/layer.h"
-#include "applib/ui/window.h"
-#include "applib/ui/window_manager.h"
-#include "applib/ui/window_private.h"
-#include "applib/ui/recognizer/recognizer.h"
-#include "applib/ui/recognizer/recognizer_manager.h"
-#include "applib/ui/recognizer/recognizer_private.h"
-
 #include <string.h>
 
+#include <applib/ui/layer.h>
+#include <applib/ui/recognizer/recognizer.h>
+#include <applib/ui/recognizer/recognizer_manager.h>
+#include <applib/ui/recognizer/recognizer_private.h>
+#include <applib/ui/window.h>
+#include <applib/ui/window_manager.h>
+#include <applib/ui/window_private.h>
+#include <clar.h>
+
 // Stubs
-#include "stubs_app_install_manager.h"
-#include "stubs_app_state.h"
-#include "stubs_app_window_stack.h"
-#include "stubs_click.h"
-#include "stubs_gbitmap.h"
-#include "stubs_graphics.h"
-#include "stubs_graphics_context.h"
-#include "stubs_heap.h"
-#include "stubs_logging.h"
-#include "stubs_modal_manager.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_process_manager.h"
-#include "stubs_resources.h"
-#include "stubs_status_bar_layer.h"
-#include "stubs_syscalls.h"
-#include "stubs_unobstructed_area.h"
-#include "stubs_window_stack.h"
+#include <stubs_app_install_manager.h>
+#include <stubs_app_state.h>
+#include <stubs_app_window_stack.h>
+#include <stubs_click.h>
+#include <stubs_gbitmap.h>
+#include <stubs_graphics.h>
+#include <stubs_graphics_context.h>
+#include <stubs_heap.h>
+#include <stubs_logging.h>
+#include <stubs_modal_manager.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_process_manager.h>
+#include <stubs_resources.h>
+#include <stubs_status_bar_layer.h>
+#include <stubs_syscalls.h>
+#include <stubs_unobstructed_area.h>
+#include <stubs_window_stack.h>
 
 bool modal_manager_is_window_visible(Window *window) {
   return false;
@@ -50,7 +49,8 @@ GDrawState graphics_context_get_drawing_state(GContext *ctx) {
   return state;
 }
 
-void graphics_context_set_drawing_state(GContext *ctx, GDrawState draw_state) {}
+void graphics_context_set_drawing_state(GContext *ctx, GDrawState draw_state) {
+}
 
 static RecognizerManager s_manager;
 static RecognizerManager s_modal_manager;
@@ -69,7 +69,8 @@ void test_recognizer_lifecycle__initialize(void) {
   recognizer_manager_init(&s_manager);
 }
 
-void test_recognizer_lifecycle__cleanup(void) {}
+void test_recognizer_lifecycle__cleanup(void) {
+}
 
 // window_get_recognizer_manager routing
 ////////////////////////////////////////

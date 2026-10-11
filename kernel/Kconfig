@@ -9,7 +9,7 @@ config KERNEL_IDLE_STACK_SIZE
 
 config KERNEL_TICK_HZ
 	int "Tick rate in Hz"
-	default 1000 if QEMU || SOC_SF32LB52
+	default 1000 if QEMU || SOC_SF32LB52 || SOC_POSIX
 	default 1024
 
 config KERNEL_IRQ_PRIO_KERNEL
@@ -19,6 +19,13 @@ config KERNEL_IRQ_PRIO_KERNEL
 config KERNEL_IRQ_PRIO_MAX_SYSCALL
 	int "Highest NVIC priority allowed to call into the kernel"
 	default 191
+
+config NUM_IRQS
+	int
+	range 1 512
+	help
+	  Number of SoC interrupt lines, i.e. vector table entries past the
+	  core exceptions. Defaulted per SoC in soc/*/Kconfig.defconfig.
 
 config KERNEL_NUM_PRIORITIES
 	int "Number of thread priorities"
@@ -34,7 +41,7 @@ config KERNEL_THREAD_TLS_SLOTS
 
 config KERNEL_STACK_ALIGN
 	int "Thread stack alignment"
-	default 32 if MPU_TYPE_ARMV8M
+	default 32 if ARMV8_M_MAINLINE
 	default 256
 	help
 	  Alignment that lets the bottom of a stack be covered by an MPU
@@ -44,4 +51,14 @@ config KERNEL_MUTEX_LOCK_LR
 	bool "Record the caller of the outermost mutex lock"
 	default y
 
+config RAMFUNC
+	bool
+	help
+	  Code and read-only data can be placed in RAM: the .ramfunc
+	  section is loaded from flash and copied to RAM at boot. Selected
+	  by SoCs that need code to run while flash is unavailable.
+
 endmenu
+
+rsource "arch/arm/Kconfig"
+rsource "arch/posix/Kconfig"

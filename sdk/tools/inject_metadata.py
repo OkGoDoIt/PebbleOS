@@ -14,7 +14,7 @@ import stm32_crc
 from pbpack import ResourcePack
 
 # Pebble App Metadata Struct
-# These are offsets of the PebbleProcessInfo struct in src/fw/app_management/pebble_process_info.h
+# These are offsets of the PebbleProcessInfo struct in fw/app_management/pebble_process_info.h
 HEADER_ADDR = 0x0  # 8 bytes
 STRUCT_VERSION_ADDR = 0x8  # 2 bytes
 SDK_VERSION_ADDR = 0xA  # 2 bytes
@@ -32,10 +32,14 @@ UUID_ADDR = 0x68  # 16 bytes
 RESOURCE_CRC_ADDR = 0x78  # 4 bytes
 RESOURCE_TIMESTAMP_ADDR = 0x7C  # 4 bytes
 VIRTUAL_SIZE_ADDR = 0x80  # 2 bytes
-STRUCT_SIZE_BYTES = 0x82
+LOAD_SIZE_HI_ADDR = 0x82  # 1 byte
+VIRTUAL_SIZE_HI_ADDR = 0x83  # 1 byte
+
+# The app CRC starts at the end of the 0x10.0x00 header, so it takes in the size high bytes
+CRC_START_ADDR = 0x82
 
 # Pebble App Flags
-# These are PebbleAppFlags from src/fw/app_management/pebble_process_info.h
+# These are PebbleAppFlags from fw/app_management/pebble_process_info.h
 PROCESS_INFO_STANDARD_APP = 0
 PROCESS_INFO_WATCH_FACE = 1 << 0
 PROCESS_INFO_VISIBILITY_HIDDEN = 1 << 1
@@ -49,9 +53,12 @@ PROCESS_INFO_HAS_WORKER = 1 << 4
 # space with applib/ which changes in size from release to release.
 MAX_APP_BINARY_SIZE = 0x10000
 
-# PebbleProcessInfo.load_size and .virtual_size are uint16_t, so neither can exceed this whatever
-# the platform allows for the total. Only the reloc table, stored past load_size, can use the rest.
-MAX_PROCESS_INFO_SIZE_FIELD = 0xFFFF
+# From struct version 0x10.0x01, PebbleProcessInfo carries load_size and virtual_size in 24 bits:
+# the low 16 in the original fields and the high 8 in load_size_hi and virtual_size_hi. Older
+# headers have padding there and stop at 16 bits.
+FIRST_WIDE_SIZE_STRUCT_VERSION = (0x10, 0x01)
+MAX_PROCESS_INFO_SIZE_FIELD = 0xFFFFFF
+MAX_PROCESS_INFO_SIZE_FIELD_16 = 0xFFFF
 
 # This number is a rough estimate, but should not be less than the available space.
 # Currently, app_state uses up a small part of the app space.
@@ -63,8 +70,10 @@ MAX_APP_MEMORY_SIZE = 24 * 1024
 # See also WORKER_RAM in stm32f2xx_flash_fw.ld
 MAX_WORKER_MEMORY_SIZE = 10 * 1024
 
-ENTRY_PT_SYMBOL = "main"
+ENTRY_PT_SYMBOL = "pbl_process_entry"
+MAIN_SYMBOL = "main"
 JUMP_TABLE_ADDR_SYMBOL = "pbl_table_addr"
+ABS_RELOC_TYPES = ("R_ARM_ABS32", "R_ARM_TARGET1")
 DEBUG = False
 
 
@@ -154,7 +163,11 @@ def inject_metadata(
             if len(columns) < 6:
                 continue
 
-            if columns[0] == ".bss" or columns[0] == ".data" and last_section_end_addr == 0:
+            if (
+                columns[0] == ".bss"
+                or columns[0] == ".data"
+                and last_section_end_addr == 0
+            ):
                 addr = int(columns[2], 16)
                 size = int(columns[4], 16)
                 last_section_end_addr = addr + size
@@ -172,31 +185,27 @@ def inject_metadata(
 
     def get_relocate_entries(elf_file):
         """returns a list of all the locations requiring an offset"""
-        # TODO: insert link to the wiki page I'm about to write about PIC and relocatable values
         entries = []
 
-        # get the .data locations
+        # Non-PIC libraries also embed absolute pointers in .text literal pools.
         readelf_relocs_process = Popen(
             ["arm-none-eabi-readelf", "-r", elf_file], stdout=PIPE
         )
         readelf_relocs_output = readelf_relocs_process.communicate()[0].decode("utf8")
         lines = readelf_relocs_output.splitlines()
 
-        i = 0
         reading_section = False
-        while i < len(lines):
-            if not reading_section:
-                # look for the next section
-                if lines[i].startswith("Relocation section '.rel.data"):
-                    reading_section = True
-                    i += 1  # skip the column title section
-            else:
-                if len(lines[i]) == 0:
-                    # end of the section
-                    reading_section = False
-                else:
-                    entries.append(int(lines[i].split(" ")[0], 16))
-            i += 1
+        for line in lines:
+            if line.startswith("Relocation section '"):
+                reading_section = line.startswith(
+                    ("Relocation section '.rel.text", "Relocation section '.rel.data")
+                )
+                continue
+            columns = line.split()
+            # PC-relative relocations are already resolved by the linker. R_ARM_TARGET1 (used by
+            # .init_array and .fini_array) is linked as absolute on arm-none-eabi.
+            if reading_section and len(columns) >= 3 and columns[2] in ABS_RELOC_TYPES:
+                entries.append(int(columns[0], 16))
 
         # get any Global Offset Table (.got) entries
         readelf_relocs_process = Popen(
@@ -222,11 +231,18 @@ def inject_metadata(
     nm_output = get_nm_output(target_elf)
 
     try:
-        app_entry_address = get_symbol_addr(nm_output, ENTRY_PT_SYMBOL)
+        main_address = get_symbol_addr(nm_output, MAIN_SYMBOL)
     except RuntimeError as e:
         raise RuntimeError(
             "Missing app entry point! Must be `int main(void) { ... }` "
         ) from e
+
+    # A libpebble.a built before it had an entry point leaves main as the entry.
+    try:
+        app_entry_address = get_symbol_addr(nm_output, ENTRY_PT_SYMBOL)
+    except RuntimeError:
+        app_entry_address = main_address
+
     jump_table_address = get_symbol_addr(nm_output, JUMP_TABLE_ADDR_SYMBOL)
 
     reloc_entries = get_relocate_entries(target_elf)
@@ -252,20 +268,48 @@ def inject_metadata(
                 f"than {max_binary_size:d} bytes"
             )
 
-        # Checked here so the pack() below cannot raise a bare struct.error.
-        if app_load_size > MAX_PROCESS_INFO_SIZE_FIELD:
-            raise RuntimeError(
-                f"App load size is {app_load_size:d} bytes. The loaded image must be {MAX_PROCESS_INFO_SIZE_FIELD:d} bytes or smaller, "
-                "because PebbleProcessInfo.load_size is a uint16_t. The relocation table is "
-                "stored past the loaded image and does not count towards this."
-            )
-
         def read_value_at_offset(offset, format_str, size):
             f.seek(offset)
             return unpack(format_str, f.read(size))
 
+        def write_value_at_offset(offset, format_str, value):
+            f.seek(offset)
+            f.write(pack(format_str, value))
+
+        # The firmware only reads the high bytes from 0x10.0x01, so a header compiled from an older
+        # pebble_process_info.h keeps the 16-bit limit rather than failing its CRC on the watch
+        struct_version = read_value_at_offset(STRUCT_VERSION_ADDR, "<BB", 2)
+        wide_sizes = struct_version >= FIRST_WIDE_SIZE_STRUCT_VERSION
+        max_size_field = (
+            MAX_PROCESS_INFO_SIZE_FIELD if wide_sizes else MAX_PROCESS_INFO_SIZE_FIELD_16
+        )
+        size_bits = 24 if wide_sizes else 16
+
+        # Checked here so the pack() calls below cannot raise a bare struct.error.
+        if app_load_size > max_size_field:
+            raise RuntimeError(
+                f"App load size is {app_load_size:d} bytes. The loaded image must be {max_size_field:d} bytes or smaller, "
+                f"because PebbleProcessInfo {struct_version[0]:#04x}.{struct_version[1]:#04x} carries load_size in {size_bits} bits. "
+                "The relocation table is stored past the loaded image and does not count towards this."
+            )
+
+        app_virtual_size = get_virtual_size(target_elf)
+
+        # Same ceiling as load_size, on the .text + .data + .bss total this time.
+        if app_virtual_size > max_size_field:
+            raise RuntimeError(
+                f"App virtual size is {app_virtual_size:d} bytes (.text + .data + .bss). Must be {max_size_field:d} bytes or "
+                f"smaller, because PebbleProcessInfo {struct_version[0]:#04x}.{struct_version[1]:#04x} carries virtual_size in {size_bits} bits."
+            )
+
+        # The high bytes sit inside the CRC range, so they go in before the CRC is taken
+        if wide_sizes:
+            write_value_at_offset(LOAD_SIZE_HI_ADDR, "<B", app_load_size >> 16)
+            write_value_at_offset(VIRTUAL_SIZE_HI_ADDR, "<B", app_virtual_size >> 16)
+
+        f.seek(0)
         app_bin = f.read()
-        app_crc = stm32_crc.crc32(app_bin[STRUCT_SIZE_BYTES:])
+        app_crc = stm32_crc.crc32(app_bin[CRC_START_ADDR:])
 
         [app_flags] = read_value_at_offset(FLAGS_ADDR, "<L", 4)
 
@@ -274,15 +318,6 @@ def inject_metadata(
 
         if has_worker:
             app_flags = app_flags | PROCESS_INFO_HAS_WORKER
-
-        app_virtual_size = get_virtual_size(target_elf)
-
-        # Same uint16_t ceiling as load_size, on the .text + .data + .bss total this time.
-        if app_virtual_size > MAX_PROCESS_INFO_SIZE_FIELD:
-            raise RuntimeError(
-                f"App virtual size is {app_virtual_size:d} bytes (.text + .data + .bss). Must be {MAX_PROCESS_INFO_SIZE_FIELD:d} bytes or "
-                "smaller, because PebbleProcessInfo.virtual_size is a uint16_t."
-            )
 
         struct_changes = {
             "load_size": app_load_size,
@@ -296,11 +331,7 @@ def inject_metadata(
             "virtual_size": app_virtual_size,
         }
 
-        def write_value_at_offset(offset, format_str, value):
-            f.seek(offset)
-            f.write(pack(format_str, value))
-
-        write_value_at_offset(LOAD_SIZE_ADDR, "<H", app_load_size)
+        write_value_at_offset(LOAD_SIZE_ADDR, "<H", app_load_size & 0xFFFF)
         write_value_at_offset(OFFSET_ADDR, "<L", app_entry_address)
         write_value_at_offset(CRC_ADDR, "<L", app_crc)
 
@@ -313,7 +344,7 @@ def inject_metadata(
 
         write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", len(reloc_entries))
 
-        write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", app_virtual_size)
+        write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", app_virtual_size & 0xFFFF)
 
         # Write the reloc_entries past the end of the binary. This expands the size of the binary,
         # but this new stuff won't actually be loaded into ram.

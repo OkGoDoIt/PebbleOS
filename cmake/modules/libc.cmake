@@ -5,7 +5,7 @@
 # PBL_LIBC_LINK_FLAGS and PBL_LIBC_LIBS for the firmware link, and adds
 # the flags that make the toolchain libc match what the firmware expects:
 # 32-bit time_t, the integer-only printf aliases, and the POSIX/BSD names
-# that -std=c11 would otherwise hide.
+# that -std=c23 would otherwise hide.
 
 # newlib defaults time_t to 64-bit; keep it 32-bit (long) to match the
 # firmware's RTC/storage and its %ld format strings.
@@ -172,6 +172,20 @@ elseif(CONFIG_LIBC_PICOLIBC)
   # link, so it belongs on the compile and the link line.
   pbl_libc_add_flags(-specs=${pbl_picolibc_specs} ${pbl_default_source_define}
                      ${pbl_sniprintf_defines})
+elseif(CONFIG_LIBC_HOST)
+  set(PBL_LIBC_LINK_FLAGS "")
+  set(PBL_LIBC_LIBS m)
+  pbl_libc_add_flags(${pbl_default_source_define} ${pbl_sniprintf_defines})
+  # What --wrap does on the target: the firmware allocates from its own
+  # heaps. Only the firmware libraries are renamed (through pbl_interface),
+  # not the host side nor the host libraries.
+  set(PBL_LIBC_DEFINITIONS
+    malloc=__wrap_malloc
+    free=__wrap_free
+    realloc=__wrap_realloc
+    calloc=__wrap_calloc
+  )
+  message(STATUS "libc: host")
 else()
   message(FATAL_ERROR "No C library selected (see lib/c/Kconfig)")
 endif()

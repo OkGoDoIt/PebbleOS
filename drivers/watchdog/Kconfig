@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig WATCHDOG
+    bool "Watchdog"
+    help
+      Watchdog Drivers
+
+if WATCHDOG
+
+config WATCHDOG_TIMEOUT_MS
+    int "Timeout in milliseconds"
+    default 8000 if WATCHDOG_NRF5
+    default 30000
+    help
+      Time without a feed after which the hardware watchdog resets the
+      system. The task watchdog feeds it on every check.
+
+      The nRF5 watchdog cannot be reconfigured once running, and the
+      bootloader starts it: there this must match the bootloader timeout.
+
+config WATCHDOG_NRF5
+    bool "Nordic nRF5"
+    default y if SOC_NRF52
+    select HAL_NORDIC
+    help
+      Support for the Nordic nRF5 watchdog.
+
+config WATCHDOG_SF32LB
+    bool "SiFli SF32LB"
+    default y if SOC_SF32LB52
+    select HAL_SIFLI
+    help
+      Support for the SiFli SF32LB watchdog.
+
+config WATCHDOG_QEMU
+    bool "QEMU Watchdog"
+    default y if SOC_QEMU
+    help
+      Support for the CMSDK APB watchdog of the QEMU Pebble machines.
+
+endif # WATCHDOG

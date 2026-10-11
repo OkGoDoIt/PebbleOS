@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include "pbl/services/phone_call.h"
+#include <pbl/services/phone_call.h>
 
-PebblePhoneCaller* phone_call_util_create_caller(const char *number, const char *name) {
+PebblePhoneCaller *phone_call_util_create_caller(const char *number, const char *name) {
   return NULL;
 }
 

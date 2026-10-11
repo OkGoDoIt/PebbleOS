@@ -3,15 +3,16 @@
 
 #pragma once
 
-#include "system/passert.h"
-
 #include "stubs_passert.h"
 
-void system_reset_prepare(void) {}
+#include <system/passert.h>
+
+void system_reset_prepare(void) {
+}
 
 void system_reset(void) {
   PBL_ASSERT(false, "System reset triggered!");
 }
 
-void system_reset_callback(void *callback) {}
-
+void system_reset_callback(void *callback) {
+}

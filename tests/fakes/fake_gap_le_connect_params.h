@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include "comm/ble/gap_le_connect_params.h"
+#include <comm/ble/gap_le_connect_params.h>
 
 void fake_gap_le_connect_params_init(void);
 
-ResponseTimeState fake_gap_le_connect_params_get_last_requested(void);
+enum pbl_bt_response_time_state fake_gap_le_connect_params_get_last_requested(void);
 
 void fake_gap_le_connect_params_reset_last_requested(void);
 
-void fake_gap_le_connect_params_set_actual_state(ResponseTimeState actual_state);
+void fake_gap_le_connect_params_set_actual_state(enum pbl_bt_response_time_state actual_state);

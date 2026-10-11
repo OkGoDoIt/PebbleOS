@@ -1,17 +1,20 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "drivers/watchdog.h"
-#include "system/passert.h"
+#include <pbl/kernel/init.h>
 
 #include <bf0_hal.h>
+#include <drivers/watchdog.h>
+#include <system/passert.h>
 
-#define HCPU_FREQ_MHZ 240
+#define HCPU_FREQ_MHZ    240
 #define PWRKEY_RESET_CNT (32000 * 15)
 
-void soc_early_init(void) {
+void pbl_soc_early_init(void) {
   HAL_StatusTypeDef ret;
   uint32_t bootopt;
+
+  SystemInit();
 
   // Adjust bootrom pull-up/down delays on PA21 (flash power control pin) so
   // that the flash is properly power cycled on reset. A flash power cycle is
@@ -47,10 +50,8 @@ void soc_early_init(void) {
 
   HAL_PMU_LpCLockSelect(PMU_LPCLK_RC32);
 
-#ifndef CONFIG_NO_WATCHDOG
   watchdog_init();
   watchdog_start();
-#endif
 
   HAL_PMU_EnableDLL(1);
 #ifdef SF32LB52_USE_LXT
@@ -79,7 +80,7 @@ void soc_early_init(void) {
   __HAL_SYSCFG_CLEAR_SECURITY();
   HAL_EFUSE_Init();
 
-  //set Sifli chipset pwrkey reset time to 15s, so it always use PMIC cold reboot for long press 
+  // set Sifli chipset pwrkey reset time to 15s, so it always use PMIC cold reboot for long press
   hwp_pmuc->PWRKEY_CNT = PWRKEY_RESET_CNT;
 
   // Disable 1V8 LDO (feeds PSRAM, we use VDD_SiP to power it)

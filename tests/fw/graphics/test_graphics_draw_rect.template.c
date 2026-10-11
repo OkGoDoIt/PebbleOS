@@ -1,14 +1,14 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/graphics.h"
-#include "applib/graphics/framebuffer.h"
+#include <applib/graphics/graphics.h>
+#include <applib/graphics/framebuffer.h>
 
-#include "applib/ui/window_private.h"
-#include "applib/ui/layer.h"
+#include <applib/ui/window_private.h>
+#include <applib/ui/layer.h>
 
 
-#include "clar.h"
+#include <clar.h>
 #include "util.h"
 
 #include <stdio.h>
@@ -16,12 +16,12 @@
 // Helper Functions
 ////////////////////////////////////
 #include "test_graphics.h"
-#include "${BIT_DEPTH_NAME}/test_framebuffer.h"
+#include <${BIT_DEPTH_NAME}/test_framebuffer.h>
 
 // Stubs
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
-#include "stubs_applib_resource.h"
+#include <stubs_applib_resource.h>
 
 static FrameBuffer *fb = NULL;
 
@@ -631,6 +631,7 @@ void test_graphics_draw_rect_${BIT_DEPTH_NAME}__clipping_rect_aa(void) {
 #define OVERLAP_RECT               GRect(0,0,20,20)
 #define CORNER_RADIUS_RECT         GRect(5,24,20,20)
 
+#if CONFIG_SCREEN_COLOR_DEPTH_BITS == 1
 static void prv_draw_dither_rects(GContext* ctx, GColor8 fill_color) {
   test_graphics_context_init(ctx, fb);
   graphics_context_set_fill_color(ctx, fill_color);
@@ -646,6 +647,7 @@ static void prv_draw_dither_rects(GContext* ctx, GColor8 fill_color) {
 
   cl_check(gbitmap_pbi_eq(&ctx->dest_bitmap, "draw_multiple_rect_dithered.${BIT_DEPTH_NAME}.pbi"));
 }
+#endif
 
 void test_graphics_draw_rect_${BIT_DEPTH_NAME}__dithering_gray(void) {
 #if CONFIG_SCREEN_COLOR_DEPTH_BITS == 1

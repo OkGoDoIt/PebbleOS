@@ -1,0 +1,17 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <kernel/events.h>
+#include <process_management/app_install_types.h>
+#include <shell/system_shell.h>
+
+const CompositorTransition *shell_get_close_compositor_animation(AppInstallId current_app_id,
+                                                                 AppInstallId next_app_id) {
+  return NULL;
+}
+
+const CompositorTransition *shell_get_open_compositor_animation(AppInstallId current_app_id,
+                                                                AppInstallId next_app_id,
+                                                                const LaunchConfigCommon *config) {
+  return NULL;
+}

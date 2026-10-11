@@ -1,8 +1,8 @@
 # Running and writing tests
 
-Unit tests live under `tests/` and run on the host (not on device or QEMU),
-using a vendored copy of the [clar](https://github.com/clar-test/clar) test
-framework in `tools/clar/`. Code under test is compiled for the host together
+Unit tests live under `tests/` and run on the host (not on device or QEMU;
+for those, see [](integration_tests.md)), using a vendored copy of the
+[clar](https://github.com/clar-test/clar) test framework in `tools/clar/`. Code under test is compiled for the host together
 with fakes and stubs that replace hardware and OS dependencies.
 
 ## Running tests
@@ -58,9 +58,9 @@ generator (`tools/clar/clar.py`) scans the file for functions named
 `test_<suite>__<case>` — no manual registration is needed:
 
 ```c
-#include "clar.h"
+#include <clar.h>
 
-#include "pbl/util/crc32.h"
+#include <pbl/crc/crc.h>
 
 void test_crc32__initialize(void) {
   // optional: runs before each test case
@@ -71,7 +71,7 @@ void test_crc32__cleanup(void) {
 }
 
 void test_crc32__empty(void) {
-  cl_assert_equal_i(crc32(0, NULL, 0), 0);
+  cl_assert_equal_i(pbl_crc32(0, NULL, 0), 0);
 }
 ```
 
@@ -86,15 +86,18 @@ files to compile:
 pbl_clar_test(test_crc32)
 ```
 
-`crc32.c` lives in `libutil`, which `pbl_clar_test()` always links; code
-that is not part of the always-linked libraries — and any fakes from
+`pbl_crc32()` lives in `libcrc`, one of the static libraries
+`pbl_clar_test()` always links along with `libutil` and `libbtutil`. A test
+or stub defining one of their functions, weak or not, replaces the library
+copy, since the linker only pulls an archive member for undefined symbols.
+Code that is not part of the always-linked libraries — and any fakes from
 `tests/fakes/` — is listed explicitly under `SOURCES`, as paths relative to
 the repository root:
 
 ```cmake
 pbl_clar_test(test_pfs
   SOURCES
-    src/fw/services/filesystem/pfs.c
+    fw/services/filesystem/pfs.c
     tests/fakes/fake_rtc.c
   OVERRIDES dummy_board
 )

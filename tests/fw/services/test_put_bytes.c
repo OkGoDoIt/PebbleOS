@@ -1,54 +1,48 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/services/put_bytes/put_bytes.h"
-
-#include "pbl/services/comm_session/session_receive_router.h"
-#include "pbl/kernel/types.h"
-#include "system/bootbits.h"
-#include "system/firmware_storage.h"
-#include <pbl/logging/logging.h>
-#include "pbl/util/attributes.h"
-#include "util/net.h"
-
-#include <bluetooth/conn_event_stats.h>
-
-#include "pbl/kernel/sem.h"
-
-#include "clar.h"
-
 #include <limits.h>
 
-#include "fake_events.h"
-#include "fake_pbl_malloc.h"
-#include "fake_new_timer.h"
-#include "fake_put_bytes_storage_mem.h"
-#include "fake_sem.h"
-#include "fake_rtc.h"
-#include "fake_session.h"
-#include "fake_spi_flash.h"
-#include "fake_system_task.h"
+#include <pbl/bluetooth/conn_event_stats.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/sem.h>
+#include <pbl/kernel/types.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/comm_session/session_receive_router.h>
+#include <pbl/services/put_bytes/put_bytes.h>
+#include <pbl/util/byteorder.h>
 
-#include "stubs_bt_lock.h"
-#include "stubs_irq.h"
-#include "stubs_hexdump.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pfs.h"
-#include "stubs_prompt.h"
-#include "stubs_serial.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_tick.h"
+#include <clar.h>
+#include <fake_events.h>
+#include <fake_new_timer.h>
+#include <fake_pbl_malloc.h>
+#include <fake_put_bytes_storage_mem.h>
+#include <fake_rtc.h>
+#include <fake_sem.h>
+#include <fake_session.h>
+#include <fake_spi_flash.h>
+#include <fake_system_task.h>
+#include <stubs_bt_lock.h>
+#include <stubs_hexdump.h>
+#include <stubs_irq.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pfs.h>
+#include <stubs_serial.h>
+#include <stubs_task_wdt.h>
+#include <stubs_tick.h>
+#include <system/bootbits.h>
+#include <system/firmware_storage.h>
 
-extern struct pbl_sem * put_bytes_get_semaphore(void);
+extern struct pbl_sem *put_bytes_get_semaphore(void);
 extern TimerID put_bytes_get_timer_id(void);
 extern uint32_t put_bytes_get_index(void);
 extern uint8_t prv_put_bytes_get_max_batched_pb_ops(void);
 
 extern const ReceiverImplementation g_put_bytes_receiver_impl;
 
-static const PebbleProtocolEndpoint s_put_bytes_endpoint = (const PebbleProtocolEndpoint) {
+static const PebbleProtocolEndpoint s_put_bytes_endpoint = (const PebbleProtocolEndpoint){
   .endpoint_id = 0xBEEF,
   .handler = NULL,
   .access_mask = PebbleProtocolAccessPrivate,
@@ -72,18 +66,14 @@ bool firmware_update_is_in_progress(void) {
 void psleep(int millis) {
 }
 
-void app_storage_get_file_name(char *name, size_t buf_length,
-                               AppInstallId app_id, PebbleTask task) {
+void app_storage_get_file_name(char *name, size_t buf_length, AppInstallId app_id,
+                               PebbleTask task) {
   strcpy(name, "t");
 }
 
-void bluetooth_analytics_handle_put_bytes_stats(bool successful, uint8_t type, uint32_t total_size,
-                                                uint32_t elapsed_time_ms,
-                                                const SlaveConnEventStats *orig_stats) {
-}
-
-bool bt_driver_analytics_get_conn_event_stats(SlaveConnEventStats *stats) {
-  return false;
+void bluetooth_analytics_handle_put_bytes_stats(
+    bool successful, uint8_t type, uint32_t total_size, uint32_t elapsed_time_ms,
+    const struct pbl_bt_slave_conn_event_stats *orig_stats) {
 }
 
 typedef enum {
@@ -101,10 +91,10 @@ typedef enum {
 } Response;
 
 // Send an INIT message
-typedef struct PACKED {
-  Cmd cmd:8;
+typedef struct PBL_PACKED {
+  Cmd cmd : 8;
   uint32_t total_size;
-  PutBytesObjectType type:8;
+  PutBytesObjectType type : 8;
   union {
     struct {
       uint8_t index;
@@ -114,31 +104,31 @@ typedef struct PACKED {
   };
 } InitRequest;
 
-typedef struct PACKED {
-  Cmd cmd:8;
+typedef struct PBL_PACKED {
+  Cmd cmd : 8;
   uint32_t cookie;
   uint32_t payload_size;
   uint8_t payload[];
 } PutRequest;
 
-typedef struct PACKED {
-  Cmd cmd:8;
+typedef struct PBL_PACKED {
+  Cmd cmd : 8;
   uint32_t cookie;
 } InstallRequest;
 
-typedef struct PACKED {
-  Cmd cmd:8;
+typedef struct PBL_PACKED {
+  Cmd cmd : 8;
   uint32_t cookie;
 } AbortRequest;
 
-typedef struct PACKED {
-  Cmd cmd:8;
+typedef struct PBL_PACKED {
+  Cmd cmd : 8;
   uint32_t cookie;
   uint32_t crc;
 } CommitRequest;
 
-typedef struct PACKED {
-  Response response:8;
+typedef struct PBL_PACKED {
+  Response response : 8;
   uint32_t cookie;
 } ResponseMsg;
 
@@ -151,16 +141,15 @@ static CommSession *s_session;
 // Helpers
 ///////////////////////////////////////////////////////////
 
-#define VALID_OBJECT_SIZE (4)
-#define PUT_BYTES_TIMEOUT_MS (30000)
-#define EXPECTED_CRC (0x12345678)
-#define EXPECTED_COOKIE (0xabcd1234)
+#define VALID_OBJECT_SIZE      (4)
+#define PUT_BYTES_TIMEOUT_MS   (30000)
+#define EXPECTED_CRC           (0x12345678)
+#define EXPECTED_COOKIE        (0xabcd1234)
 #define EXPECT_INIT_TIMEOUT_MS (1000)
 
+static void (*s_do_before_write)(void);
 
-static void(*s_do_before_write)(void);
-
-static void prv_receive_data(CommSession *session, const uint8_t* data, size_t length) {
+static void prv_receive_data(CommSession *session, const uint8_t *data, size_t length) {
   Receiver *r = g_put_bytes_receiver_impl.prepare(session, &s_put_bytes_endpoint, length);
   if (r) {
     if (s_do_before_write) {
@@ -174,33 +163,33 @@ static void prv_receive_data(CommSession *session, const uint8_t* data, size_t l
 }
 
 static void prv_receive_init(uint32_t total_size, PutBytesObjectType object_type) {
-  InitRequest init_msg = (InitRequest) {
+  InitRequest init_msg = (InitRequest){
     .cmd = CmdInit,
-    .total_size = htonl(total_size),
+    .total_size = pbl_cpu_to_be32(total_size),
     .type = object_type,
-    .cookie = htonl(1),
+    .cookie = pbl_cpu_to_be32(1),
   };
-  prv_receive_data(s_session, (const uint8_t *) &init_msg, sizeof(init_msg));
+  prv_receive_data(s_session, (const uint8_t *)&init_msg, sizeof(init_msg));
 }
 
 static void prv_receive_init_cookie(uint32_t total_size, PutBytesObjectType object_type,
                                     uint32_t cookie) {
-  InitRequest init_msg = (InitRequest) {
+  InitRequest init_msg = (InitRequest){
     .cmd = CmdInit,
-    .total_size = htonl(total_size),
+    .total_size = pbl_cpu_to_be32(total_size),
     .type = object_type | (1 << 7),
-    .cookie = htonl(cookie),
+    .cookie = pbl_cpu_to_be32(cookie),
   };
-  prv_receive_data(s_session, (const uint8_t *) &init_msg, sizeof(init_msg));
+  prv_receive_data(s_session, (const uint8_t *)&init_msg, sizeof(init_msg));
 }
 
 static void prv_receive_init_file(uint32_t total_size, const char *fn, size_t fn_len) {
   uint8_t buffer[sizeof(InitRequest) + fn_len];
 
   InitRequest *init_msg = (InitRequest *)buffer;
-  *init_msg = (InitRequest) {
+  *init_msg = (InitRequest){
     .cmd = CmdInit,
-    .total_size = htonl(total_size),
+    .total_size = pbl_cpu_to_be32(total_size),
     .type = ObjectFile,
   };
   memcpy(&init_msg->filename[0], fn, fn_len);
@@ -211,60 +200,60 @@ static void prv_receive_put(uint32_t cookie, const uint8_t *payload, uint32_t pa
   uint8_t buffer[sizeof(PutRequest) + payload_size];
 
   PutRequest *put_msg = (PutRequest *)buffer;
-  *put_msg = (PutRequest) {
+  *put_msg = (PutRequest){
     .cmd = CmdPut,
-    .cookie = htonl(cookie),
-    .payload_size = htonl(payload_size),
+    .cookie = pbl_cpu_to_be32(cookie),
+    .payload_size = pbl_cpu_to_be32(payload_size),
   };
   memcpy(&put_msg->payload[0], payload, payload_size);
   prv_receive_data(s_session, buffer, sizeof(buffer));
 }
 
 static void prv_receive_commit(uint32_t cookie, uint32_t crc) {
-  CommitRequest commit_msg = (CommitRequest) {
+  CommitRequest commit_msg = (CommitRequest){
     .cmd = CmdCommit,
-    .cookie = htonl(cookie),
-    .crc = htonl(crc),
+    .cookie = pbl_cpu_to_be32(cookie),
+    .crc = pbl_cpu_to_be32(crc),
   };
   prv_receive_data(s_session, (const uint8_t *)&commit_msg, sizeof(commit_msg));
 }
 
 static void prv_receive_abort(uint32_t cookie) {
-  AbortRequest abort_msg = (AbortRequest) {
+  AbortRequest abort_msg = (AbortRequest){
     .cmd = CmdAbort,
-    .cookie = htonl(cookie),
+    .cookie = pbl_cpu_to_be32(cookie),
   };
-  prv_receive_data(s_session, (const uint8_t *) &abort_msg, sizeof(abort_msg));
+  prv_receive_data(s_session, (const uint8_t *)&abort_msg, sizeof(abort_msg));
 }
 
 static void prv_receive_install(uint32_t cookie) {
-  InstallRequest install_msg = (InstallRequest) {
+  InstallRequest install_msg = (InstallRequest){
     .cmd = CmdInstall,
-    .cookie = htonl(cookie),
+    .cookie = pbl_cpu_to_be32(cookie),
   };
-  prv_receive_data(s_session, (const uint8_t *) &install_msg, sizeof(install_msg));
+  prv_receive_data(s_session, (const uint8_t *)&install_msg, sizeof(install_msg));
 }
 
-#define assert_ack_count(c) \
-  { \
+#define assert_ack_count(c)                \
+  {                                        \
     fake_comm_session_process_send_next(); \
     cl_assert_equal_i(s_acks_received, c); \
   }
 
-#define assert_nack_count(c) \
-  { \
-    fake_comm_session_process_send_next(); \
+#define assert_nack_count(c)                \
+  {                                         \
+    fake_comm_session_process_send_next();  \
     cl_assert_equal_i(s_nacks_received, c); \
   }
 
-#define assert_cleanup_event(object_type_, object_size_) \
-  PebbleEvent event = fake_event_get_last(); \
-  cl_assert_equal_i(event.type, PEBBLE_PUT_BYTES_EVENT); \
+#define assert_cleanup_event(object_type_, object_size_)                   \
+  PebbleEvent event = fake_event_get_last();                               \
+  cl_assert_equal_i(event.type, PEBBLE_PUT_BYTES_EVENT);                   \
   cl_assert_equal_i(event.put_bytes.type, PebblePutBytesEventTypeCleanup); \
-  cl_assert_equal_i(event.put_bytes.object_type, object_type_); \
-  cl_assert_equal_i(event.put_bytes.total_size, object_size_); \
-  cl_assert_equal_i(event.put_bytes.progress_percent, 0); \
-  cl_assert_equal_b(event.put_bytes.failed, true); \
+  cl_assert_equal_i(event.put_bytes.object_type, object_type_);            \
+  cl_assert_equal_i(event.put_bytes.total_size, object_size_);             \
+  cl_assert_equal_i(event.put_bytes.progress_percent, 0);                  \
+  cl_assert_equal_b(event.put_bytes.failed, true);
 
 static void prv_receive_init_fw_object(void) {
   prv_receive_init(VALID_OBJECT_SIZE, ObjectFirmware);
@@ -284,7 +273,7 @@ static void prv_receive_init_and_put_fw_object(void) {
   fake_comm_session_process_send_next();
   fake_system_task_callbacks_invoke_pending();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc, 0xdd };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc, 0xdd};
   prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
   prv_process_and_reset_test_counters();
 }
@@ -299,7 +288,7 @@ static void prv_receive_init_put_commit_and_install(PutBytesObjectType object_ty
   prv_receive_init(VALID_OBJECT_SIZE, object_type);
   prv_process_and_reset_test_counters();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc, 0xdd };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc, 0xdd};
   prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
   prv_process_and_reset_test_counters();
 
@@ -312,8 +301,8 @@ static void prv_receive_init_put_commit_and_install(PutBytesObjectType object_ty
 // Tests
 ///////////////////////////////////////////////////////////
 
-static void prv_system_msg_sent_callback(uint16_t endpoint_id,
-                                         const uint8_t* data, unsigned int data_length) {
+static void prv_system_msg_sent_callback(uint16_t endpoint_id, const uint8_t *data,
+                                         unsigned int data_length) {
   if (endpoint_id != 0xBEEF) {
     // Not the put bytes endpoint, ignore
     return;
@@ -323,7 +312,7 @@ static void prv_system_msg_sent_callback(uint16_t endpoint_id,
   cl_assert_equal_i(data_length, 5);
 
   ResponseMsg *response_msg = (ResponseMsg *)data;
-  s_last_response_cookie = ntohl(response_msg->cookie);
+  s_last_response_cookie = pbl_be32_to_cpu(response_msg->cookie);
   if (response_msg->response == ResponseAck) {
     ++s_acks_received;
   } else if (response_msg->response == ResponseNack) {
@@ -337,8 +326,8 @@ void test_put_bytes__initialize(void) {
   fake_comm_session_init();
   fake_event_reset_count();
 
-  Transport *transport = fake_transport_create(TransportDestinationSystem, NULL,
-                                               prv_system_msg_sent_callback);
+  Transport *transport =
+      fake_transport_create(TransportDestinationSystem, NULL, prv_system_msg_sent_callback);
   s_session = fake_transport_set_connected(transport, true /* connected */);
   cl_assert_equal_p(comm_session_get_system_session(), s_session);
 
@@ -368,7 +357,6 @@ void test_put_bytes__cleanup(void) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Misc
-
 
 static pbl_tick_t prv_taking_too_long_yield_cb(struct pbl_sem *queue) {
   return pbl_ms_to_ticks(1000);
@@ -426,15 +414,15 @@ void test_put_bytes__cancel_between_prepare_and_finish(void) {
 
   s_do_before_write = prv_cancel_before_write_second_message;
 
-  const uint8_t payload[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t payload[] = {0xaa, 0xbb, 0xcc};
   prv_receive_put(s_last_response_cookie, payload, sizeof(payload));
 
   assert_nack_count(1);
 }
 
 void test_put_bytes__invalid_command_opcode(void) {
-  uint8_t invalid_cmd[] = { CmdInvalid };
-  prv_receive_data(s_session, (const uint8_t *) invalid_cmd, sizeof(invalid_cmd));
+  uint8_t invalid_cmd[] = {CmdInvalid};
+  prv_receive_data(s_session, (const uint8_t *)invalid_cmd, sizeof(invalid_cmd));
 
   // Messages with invalid command opcodes are NACK'd:
   assert_ack_count(0);
@@ -477,8 +465,7 @@ void test_put_bytes__init_too_large(void) {
 
 void test_put_bytes__init_msg_incomplete(void) {
   const uint8_t incomplete_init_msg = CmdInit;
-  prv_receive_data(s_session, (const uint8_t *) &incomplete_init_msg,
-                                  sizeof(incomplete_init_msg));
+  prv_receive_data(s_session, (const uint8_t *)&incomplete_init_msg, sizeof(incomplete_init_msg));
   assert_ack_count(0);
   assert_nack_count(1);
 }
@@ -549,7 +536,7 @@ void test_put_bytes__init_worker_okay_while_not_in_fw_update_mode(void) {
 }
 
 void test_put_bytes__init_nack_upon_oom(void) {
-  fake_malloc_set_largest_free_block(1024);  // PutBytes allocates ~2K
+  fake_malloc_set_largest_free_block(1024); // PutBytes allocates ~2K
   prv_receive_init(1024 * 1024, ObjectFirmware);
 
   fake_malloc_set_largest_free_block(~0);
@@ -565,8 +552,7 @@ void test_put_bytes__put_message_too_short(void) {
   prv_process_and_reset_test_counters();
 
   const uint8_t incomplete_put_msg = CmdPut;
-  prv_receive_data(s_session, (const uint8_t *) &incomplete_put_msg,
-                                  sizeof(incomplete_put_msg));
+  prv_receive_data(s_session, (const uint8_t *)&incomplete_put_msg, sizeof(incomplete_put_msg));
   assert_ack_count(0);
   assert_nack_count(1);
 }
@@ -576,14 +562,14 @@ void test_put_bytes__put_message_length_field_too_long(void) {
   prv_process_and_reset_test_counters();
 
   const size_t payload_size = 2;
-  const uint8_t chunk[] = { 0xaa, 0xbb };
+  const uint8_t chunk[] = {0xaa, 0xbb};
   uint8_t buffer[sizeof(PutRequest) + payload_size];
 
   PutRequest *put_msg = (PutRequest *)buffer;
-  *put_msg = (PutRequest) {
+  *put_msg = (PutRequest){
     .cmd = CmdPut,
-    .cookie = htonl(s_last_response_cookie),
-    .payload_size = htonl(payload_size) + 1 /* one off! */,
+    .cookie = pbl_cpu_to_be32(s_last_response_cookie),
+    .payload_size = pbl_cpu_to_be32(payload_size) + 1 /* one off! */,
   };
   memcpy(&put_msg->payload[0], chunk, payload_size);
   prv_receive_data(s_session, buffer, sizeof(buffer));
@@ -596,7 +582,7 @@ void test_put_bytes__invalid_session_cookie(void) {
   prv_receive_init_fw_object();
   prv_process_and_reset_test_counters();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc};
   prv_receive_put(~s_last_response_cookie, chunk, sizeof(chunk));
 
   assert_ack_count(0);
@@ -609,7 +595,7 @@ void test_put_bytes__not_in_fw_update_mode(void) {
 
   s_firmware_update_is_in_progress = false;
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc};
   prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
 
   assert_ack_count(0);
@@ -621,7 +607,7 @@ void test_put_bytes__previous_chunk_not_acked_yet(void) {
   prv_receive_init(VALID_OBJECT_SIZE * max_put_ops, ObjectFirmware);
   prv_process_and_reset_test_counters();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc};
   uint8_t max_pb_ops = prv_put_bytes_get_max_batched_pb_ops();
   for (int i = 0; i <= max_pb_ops; i++) {
     prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
@@ -648,7 +634,7 @@ void test_put_bytes__app_cancelled_before_chunk_got_processed(void) {
   prv_receive_init_cookie(VALID_OBJECT_SIZE, ObjectWatchApp, EXPECTED_COOKIE);
   prv_process_and_reset_test_counters();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc};
   prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
 
   put_bytes_cancel();
@@ -668,7 +654,7 @@ void test_put_bytes__chunk_written_to_storage_and_progress_event_put(void) {
   prv_receive_init_fw_object();
   prv_process_and_reset_test_counters();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc};
   prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
 
   assert_ack_count(1);
@@ -731,8 +717,7 @@ void test_put_bytes__commit_message_too_short(void) {
   prv_receive_init_and_put_fw_object();
 
   const uint8_t incomplete_put_msg = CmdCommit;
-  prv_receive_data(s_session, (const uint8_t *) &incomplete_put_msg,
-                                  sizeof(incomplete_put_msg));
+  prv_receive_data(s_session, (const uint8_t *)&incomplete_put_msg, sizeof(incomplete_put_msg));
   assert_ack_count(0);
   assert_nack_count(1);
 }
@@ -742,14 +727,14 @@ void test_put_bytes__commit_message_sent_while_previous_put_was_not_acked_yet(vo
   prv_receive_init(VALID_OBJECT_SIZE * max_put_ops, ObjectFirmware);
   prv_process_and_reset_test_counters();
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc, 0xdd };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc, 0xdd};
   for (int i = 0; i < max_put_ops; i++) {
     prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
   }
 
   prv_receive_commit(s_last_response_cookie, EXPECTED_CRC);
-  assert_ack_count(max_put_ops);  // For the Put(s)
-  assert_nack_count(1); // For the Commit
+  assert_ack_count(max_put_ops); // For the Put(s)
+  assert_nack_count(1);          // For the Commit
 }
 
 void test_put_bytes__commit_message_cookie_mismatch(void) {
@@ -777,19 +762,34 @@ void test_put_bytes__commit_message_crc_mismatch(void) {
   assert_nack_count(1);
 }
 
-void test_put_bytes__commit_message_fw_description_is_written(void) {
+static bool s_written_after_commit;
+
+static void prv_flag_write(void) {
+  s_written_after_commit = true;
+}
+
+void test_put_bytes__commit_message_fw_description(void) {
   prv_receive_init_and_put_fw_object();
+  s_written_after_commit = false;
+  fake_pb_storage_register_cb_before_write(prv_flag_write);
   prv_receive_commit(s_last_response_cookie, EXPECTED_CRC);
   fake_comm_session_process_send_next();
   fake_system_task_callbacks_invoke_pending();
+  fake_pb_storage_register_cb_before_write(NULL);
 
-  // Assert the FW description got written at the beginning of the storage:
+#ifdef CONFIG_PBLBOOT
+  cl_assert(!s_written_after_commit);
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc, 0xdd};
+  fake_pb_storage_mem_assert_contents_written(chunk, sizeof(chunk));
+#else
+  cl_assert(s_written_after_commit);
   const FirmwareDescription fw_descr = {
     .description_length = sizeof(FirmwareDescription),
     .firmware_length = VALID_OBJECT_SIZE,
     .checksum = EXPECTED_CRC,
   };
   fake_pb_storage_mem_assert_fw_description_written(&fw_descr);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -800,8 +800,7 @@ void test_put_bytes__abort_message_too_short(void) {
   prv_process_and_reset_test_counters();
 
   const uint8_t incomplete_abort_msg = CmdAbort;
-  prv_receive_data(s_session, (const uint8_t *) &incomplete_abort_msg,
-                                  sizeof(incomplete_abort_msg));
+  prv_receive_data(s_session, (const uint8_t *)&incomplete_abort_msg, sizeof(incomplete_abort_msg));
   assert_ack_count(0);
   assert_nack_count(1);
 }
@@ -843,8 +842,8 @@ void test_put_bytes__install_message_too_short(void) {
   prv_receive_init_put_and_commit_fw_object();
 
   const uint8_t incomplete_install_msg = CmdInstall;
-  prv_receive_data(s_session, (const uint8_t *) &incomplete_install_msg,
-                                  sizeof(incomplete_install_msg));
+  prv_receive_data(s_session, (const uint8_t *)&incomplete_install_msg,
+                   sizeof(incomplete_install_msg));
   assert_ack_count(0);
   assert_nack_count(1);
 }
@@ -863,6 +862,27 @@ void test_put_bytes__install_message_cookie_mismatch(void) {
   prv_receive_install(~s_last_response_cookie);
   assert_ack_count(0);
   assert_nack_count(1);
+}
+
+// The phone matches a response to the request it sent, and the commit that precedes an install has
+// already cleaned the transfer state up, so the install's own token is the only one left to answer
+// with.
+void test_put_bytes__install_ack_carries_the_install_token(void) {
+  prv_receive_init_put_and_commit_fw_object();
+  const uint32_t install_token = s_last_response_cookie;
+
+  prv_receive_install(install_token);
+  assert_ack_count(1);
+  cl_assert_equal_i(s_last_response_cookie, install_token);
+}
+
+void test_put_bytes__install_nack_carries_the_install_token(void) {
+  prv_receive_init_put_and_commit_fw_object();
+  const uint32_t unknown_token = ~s_last_response_cookie;
+
+  prv_receive_install(unknown_token);
+  assert_nack_count(1);
+  cl_assert_equal_i(s_last_response_cookie, unknown_token);
 }
 
 void test_put_bytes__install_message_prf_boot_bit_set(void) {
@@ -910,7 +930,7 @@ void test_put_bytes__put_chunk_restarts_timeout_timer(void) {
   TimerID timer_id = put_bytes_get_timer_id();
   new_timer_stop(timer_id);
 
-  const uint8_t chunk[] = { 0xaa, 0xbb, 0xcc };
+  const uint8_t chunk[] = {0xaa, 0xbb, 0xcc};
   prv_receive_put(s_last_response_cookie, chunk, sizeof(chunk));
   fake_system_task_callbacks_invoke_pending();
 
@@ -987,10 +1007,7 @@ void test_put_bytes__expect_init_event_upon_timeout(void) {
 void test_put_bytes__session_closed_after_fw_init(void) {
   prv_receive_init_fw_object();
 
-  PebbleCommSessionEvent app_event = {
-    .is_open = false,
-    .is_system = true
-  };
+  PebbleCommSessionEvent app_event = {.is_open = false, .is_system = true};
 
   // Close the BT session, have put_bytes react
   put_bytes_handle_comm_session_event(&app_event);
@@ -999,14 +1016,26 @@ void test_put_bytes__session_closed_after_fw_init(void) {
   assert_cleanup_event(ObjectFirmware, VALID_OBJECT_SIZE);
 }
 
+void test_put_bytes__session_opened_before_fw_init(void) {
+  put_bytes_expect_init(EXPECT_INIT_TIMEOUT_MS);
+
+  PebbleCommSessionEvent app_event = {.is_open = true, .is_system = true};
+
+  // The session opening is handled after the update started
+  put_bytes_handle_comm_session_event(&app_event);
+  fake_event_reset_count();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(fake_event_get_count(), 0);
+
+  prv_receive_init_fw_object();
+  assert_ack_count(1);
+  assert_nack_count(0);
+}
 
 void test_put_bytes__session_closed_after_expect_init(void) {
   put_bytes_expect_init(EXPECT_INIT_TIMEOUT_MS);
 
-  PebbleCommSessionEvent app_event = {
-    .is_open = false,
-    .is_system = true
-  };
+  PebbleCommSessionEvent app_event = {.is_open = false, .is_system = true};
 
   // Close the BT session, have put_bytes react
   put_bytes_handle_comm_session_event(&app_event);

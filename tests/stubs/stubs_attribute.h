@@ -3,15 +3,14 @@
 
 #pragma once
 
-#include "pbl/services/timeline/attribute.h"
+#include <pbl/services/timeline/attribute.h>
 
 const char *attribute_get_string(const AttributeList *attr_list, AttributeId id,
                                  char *default_value) {
   return NULL;
 }
 
-uint8_t attribute_get_uint8(const AttributeList *attr_list, AttributeId id,
-                            uint8_t default_value) {
+uint8_t attribute_get_uint8(const AttributeList *attr_list, AttributeId id, uint8_t default_value) {
   return 0;
 }
 
@@ -28,7 +27,8 @@ void attribute_list_add_uint32(AttributeList *list, AttributeId id, uint32_t uin
   return;
 }
 
-void attribute_list_add_string_list(AttributeList *list, AttributeId id, StringList *string_list) {
+void attribute_list_add_string_list(AttributeList *list, AttributeId id,
+                                    struct pbl_string_list *string_list) {
   return;
 }
 
@@ -36,8 +36,7 @@ void attribute_list_add_uint32_list(AttributeList *list, AttributeId id, Uint32L
   return;
 }
 
-void attribute_list_add_resource_id(AttributeList *list, AttributeId id,
-                                    uint32_t resource_id) {
+void attribute_list_add_resource_id(AttributeList *list, AttributeId id, uint32_t resource_id) {
   return;
 }
 

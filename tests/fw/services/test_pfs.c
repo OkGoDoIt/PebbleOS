@@ -1,50 +1,47 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <pbl/drivers/flash.h>
-#include "flash_region/flash_region.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/filesystem/flash_translation.h"
 #include <pbl/logging/logging.h>
-#include "system/passert.h"
-#include "pbl/util/math.h"
-#include "pbl/util/size.h"
+#include <pbl/services/filesystem/flash_translation.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
 
-#include "clar.h"
-
-#include "fake_spi_flash.h"
-#include "fake_rtc.h"
-#include "stubs_analytics.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_print.h"
-#include "stubs_prompt.h"
-#include "stubs_serial.h"
-#include "stubs_sleep.h"
-#include "stubs_task_watchdog.h"
+#include <clar.h>
+#include <fake_rtc.h>
+#include <fake_spi_flash.h>
+#include <flash_region/flash_region.h>
+#include <stubs_analytics.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_print.h>
+#include <stubs_serial.h>
+#include <stubs_sleep.h>
+#include <stubs_task_wdt.h>
+#include <system/passert.h>
 
 #define PFS_SECTOR_SIZE 4096
 
 // a - 4K file full of 1's
 static const char *const TEST_FILE_A_NAME = "a";
-static const size_t TEST_FILE_A_SIZE = 4096;
+#define TEST_FILE_A_SIZE 4096
 static char s_test_file_a[TEST_FILE_A_SIZE];
 
 // b - 0K file for appending
 static const char *const TEST_FILE_B_NAME = "b";
-static const size_t TEST_FILE_B_SIZE = 0;
-static const size_t TEST_FILE_B_APPEND_SIZE = 8000;
+#define TEST_FILE_B_APPEND_SIZE 8000
 static char s_test_file_b[TEST_FILE_B_APPEND_SIZE];
 
 // c - space to perform non-append writes
 static const char *const TEST_FILE_C_NAME = "c";
-static const size_t TEST_FILE_C_SIZE = 9001; // it's over 9000!
+#define TEST_FILE_C_SIZE 9001 // it's over 9000!
 static char s_test_file_c[TEST_FILE_C_SIZE];
 
 static uint32_t num_pages(void) {
@@ -61,18 +58,15 @@ void test_pfs__initialize(void) {
   int fd;
 
   memset(s_test_file_a, 0, sizeof(s_test_file_a));
-  fd = pfs_open(TEST_FILE_A_NAME, OP_FLAG_WRITE, FILE_TYPE_STATIC,
-      sizeof(s_test_file_a));
+  fd = pfs_open(TEST_FILE_A_NAME, OP_FLAG_WRITE, FILE_TYPE_STATIC, sizeof(s_test_file_a));
   pfs_write(fd, (uint8_t *)s_test_file_a, sizeof(s_test_file_a));
   pfs_close(fd);
 
   memset(s_test_file_b, 0, sizeof(s_test_file_b));
-  fd = pfs_open(TEST_FILE_B_NAME, OP_FLAG_WRITE, FILE_TYPE_STATIC,
-      sizeof(s_test_file_b));
+  fd = pfs_open(TEST_FILE_B_NAME, OP_FLAG_WRITE, FILE_TYPE_STATIC, sizeof(s_test_file_b));
   pfs_close(fd);
 
-  fd = pfs_open(TEST_FILE_C_NAME, OP_FLAG_WRITE, FILE_TYPE_STATIC,
-      sizeof (s_test_file_c));
+  fd = pfs_open(TEST_FILE_C_NAME, OP_FLAG_WRITE, FILE_TYPE_STATIC, sizeof(s_test_file_c));
   for (unsigned int i = 0; i < ARRAY_LENGTH(s_test_file_c); ++i) {
     s_test_file_c[i] = 'c';
   }
@@ -85,7 +79,7 @@ void test_pfs__cleanup(void) {
 }
 
 void test_pfs__create(void) {
-  char hello[] = { 'h', 'e', 'l', 'l', 'o' };
+  char hello[] = {'h', 'e', 'l', 'l', 'o'};
   int fd_z = pfs_open("z", OP_FLAG_WRITE, FILE_TYPE_STATIC, sizeof(hello));
   cl_assert(fd_z >= 0);
   int bytes_written = pfs_write(fd_z, (uint8_t *)hello, sizeof(hello));
@@ -124,8 +118,7 @@ void test_pfs__garbage_collection(void) {
   test_force_garbage_collection(start_page);
 
   // now make sure the files are still there!
-  for (int i = 0; i < 16; i+=2) {
-
+  for (int i = 0; i < 16; i += 2) {
     snprintf(file_small, sizeof(file_small), "file%d", i);
 
     uint8_t buf[PFS_SECTOR_SIZE * 2];
@@ -230,8 +223,7 @@ void test_pfs__page_lookup_cache(void) {
     cl_assert(pfs_write(fd, (uint8_t *)buf_small, len) == len);
     cl_assert(pfs_close(fd) == S_SUCCESS);
     // delete every few files and a bunch of pages near the end
-    if (((i & 0x1) == 0) ||
-        ((i > ((num_pages() * 7) / 10)) && (i < ((num_pages() * 8) / 10)))) {
+    if (((i & 0x1) == 0) || ((i > ((num_pages() * 7) / 10)) && (i < ((num_pages() * 8) / 10)))) {
       cl_assert(pfs_remove(file_small) == S_SUCCESS);
     }
   }
@@ -273,8 +265,7 @@ void test_pfs__write(void) {
   cl_assert(rv == E_INVALID_ARGUMENT);
 
   uint8_t buf[10];
-  int fd = pfs_open("newfile", OP_FLAG_WRITE | OP_FLAG_READ,
-      FILE_TYPE_STATIC, sizeof(buf));
+  int fd = pfs_open("newfile", OP_FLAG_WRITE | OP_FLAG_READ, FILE_TYPE_STATIC, sizeof(buf));
   for (int i = 0; i < sizeof(buf); i++) {
     buf[i] = i;
   }
@@ -368,6 +359,58 @@ void test_pfs__seek(void) {
   cl_assert(rv == E_RANGE);
 }
 
+void test_pfs__seek_walks_forward_from_current_page(void) {
+  const int num_file_pages = 32;
+  const int file_size = num_file_pages * 4000;
+  const int stride = 64;
+
+  uint8_t *data = malloc(file_size);
+  for (int i = 0; i < file_size; i++) {
+    data[i] = (uint8_t)(i * 7 + (i >> 8));
+  }
+
+  int fd = pfs_open("big", OP_FLAG_WRITE, FILE_TYPE_STATIC, file_size);
+  cl_assert(fd >= 0);
+  cl_assert_equal_i(pfs_write(fd, data, file_size), file_size);
+  cl_assert_equal_i(pfs_close(fd), S_SUCCESS);
+
+  fd = pfs_open("big", OP_FLAG_READ | OP_FLAG_WRITE, FILE_TYPE_STATIC, 0);
+  cl_assert(fd >= 0);
+
+  const uint32_t reads_before = fake_flash_read_count();
+  int steps = 0;
+  for (int off = 0; off + 4 <= file_size; off += stride) {
+    uint8_t buf[4];
+    cl_assert_equal_i(pfs_seek(fd, off, FSeekSet), off);
+    cl_assert_equal_i(pfs_read(fd, buf, sizeof(buf)), sizeof(buf));
+    cl_assert_equal_m(buf, &data[off], sizeof(buf));
+    steps++;
+  }
+  cl_assert(fake_flash_read_count() - reads_before <= 2 * (steps + num_file_pages));
+
+  const int write_off = file_size / 2 + 4090;
+  const uint8_t patch[16] = {0};
+  memcpy(&data[write_off], patch, sizeof(patch));
+  cl_assert_equal_i(pfs_seek(fd, write_off - 3000, FSeekSet), write_off - 3000);
+  uint8_t byte;
+  cl_assert_equal_i(pfs_read(fd, &byte, 1), 1);
+  cl_assert_equal_i(pfs_seek(fd, write_off, FSeekSet), write_off);
+  cl_assert_equal_i(pfs_write(fd, patch, sizeof(patch)), sizeof(patch));
+
+  uint8_t *readback = malloc(file_size);
+  for (int off = file_size - 4096; off >= 0; off -= 4096) {
+    cl_assert_equal_i(pfs_seek(fd, off, FSeekSet), off);
+    cl_assert_equal_i(pfs_read(fd, &readback[off], 4096), 4096);
+  }
+  cl_assert_equal_i(pfs_seek(fd, 0, FSeekSet), 0);
+  cl_assert_equal_i(pfs_read(fd, readback, file_size % 4096), file_size % 4096);
+  cl_assert_equal_m(readback, data, file_size);
+
+  cl_assert_equal_i(pfs_close(fd), S_SUCCESS);
+  free(readback);
+  free(data);
+}
+
 void test_pfs__read(void) {
   const int rd_len = 10;
 
@@ -434,7 +477,7 @@ void test_pfs__close_and_remove(void) {
   cl_assert(pfs_close_and_remove(2) == E_INVALID_ARGUMENT);
 
   int fd[NUM_ENTRIES];
-  char *fname[NUM_ENTRIES] = {"a", "b", "c" };
+  char *fname[NUM_ENTRIES] = {"a", "b", "c"};
 
   // create several files
   for (int i = 0; i < NUM_ENTRIES; i++) {
@@ -455,7 +498,6 @@ void test_pfs__close_and_remove(void) {
 }
 
 void test_pfs__discontiguous_page_test(void) {
-
   pfs_format(false /* write erase headers */); // start with an empty flash
   pfs_init(false);
 
@@ -529,8 +571,8 @@ void test_pfs__file_span_regions(void) {
   char name[128];
   snprintf(name, sizeof(name), "bigfile");
 
-  //Fill up entire memory section, subtract 32768 for header space.
-  int fd = pfs_open(name, OP_FLAG_WRITE, FILE_TYPE_STATIC, pfs_get_size() - (num_pages()*128));
+  // Fill up entire memory section, subtract 32768 for header space.
+  int fd = pfs_open(name, OP_FLAG_WRITE, FILE_TYPE_STATIC, pfs_get_size() - (num_pages() * 128));
 
   printf("%d\n", pfs_get_size() - 1024);
 
@@ -571,7 +613,6 @@ void test_pfs__active_regions(void) {
   cl_assert(fd >= 0);
   cl_assert(pfs_close(fd) == S_SUCCESS);
   cl_assert(pfs_active_in_region(32000, 68000));
-
 }
 
 int run_full_flash_region_test(void) {
@@ -714,10 +755,10 @@ static void prv_file_changed_callback(void *data) {
 }
 
 void test_pfs__watch_file_callbacks(void) {
-  const char* file_name = "newfile";
+  const char *file_name = "newfile";
 
-  PFSCallbackHandle cb_handle = pfs_watch_file(file_name, prv_file_changed_callback,
-                                               FILE_CHANGED_EVENT_ALL, NULL);
+  PFSCallbackHandle cb_handle =
+      pfs_watch_file(file_name, prv_file_changed_callback, FILE_CHANGED_EVENT_ALL, NULL);
 
   // Callback should get invoked if we close with write access
   s_watch_file_callback_called_count = 0;
@@ -779,7 +820,6 @@ void test_pfs__last_written_page(void) {
   cl_assert(test_scan_for_last_written() >= 0);
 }
 
-
 extern void test_force_reboot_during_garbage_collection(uint16_t start_page);
 extern void pfs_reset_all_state(void);
 void test_pfs__reboot_during_gc(void) {
@@ -826,9 +866,8 @@ void test_pfs__reboot_during_gc(void) {
   // simulate a reboot, all files should now appear because the GC completes
   pfs_init(false);
 
-    // now make sure the files are still there!
-  for (int i = 0; i < pages_to_write; i+=2) {
-
+  // now make sure the files are still there!
+  for (int i = 0; i < pages_to_write; i += 2) {
     snprintf(file_small, sizeof(file_small), "file%d", i);
 
     uint8_t buf[PFS_SECTOR_SIZE * 2];
@@ -880,7 +919,6 @@ void test_pfs__file_list(void) {
   cl_assert(list_find(&dir_list->list_node, prv_find_name, "b_test_1"));
   pfs_delete_file_list(dir_list);
 
-
   // Do another search using a filter
   dir_list = pfs_create_file_list(prv_filename_filter_a_prefix_cb);
 
@@ -908,13 +946,13 @@ extern void test_force_recalc_of_gc_region(void);
 // sector (requirement is that no files exist in the entire sector) & use the last page as a
 // starting point for where we will create initialize new files.
 //
-// There is a perfect storm of events which can lead to corruption on reboot. The sequence is as follows:
-// 1) The last written file is deleted right before a reboot
-// 2) No other files exist in the same sector as the one where the last file was deleted
+// There is a perfect storm of events which can lead to corruption on reboot. The sequence is as
+// follows: 1) The last written file is deleted right before a reboot 2) No other files exist in the
+// same sector as the one where the last file was deleted
 //
 // Upon reboot, a file could be created in this region & then later deleted when a garbage
-// collection was needed. In practice, I think this is most likely to happen after issuing a command like
-// 'factory reset fast' which we rely on heavily for automated testing
+// collection was needed. In practice, I think this is most likely to happen after issuing a command
+// like 'factory reset fast' which we rely on heavily for automated testing
 void test_pfs__start_page_collides_with_gc_page(void) {
   pfs_format(true);
 
@@ -997,9 +1035,9 @@ void test_pfs__doesnt_give_out_fd_zero(void) {
 
 // PageHeader field offsets/masks, mirroring the layout in pfs.c, so the tests
 // can corrupt and inspect raw page headers.
-#define PAGE_HDR_FLAGS_OFFSET   3
-#define PAGE_HDR_CRC_OFFSET     24
-#define PAGE_HDR_FLAG_DELETED   (1 << 1)
+#define PAGE_HDR_FLAGS_OFFSET 3
+#define PAGE_HDR_CRC_OFFSET   24
+#define PAGE_HDR_FLAG_DELETED (1 << 1)
 
 static void prv_corrupt_page_hdr_crc(uint16_t page) {
   const uint32_t bad_crc = 0;

@@ -1,20 +1,20 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/util/trig.h"
-#include "pbl/util/math.h"
-
-#include <math.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
+
+#include <pbl/util/math.h>
+#include <pbl/util/trig.h>
 
 #include <clar.h>
 
 // Stubs
 ///////////////////////////////////////////////////////////
-#include "stubs_logging.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_passert.h"
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
 
 // Tests
 ///////////////////////////////////////////////////////////
@@ -22,9 +22,10 @@ static void check_atan2(int16_t x, int16_t y) {
   int32_t ours = atan2_lookup(y, x) * 180 / TRIG_PI;
   double theirs = atan2(y, x) / 3.14159 * 180;
   // atan2 returns in range [-pi, +pi], but we have [0,2pi].
-  if (theirs < 0) theirs += 360;
+  if (theirs < 0)
+    theirs += 360;
 
-  cl_assert(abs(ours - (int) theirs) < 3); // Allow 3 degrees difference max
+  cl_assert(abs(ours - (int)theirs) < 3); // Allow 3 degrees difference max
 }
 
 static double log_two(uint32_t n) {
@@ -71,8 +72,8 @@ void test_math__atan2(void) {
   check_atan2(0, 0);
   check_atan2(0, 10);
   check_atan2(10, 0);
-  check_atan2(-32768, 1); // <- causes overflow for int16
-  check_atan2(1, -32768); // <- causes overflow for int16
+  check_atan2(-32768, 1);    // <- causes overflow for int16
+  check_atan2(1, -32768);    // <- causes overflow for int16
   check_atan2(20001, 20000); // <- causes overflow if numbers are added in an int16
   check_atan2(32767, 1);
   check_atan2(1, 32767);
@@ -112,23 +113,23 @@ void test_math__sign_extend(void) {
 void test_math__serial_distance32(void) {
   {
     int32_t dist = serial_distance32(0x0, 0x1);
-    cl_assert_equal_i(dist,  1);
+    cl_assert_equal_i(dist, 1);
   }
   {
     int32_t dist = serial_distance32(0x1, 0x0);
-    cl_assert_equal_i(dist,  -1);
+    cl_assert_equal_i(dist, -1);
   }
   {
     int32_t dist = serial_distance32(0x0, 0xffffffff);
-    cl_assert_equal_i(dist,  -1);
+    cl_assert_equal_i(dist, -1);
   }
   {
     int32_t dist = serial_distance32(0xffffffff, 0x0);
-    cl_assert_equal_i(dist,  1);
+    cl_assert_equal_i(dist, 1);
   }
   {
     int32_t dist = serial_distance32(0x0, 0x7fffffff);
-    cl_assert_equal_i(dist,  0x7fffffff);
+    cl_assert_equal_i(dist, 0x7fffffff);
   }
 }
 
@@ -265,4 +266,39 @@ void test_math__gcd_basic_reversed(void) {
 
 void test_math__gcd_of_number_and_itself(void) {
   cl_assert_equal_i(10, gcd(10, 10));
+}
+
+void test_math__u32_add_overflow(void) {
+  uint32_t r;
+  cl_assert(!pbl_u32_add_overflow(1, 2, &r));
+  cl_assert_equal_i(r, 3);
+  cl_assert(!pbl_u32_add_overflow(UINT32_MAX - 1, 1, &r));
+  cl_assert(r == UINT32_MAX);
+  cl_assert(pbl_u32_add_overflow(UINT32_MAX, 2, &r));
+  cl_assert_equal_i(r, 1);
+}
+
+void test_math__u32_mul_overflow(void) {
+  uint32_t r;
+  cl_assert(!pbl_u32_mul_overflow(3, 4, &r));
+  cl_assert_equal_i(r, 12);
+  cl_assert(!pbl_u32_mul_overflow(0x10000, 0xffff, &r));
+  cl_assert(r == 0xffff0000u);
+  cl_assert(pbl_u32_mul_overflow(0x10000, 0x10000, &r));
+  cl_assert_equal_i(r, 0);
+}
+
+void test_math__size_add_overflow(void) {
+  size_t r;
+  cl_assert(!pbl_size_add_overflow(SIZE_MAX - 1, 1, &r));
+  cl_assert(r == SIZE_MAX);
+  cl_assert(pbl_size_add_overflow(SIZE_MAX, 1, &r));
+  cl_assert(r == 0);
+}
+
+void test_math__size_mul_overflow(void) {
+  size_t r;
+  cl_assert(!pbl_size_mul_overflow(SIZE_MAX / 4, 4, &r));
+  cl_assert(r == SIZE_MAX / 4 * 4);
+  cl_assert(pbl_size_mul_overflow(SIZE_MAX / 4 + 1, 4, &r));
 }

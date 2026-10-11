@@ -1,30 +1,30 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-
-#include "kernel/event_loop.h"
-#include "kernel/events.h"
-#include "kernel/pebble_tasks.h"
-#include <pbl/drivers/display/display.h>
-#include "pbl/services/event_service.h"
-#include "pbl/services/touch/touch.h"
-#include "pbl/services/touch/touch_event.h"
-#include "pbl/services/touch/touch_session.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "fake_events.h"
+#include <pbl/drivers/display/display.h>
+#include <pbl/services/event_service.h>
+#include <pbl/services/touch/touch.h>
+#include <pbl/services/touch/touch_event.h>
+#include <pbl/services/touch/touch_session.h>
+
+#include <clar.h>
+#include <fake_events.h>
+#include <kernel/event_loop.h>
+#include <kernel/events.h>
+#include <kernel/pebble_tasks.h>
 
 // Stubs
-#include "stubs_analytics.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
+#include <stubs_analytics.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
 
-void kernel_free(void *p) {}
+void kernel_free(void *p) {
+}
 
 // Declared in syscall/syscall.h; in the test build DEFINE_SYSCALL is a plain function.
 void sys_touch_set_raw_subscribed(bool subscribed);
@@ -228,8 +228,8 @@ void test_touch__has_app_subscribers_ignores_shared_subscriptions(void) {
   // event-service subscription as raw handlers; those subscriptions must NOT
   // read as app subscribers, or wake-on-every-touch comes back with menu
   // gestures off.
-  s_add_subscriber_cb(PebbleTask_KernelMain);  // modal twin
-  s_add_subscriber_cb(PebbleTask_App);         // app twin
+  s_add_subscriber_cb(PebbleTask_KernelMain); // modal twin
+  s_add_subscriber_cb(PebbleTask_App);        // app twin
   cl_assert(!touch_has_app_subscribers());
   s_remove_subscriber_cb(PebbleTask_App);
   s_remove_subscriber_cb(PebbleTask_KernelMain);

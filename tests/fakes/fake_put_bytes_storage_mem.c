@@ -3,13 +3,20 @@
 
 #include "fake_put_bytes_storage_mem.h"
 
-#include "clar_asserts.h"
+#include <pbl/services/put_bytes/put_bytes_storage_internal.h>
 
-#include "kernel/pbl_malloc.h"
-#include "pbl/services/put_bytes/put_bytes_storage_internal.h"
-#include "system/passert.h"
+#include <clar_asserts.h>
+#include <kernel/pbl_malloc.h>
+#include <system/passert.h>
 
 #define FAKE_STORAGE_MAX_SIZE (512 * 1024)
+
+#ifdef CONFIG_PBLBOOT
+#define FAKE_STORAGE_START_OFFSET 0U
+#else
+// put_bytes_storage_raw.c reserves room for the FirmwareDescription
+#define FAKE_STORAGE_START_OFFSET sizeof(FirmwareDescription)
+#endif
 
 typedef struct FakePutBytesStorageData {
   PutBytesStorageInfo *info;
@@ -21,7 +28,7 @@ typedef struct FakePutBytesStorageData {
 
 FakePutBytesStorageData s_storage_data;
 
-bool pb_storage_raw_get_status(PutBytesObjectType obj_type,  PbInstallStatus *status) {
+bool pb_storage_raw_get_status(PutBytesObjectType obj_type, PbInstallStatus *status) {
   return false;
 }
 
@@ -30,7 +37,7 @@ static bool fake_pb_storage_mem_init(PutBytesStorage *storage, PutBytesObjectTyp
                                      uint32_t append_offset) {
   // This fake only supports one put bytes storage to be init'd at a time.
   PBL_ASSERTN(!s_storage_data.total_size);
-  size_t buffer_size = total_size + sizeof(FirmwareDescription);
+  size_t buffer_size = total_size + FAKE_STORAGE_START_OFFSET;
   memset(s_storage_data.buffer, 0, sizeof(s_storage_data.buffer));
   s_storage_data.total_size = buffer_size;
   PutBytesStorageInfo *info_copy = NULL;
@@ -41,8 +48,7 @@ static bool fake_pb_storage_mem_init(PutBytesStorage *storage, PutBytesObjectTyp
   s_storage_data.info = info_copy;
   storage->impl_data = &s_storage_data;
 
-  // put_bytes_storage_raw.c is weird, it reserves space at the beginning for FirmwareDescription:
-  storage->current_offset = sizeof(FirmwareDescription);
+  storage->current_offset = FAKE_STORAGE_START_OFFSET;
   return true;
 }
 
@@ -50,7 +56,7 @@ uint32_t fake_pb_storage_mem_get_max_size(PutBytesObjectType object_type) {
   return FAKE_STORAGE_MAX_SIZE;
 }
 
-static void(*s_do_before_write)(void) = NULL;
+static void (*s_do_before_write)(void) = NULL;
 static void fake_pb_storage_mem_write(PutBytesStorage *storage, uint32_t offset,
                                       const uint8_t *buffer, uint32_t length) {
   PBL_ASSERTN(s_storage_data.total_size);
@@ -64,7 +70,8 @@ static void fake_pb_storage_mem_write(PutBytesStorage *storage, uint32_t offset,
   memcpy(s_storage_data.buffer + offset, buffer, length);
 }
 
-static uint32_t fake_pb_storage_mem_calculate_crc(PutBytesStorage *storage, PutBytesCrcType crc_type) {
+static uint32_t fake_pb_storage_mem_calculate_crc(PutBytesStorage *storage,
+                                                  PutBytesCrcType crc_type) {
   PBL_ASSERTN(storage->impl_data == &s_storage_data);
   return s_storage_data.crc;
 }
@@ -106,7 +113,7 @@ void fake_pb_storage_register_cb_before_write(void (*cb_before_write)(void)) {
 
 void fake_pb_storage_mem_reset(void) {
   prv_cleanup();
-  s_storage_data = (FakePutBytesStorageData) {};
+  s_storage_data = (FakePutBytesStorageData){};
 }
 
 void fake_pb_storage_mem_set_crc(uint32_t crc) {
@@ -118,11 +125,14 @@ bool fake_pb_storage_mem_get_last_success(void) {
 }
 
 void fake_pb_storage_mem_assert_contents_written(const uint8_t contents[], size_t size) {
-  cl_assert_equal_m(contents, s_storage_data.buffer + sizeof(FirmwareDescription), size);
+  cl_assert_equal_m(contents, s_storage_data.buffer + FAKE_STORAGE_START_OFFSET, size);
 }
 
+#ifndef CONFIG_PBLBOOT
 void fake_pb_storage_mem_assert_fw_description_written(const FirmwareDescription *fw_descr) {
   cl_assert_equal_m(fw_descr, s_storage_data.buffer, sizeof(*fw_descr));
 }
+#endif
 
 #undef FAKE_STORAGE_MAX_SIZE
+#undef FAKE_STORAGE_START_OFFSET

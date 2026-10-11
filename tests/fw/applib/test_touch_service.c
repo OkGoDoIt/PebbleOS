@@ -1,19 +1,18 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-
-#include "applib/touch_service.h"
-#include "applib/touch_service_private.h"
-#include "kernel/events.h"
-#include "kernel/pebble_tasks.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <applib/touch_service.h>
+#include <applib/touch_service_private.h>
+#include <clar.h>
+#include <kernel/events.h>
+#include <kernel/pebble_tasks.h>
+
 // Stubs
-#include "stubs_logging.h"
-#include "stubs_passert.h"
+#include <stubs_logging.h>
+#include <stubs_passert.h>
 
 // Fake event service
 //////////////////////////////////////////
@@ -131,8 +130,8 @@ void test_touch_service__initialize(void) {
   s_unsubscribe_count = 0;
   s_subscribed_info = NULL;
   s_touch_reset_count = 0;
-  s_system_rec = (HandlerRecord){ 0 };
-  s_raw_rec = (HandlerRecord){ 0 };
+  s_system_rec = (HandlerRecord){0};
+  s_raw_rec = (HandlerRecord){0};
   touch_service_state_init(&s_state);
 }
 
@@ -194,7 +193,7 @@ void test_touch_service__slots_are_independent(void) {
   cl_assert(s_state.raw_handler == prv_raw_handler);
 
   prv_deliver_touch(TouchEvent_Touchdown, 7, 8);
-  cl_assert_equal_i(s_system_rec.calls, 1);  // unchanged
+  cl_assert_equal_i(s_system_rec.calls, 1); // unchanged
   cl_assert_equal_i(s_raw_rec.calls, 1);
 }
 

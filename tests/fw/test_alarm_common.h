@@ -3,48 +3,51 @@
 
 #pragma once
 
-#include "pbl/services/activity/activity.h"
-#include "pbl/services/alarms/alarm.h"
-#include "pbl/services/alarms/alarm_pin.h"
-
-#include <pbl/drivers/rtc.h>
-#include "resource/timeline_resource_ids.auto.h"
-#include "pbl/services/cron.h"
-#include "pbl/services/new_timer/new_timer.h"
-#include "pbl/services/system_task.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/settings/settings_file.h"
-#include "pbl/services/timeline/item.h"
-#include "pbl/util/attributes.h"
-
 #include <stdint.h>
 #include <string.h>
 
-#include "clar.h"
+#include <pbl/cron/cron.h>
+#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/activity/activity.h>
+#include <pbl/services/alarms/alarm.h>
+#include <pbl/services/alarms/alarm_pin.h>
+#include <pbl/services/blob_db/pin_db.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/services/new_timer/new_timer.h>
+#include <pbl/services/settings/settings_file.h>
+#include <pbl/services/system_task.h>
+#include <pbl/services/timeline/item.h>
+#include <pbl/services/timeline/timeline.h>
+#include <pbl/util/size.h>
 
+#include <applib/event_service_client.h>
+#include <clar.h>
+#include <resource/timeline_resource_ids.auto.h>
 
 // Stubs
-#include "stubs_analytics.h"
-#include "stubs_app_cache.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_blob_db.h"
-#include "stubs_calendar.h"
-#include "stubs_hexdump.h"
-#include "stubs_i18n.h"
-#include "stubs_layout_layer.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_prompt.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_regular_timer.h"
-#include "stubs_sleep.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_timeline_event.h"
+#include <stubs_analytics.h>
+#include <stubs_app_cache.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_blob_db.h>
+#include <stubs_calendar.h>
+#include <stubs_hexdump.h>
+#include <stubs_i18n.h>
+#include <stubs_layout_layer.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_regular_timer.h>
+#include <stubs_sleep.h>
+#include <stubs_task_wdt.h>
+#include <stubs_timeline_event.h>
 
 // Fakes
-#include "fake_spi_flash.h"
+#include <pbl/util/units.h>
+
+#include <fake_spi_flash.h>
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //! Stubs
@@ -53,14 +56,16 @@ status_t reminder_db_delete_with_parent(const TimelineItemId *id) {
   return S_SUCCESS;
 }
 
-const PebbleProcessMd* alarms_app_get_info() {
+const PebbleProcessMd *alarms_app_get_info() {
   static const PebbleProcessMdSystem s_alarms_app_info = {
     .common = {
-      .uuid = {0x67, 0xa3, 0x2d, 0x95, 0xef, 0x69, 0x46, 0xd4,
-               0xa0, 0xb9, 0x85, 0x4c, 0xc6, 0x2f, 0x97, 0xf9},
+      .uuid = {
+        0x67, 0xa3, 0x2d, 0x95, 0xef, 0x69, 0x46, 0xd4, 0xa0, 0xb9, 0x85, 0x4c, 0xc6, 0x2f, 0x97,
+        0xf9
+      },
     },
   };
-  return (const PebbleProcessMd*) &s_alarms_app_info;
+  return (const PebbleProcessMd *)&s_alarms_app_info;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -73,20 +78,19 @@ typedef enum AlarmDataType {
   ALARM_DATA_PINS = 1,
 } AlarmDataType;
 
-typedef struct PACKED AlarmStorageKey {
+typedef struct PBL_PACKED AlarmStorageKey {
   AlarmId id;
-  AlarmDataType type:8;
+  AlarmDataType type : 8;
 } AlarmStorageKey;
 
-typedef struct PACKED {
-  AlarmKind kind:8;
+typedef struct PBL_PACKED {
+  AlarmKind kind : 8;
   bool is_disabled;
   uint8_t hour;
   uint8_t minute;
   // 1 entry per week day. True if the alarm should go off on that week day. Sunday = 0.
   bool scheduled_days[7];
 } AlarmConfig;
-
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //! State variables
@@ -115,6 +119,45 @@ static const int s_wednesday = 1426636800;
 static TimelineItem *s_last_timeline_item_added = NULL;
 static Uuid s_last_timeline_item_removed_uuid = {};
 
+typedef struct {
+  Uuid id;
+  SerializedTimelineItemHeader header;
+  bool exists;
+} FakePinRecord;
+
+static FakePinRecord s_fake_pin_records[4];
+static FakePinRecord *s_current_fake_pin_record;
+
+static void prv_fake_pin_get_key(SettingsFile *file, void *buf, size_t len) {
+  (void)file;
+  memcpy(buf, &s_current_fake_pin_record->id, len);
+}
+
+static void prv_fake_pin_get_val(SettingsFile *file, void *buf, size_t len) {
+  (void)file;
+  memcpy(buf, &s_current_fake_pin_record->header, len);
+}
+
+static inline void prv_fake_pin_record_add(Uuid id, Uuid parent, time_t timestamp,
+                                           LayoutId layout) {
+  for (size_t i = 0; i < ARRAY_LENGTH(s_fake_pin_records); ++i) {
+    if (!s_fake_pin_records[i].exists) {
+      s_fake_pin_records[i] = (FakePinRecord){
+        .id = id,
+        .header.common =
+            {
+              .parent_id = parent,
+              .timestamp = timestamp,
+              .type = TimelineItemTypePin,
+              .layout = layout,
+            },
+        .exists = true,
+      };
+      return;
+    }
+  }
+  cl_assert(false);
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //! Counter variables
@@ -122,7 +165,6 @@ static int s_num_timeline_adds = 0;
 static int s_num_timeline_removes = 0;
 static int s_num_alarm_events_put = 0;
 static int s_num_alarms_fired = 0;
-
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //! Fakes
@@ -140,7 +182,7 @@ bool system_task_add_callback(SystemTaskEventCallback cb, void *data) {
 }
 
 int prv_hours_and_minutes_to_seconds(int hour, int minute) {
-  return (hour * SECONDS_PER_HOUR) + (minute * SECONDS_PER_MINUTE);
+  return (hour * PBL_SEC_PER_HOUR) + (minute * PBL_SEC_PER_MIN);
 }
 
 const char *timeline_get_private_data_source(Uuid *parent_id) {
@@ -151,17 +193,50 @@ status_t pin_db_insert_item_without_event(TimelineItem *item) {
   s_num_timeline_adds++;
   timeline_item_destroy(s_last_timeline_item_added);
   s_last_timeline_item_added = timeline_item_copy(item);
-  return true;
+  return S_SUCCESS;
 }
 
 status_t pin_db_delete(const uint8_t *key, int key_len) {
   s_num_timeline_removes++;
   s_last_timeline_item_removed_uuid = *(Uuid *)key;
-  return true;
+  for (size_t i = 0; i < ARRAY_LENGTH(s_fake_pin_records); ++i) {
+    if (s_fake_pin_records[i].exists && uuid_equal(&s_fake_pin_records[i].id, (Uuid *)key)) {
+      s_fake_pin_records[i].exists = false;
+    }
+  }
+  return S_SUCCESS;
 }
 
-void event_put(PebbleEvent* event) {
+status_t pin_db_each(TimelineItemStorageEachCallback each, void *data) {
+  for (size_t i = 0; i < ARRAY_LENGTH(s_fake_pin_records); ++i) {
+    if (!s_fake_pin_records[i].exists) {
+      continue;
+    }
+    s_current_fake_pin_record = &s_fake_pin_records[i];
+    SettingsRecordInfo info = {
+      .get_key = prv_fake_pin_get_key,
+      .key_len = UUID_SIZE,
+      .get_val = prv_fake_pin_get_val,
+      .val_len = sizeof(SerializedTimelineItemHeader),
+    };
+    if (!each(NULL, &info, data)) {
+      break;
+    }
+  }
+  s_current_fake_pin_record = NULL;
+  return S_SUCCESS;
+}
+
+void event_put(PebbleEvent *event) {
   s_num_alarm_events_put++;
+}
+
+static EventServiceInfo *s_language_change_event_info;
+
+void event_service_client_subscribe(EventServiceInfo *service_info) {
+  if (service_info->type == PEBBLE_LANGUAGE_CHANGE_EVENT) {
+    s_language_change_event_info = service_info;
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -174,8 +249,8 @@ void prv_assert_settings_key_absent(const void *key, size_t key_len) {
   settings_file_close(&file);
 }
 
-void prv_assert_settings_value(const void *key, size_t key_len,
-                               const void *expected_value, size_t value_len) {
+void prv_assert_settings_value(const void *key, size_t key_len, const void *expected_value,
+                               size_t value_len) {
   SettingsFile file;
   char buffer[value_len];
   cl_must_pass(settings_file_open(&file, "alarms", 1024));
@@ -184,9 +259,9 @@ void prv_assert_settings_value(const void *key, size_t key_len,
   cl_assert_equal_m(expected_value, buffer, value_len);
 }
 
-void prv_assert_alarm_config(AlarmId id, uint8_t hour, uint8_t minute,
-                             bool disabled, AlarmKind kind, const bool scheduled_days[7]) {
-  AlarmStorageKey key = { .id = id, .type = ALARM_DATA_CONFIG };
+void prv_assert_alarm_config(AlarmId id, uint8_t hour, uint8_t minute, bool disabled,
+                             AlarmKind kind, const bool scheduled_days[7]) {
+  AlarmStorageKey key = {.id = id, .type = ALARM_DATA_CONFIG};
   AlarmConfig config = {
     .kind = kind,
     .is_disabled = disabled,
@@ -210,11 +285,11 @@ void prv_assert_alarm_config(AlarmId id, uint8_t hour, uint8_t minute,
 }
 
 void prv_assert_alarm_config_absent(AlarmId id) {
-  AlarmStorageKey key = { .id = id, .type = ALARM_DATA_CONFIG };
+  AlarmStorageKey key = {.id = id, .type = ALARM_DATA_CONFIG};
   prv_assert_settings_key_absent(&key, sizeof(key));
 }
 
 void assert_alarm_pins_absent(AlarmId id) {
-  AlarmStorageKey key = { .id = id, .type = ALARM_DATA_PINS };
+  AlarmStorageKey key = {.id = id, .type = ALARM_DATA_PINS};
   prv_assert_settings_key_absent(&key, sizeof(key));
 }

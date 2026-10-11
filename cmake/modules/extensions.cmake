@@ -23,8 +23,8 @@ function(pbl_init)
   set_property(GLOBAL PROPERTY PBL_STATIC_LIBS "")
 endfunction()
 
-# Name a library after its directory, e.g. src/fw/services/timeline ->
-# src__fw__services__timeline. Mirrors the waf model this replaces.
+# Name a library after its directory, e.g. fw/services/timeline ->
+# fw__services__timeline. Mirrors the waf model this replaces.
 function(pbl_library_default_name out)
   file(RELATIVE_PATH rel ${PBL_BASE} ${CMAKE_CURRENT_SOURCE_DIR})
   string(REPLACE "/" "__" name ${rel})
@@ -218,6 +218,37 @@ define_property(GLOBAL PROPERTY PBL_LINK_OPTIONS
 
 function(pbl_link_options)
   set_property(GLOBAL APPEND PROPERTY PBL_LINK_OPTIONS ${ARGN})
+endfunction()
+
+# Host side of a native build: the bottom halves of drivers, compiled against
+# the host's headers and libraries only, none of the firmware's.
+define_property(GLOBAL PROPERTY PBL_HOST_SOURCES
+  BRIEF_DOCS "Sources of the host side of a native build")
+define_property(GLOBAL PROPERTY PBL_HOST_INCLUDE_DIRS
+  BRIEF_DOCS "Header directories of the host side of a native build")
+define_property(GLOBAL PROPERTY PBL_HOST_COMPILE_OPTIONS
+  BRIEF_DOCS "Compile options of the host side of a native build")
+
+function(pbl_host_sources)
+  foreach(src ${ARGN})
+    if(NOT IS_ABSOLUTE ${src})
+      set(src ${CMAKE_CURRENT_SOURCE_DIR}/${src})
+    endif()
+    set_property(GLOBAL APPEND PROPERTY PBL_HOST_SOURCES ${src})
+  endforeach()
+endfunction()
+
+function(pbl_host_include_directories)
+  foreach(dir ${ARGN})
+    if(NOT IS_ABSOLUTE ${dir})
+      set(dir ${CMAKE_CURRENT_SOURCE_DIR}/${dir})
+    endif()
+    set_property(GLOBAL APPEND PROPERTY PBL_HOST_INCLUDE_DIRS ${dir})
+  endforeach()
+endfunction()
+
+function(pbl_host_compile_options)
+  set_property(GLOBAL APPEND PROPERTY PBL_HOST_COMPILE_OPTIONS ${ARGN})
 endfunction()
 
 function(pbl_add_subdirectory_ifdef feature)

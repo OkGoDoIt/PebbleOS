@@ -1,0 +1,306 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <string.h>
+
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/irq.h>
+#include <pbl/kernel/msgq.h>
+#include <pbl/kernel/poll.h>
+#include <pbl/kernel/thread.h>
+#include <pbl/kernel/types.h>
+#include <pbl/logging/logging.h>
+#include <pbl/mcu/fpu.h>
+#include <pbl/services/new_timer/new_timer.h>
+#include <pbl/services/system_task.h>
+#include <pbl/task_wdt/task_wdt.h>
+
+#include <kernel/memory_layout.h>
+#include <kernel/pebble_tasks.h>
+#include <kernel/util/task_init.h>
+#include <process_management/app_manager.h>
+#include <system/passert.h>
+
+PBL_LOG_MODULE_DEFINE(service_system_task, CONFIG_SERVICE_SYSTEM_TASK_LOG_LEVEL);
+
+#define SYSTEM_TASK_PRIORITY (PBL_PRIO_IDLE + 1)
+
+#define APP_THROTTLE_TIME_MS 300
+
+typedef struct {
+  SystemTaskEventCallback cb;
+  void *data;
+  bool raised_priority;
+} SystemTaskEvent;
+
+#define SYSTEM_TASK_QUEUE_LENGTH          30
+#define FROM_APP_SYSTEM_TASK_QUEUE_LENGTH 8
+
+static PBL_MSGQ_DEFINE(s_system_task_queue, sizeof(SystemTaskEvent), SYSTEM_TASK_QUEUE_LENGTH);
+static PBL_MSGQ_DEFINE(s_from_app_system_task_queue, sizeof(SystemTaskEvent),
+                       FROM_APP_SYSTEM_TASK_QUEUE_LENGTH);
+static PBL_POLL_GROUP_DEFINE(s_system_task_queue_set);
+static bool s_initialized;
+
+static SystemTaskEventCallback s_current_cb;
+
+static int s_wdt_channel = -1;
+static TimerID s_throttle_timer = TIMER_INVALID_ID;
+
+static bool s_should_block_callbacks = false;
+static uint32_t s_raised_priority_refcount;
+
+static bool prv_is_accepting_callbacks() {
+  return s_initialized && !s_should_block_callbacks;
+}
+
+static void prv_app_throttle_end(void *data) {
+  struct pbl_thread *app = pebble_task_get_thread(PebbleTask_App);
+  if (app) {
+    pbl_thread_prio_set(app, APP_TASK_PRIORITY);
+  }
+  PBL_LOG_DBG("Ending App Throttling");
+}
+
+static void prv_app_throttle_start(void) {
+  static char s_last_throttled_app[PBL_THREAD_NAME_LEN];
+  struct pbl_thread *app = pebble_task_get_thread(PebbleTask_App);
+  if (!app) {
+    return;
+  }
+
+  const char *name = pbl_thread_name(app);
+  if (strcmp(s_last_throttled_app, name) != 0) {
+    strcpy(s_last_throttled_app, name);
+    PBL_LOG_WRN("Starting App Throttling for %s", name);
+  } else {
+    PBL_LOG_DBG("Starting App Throttling for %s", name);
+  }
+
+  pbl_thread_prio_set(app, PBL_PRIO_IDLE);
+  new_timer_start(s_throttle_timer, APP_THROTTLE_TIME_MS, prv_app_throttle_end, NULL, 0);
+}
+
+//! The system task is starved when it is ready to run but does not get the
+//! CPU, or blocked in a callback on a lock the worker cannot release because
+//! the app hogs the CPU. Parking the app briefly resolves both.
+static void *prv_wdt_expired(int channel_id, void *user_data) {
+  if (s_throttle_timer != TIMER_INVALID_ID &&
+      (system_task_is_ready_to_run() || s_current_cb != NULL)) {
+    prv_app_throttle_start();
+  }
+  return s_current_cb;
+}
+
+static void system_task_main(void *paramater) {
+  s_wdt_channel = pbl_task_wdt_add(NULL, CONFIG_TASK_WDT_TIMEOUT_MS, prv_wdt_expired, NULL);
+  PBL_ASSERTN(s_wdt_channel >= 0);
+  task_init();
+
+  while (true) {
+    SystemTaskEvent event;
+
+    pbl_task_wdt_set_waiting(true);
+    struct pbl_msgq *activated_queue = pbl_poll_group_wait(&s_system_task_queue_set, PBL_FOREVER);
+    pbl_task_wdt_set_waiting(false);
+
+    // Get event from the activated queue
+    bool result = (pbl_msgq_get(activated_queue, &event, PBL_NO_WAIT) == 0);
+
+    // I believe its possible that we just reset the queue and accidentally
+    // pended an extra event to the queue set so handle that case gracefully
+    if (result) {
+      s_current_cb = event.cb;
+      event.cb(event.data);
+      mcu_fpu_cleanup();
+      s_current_cb = NULL;
+      if (event.raised_priority) {
+        system_task_enable_raised_priority(false);
+      }
+    }
+
+    // Refresh the watchdog immediately, just in case that cb() took awhile to run.
+    system_task_watchdog_feed();
+  }
+}
+
+void system_task_init(void) {
+  s_raised_priority_refcount = 0;
+  pbl_poll_group_add(&s_system_task_queue_set, &s_system_task_queue);
+  pbl_poll_group_add(&s_system_task_queue_set, &s_from_app_system_task_queue);
+  s_initialized = true;
+
+  extern uint32_t __kernel_bg_stack_start__[];
+  extern uint32_t __kernel_bg_stack_size__[];
+  extern uint32_t __stack_guard_size__[];
+
+  struct pbl_thread_attr attr = {
+    .name = "KernelBG",
+    .entry = system_task_main,
+    .prio = SYSTEM_TASK_PRIORITY,
+    .privileged = true,
+    .stack = (void *)((uintptr_t)__kernel_bg_stack_start__ + MEMORY_LAYOUT_STACK_GUARD_SIZE),
+    .stack_size = MEMORY_LAYOUT_KERNEL_BG_STACK_SIZE - MEMORY_LAYOUT_STACK_GUARD_SIZE,
+  };
+
+  pebble_task_create(PebbleTask_KernelBackground, &attr);
+}
+
+void system_task_timer_init(void) {
+  s_throttle_timer = new_timer_create();
+}
+
+void system_task_watchdog_feed(void) {
+  pbl_task_wdt_feed(s_wdt_channel);
+}
+
+static void handle_system_task_send_failure(SystemTaskEventCallback cb, uintptr_t caller_lr) {
+  PBL_LOG_ERR("System task queue full. Dropped cb: %p, current cb: %p", cb, s_current_cb);
+
+  RebootReason reason = {
+    .code = RebootReasonCode_EventQueueFull,
+    .event_queue = {
+      .push_lr = (uint32_t)caller_lr,
+      .current_event = (uint32_t)(uintptr_t)s_current_cb,
+      .dropped_event = (uint32_t)(uintptr_t)cb
+    }
+  };
+  reboot_reason_set(&reason);
+
+  reset_due_to_software_failure();
+}
+
+static bool prv_send_to_queue_no_wait(SystemTaskEventCallback cb, void *data) {
+  SystemTaskEvent event = {
+    .cb = cb,
+    .data = data,
+  };
+
+  return pbl_msgq_put(&s_system_task_queue, &event, PBL_NO_WAIT) == 0;
+}
+
+bool system_task_add_callback_from_isr(SystemTaskEventCallback cb, void *data) {
+  // Capture caller LR at entry; reading from a deeper helper is unreliable.
+  uintptr_t caller_lr = (uintptr_t)PBL_RETURN_ADDRESS(0);
+  if (!prv_is_accepting_callbacks()) {
+    return false;
+  }
+
+  bool success = prv_send_to_queue_no_wait(cb, data);
+  if (!success) {
+    handle_system_task_send_failure(cb, caller_lr);
+  }
+
+  return success;
+}
+
+bool system_task_add_callback_droppable(SystemTaskEventCallback cb, void *data) {
+  if (!prv_is_accepting_callbacks()) {
+    return false;
+  }
+
+  return prv_send_to_queue_no_wait(cb, data);
+}
+
+bool system_task_add_callback_from_isr_droppable(SystemTaskEventCallback cb, void *data) {
+  return system_task_add_callback_droppable(cb, data);
+}
+
+bool system_task_add_callback_from_isr_droppable_raised(SystemTaskEventCallback cb, void *data) {
+  if (!prv_is_accepting_callbacks()) {
+    return false;
+  }
+
+  SystemTaskEvent event = {
+    .cb = cb,
+    .data = data,
+    .raised_priority = true,
+  };
+
+  // The queued event owns the boost until its callback returns, even if the
+  // device stops in the meantime. Rejected work must not retain a reference.
+  pbl_irq_lock();
+  system_task_enable_raised_priority(true);
+  bool success = (pbl_msgq_put(&s_system_task_queue, &event, PBL_NO_WAIT) == 0);
+  if (!success) {
+    system_task_enable_raised_priority(false);
+  }
+  pbl_irq_unlock();
+  return success;
+}
+
+bool system_task_add_callback(SystemTaskEventCallback cb, void *data) {
+  uintptr_t caller_lr = (uintptr_t)PBL_RETURN_ADDRESS(0);
+  if (!prv_is_accepting_callbacks()) {
+    return false;
+  }
+
+  SystemTaskEvent event = {
+    .cb = cb,
+    .data = data,
+  };
+
+  if (pebble_task_get_current() == PebbleTask_App) {
+    // If we're the app and we've filled up our system task, the app just gets to wait.
+    // FIXME: In the future when we want to bound the amount of time a syscall can take this will
+    // have to change.
+    pbl_msgq_put(&s_from_app_system_task_queue, &event, PBL_FOREVER);
+    return true;
+  } else {
+    // Back ourselves up and wait a reasonable amount of time before failing. If the queue is really
+    // backed up we want to fall through to the handle_system_task_send_failure and not just get
+    // killed by the watchdog.
+    bool success = (pbl_msgq_put(&s_system_task_queue, &event, PBL_MSEC(3000)) == 0);
+    if (!success) {
+      handle_system_task_send_failure(cb, caller_lr);
+    }
+  }
+
+  return true;
+}
+
+void system_task_block_callbacks(bool block) {
+  s_should_block_callbacks = block;
+}
+
+uint32_t system_task_get_available_space(void) {
+  const bool is_app = pebble_task_get_current() == PebbleTask_App;
+  return pbl_msgq_num_free(is_app ? &s_from_app_system_task_queue : &s_system_task_queue);
+}
+
+void *system_task_get_current_callback(void) {
+  return s_current_cb;
+}
+
+void system_task_enable_raised_priority(bool is_raised) {
+  const pbl_prio_t raised_priority_level = PBL_PRIO_IDLE + 3; // Same as KernelMain / BT tasks
+
+  pbl_irq_lock();
+  if (is_raised) {
+    PBL_ASSERTN(s_raised_priority_refcount < UINT32_MAX);
+    if (s_raised_priority_refcount == UINT32_MAX) {
+      pbl_irq_unlock();
+      return;
+    }
+    if (s_raised_priority_refcount++ == 0) {
+      pbl_thread_prio_set(pebble_task_get_thread(PebbleTask_KernelBackground),
+                          raised_priority_level);
+    }
+  } else {
+    PBL_ASSERTN(s_raised_priority_refcount > 0);
+    if (s_raised_priority_refcount == 0) {
+      pbl_irq_unlock();
+      return;
+    }
+    if (--s_raised_priority_refcount == 0) {
+      pbl_thread_prio_set(pebble_task_get_thread(PebbleTask_KernelBackground),
+                          SYSTEM_TASK_PRIORITY);
+    }
+  }
+  pbl_irq_unlock();
+}
+
+bool system_task_is_ready_to_run(void) {
+  // check if system task is ready to go (instead of e.g. waiting for a mutex)
+  return pbl_thread_state(pebble_task_get_thread(PebbleTask_KernelBackground)) == PBL_THREAD_READY;
+}

@@ -23,24 +23,27 @@ jobs:
               - '.github/actions/**'
               - '.github/workflows/test.yml'
               - 'cmake/**'
+              - 'drivers/**'
+              - 'fw/**'
               - 'include/**'
+              - 'kernel/**'
               - 'lib/**'
-              - 'platform/**'
               - 'resources/**'
               - 'sdk/**'
-              - 'src/**'
-              - 'stored_apps/**'
+              - 'soc/**'
               - 'subsys/**'
               - 'tests/**'
               - 'third_party/**'
               - 'tools/**'
+              - 'SDK_VERSION'
+              - 'requirements.txt'
 
   build-test:
     needs: changes-test
     if: needs.changes-test.outputs.should-test == 'true'
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/coredevices/pebbleos-docker:v7
+      image: ghcr.io/coredevices/pebbleos-docker:v10
     steps:
       - name: Mark Github workspace as safe
         run: git config --system --add safe.directory "${GITHUB_WORKSPACE}" 

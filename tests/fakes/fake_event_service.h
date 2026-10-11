@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include "clar_asserts.h"
-
-#include "applib/event_service_client.h"
 #include "fake_events.h"
+
+#include <applib/event_service_client.h>
+#include <clar_asserts.h>
 
 static EventServiceInfo s_event_handler[PEBBLE_NUM_EVENTS];
 
@@ -16,11 +16,11 @@ void event_service_client_subscribe(EventServiceInfo *service_info) {
 }
 
 void event_service_client_unsubscribe(EventServiceInfo *service_info) {
-  s_event_handler[service_info->type] = (EventServiceInfo) {};
+  s_event_handler[service_info->type] = (EventServiceInfo){};
 }
 
 void fake_event_service_init(void) {
-  memset(s_event_handler, sizeof(s_event_handler), 0);
+  memset(s_event_handler, 0, sizeof(s_event_handler));
 }
 
 void fake_event_service_handle_last(void) {
@@ -33,4 +33,3 @@ void fake_event_service_handle_last(void) {
 EventServiceInfo *fake_event_service_get_info(PebbleEventType type) {
   return &s_event_handler[type];
 }
-

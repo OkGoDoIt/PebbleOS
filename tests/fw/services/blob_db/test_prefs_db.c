@@ -1,42 +1,41 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <pbl/services/blob_db/prefs_db.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/util/uuid.h>
 
-#include "pbl/util/uuid.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/blob_db/prefs_db.h"
-#include "shell/prefs.h"
-#include "shell/prefs_private.h"
+#include <clar.h>
+#include <shell/prefs.h>
+#include <shell/prefs_private.h>
 
 // Fixture
 ////////////////////////////////////////////////////////////////
 
 // Fakes
 ////////////////////////////////////////////////////////////////
-#include "fake_spi_flash.h"
-#include "fake_system_task.h"
-#include "fake_kernel_services_notifications.h"
+#include <fake_kernel_services_notifications.h>
+#include <fake_spi_flash.h>
+#include <fake_system_task.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include "stubs_analytics.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_event_loop.h"
-#include "stubs_hexdump.h"
-#include "stubs_logging.h"
-#include "stubs_mfg_info.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_prompt.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_sleep.h"
-#include "stubs_system_theme.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_timeline_peek.h"
-#include "stubs_ambient_light.h"
-#include "stubs_activity.h"
+#include <stubs_activity.h>
+#include <stubs_ambient_light.h>
+#include <stubs_analytics.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_event_loop.h>
+#include <stubs_hexdump.h>
+#include <stubs_logging.h>
+#include <stubs_mfg_info.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_sleep.h>
+#include <stubs_system_theme.h>
+#include <stubs_task_wdt.h>
+#include <stubs_timeline_peek.h>
 
 void prefs_sync_init(void) {
 }
@@ -71,23 +70,19 @@ void test_prefs_db__insert_and_read(void) {
   const char *key = "lightTimeoutMsX";
   int key_len = strlen(key) - 1;
 
-
   // Set initial value
   backlight_set_timeout_ms(set_value + 1);
 
-
   // Insert and check the length
-  cl_assert_equal_i(prefs_db_insert((uint8_t *)key, key_len, (uint8_t *)&set_value,
-                                    sizeof(set_value)), 0);
+  cl_assert_equal_i(
+      prefs_db_insert((uint8_t *)key, key_len, (uint8_t *)&set_value, sizeof(set_value)), 0);
   cl_assert_equal_i(prefs_db_get_len((uint8_t *)key, key_len), sizeof(set_value));
-
 
   // Read it back
   uint32_t get_value;
-  cl_assert_equal_i(prefs_db_read((uint8_t *)key, key_len, (uint8_t *)&get_value,
-                                  sizeof(get_value)), 0);
+  cl_assert_equal_i(
+      prefs_db_read((uint8_t *)key, key_len, (uint8_t *)&get_value, sizeof(get_value)), 0);
   cl_assert_equal_i(set_value, get_value);
-
 
   // If we get the pref setting now, it should still be the old value because we haven't
   // issued the blob_db update event yet
@@ -95,7 +90,7 @@ void test_prefs_db__insert_and_read(void) {
   cl_assert_equal_i(get_pref, set_value + 1);
 
   // Issue the blob_db update event
-  PebbleBlobDBEvent event = (PebbleBlobDBEvent) {
+  PebbleBlobDBEvent event = (PebbleBlobDBEvent){
     .db_id = BlobDBIdPrefs,
     .type = BlobDBEventTypeInsert,
     .key = (uint8_t *)key,
@@ -105,31 +100,26 @@ void test_prefs_db__insert_and_read(void) {
   get_pref = backlight_get_timeout_ms();
   cl_assert(get_pref == get_value);
 
-
   // Set new value using the set call and read it back using prefs_db
   uint32_t new_set_value = 4242;
   backlight_set_timeout_ms(new_set_value);
-  cl_assert_equal_i(prefs_db_read((uint8_t *)key, key_len, (uint8_t *)&get_value,
-                                  sizeof(get_value)), 0);
+  cl_assert_equal_i(
+      prefs_db_read((uint8_t *)key, key_len, (uint8_t *)&get_value, sizeof(get_value)), 0);
   cl_assert_equal_i(new_set_value, get_value);
-
 
   // Try and insert an unknown key. It should fail
   const char *bad_key = "bad_key";
   int bad_key_len = strlen(bad_key);
   cl_assert(prefs_db_insert((uint8_t *)bad_key, bad_key_len, (uint8_t *)&set_value,
-                                    sizeof(set_value)) < 0);
+                            sizeof(set_value)) < 0);
   cl_assert(prefs_db_get_len((uint8_t *)bad_key, bad_key_len) < 0);
-  cl_assert(prefs_db_read((uint8_t *)bad_key, bad_key_len, (uint8_t *)&get_value,
-                                  sizeof(get_value)) < 0);
-
+  cl_assert(
+      prefs_db_read((uint8_t *)bad_key, bad_key_len, (uint8_t *)&get_value, sizeof(get_value)) < 0);
 
   // Try and insert the wrong size for a known key, it should fail
-  cl_assert(prefs_db_insert((uint8_t *)key, key_len, (uint8_t *)&set_value,
-                                    sizeof(set_value) + 1) < 0);
+  cl_assert(prefs_db_insert((uint8_t *)key, key_len, (uint8_t *)&set_value, sizeof(set_value) + 1) <
+            0);
   // Read it back
-  cl_assert(prefs_db_read((uint8_t *)key, key_len, (uint8_t *)&get_value,
-                                  sizeof(get_value) + 1) < 0);
+  cl_assert(prefs_db_read((uint8_t *)key, key_len, (uint8_t *)&get_value, sizeof(get_value) + 1) <
+            0);
 }
-
-

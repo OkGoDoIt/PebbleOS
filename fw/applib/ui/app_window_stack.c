@@ -1,0 +1,105 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "app_window_stack.h"
+
+#include "window.h"
+#include "window_stack.h"
+#include "window_stack_private.h"
+
+#include <pbl/kernel/sem.h>
+#include <pbl/logging/logging.h>
+
+#include <kernel/event_loop.h>
+#include <kernel/pbl_malloc.h>
+#include <process_state/app_state/app_state.h>
+
+#ifdef CONFIG_SHELL
+#include <errno.h>
+
+#include <pbl/shell/shell.h>
+#endif
+
+void app_window_stack_push(Window *window, bool animated) {
+  PBL_LOG_DBG("Pushing window %p onto app window stack %p", window, app_state_get_window_stack());
+  window_stack_push(app_state_get_window_stack(), window, animated);
+}
+
+void app_window_stack_insert_next(Window *window) {
+  window_stack_insert_next(app_state_get_window_stack(), window);
+}
+
+Window *app_window_stack_pop(bool animated) {
+  return window_stack_pop(app_state_get_window_stack(), animated);
+}
+
+void app_window_stack_pop_all(const bool animated) {
+  window_stack_pop_all(app_state_get_window_stack(), animated);
+}
+
+bool app_window_stack_remove(Window *window, bool animated) {
+  return window_stack_remove(window, animated);
+}
+
+Window *app_window_stack_get_top_window(void) {
+  return window_stack_get_top_window(app_state_get_window_stack());
+}
+
+bool app_window_stack_contains_window(Window *window) {
+  return window_stack_contains_window(app_state_get_window_stack(), window);
+}
+
+uint32_t app_window_stack_count(void) {
+  return window_stack_count(app_state_get_window_stack());
+}
+
+#ifdef CONFIG_SHELL
+typedef struct WindowStackInfoContext {
+  struct pbl_sem interlock;
+  WindowStackDump *dump;
+  size_t count;
+} WindowStackInfoContext;
+
+static void prv_window_stack_info_cb(void *ctx) {
+  // Note: Because of the nature of modal windows that has us re-using the Window Stack code for
+  // everything (for simplicity), while a normal call to any of the stack functions would yield
+  // us the appropriate window stack based on our current task, for the sake of this command, we
+  // only care about the application's window stack, so we'll work with that directly.
+  WindowStackInfoContext *info = ctx;
+  WindowStack *stack = app_state_get_window_stack();
+  info->count = window_stack_dump(stack, &info->dump);
+  pbl_sem_give(&info->interlock);
+}
+
+static int prv_cmd_windows(const struct pbl_shell *sh, size_t argc, char **argv) {
+  int ret = 0;
+  struct WindowStackInfoContext info = {0};
+  pbl_sem_init(&info.interlock, 0, 1);
+  // FIXME: Dumping the app window stack from another task without a
+  // lock exposes us to the possibility of catching the window stack in
+  // an inconsistent state. It's been like this for years without issue
+  // but we could just be really lucky. Switch to the app task to dump
+  // the window stack?
+  launcher_task_add_callback(prv_window_stack_info_cb, &info);
+  pbl_sem_take(&info.interlock, PBL_FOREVER);
+  pbl_sem_deinit(&info.interlock);
+
+  if (info.count > 0 && !info.dump) {
+    pbl_shell_error(sh, "couldn't allocate buffers for window stack data");
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  pbl_shell_print(sh, "Window Stack, top to bottom: (%zu)", info.count);
+  for (size_t i = 0; i < info.count; ++i) {
+    pbl_shell_print(sh, "window %p <%s>", info.dump[i].addr, info.dump[i].name);
+  }
+cleanup:
+  kernel_free(info.dump);
+  return ret;
+}
+
+PBL_SHELL_SUBCMD_SET_CREATE(sub_ui);
+PBL_SHELL_CMD_REGISTER(ui, sub_ui, "User interface debugging", NULL);
+PBL_SHELL_SUBCMD_ADD(sub_ui, windows, NULL, "Show the app window stack", prv_cmd_windows, 0, 0);
+#endif

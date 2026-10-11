@@ -3,7 +3,7 @@
 #include "pbl/services/audio_companion.h"
 
 #include "applib/event_service_client.h"
-#include "bluetooth/audio_companion_service.h"
+#include "pbl/bluetooth/audio_companion.h"
 #include "pbl/services/audio_companion_private.h"
 #include "pbl/services/battery/battery_state.h"
 #include "services/audio_companion/auth.h"
@@ -58,7 +58,7 @@ static uint32_t s_data_count;
 static uint16_t s_effective_mtu;
 static bool s_notify_data_succeeds;
 static bool s_notify_control_succeeds;
-static ResponseTimeState s_response_time_state;
+static enum pbl_bt_response_time_state s_response_time_state;
 static uint16_t s_response_time_period_secs;
 
 static bool s_pref_enabled;
@@ -103,7 +103,7 @@ static void prv_assert_service_lock_not_held(void) {
   cl_assert(!lock || !pbl_mutex_is_owner(lock));
 }
 
-bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length) {
+bool pbl_bt_audio_companion_notify_data(const uint8_t *data, size_t length) {
   if (!s_notify_data_succeeds) {
     return false;
   }
@@ -115,7 +115,7 @@ bool bt_driver_audio_companion_notify_data(const uint8_t *data, size_t length) {
   return true;
 }
 
-bool bt_driver_audio_companion_notify_control(const uint8_t *data, size_t length) {
+bool pbl_bt_audio_companion_notify_control(const uint8_t *data, size_t length) {
   if (!s_notify_control_succeeds) {
     return false;
   }
@@ -127,11 +127,11 @@ bool bt_driver_audio_companion_notify_control(const uint8_t *data, size_t length
   return true;
 }
 
-uint16_t bt_driver_audio_companion_get_effective_mtu(void) {
+uint16_t pbl_bt_audio_companion_get_effective_mtu(void) {
   return s_effective_mtu;
 }
 
-void bt_driver_audio_companion_set_response_time(ResponseTimeState state,
+void pbl_bt_audio_companion_set_response_time(enum pbl_bt_response_time_state state,
                                                  uint16_t max_period_secs) {
   // This call takes bt_lock, which the BT stack holds across HCI round trips and bonding flash
   // I/O. Holding the service lock across it makes s_lock a multi-second lock, and the drain timer
@@ -142,7 +142,7 @@ void bt_driver_audio_companion_set_response_time(ResponseTimeState state,
   s_response_time_period_secs = max_period_secs;
 }
 
-void bt_driver_audio_companion_service_init(void) {
+void pbl_bt_audio_companion_service_init(void) {
 }
 
 void event_service_client_subscribe(EventServiceInfo *service_info) {
@@ -168,7 +168,7 @@ void rtc_get_time_ms(time_t *out_seconds, uint16_t *out_ms) {
   *out_ms = s_rtc_ms;
 }
 
-uint32_t rand32(void) {
+uint32_t pbl_rand32(void) {
   return s_rand32_value++;
 }
 
@@ -613,7 +613,7 @@ void test_audio_companion__initialize(void) {
   s_effective_mtu = 256;
   s_notify_data_succeeds = true;
   s_notify_control_succeeds = true;
-  s_response_time_state = ResponseTimeMax;
+  s_response_time_state = PBL_BT_RESPONSE_TIME_MAX;
   s_response_time_period_secs = 0;
   s_pref_enabled = false;
   s_battery_state = (BatteryChargeState){ .charge_percent = 80 };
@@ -869,13 +869,13 @@ void test_audio_companion__reconnect_uses_short_catch_up_burst(void) {
   prv_subscribe(true, true);
   prv_authenticate();
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
   cl_assert_equal_i(s_response_time_period_secs, TEST_MAX_PERIOD_RUN_FOREVER);
 
   audio_companion_handle_disconnect();
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateIdle);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
 
   prv_feed_frames(4);
   s_data_count = 0;
@@ -885,15 +885,15 @@ void test_audio_companion__reconnect_uses_short_catch_up_burst(void) {
   prv_subscribe(true, true);
 
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMin);
-  cl_assert_equal_i(s_response_time_period_secs, MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIN);
+  cl_assert_equal_i(s_response_time_period_secs, PBL_BT_MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS);
 
   stub_new_timer_invoke(1);
   fake_system_task_callbacks_invoke_pending();
 
   cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamStart));
   cl_assert(prv_find_data_msg(AudioCompanionDataMsgIdStreamData));
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
   cl_assert_equal_i(s_response_time_period_secs, TEST_MAX_PERIOD_RUN_FOREVER);
 }
 
@@ -1468,7 +1468,7 @@ void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes
   // The connection interval is deliberately NOT relaxed on the suppression edge any more -- that
   // is gated on the run lasting 30 s, and this run is a few frames old. See
   // test_audio_companion__short_quiet_runs_do_not_renegotiate_the_connection.
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 
   // Once suppression is active, more quiet frames should not create recurring BLE updates.
   s_data_count = 0;
@@ -1480,7 +1480,7 @@ void test_audio_companion__silence_suppression_sends_gap_only_when_audio_resumes
   prv_feed_frame_with_sample(800);
   fake_system_task_callbacks_invoke_pending();
   cl_assert(s_encoded_counter > encoded_before_resume);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 
   const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
   cl_assert(gap);
@@ -1499,7 +1499,7 @@ void test_audio_companion__light_silence_suppression_resumes_on_quiet_speech(voi
   prv_feed_silence_frames(1005);
   const uint8_t encoded_before_resume = s_encoded_counter;
   cl_assert(encoded_before_resume > 0);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 
   s_data_count = 0;
   prv_feed_silence_frames(50);
@@ -1513,7 +1513,7 @@ void test_audio_companion__light_silence_suppression_resumes_on_quiet_speech(voi
   fake_system_task_callbacks_invoke_pending();
 
   cl_assert_equal_i(s_encoded_counter, encoded_before_resume + 1);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 
   const CapturedNotification *gap = prv_find_data_msg(AudioCompanionDataMsgIdStreamGap);
   cl_assert(gap);
@@ -2116,17 +2116,17 @@ void test_audio_companion__short_quiet_runs_do_not_renegotiate_the_connection(vo
   prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
   prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
   cl_assert_equal_b(prv_diag().silence_suppressing, true);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 
   prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_BLE_RELAX_FRAMES - 2);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 
   prv_feed_frames_at_level(TEST_QUIET_LEVEL, 1);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMax);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
 
   // ...and speech puts it straight back.
   prv_feed_frames_at_level(900, 1);
-  cl_assert_equal_i(s_response_time_state, ResponseTimeMiddle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIDDLE);
 }
 
 //! The stationary power-save mute reads the detector at the end of each listen window, so the

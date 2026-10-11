@@ -1,36 +1,36 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/framebuffer.h"
-#include "applib/graphics/graphics.h"
-#include "applib/ui/app_window_stack.h"
-#include "applib/ui/content_indicator.h"
-#include "applib/ui/content_indicator_private.h"
-#include "applib/ui/dialogs/simple_dialog.h"
-#include "applib/ui/text_layer.h"
-#include "applib/ui/window_private.h"
-#include "resource/resource.h"
-#include "resource/resource_ids.auto.h"
-#include "pbl/services/timeline/timeline_resources.h"
-#include "shell/system_theme.h"
-#include "system/passert.h"
-#include "util/graphics.h"
-#include "pbl/util/hash.h"
-#include "pbl/util/math.h"
-#include "pbl/util/size.h"
-
-#include "clar.h"
-
 #include <stdio.h>
+
+#include <pbl/services/timeline/timeline_resources.h>
+#include <pbl/util/hash.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+
+#include <applib/graphics/framebuffer.h>
+#include <applib/graphics/graphics.h>
+#include <applib/graphics/raw_image.h>
+#include <applib/ui/app_window_stack.h>
+#include <applib/ui/content_indicator.h>
+#include <applib/ui/content_indicator_private.h>
+#include <applib/ui/dialogs/simple_dialog.h>
+#include <applib/ui/text_layer.h>
+#include <applib/ui/window_private.h>
+#include <clar.h>
+#include <resource/resource.h>
+#include <resource/resource_ids.auto.h>
+#include <shell/system_theme.h>
+#include <system/passert.h>
 
 static GContext s_ctx;
 
 // Fakes
 /////////////////////
 
-#include "fake_content_indicator.h"
-#include "fake_spi_flash.h"
-#include "fixtures/load_test_resources.h"
+#include <fake_content_indicator.h>
+#include <fake_spi_flash.h>
+#include <fixtures/load_test_resources.h>
 
 GContext *graphics_context_get_current_context(void) {
   return &s_ctx;
@@ -39,33 +39,32 @@ GContext *graphics_context_get_current_context(void) {
 // Stubs
 /////////////////////
 
-#include "stubs_analytics.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_app_state.h"
-#include "stubs_app_timer.h"
-#include "stubs_bootbits.h"
-#include "stubs_buffer.h"
-#include "stubs_click.h"
-#include "stubs_heap.h"
-#include "stubs_layer.h"
-#include "stubs_logging.h"
-#include "stubs_memory_layout.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_print.h"
-#include "stubs_prompt.h"
-#include "stubs_serial.h"
-#include "stubs_shell_prefs.h"
-#include "stubs_sleep.h"
-#include "stubs_status_bar_layer.h"
-#include "stubs_syscall_internal.h"
-#include "stubs_syscalls.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_vibes.h"
-#include "stubs_window_manager.h"
-#include "stubs_window_stack.h"
+#include <stubs_analytics.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_state.h>
+#include <stubs_app_timer.h>
+#include <stubs_bootbits.h>
+#include <stubs_buffer.h>
+#include <stubs_click.h>
+#include <stubs_heap.h>
+#include <stubs_layer.h>
+#include <stubs_logging.h>
+#include <stubs_memory_layout.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_print.h>
+#include <stubs_serial.h>
+#include <stubs_shell_prefs.h>
+#include <stubs_sleep.h>
+#include <stubs_status_bar_layer.h>
+#include <stubs_syscall_internal.h>
+#include <stubs_syscalls.h>
+#include <stubs_task_wdt.h>
+#include <stubs_vibes.h>
+#include <stubs_window_manager.h>
+#include <stubs_window_stack.h>
 
 AnimationProgress animation_timing_scaled(AnimationProgress time_normalized,
                                           AnimationProgress interval_start,
@@ -78,12 +77,12 @@ KinoReel *kino_reel_scale_segmented_create(KinoReel *from_reel, bool take_owners
   return NULL;
 }
 
-void kino_reel_scale_segmented_set_deflate_effect(KinoReel *reel, int16_t expand) {}
+void kino_reel_scale_segmented_set_deflate_effect(KinoReel *reel, int16_t expand) {
+}
 
 bool kino_reel_scale_segmented_set_delay_by_distance(KinoReel *reel, GPoint target) {
   return false;
 }
-
 
 // Helper Functions
 /////////////////////
@@ -104,7 +103,7 @@ static GBitmap *s_dest_bitmap;
 // Overrides same function in graphics.c; we need to do this so we can pass in the GBitmapFormat
 // we need to use for the unit test output canvas instead of relying on GBITMAP_NATIVE_FORMAT, which
 // wouldn't work for Spalding since it uses GBitmapFormat8BitCircular
-GBitmap* graphics_capture_frame_buffer(GContext *ctx) {
+GBitmap *graphics_capture_frame_buffer(GContext *ctx) {
   PBL_ASSERTN(ctx);
   return graphics_capture_frame_buffer_format(ctx, CANVAS_GBITMAP_FORMAT);
 }
@@ -121,7 +120,7 @@ bool graphics_release_frame_buffer(GContext *ctx, GBitmap *buffer) {
 
 void test_simple_dialog__initialize(void) {
   fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(fb, &(GSize) {DISP_COLS, DISP_ROWS});
+  framebuffer_init(fb, &(GSize){DISP_COLS, DISP_ROWS});
   test_graphics_context_init(&s_ctx, fb);
   framebuffer_clear(fb);
 
@@ -129,7 +128,8 @@ void test_simple_dialog__initialize(void) {
   fake_spi_flash_init(0, 0x1000000);
   pfs_init(false);
   pfs_format(true /* write erase headers */);
-  load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME, false /* is_next */);
+  load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
+                                 false /* is_next */);
 
   resource_init();
 }

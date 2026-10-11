@@ -1,85 +1,86 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/kernel/types.h"
-#include "applib/accel_service.h"
-#include "applib/data_logging.h"
-#include "applib/health_service.h"
-#include "applib/health_service_private.h"
 #include <pbl/drivers/rtc.h>
 #include <pbl/drivers/vibe.h>
-#include "kernel/events.h"
-#include "pbl/services/hrm/hrm_manager_private.h"
-#include "pbl/services/activity/activity.h"
-#include "pbl/services/activity/activity_algorithm.h"
-#include "pbl/services/activity/activity_private.h"
-#include "pbl/services/activity/kraepelin/activity_algorithm_kraepelin.h"
-#include "pbl/services/data_logging/data_logging_service.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/protobuf_log/protobuf_log.h"
-#include "shell/prefs.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/types.h>
 #include <pbl/logging/logging.h>
-#include "system/passert.h"
-#include "pbl/util/math.h"
-#include "pbl/util/size.h"
+#include <pbl/services/activity/activity.h>
+#include <pbl/services/activity/activity_algorithm.h>
+#include <pbl/services/activity/activity_private.h>
+#include <pbl/services/activity/kraepelin/activity_algorithm_kraepelin.h>
+#include <pbl/services/data_logging/data_logging_service.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/services/hrm/hrm_manager_private.h>
+#include <pbl/services/protobuf_log/protobuf_log.h>
+#include <pbl/services/time.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+#include <pbl/util/time.h>
+#include <pbl/util/units.h>
 
+#include <applib/accel_service.h>
+#include <applib/data_logging.h>
+#include <applib/health_service.h>
+#include <applib/health_service_private.h>
+#include <clar.h>
+#include <kernel/events.h>
+#include <shell/prefs.h>
 #include <sys/stat.h>
-
-#include "clar.h"
+#include <system/passert.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
 
-
 // Stubs
-#include "stubs_activity_insights.h"
-#include "stubs_alarm.h"
-#include "stubs_app_manager.h"
-#include "stubs_analytics.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_battery.h"
-#include "stubs_event_loop.h"
-#include "stubs_irq.h"
-#include "stubs_health_db.h"
-#include "stubs_hexdump.h"
-#include "stubs_i18n.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pebble_process_info.h"
-#include "stubs_prompt.h"
-#include "stubs_sleep.h"
-#include "stubs_system_theme.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_timeline_peek.h"
-#include "stubs_worker_manager.h"
-#include "stubs_workout_service.h"
-#include "stubs_ambient_light.h"
+#include <pbl/util/testing.h>
+
+#include <stubs_activity_insights.h>
+#include <stubs_alarm.h>
+#include <stubs_ambient_light.h>
+#include <stubs_analytics.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_manager.h>
+#include <stubs_battery.h>
+#include <stubs_event_loop.h>
+#include <stubs_health_db.h>
+#include <stubs_hexdump.h>
+#include <stubs_i18n.h>
+#include <stubs_irq.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pebble_process_info.h>
+#include <stubs_sleep.h>
+#include <stubs_system_theme.h>
+#include <stubs_task_wdt.h>
+#include <stubs_timeline_peek.h>
+#include <stubs_worker_manager.h>
+#include <stubs_workout_service.h>
 
 void prefs_sync_init(void) {
 }
 
 // Fakes
-#include "fake_accel_service.h"
-#include "fake_cron.h"
-#include "fake_events.h"
-#include "fake_new_timer.h"
-#include "fake_pbl_std.h"
-#include "fake_rtc.h"
-#include "fake_spi_flash.h"
-#include "fake_system_task.h"
-
+#include <fake_accel_service.h>
+#include <fake_cron.h>
+#include <fake_events.h>
+#include <fake_new_timer.h>
+#include <fake_pbl_std.h>
+#include <fake_rtc.h>
+#include <fake_spi_flash.h>
+#include <fake_system_task.h>
 
 // We start time out at 5pm on Jan 1, 2015 for all of these tests
-static const  struct tm s_init_time_tm = {
-    // Thursday, Jan 1, 2015, 5:pm
-    .tm_hour = 17,
-    .tm_mday = 1,
-    .tm_mon = 0,
-    .tm_year = 115
-  };
-
+static const struct tm s_init_time_tm = {
+  // Thursday, Jan 1, 2015, 5:pm
+  .tm_hour = 17,
+  .tm_mday = 1,
+  .tm_mon = 0,
+  .tm_year = 115
+};
 
 #define ACTIVITY_FIXTURE_PATH "activity"
 
@@ -89,16 +90,18 @@ const int s_exp_5pm_resting_kcalories = 1031;
 const int s_exp_full_day_resting_kcalories = 1455;
 
 // Stub for health tracking disabled UI
-void health_tracking_ui_feature_show_disabled(void) { }
+void health_tracking_ui_feature_show_disabled(void) {
+}
 
-// These are declared as T_STATIC in activity.c
+// These are declared as PBL_T_STATIC in activity.c
 void prv_hrm_subscription_cb(PebbleHRMEvent *hrm_event, void *context);
 void prv_minute_system_task_cb(void *data);
 
-void hrm_manager_handle_prefs_changed(void) { }
+void hrm_manager_handle_prefs_changed(void) {
+}
 
-#define ASSERT_EQUAL_I(i1,i2,file,line) \
-        clar__assert_equal_i((i1),(i2),file,line,#i1 " != " #i2, 1)
+#define ASSERT_EQUAL_I(i1, i2, file, line) \
+  clar__assert_equal_i((i1), (i2), file, line, #i1 " != " #i2, 1)
 
 // ======================================================================================
 // Misc stubs
@@ -113,11 +116,13 @@ HealthServiceState *worker_state_get_health_service_state(void) {
   return NULL;
 }
 
-void event_service_client_subscribe(EventServiceInfo * service_info) {}
-void event_service_client_unsubscribe(EventServiceInfo * service_info) {}
+void event_service_client_subscribe(EventServiceInfo *service_info) {
+}
+void event_service_client_unsubscribe(EventServiceInfo *service_info) {
+}
 
-void sys_send_pebble_event_to_kernel(PebbleEvent* event) {}
-
+void sys_send_pebble_event_to_kernel(PebbleEvent *event) {
+}
 
 static UnitsDistance s_units_distance_result;
 
@@ -134,8 +139,9 @@ static uint32_t s_hrm_manager_update_interval;
 static int s_hrm_manager_num_update_interval_changes;
 static uint16_t s_hrm_manager_expire_s;
 HRMSessionRef hrm_manager_subscribe_with_callback(AppInstallId app_id, uint32_t update_interval_s,
-                                         uint16_t expire_s, HRMFeature features,
-                                         HRMSubscriberCallback callback, void *context) {
+                                                  uint16_t expire_s, HRMFeature features,
+                                                  bool low_latency, HRMSubscriberCallback callback,
+                                                  void *context) {
   s_hrm_manager_update_interval = update_interval_s;
   s_hrm_manager_expire_s = expire_s;
   return s_hrm_next_session_ref++;
@@ -144,6 +150,24 @@ HRMSessionRef hrm_manager_subscribe_with_callback(AppInstallId app_id, uint32_t 
 bool sys_hrm_manager_unsubscribe(HRMSessionRef session) {
   cl_assert(session < s_hrm_next_session_ref);
   return true;
+}
+
+bool sys_hrm_manager_set_features(HRMSessionRef session, HRMFeature features) {
+  return true;
+}
+
+bool hrm_manager_has_continuous_green_subscriber(void) {
+  return false;
+}
+
+// Activity-SpO2 / HR-pause APIs referenced by activity.c. Stubbed to keep the auto-activity HR
+// path idle so these tests exercise only the daily HR/SpO2 schedulers.
+bool activity_algorithm_activity_hrm_is_active(void) {
+  return false;
+}
+
+void activity_algorithm_activity_hrm_set_paused(bool paused) {
+  (void)paused;
 }
 
 bool sys_hrm_manager_set_update_interval(HRMSessionRef session, uint32_t update_interval_s,
@@ -174,7 +198,6 @@ AppInstallId app_get_app_id(void) {
   return 1;
 }
 
-
 // ======================================================================================
 // Queue stubs, to support the semaphore that activity.c uses to block on a kernel BG callback
 int s_queue_value = 0;
@@ -194,15 +217,12 @@ void pbl_sem_give(struct pbl_sem *s) {
   s_queue_value++;
 }
 
-
-
 // =============================================================================================
 // Data logging stubs
 typedef enum {
   DataLoggingSession_AccelSamples = 1,
   DataLoggingSession_ActivitySessions = 2,
 } DataLoggingSession_ID;
-
 
 // Logged items
 static bool s_dls_accel_samples_created;
@@ -229,10 +249,10 @@ DataLoggingResult dls_log(DataLoggingSession *logging_session, const void *data,
       s_dls_accel_records[s_num_dls_accel_records++] = records[i];
     }
 
-  } else if (logging_session == (DataLoggingSession *) DataLoggingSession_ActivitySessions) {
+  } else if (logging_session == (DataLoggingSession *)DataLoggingSession_ActivitySessions) {
     cl_assert(s_dls_activity_sessions_created);
 
-    ActivitySessionDataLoggingRecord  *records = (ActivitySessionDataLoggingRecord *)data;
+    ActivitySessionDataLoggingRecord *records = (ActivitySessionDataLoggingRecord *)data;
     for (int i = 0; i < num_items; i++) {
       if (s_num_dls_activity_records >= 100) {
         cl_assert(false);
@@ -258,7 +278,7 @@ DataLoggingSession *dls_create(uint32_t tag, DataLoggingItemType item_type, uint
   } else if (tag == DlsSystemTagActivitySession) {
     s_dls_activity_sessions_created = true;
     cl_assert_equal_i(item_size, sizeof(ActivitySessionDataLoggingRecord));
-    return (DataLoggingSession *) DataLoggingSession_ActivitySessions;
+    return (DataLoggingSession *)DataLoggingSession_ActivitySessions;
 
   } else {
     return NULL;
@@ -268,13 +288,12 @@ DataLoggingSession *dls_create(uint32_t tag, DataLoggingItemType item_type, uint
 void dls_finish(DataLoggingSession *logging_session) {
   if (logging_session == (DataLoggingSession *)DataLoggingSession_AccelSamples) {
     s_dls_accel_samples_created = false;
-  } else if (logging_session == (DataLoggingSession *) DataLoggingSession_ActivitySessions) {
+  } else if (logging_session == (DataLoggingSession *)DataLoggingSession_ActivitySessions) {
     s_dls_activity_sessions_created = false;
   } else {
     cl_assert(false);
   }
 }
-
 
 // =================================================================================
 // Measurement logging stubs
@@ -287,17 +306,16 @@ bool protobuf_log_session_delete(ProtobufLogRef session) {
 }
 
 bool protobuf_log_hr_add_sample(ProtobufLogRef ref, time_t now_utc, uint8_t bpm,
-                               HRMQuality quality) {
+                                HRMQuality quality) {
   return true;
 }
-
 
 // =============================================================================================
 // Assertion utilities
 // --------------------------------------------------------------------------------------
 static void prv_assert_equal_metric_history(ActivityMetric metric,
                                             const uint32_t expected[ACTIVITY_HISTORY_DAYS],
-                                            char* file, int line) {
+                                            char *file, int line) {
   int32_t actual[ACTIVITY_HISTORY_DAYS];
   activity_get_metric(metric, ACTIVITY_HISTORY_DAYS, actual);
   for (int i = 0; i < ACTIVITY_HISTORY_DAYS; i++) {
@@ -306,31 +324,7 @@ static void prv_assert_equal_metric_history(ActivityMetric metric,
 }
 
 #define ASSERT_EQUAL_METRIC_HISTORY(metric, expected) \
-        prv_assert_equal_metric_history((metric), (expected), __FILE__, __LINE__)
-
-
-static void prv_assert_dls_activity_record_present(ActivitySessionDataLoggingRecord *record,
-                                                   char *file, int line) {
-  for (int i = 0; i < s_num_dls_activity_records; i++) {
-    if (!memcmp(record, &s_dls_activity_records[i], sizeof(*record))) {
-      return;
-    }
-  }
-  printf("\nFound records:");
-  for (int i = 0; i < s_num_dls_activity_records; i++) {
-    printf("\ntype: %d, start_utc: %"PRIu32", elapsed: %"PRIu32", utc_to_local: %"PRIu32" ",
-           (int)s_dls_activity_records[i].activity, (uint32_t)s_dls_activity_records[i].start_utc,
-           s_dls_activity_records[i].elapsed_sec, s_dls_activity_records[i].utc_to_local);
-  }
-  printf("\nLooking for: type: %d, start_utc: %"PRIu32", elapsed: %"PRIu32", "
-           "utc_to_local: %"PRIu32" ", (int)record->activity, (uint32_t)record->start_utc,
-         record->elapsed_sec, record->utc_to_local);
-  clar__assert(false, file, line, "Missing activity record", "", true);
-}
-
-#define ASSERT_ACTIVITY_DLS_RECORD_PRESENT(record) \
-        prv_assert_dls_activity_record_present((record), __FILE__, __LINE__)
-
+  prv_assert_equal_metric_history((metric), (expected), __FILE__, __LINE__)
 
 // Assert that given number of activity sessions are present
 static void prv_assert_num_activities(uint32_t num_expected, char *file, int line) {
@@ -338,7 +332,7 @@ static void prv_assert_num_activities(uint32_t num_expected, char *file, int lin
   uint32_t num_sessions = ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT;
   activity_get_sessions(&num_sessions, sessions);
   if (num_sessions != num_expected) {
-    printf("Expected %"PRIu32" activities, but found %"PRIu32".\n", num_expected, num_sessions);
+    printf("Expected %" PRIu32 " activities, but found %" PRIu32 ".\n", num_expected, num_sessions);
   }
   clar__assert(num_sessions == num_expected, file, line, "wrong number of activities", "", true);
 }
@@ -349,67 +343,38 @@ static void prv_assert_step_activity_present(ActivitySession *exp_session, char 
   uint32_t num_sessions = ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT;
   activity_get_sessions(&num_sessions, sessions);
   for (int i = 0; i < num_sessions; i++) {
-    if (sessions[i].type == exp_session->type
-      && sessions[i].start_utc == exp_session->start_utc
-      && sessions[i].length_min == exp_session->length_min
-      && sessions[i].step_data.active_kcalories == exp_session->step_data.active_kcalories
-      && sessions[i].step_data.resting_kcalories == exp_session->step_data.resting_kcalories
-      && sessions[i].step_data.distance_meters == exp_session->step_data.distance_meters
-      && sessions[i].step_data.steps == exp_session->step_data.steps) {
+    if (sessions[i].type == exp_session->type && sessions[i].start_utc == exp_session->start_utc &&
+        sessions[i].length_min == exp_session->length_min &&
+        sessions[i].step_data.active_kcalories == exp_session->step_data.active_kcalories &&
+        sessions[i].step_data.resting_kcalories == exp_session->step_data.resting_kcalories &&
+        sessions[i].step_data.distance_meters == exp_session->step_data.distance_meters &&
+        sessions[i].step_data.steps == exp_session->step_data.steps) {
       return;
     }
   }
   printf("\nFound activities:");
   for (int i = 0; i < num_sessions; i++) {
-    printf("\nFound:       type: %d, start_utc: %d, len: %"PRIu16", steps: %"PRIu16", "
-             "rest_cal: %"PRIu32", active_cal: %"PRIu32", dist: %"PRIu32" ",
+    printf("\nFound:       type: %d, start_utc: %d, len: %" PRIu16 ", steps: %" PRIu16
+           ", "
+           "rest_cal: %" PRIu32 ", active_cal: %" PRIu32 ", dist: %" PRIu32 " ",
            (int)sessions[i].type, (int)sessions[i].start_utc, sessions[i].length_min,
            sessions[i].step_data.steps, sessions[i].step_data.resting_kcalories,
-           sessions[i].step_data.active_kcalories,
-           sessions[i].step_data.distance_meters);
+           sessions[i].step_data.active_kcalories, sessions[i].step_data.distance_meters);
   }
-  printf("\nLooking for: type: %d, start_utc: %d, len: %"PRIu16", steps: %"PRIu16", "
-           "rest_cal: %"PRIu32", active_cal: %"PRIu32", dist: %"PRIu32" ",
-         (int)exp_session->type, (int)exp_session->start_utc,
-         exp_session->length_min, exp_session->step_data.steps,
-         exp_session->step_data.resting_kcalories,
+  printf("\nLooking for: type: %d, start_utc: %d, len: %" PRIu16 ", steps: %" PRIu16
+         ", "
+         "rest_cal: %" PRIu32 ", active_cal: %" PRIu32 ", dist: %" PRIu32 " ",
+         (int)exp_session->type, (int)exp_session->start_utc, exp_session->length_min,
+         exp_session->step_data.steps, exp_session->step_data.resting_kcalories,
          exp_session->step_data.active_kcalories, exp_session->step_data.distance_meters);
   clar__assert(false, file, line, "Missing activity record", "", true);
 }
 
-// Assert that a particular sleep activity session is present in the sessions list
-static void prv_assert_sleep_activity_present(ActivitySession *exp_session, char *file, int line) {
-  ActivitySession sessions[ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT];
-  uint32_t num_sessions = ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT;
-  activity_get_sessions(&num_sessions, sessions);
-  for (int i = 0; i < num_sessions; i++) {
-    if (sessions[i].type == exp_session->type
-        && sessions[i].start_utc == exp_session->start_utc
-        && sessions[i].length_min == exp_session->length_min) {
-      return;
-    }
-  }
-  printf("\nFound activities:");
-  for (int i = 0; i < num_sessions; i++) {
-    printf("\nFound:       type: %d, start_utc: %d, len: %"PRIu16" ",
-           (int)sessions[i].type, (int)sessions[i].start_utc, sessions[i].length_min);
-  }
-  printf("\nLooking for: type: %d, start_utc: %d, len: %"PRIu16" ",
-         (int)exp_session->type, (int)exp_session->start_utc,
-         exp_session->length_min);
-  clar__assert(false, file, line, "Missing sleep activity record", "", true);
-}
-
 #define ASSERT_STEP_ACTIVITY_SESSION_PRESENT(session) \
-        prv_assert_step_activity_present((session), __FILE__, __LINE__)
-
-#define ASSERT_SLEEP_ACTIVITY_SESSION_PRESENT(session) \
-        prv_assert_sleep_activity_present((session), __FILE__, __LINE__)
+  prv_assert_step_activity_present((session), __FILE__, __LINE__)
 
 #define ASSERT_NUM_ACTIVITY_SESSIONS(num_sessions) \
-        prv_assert_num_activities((num_sessions), __FILE__, __LINE__)
-
-
+  prv_assert_num_activities((num_sessions), __FILE__, __LINE__)
 
 // =============================================================================================
 // Activity algorithm stub
@@ -418,7 +383,7 @@ static void prv_assert_sleep_activity_present(ActivitySession *exp_session, char
 //  y: sleep state
 //
 
-#define ALGORITHM_SAMPLING_RATE ACCEL_SAMPLING_25HZ
+#define ALGORITHM_SAMPLING_RATE    ACCEL_SAMPLING_25HZ
 #define TEST_ACTIVITY_MAX_SESSIONS 24
 typedef struct {
   // Captured sessions
@@ -426,8 +391,8 @@ typedef struct {
   int num_sessions_created;
   time_t last_captured_utc;
 
-  int sleep_current_container_idx;    // >=0 if we have a container in progress
-  ActivitySleepState sleep_state;   // Our current sleep state
+  int sleep_current_container_idx; // >=0 if we have a container in progress
+  ActivitySleepState sleep_state;  // Our current sleep state
 } AlgorithmStateMinuteData;
 
 typedef struct {
@@ -449,12 +414,11 @@ typedef struct {
 } AlgorithmState;
 static AlgorithmState s_test_alg_state;
 
-
 bool activity_algorithm_init(AccelSamplingRate *sampling_rate) {
   *sampling_rate = ALGORITHM_SAMPLING_RATE;
   AlgorithmStateMinuteData minute_data = s_test_alg_state.minute_data;
   // Preserve the minute data from the last boot
-  s_test_alg_state = (AlgorithmState) {
+  s_test_alg_state = (AlgorithmState){
     .minute_data = minute_data,
     .rate_last_update_time = rtc_get_time(),
   };
@@ -465,7 +429,7 @@ bool activity_algorithm_init(AccelSamplingRate *sampling_rate) {
 // Call from unit tests to clear out the "minute data" that might have been left over
 // from last time
 static void prv_activity_algorithm_erase_minute_data(void) {
-  s_test_alg_state.minute_data = (AlgorithmStateMinuteData){ };
+  s_test_alg_state.minute_data = (AlgorithmStateMinuteData){};
   s_test_alg_state.minute_data.sleep_current_container_idx = -1;
   s_test_alg_state.minute_data.sleep_state = ActivitySleepStateAwake;
 }
@@ -490,18 +454,20 @@ void activity_algorithm_handle_accel(AccelRawData *data, uint32_t num_samples, u
     // Update the length of the current sleep container if we have one
     if (s_test_alg_state.minute_data.sleep_current_container_idx >= 0) {
       cl_assert(prior_state != ActivitySleepStateAwake);
-      ActivitySession *session = &s_test_alg_state.minute_data.sessions
-                                      [s_test_alg_state.minute_data.sleep_current_container_idx];
-      session->length_min = ROUND(now_secs - session->start_utc, SECONDS_PER_MINUTE);
+      ActivitySession *session =
+          &s_test_alg_state.minute_data
+               .sessions[s_test_alg_state.minute_data.sleep_current_container_idx];
+      session->length_min = ROUND(now_secs - session->start_utc, PBL_SEC_PER_MIN);
       // Inform the activity service of the new state
       activity_sessions_prv_add_activity_session(session);
     }
     // If we were in restful sleep, update that session as well
     if (prior_state == ActivitySleepStateRestfulSleep) {
       cl_assert(s_test_alg_state.minute_data.num_sessions_created > 0);
-      ActivitySession *session = &s_test_alg_state.minute_data.sessions
-            [s_test_alg_state.minute_data.num_sessions_created - 1];
-      session->length_min = ROUND(now_secs - session->start_utc, SECONDS_PER_MINUTE);
+      ActivitySession *session =
+          &s_test_alg_state.minute_data
+               .sessions[s_test_alg_state.minute_data.num_sessions_created - 1];
+      session->length_min = ROUND(now_secs - session->start_utc, PBL_SEC_PER_MIN);
       // Inform the activity service of the new state
       activity_sessions_prv_add_activity_session(session);
     }
@@ -534,8 +500,8 @@ void activity_algorithm_handle_accel(AccelRawData *data, uint32_t num_samples, u
           cl_assert(s_test_alg_state.minute_data.sleep_current_container_idx < 0);
           s_test_alg_state.minute_data.sleep_current_container_idx =
               s_test_alg_state.minute_data.num_sessions_created;
-          s_test_alg_state.minute_data.sessions[s_test_alg_state.minute_data.num_sessions_created++]
-            = (ActivitySession) {
+          s_test_alg_state.minute_data
+              .sessions[s_test_alg_state.minute_data.num_sessions_created++] = (ActivitySession){
             .type = ActivitySessionType_Sleep,
             .start_utc = now_secs,
             .length_min = 0,
@@ -554,8 +520,8 @@ void activity_algorithm_handle_accel(AccelRawData *data, uint32_t num_samples, u
           cl_assert(s_test_alg_state.minute_data.num_sessions_created < TEST_ACTIVITY_MAX_SESSIONS);
           s_test_alg_state.minute_data.sleep_current_container_idx =
               s_test_alg_state.minute_data.num_sessions_created;
-          s_test_alg_state.minute_data.sessions[s_test_alg_state.minute_data.num_sessions_created++]
-            = (ActivitySession) {
+          s_test_alg_state.minute_data
+              .sessions[s_test_alg_state.minute_data.num_sessions_created++] = (ActivitySession){
             .type = ActivitySessionType_Sleep,
             .start_utc = now_secs,
             .length_min = 0,
@@ -565,13 +531,13 @@ void activity_algorithm_handle_accel(AccelRawData *data, uint32_t num_samples, u
 
         // Start a restful sleep session
         cl_assert(s_test_alg_state.minute_data.num_sessions_created < TEST_ACTIVITY_MAX_SESSIONS);
-        s_test_alg_state.minute_data.sessions[s_test_alg_state.minute_data.num_sessions_created++]
-          = (ActivitySession) {
-          .type = ActivitySessionType_RestfulSleep,
-          .start_utc = now_secs,
-          .length_min = 0,
-          .ongoing = true,
-        };
+        s_test_alg_state.minute_data.sessions[s_test_alg_state.minute_data.num_sessions_created++] =
+            (ActivitySession){
+              .type = ActivitySessionType_RestfulSleep,
+              .start_utc = now_secs,
+              .length_min = 0,
+              .ongoing = true,
+            };
         break;
 
       case ActivitySleepStateUnknown:
@@ -586,8 +552,8 @@ void activity_algorithm_handle_accel(AccelRawData *data, uint32_t num_samples, u
   // emulate that
   if ((now_secs - s_test_alg_state.rate_last_update_time) >= 5) {
     s_test_alg_state.rate_steps = s_test_alg_state.steps - s_test_alg_state.rate_last_steps;
-    s_test_alg_state.rate_elapsed_ms = (now_secs - s_test_alg_state.rate_last_update_time)
-                                        * MS_PER_SECOND;
+    s_test_alg_state.rate_elapsed_ms =
+        (now_secs - s_test_alg_state.rate_last_update_time) * PBL_MSEC_PER_SEC;
 
     s_test_alg_state.rate_last_update_time = now_secs;
     s_test_alg_state.rate_last_steps = s_test_alg_state.steps;
@@ -624,18 +590,18 @@ bool activity_algorithm_get_sleep_sessions(time_t sleep_earliest_end_utc,
   for (uint32_t i = 0; i < s_test_alg_state.minute_data.num_sessions_created; i++) {
     ActivitySession *session = &s_test_alg_state.minute_data.sessions[i];
     int start_minute = time_util_get_minute_of_day(session->start_utc);
-    ACTIVITY_LOG_DEBUG("Found session %d: start_min: %d, len_min: %"PRIu16" ", session->type,
-                       start_minute, session->length_min);
+    PBL_LOG_DBG("Found session %d: start_min: %d, len_min: %" PRIu16 " ", session->type,
+                start_minute, session->length_min);
     if (!activity_sessions_prv_is_sleep_activity(session->type)) {
       continue;
     }
-    if (s_test_alg_state.minute_data.sessions[i].start_utc
-          + (s_test_alg_state.minute_data.sessions[i].length_min * SECONDS_PER_MINUTE)
-        < sleep_earliest_end_utc) {
+    if (s_test_alg_state.minute_data.sessions[i].start_utc +
+            (s_test_alg_state.minute_data.sessions[i].length_min * PBL_SEC_PER_MIN) <
+        sleep_earliest_end_utc) {
       continue;
     }
-    ACTIVITY_LOG_DEBUG("Returning session %d: start_min: %d, len_min: %"PRIu16" ", session->type,
-                       start_minute, session->length_min);
+    PBL_LOG_DBG("Returning session %d: start_min: %d, len_min: %" PRIu16 " ", session->type,
+                start_minute, session->length_min);
     activity_sessions_prv_add_activity_session(&s_test_alg_state.minute_data.sessions[i]);
   }
   return true;
@@ -667,6 +633,12 @@ bool activity_algorithm_test_fill_minute_file(void) {
   return true;
 }
 
+// Activity-SpO2 / HR-pause APIs referenced by activity.c. Stubbed to keep the auto-activity HR
+// path idle so these tests exercise only the daily HR/SpO2 schedulers.
+void workout_service_set_hrm_paused(bool paused) {
+  (void)paused;
+}
+
 // We simulate the activity_algorithm_get_minute_history() call to return data that reflects
 // that we record chunks of ALG_MINUTES_PER_RECORD minutes at a time. If we don't ask on a
 // ALG_MINUTES_PER_RECORD minute boundary, we will have up to ALG_MINUTES_PER_RECORD minutes
@@ -678,28 +650,28 @@ bool activity_algorithm_get_minute_history(HealthMinuteData *minute_data, uint32
   time_t now = rtc_get_time();
 
   // Get the minute index
-  uint32_t minute_idx = now / SECONDS_PER_MINUTE;
+  uint32_t minute_idx = now / PBL_SEC_PER_MIN;
 
   // Compute the timestamp of the end of the last record we would have available
   uint32_t last_minute_avail = minute_idx - (minute_idx % ALG_MINUTES_PER_FILE_RECORD);
-  time_t last_second_available = last_minute_avail * SECONDS_PER_MINUTE;
+  time_t last_second_available = last_minute_avail * PBL_SEC_PER_MIN;
 
   // Return the data now
   uint32_t num_records_requested = *num_records;
 
   // Start on next minute boundary
-  *utc_start = ((*utc_start + SECONDS_PER_MINUTE - 1) / SECONDS_PER_MINUTE) * SECONDS_PER_MINUTE;
+  *utc_start = ((*utc_start + PBL_SEC_PER_MIN - 1) / PBL_SEC_PER_MIN) * PBL_SEC_PER_MIN;
 
   int num_records_returned;
   time_t record_start_time = *utc_start;
   for (num_records_returned = 0; num_records_returned < num_records_requested;
-       num_records_returned++, record_start_time += SECONDS_PER_MINUTE) {
-    if (record_start_time + SECONDS_PER_MINUTE > last_second_available) {
+       num_records_returned++, record_start_time += PBL_SEC_PER_MIN) {
+    if (record_start_time + PBL_SEC_PER_MIN > last_second_available) {
       // This record not available yet.
       break;
     }
 
-    minute_data[num_records_returned] = (HealthMinuteData) {
+    minute_data[num_records_returned] = (HealthMinuteData){
       .steps = record_start_time % 255,
     };
   }
@@ -716,7 +688,6 @@ bool activity_algorithm_test_send_fake_minute_data_dls_record(void) {
   return true;
 }
 
-
 // =========================================================================================
 // Tests
 
@@ -727,7 +698,7 @@ bool activity_algorithm_test_send_fake_minute_data_dls_record(void) {
 // .y : the current sleep state
 // .z : 0
 static void prv_feed_canned_accel_data(uint32_t num_sec, uint32_t steps_per_minute,
-                                ActivitySleepState sleep_state) {
+                                       ActivitySleepState sleep_state) {
   uint32_t num_steps = (steps_per_minute * num_sec + 30) / 60;
   uint32_t num_samples = num_sec * ALGORITHM_SAMPLING_RATE;
   uint32_t samples_per_step = 0;
@@ -742,12 +713,12 @@ static void prv_feed_canned_accel_data(uint32_t num_sec, uint32_t steps_per_minu
   uint64_t start_ms = utc_secs * 1000 + ms;
   uint64_t ms_per_sample = 1000 / ALGORITHM_SAMPLING_RATE;
 
-  for (int i = 0; i < num_samples; ) {
+  for (int i = 0; i < num_samples;) {
     AccelData accel_data[ALGORITHM_SAMPLING_RATE];
 
     for (int j = 0; j < ALGORITHM_SAMPLING_RATE; j++, i++) {
       need_step_ctr -= 1;
-      accel_data[j] = (AccelData) {
+      accel_data[j] = (AccelData){
         .x = (num_steps > 0) && (need_step_ctr <= 0),
         .y = sleep_state,
         .z = 0,
@@ -774,11 +745,9 @@ static void prv_feed_canned_accel_data(uint32_t num_sec, uint32_t steps_per_minu
       fake_cron_job_fire();
       fake_system_task_callbacks_invoke_pending();
     }
-
   }
   PBL_ASSERTN(num_steps == 0);
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Feed in X seconds of raw data
@@ -788,12 +757,12 @@ static void prv_feed_raw_accel_data(AccelRawData *samples, uint32_t num_samples)
   rtc_get_time_ms(&utc_secs, &ms);
   uint64_t start_ms = utc_secs * 1000 + ms;
 
-  for (int i = 0; i < num_samples; ) {
+  for (int i = 0; i < num_samples;) {
     AccelData accel_data[ALGORITHM_SAMPLING_RATE];
 
     int j;
     for (j = 0; j < ALGORITHM_SAMPLING_RATE && i < num_samples; j++, i++) {
-      accel_data[j] = (AccelData) {
+      accel_data[j] = (AccelData){
         .x = samples[i].x,
         .y = samples[i].y,
         .z = samples[i].z,
@@ -814,10 +783,8 @@ static void prv_feed_raw_accel_data(AccelRawData *samples, uint32_t num_samples)
       fake_cron_job_fire();
       fake_system_task_callbacks_invoke_pending();
     }
-
   }
 }
-
 
 // --------------------------------------------------------------------------------
 // Fast forward time, one minute at a time, calling all minute callbacks along the way.
@@ -825,14 +792,13 @@ static void prv_feed_raw_accel_data(AccelRawData *samples, uint32_t num_samples)
 static void prv_advance_by_days(uint32_t num_days) {
   for (int i = 0; i < num_days; i++) {
     // Advance time
-    fake_rtc_increment_time(SECONDS_PER_DAY);
-    fake_rtc_increment_ticks(PBL_TICK_HZ * SECONDS_PER_DAY);
+    fake_rtc_increment_time(PBL_SEC_PER_DAY);
+    fake_rtc_increment_ticks(PBL_TICK_HZ * PBL_SEC_PER_DAY);
 
     fake_cron_job_fire();
     fake_system_task_callbacks_invoke_pending();
   }
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Uncompress data stored in the raw accel DLS records
@@ -854,13 +820,12 @@ static void prv_uncompress_captured_data(AccelRawData *data, uint32_t num_sample
       cl_assert(!(record->flags & ACTIVITY_RAW_SAMPLE_FLAG_LAST_RECORD));
     }
 
-
     // Uncompress the entries into samples
     uint32_t num_samples_seen = 0;
     for (int j = 0; j < record->num_entries; j++) {
       uint32_t encoded = record->entries[j];
       uint32_t run_size = ACTIVITY_RAW_SAMPLE_GET_RUN_SIZE(encoded);
-      AccelRawData sample = (AccelRawData) {
+      AccelRawData sample = (AccelRawData){
         .x = ACTIVITY_RAW_SAMPLE_GET_X(encoded),
         .y = ACTIVITY_RAW_SAMPLE_GET_Y(encoded),
         .z = ACTIVITY_RAW_SAMPLE_GET_Z(encoded),
@@ -877,7 +842,6 @@ static void prv_uncompress_captured_data(AccelRawData *data, uint32_t num_sample
   cl_assert_equal_i(num_samples, 0);
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Init and enable the activity service
 static void prv_activity_init_and_set_enabled(bool enable) {
@@ -885,8 +849,6 @@ static void prv_activity_init_and_set_enabled(bool enable) {
   activity_set_enabled(enable);
   fake_system_task_callbacks_invoke_pending();
 }
-
-
 
 // -----------------------------------------------------------------------------------------
 // Fetch sleep sessions using the health_service API
@@ -914,15 +876,14 @@ static bool prv_activity_iterate_cb(HealthActivity activity, time_t time_start, 
 
   char time_start_text[64];
   struct tm *local_tm = localtime(&time_start);
-  strftime(time_start_text, sizeof(time_start_text),  "%F %r", local_tm);
+  strftime(time_start_text, sizeof(time_start_text), "%F %r", local_tm);
 
   char time_end_text[64];
   local_tm = localtime(&time_end);
-  strftime(time_end_text, sizeof(time_end_text),  "%F %r", local_tm);
+  strftime(time_end_text, sizeof(time_end_text), "%F %r", local_tm);
 
-  PBL_LOG_DBG("Got activity: %d %s to %s (%d min)", (int)activity, time_start_text,
-          time_end_text, (int)((time_end - time_start) / SECONDS_PER_MINUTE));
-
+  PBL_LOG_DBG("Got activity: %d %s to %s (%d min)", (int)activity, time_start_text, time_end_text,
+              (int)((time_end - time_start) / PBL_SEC_PER_MIN));
 
   // Save the session info
   ActivitySessionType session_type = ActivitySessionType_Sleep;
@@ -934,11 +895,11 @@ static bool prv_activity_iterate_cb(HealthActivity activity, time_t time_start, 
     cl_assert(false);
   }
 
-  s_health_sessions[s_health_sessions_count] = (ActivitySession) {
+  s_health_sessions[s_health_sessions_count] = (ActivitySession){
     .type = session_type,
     .start_utc = time_start,
-    .length_min = ROUND(time_end - time_start, SECONDS_PER_MINUTE),
-    };
+    .length_min = ROUND(time_end - time_start, PBL_SEC_PER_MIN),
+  };
   s_health_sessions_count += 1;
 
   return true;
@@ -953,13 +914,11 @@ static void prv_sleep_sessions_using_health_service(uint32_t *session_entries,
   s_health_sessions = sessions;
   s_health_sessions_awake_time = 0;
   s_health_sessions_sleep_time = 0;
-  health_service_activities_iterate(HealthActivityMaskAll, now - (2 * SECONDS_PER_DAY), now,
-                                    direction, prv_activity_iterate_cb,
-                                    NULL);
-  PBL_LOG_DBG("Found %"PRIu32" activities", s_health_sessions_count);
+  health_service_activities_iterate(HealthActivityMaskAll, now - (2 * PBL_SEC_PER_DAY), now,
+                                    direction, prv_activity_iterate_cb, NULL);
+  PBL_LOG_DBG("Found %" PRIu32 " activities", s_health_sessions_count);
   *session_entries = s_health_sessions_count;
 }
-
 
 static void prv_assert_equal_activity_and_health_sleep_sessions(int exp_num_sessions) {
   // Get the sleep sessions and make sure we get the expected ones
@@ -982,8 +941,6 @@ static void prv_assert_equal_activity_and_health_sleep_sessions(int exp_num_sess
     cl_assert_equal_i(sessions[i].length_min, health_sessions[i].length_min);
   }
 }
-
-
 
 // =============================================================================================
 // Start of unit tests
@@ -1011,13 +968,11 @@ void test_activity__initialize(void) {
   activity_prefs_set_age_years(ACTIVITY_DEFAULT_AGE_YEARS);
 }
 
-
 // ---------------------------------------------------------------------------------------
 void test_activity__cleanup(void) {
   activity_stop_tracking();
   fake_system_task_callbacks_invoke_pending();
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that we correctly initialize the history upon startup based on stored settings
@@ -1033,17 +988,16 @@ void test_activity__init_history(void) {
 
   // Should start out with 0 in the history
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricDistanceMeters,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricActiveKCalories,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 0, 0, 0, 0, 0, 0}));
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricRestingKCalories, exp_resting_kcalories);
-
 
   // Start activity tracking. This method assumes it can be called from any task, so we must
   // invoke system callbacks to handle its KernelBG callback.
@@ -1058,7 +1012,7 @@ void test_activity__init_history(void) {
   // Put in a stepping activity
   time_t day_start = time_util_get_midnight_of(rtc_get_time());
   ActivitySession walk_activity = {
-    .start_utc = day_start + 12 * SECONDS_PER_HOUR,
+    .start_utc = day_start + 12 * PBL_SEC_PER_HOUR,
     .length_min = 120,
     .type = ActivitySessionType_Walk,
     .step_data = {
@@ -1077,22 +1031,24 @@ void test_activity__init_history(void) {
 
   // Wait long enough for our recompute sleep and periodic update logic to run.
   uint32_t wait_min = MAX(ACTIVITY_SESSION_UPDATE_MIN, ACTIVITY_SETTINGS_UPDATE_MIN);
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * wait_min, 0, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * wait_min, 0, ActivitySleepStateAwake);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){100, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){2 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){1 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){100, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){2 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepRestfulSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){1 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0, 0}));
 
   // Check that we have the expected # of activities
-  ASSERT_NUM_ACTIVITY_SESSIONS(3);  // 2 sleep sessions + 1 activity sessions
+  ASSERT_NUM_ACTIVITY_SESSIONS(3); // 2 sleep sessions + 1 activity sessions
   ASSERT_STEP_ACTIVITY_SESSION_PRESENT(&walk_activity);
 
   // The expected resting calories
-  int minutes_today = 17 * MINUTES_PER_HOUR + 3 + wait_min;
-  const int exp_resting_kcalories_now = ROUND(s_exp_full_day_resting_kcalories * minutes_today,
-                                              MINUTES_PER_DAY);
+  int minutes_today = 17 * PBL_MIN_PER_HOUR + 3 + wait_min;
+  const int exp_resting_kcalories_now =
+      ROUND(s_exp_full_day_resting_kcalories * minutes_today, PBL_MIN_PER_DAY);
   exp_resting_kcalories[0] = exp_resting_kcalories_now;
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricRestingKCalories, exp_resting_kcalories);
 
@@ -1106,20 +1062,23 @@ void test_activity__init_history(void) {
   activity_get_metric(ActivityMetricActiveKCalories, 1, &exp_active_kcalories);
   cl_assert(exp_active_kcalories > 0);
 
-
   // If we init again, we should start out with the same metrics because we
   // would have retrieved them from settings
   prv_activity_init_and_set_enabled(true);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){100, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricDistanceMeters,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){exp_distance, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricActiveKCalories,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){exp_active_kcalories, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){2 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){1 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){100, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricDistanceMeters,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){exp_distance, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricActiveKCalories,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){exp_active_kcalories, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){2 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepRestfulSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){1 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0, 0}));
 
   // The actual resting calories must be in the range from min_resting_kcalories to
   // exp_resting_kcalories_now because we don't know at exactly which time settings were saved to
@@ -1129,17 +1088,16 @@ void test_activity__init_history(void) {
                       actual_resting_kcalories);
   for (int i = 0; i < ACTIVITY_HISTORY_DAYS; i++) {
     if (i == 0) {
-      cl_assert(actual_resting_kcalories[i] >= min_resting_kcalories
-                  && actual_resting_kcalories[i] <= exp_resting_kcalories_now);
+      cl_assert(actual_resting_kcalories[i] >= min_resting_kcalories &&
+                actual_resting_kcalories[i] <= exp_resting_kcalories_now);
     } else {
       cl_assert_equal_i(actual_resting_kcalories[i], exp_resting_kcalories[i]);
     }
   }
 
   // Make sure all of our activities persisted
-  ASSERT_NUM_ACTIVITY_SESSIONS(3);  // 2 sleep sessions + 1 activity sessions
+  ASSERT_NUM_ACTIVITY_SESSIONS(3); // 2 sleep sessions + 1 activity sessions
   ASSERT_STEP_ACTIVITY_SESSION_PRESENT(&walk_activity);
-
 
   // Pretend that 24 hours has elapsed since we saved prefs. This should put both the step and
   // sleep history 1 day behind
@@ -1149,15 +1107,19 @@ void test_activity__init_history(void) {
   rtc_set_time(utc_sec);
   prv_activity_init_and_set_enabled(true);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 100, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricDistanceMeters,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, exp_distance, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricActiveKCalories,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, exp_active_kcalories, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 2 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 1 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 100, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricDistanceMeters,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, exp_distance, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricActiveKCalories,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, exp_active_kcalories, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 2 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepRestfulSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 1 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0}));
 
   activity_get_metric(ActivityMetricRestingKCalories, ACTIVITY_HISTORY_DAYS,
                       actual_resting_kcalories);
@@ -1165,14 +1127,13 @@ void test_activity__init_history(void) {
     if (i == 0) {
       cl_assert_equal_i(actual_resting_kcalories[i], s_exp_5pm_resting_kcalories);
     } else if (i == 1) {
-      cl_assert(actual_resting_kcalories[i] >= min_resting_kcalories
-                  && actual_resting_kcalories[i] <= exp_resting_kcalories_now);
+      cl_assert(actual_resting_kcalories[i] >= min_resting_kcalories &&
+                actual_resting_kcalories[i] <= exp_resting_kcalories_now);
     } else {
       cl_assert_equal_i(actual_resting_kcalories[i], exp_resting_kcalories[i]);
     }
   }
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that we correctly initialize the setting upon startup based on the stored settings file
@@ -1223,7 +1184,6 @@ void test_activity__settings(void) {
   activity_prefs_set_age_years(ACTIVITY_DEFAULT_AGE_YEARS);
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test that our periodic minute callback correctly detects the midnight rollover
 void test_activity__day_rollover(void) {
@@ -1238,23 +1198,25 @@ void test_activity__day_rollover(void) {
   prv_feed_canned_accel_data(60, 0, ActivitySleepStateRestfulSleep);
 
   // Wait long enough for our recompute sleep logic to run.
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * ACTIVITY_SESSION_UPDATE_MIN, 0,
-                              ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * ACTIVITY_SESSION_UPDATE_MIN, 0,
+                             ActivitySleepStateAwake);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){100, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){2 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){1 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){100, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){2 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepRestfulSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){1 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0, 0}));
 
   // Expected resting calories
   uint32_t exp_resting_kcalories[ACTIVITY_HISTORY_DAYS];
   for (int i = 0; i < ACTIVITY_HISTORY_DAYS; i++) {
     if (i == 0) {
       // All tests start at 5pm, we we just entered 3 minutes of data.
-      uint32_t minutes_today = 17 * MINUTES_PER_HOUR + 3 + ACTIVITY_SESSION_UPDATE_MIN;
-      exp_resting_kcalories[i] = ROUND(s_exp_full_day_resting_kcalories * minutes_today,
-                                       MINUTES_PER_DAY);
+      uint32_t minutes_today = 17 * PBL_MIN_PER_HOUR + 3 + ACTIVITY_SESSION_UPDATE_MIN;
+      exp_resting_kcalories[i] =
+          ROUND(s_exp_full_day_resting_kcalories * minutes_today, PBL_MIN_PER_DAY);
     } else {
       exp_resting_kcalories[i] = s_exp_full_day_resting_kcalories;
     }
@@ -1265,7 +1227,7 @@ void test_activity__day_rollover(void) {
   // other which drop off because it is in the future (invalid)
   time_t day_start = time_util_get_midnight_of(rtc_get_time());
   ActivitySession old_activity = {
-    .start_utc = day_start + 12 * SECONDS_PER_HOUR,
+    .start_utc = day_start + 12 * PBL_SEC_PER_HOUR,
     .length_min = 120,
     .type = ActivitySessionType_Walk,
     .step_data = {
@@ -1276,7 +1238,7 @@ void test_activity__day_rollover(void) {
     },
   };
   ActivitySession new_activity = {
-    .start_utc = day_start + 23 * SECONDS_PER_HOUR,
+    .start_utc = day_start + 23 * PBL_SEC_PER_HOUR,
     .length_min = 120,
     .type = ActivitySessionType_Run,
     .step_data = {
@@ -1288,27 +1250,29 @@ void test_activity__day_rollover(void) {
   };
   activity_sessions_prv_add_activity_session(&old_activity);
   activity_sessions_prv_add_activity_session(&new_activity);
-  ASSERT_NUM_ACTIVITY_SESSIONS(4);  // 2 sleep sessions + 2 activity sessions
+  ASSERT_NUM_ACTIVITY_SESSIONS(4); // 2 sleep sessions + 2 activity sessions
   ASSERT_STEP_ACTIVITY_SESSION_PRESENT(&old_activity);
   ASSERT_STEP_ACTIVITY_SESSION_PRESENT(&new_activity);
 
   // Wait long enough for our midnight rollover to occur. We init time at 5pm, so we need to wait
   // for at least 7 hours.
-  const int minutes_till_midnight = (7 * MINUTES_PER_HOUR) - ACTIVITY_SESSION_UPDATE_MIN - 3;
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * (minutes_till_midnight + 1), 0,
-                              ActivitySleepStateAwake);
+  const int minutes_till_midnight = (7 * PBL_MIN_PER_HOUR) - ACTIVITY_SESSION_UPDATE_MIN - 3;
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * (minutes_till_midnight + 1), 0,
+                             ActivitySleepStateAwake);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 100, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 2 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 1 * SECONDS_PER_MINUTE, 0, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 100, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 2 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepRestfulSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 1 * PBL_SEC_PER_MIN, 0, 0, 0, 0, 0}));
   for (int i = 0; i < ACTIVITY_HISTORY_DAYS; i++) {
     if (i == 0) {
       exp_resting_kcalories[i] = 1;
     } else if (i == 1) {
-      exp_resting_kcalories[i] = ROUND(s_exp_full_day_resting_kcalories * (MINUTES_PER_DAY - 1),
-                                       MINUTES_PER_DAY);
+      exp_resting_kcalories[i] =
+          ROUND(s_exp_full_day_resting_kcalories * (PBL_MIN_PER_DAY - 1), PBL_MIN_PER_DAY);
     } else {
       exp_resting_kcalories[i] = s_exp_full_day_resting_kcalories;
     }
@@ -1327,9 +1291,7 @@ void test_activity__day_rollover(void) {
 
     prv_advance_by_days(1);
   }
-
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Derived metrics like distance, calories, and walking minutes that are based on steps
@@ -1366,13 +1328,13 @@ void test_activity__step_derived_metrics(void) {
   //    1388 * 1020/1440 = 1023 kcalories
   activity_get_metric(ActivityMetricRestingKCalories, 1, &value);
   const int k_bmr_cal = 1388 * ACTIVITY_CALORIES_PER_KCAL;
-  cl_assert_equal_i(value, ROUND(k_bmr_cal * k_minute_start / MINUTES_PER_DAY,
-                                 ACTIVITY_CALORIES_PER_KCAL));
+  cl_assert_equal_i(
+      value, ROUND(k_bmr_cal * k_minute_start / PBL_MIN_PER_DAY, ACTIVITY_CALORIES_PER_KCAL));
   cl_assert_equal_i(health_service_sum_today(HealthMetricRestingKCalories), value);
 
   // Feed in 100 steps/minute over 1 hour (walking rate)
-  prv_feed_canned_accel_data(SECONDS_PER_HOUR, 100, ActivitySleepStateAwake);
-  const int k_exp_steps = 100 * MINUTES_PER_HOUR;
+  prv_feed_canned_accel_data(PBL_SEC_PER_HOUR, 100, ActivitySleepStateAwake);
+  const int k_exp_steps = 100 * PBL_MIN_PER_HOUR;
 
   // Test the derived metrics
   activity_get_metric(ActivityMetricStepCount, 1, &value);
@@ -1380,8 +1342,8 @@ void test_activity__step_derived_metrics(void) {
   cl_assert_equal_i(health_service_sum_today(HealthMetricStepCount), k_exp_steps);
 
   activity_get_metric(ActivityMetricActiveSeconds, 1, &value);
-  cl_assert_equal_i(value, SECONDS_PER_HOUR);
-  cl_assert_equal_i(health_service_sum_today(HealthMetricActiveSeconds), SECONDS_PER_HOUR);
+  cl_assert_equal_i(value, PBL_SEC_PER_HOUR);
+  cl_assert_equal_i(health_service_sum_today(HealthMetricActiveSeconds), PBL_SEC_PER_HOUR);
 
   activity_get_metric(ActivityMetricActiveKCalories, 1, &value);
   // The following determined from a known good commit
@@ -1390,22 +1352,20 @@ void test_activity__step_derived_metrics(void) {
   cl_assert_equal_i(health_service_sum_today(HealthMetricActiveKCalories), exp_active_kcalories);
 
   // We now expect to get the following resting calories since we are now 1025 minutes into the day:
-  const int exp_resting_calories = k_bmr_cal * (k_minute_start + MINUTES_PER_HOUR)
-                                   / MINUTES_PER_DAY;
+  const int exp_resting_calories =
+      k_bmr_cal * (k_minute_start + PBL_MIN_PER_HOUR) / PBL_MIN_PER_DAY;
   activity_get_metric(ActivityMetricRestingKCalories, 1, &value);
   cl_assert_equal_i(value, ROUND(exp_resting_calories, ACTIVITY_CALORIES_PER_KCAL));
 
-
   // Test that ActivityMetricStepMinutes responds correctly
-  prv_feed_canned_accel_data(1 * SECONDS_PER_MINUTE, 100, ActivitySleepStateAwake);
-  prv_feed_canned_accel_data(1 * SECONDS_PER_MINUTE, 10, ActivitySleepStateAwake);
-  prv_feed_canned_accel_data(1 * SECONDS_PER_MINUTE, 100, ActivitySleepStateAwake);
-  prv_feed_canned_accel_data(1 * SECONDS_PER_MINUTE, 10, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(1 * PBL_SEC_PER_MIN, 100, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(1 * PBL_SEC_PER_MIN, 10, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(1 * PBL_SEC_PER_MIN, 100, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(1 * PBL_SEC_PER_MIN, 10, ActivitySleepStateAwake);
   activity_get_metric(ActivityMetricActiveSeconds, 1, &value);
-  cl_assert_equal_i(value, SECONDS_PER_HOUR + (2 * SECONDS_PER_MINUTE));
+  cl_assert_equal_i(value, PBL_SEC_PER_HOUR + (2 * PBL_SEC_PER_MIN));
   cl_assert_equal_i(health_service_sum_today(HealthMetricActiveSeconds),
-                    SECONDS_PER_HOUR + (2 * SECONDS_PER_MINUTE));
-
+                    PBL_SEC_PER_HOUR + (2 * PBL_SEC_PER_MIN));
 
   // ----------------------------------------------------------------------------------
   // Reset and try another case. Faster pace and taller person
@@ -1419,7 +1379,7 @@ void test_activity__step_derived_metrics(void) {
   activity_prefs_set_age_years(40);
 
   // Another day
-  utc_sec += SECONDS_PER_DAY;
+  utc_sec += PBL_SEC_PER_DAY;
   rtc_set_time(utc_sec);
   prv_activity_init_and_set_enabled(true);
 
@@ -1433,16 +1393,16 @@ void test_activity__step_derived_metrics(void) {
   //    1859 * 1020/1440 = 1328 kcalories
   activity_get_metric(ActivityMetricRestingKCalories, 1, &value);
   const int k_bmr_cal_2 = 1859 * ACTIVITY_CALORIES_PER_KCAL;
-  cl_assert_equal_i(value, ROUND(k_bmr_cal_2 * k_minute_start / MINUTES_PER_DAY,
-                                 ACTIVITY_CALORIES_PER_KCAL));
+  cl_assert_equal_i(
+      value, ROUND(k_bmr_cal_2 * k_minute_start / PBL_MIN_PER_DAY, ACTIVITY_CALORIES_PER_KCAL));
 
   // Feed in 125 steps/minute over 60 minutes
-  prv_feed_canned_accel_data(60 * SECONDS_PER_MINUTE, 125, ActivitySleepStateAwake);
-  const int k_exp_steps_2 = 125 * MINUTES_PER_HOUR;
+  prv_feed_canned_accel_data(60 * PBL_SEC_PER_MIN, 125, ActivitySleepStateAwake);
+  const int k_exp_steps_2 = 125 * PBL_MIN_PER_HOUR;
 
   // Test the derived metrics
   activity_get_metric(ActivityMetricActiveSeconds, 1, &value);
-  cl_assert_equal_i(value, SECONDS_PER_HOUR);
+  cl_assert_equal_i(value, PBL_SEC_PER_HOUR);
 
   activity_get_metric(ActivityMetricStepCount, 1, &value);
   cl_assert_equal_i(value, k_exp_steps_2);
@@ -1453,12 +1413,11 @@ void test_activity__step_derived_metrics(void) {
   cl_assert_equal_i(value, exp_active_kcalories_2);
 
   // We now expect to get the following resting calories
-  const int exp_resting_calories_2 = k_bmr_cal_2 * (k_minute_start + MINUTES_PER_HOUR)
-                                     / MINUTES_PER_DAY;
+  const int exp_resting_calories_2 =
+      k_bmr_cal_2 * (k_minute_start + PBL_MIN_PER_HOUR) / PBL_MIN_PER_DAY;
   activity_get_metric(ActivityMetricRestingKCalories, 1, &value);
   cl_assert_equal_i(value, ROUND(exp_resting_calories_2, ACTIVITY_CALORIES_PER_KCAL));
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test derived metrics based on sleep data
@@ -1474,57 +1433,77 @@ void test_activity__sleep_derived_metrics(void) {
   // at 10pm, takes 30 minutes to fall asleep, and wakes up at 6am.
 
   // Light walking, 50 steps/minute, until 10pm
-  prv_feed_canned_accel_data(5 * SECONDS_PER_HOUR, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(5 * PBL_SEC_PER_HOUR, 50, ActivitySleepStateAwake);
 
   // Falling asleep for 30 minutes
-  prv_feed_canned_accel_data(30 * SECONDS_PER_MINUTE, 5, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(30 * PBL_SEC_PER_MIN, 5, ActivitySleepStateAwake);
 
   // Starting at 10:30pm: 2 Cycles of light (60 min), deep (50 min), awake (10 min)
   for (int i = 0; i < 2; i++) {
-
-    prv_feed_canned_accel_data(60 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+    prv_feed_canned_accel_data(60 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
     activity_get_metric(ActivityMetricSleepState, 1, &value);
     cl_assert_equal_i(value, ActivitySleepStateLightSleep);
 
-    prv_feed_canned_accel_data(50 * SECONDS_PER_MINUTE, 0, ActivitySleepStateRestfulSleep);
+    prv_feed_canned_accel_data(50 * PBL_SEC_PER_MIN, 0, ActivitySleepStateRestfulSleep);
     activity_get_metric(ActivityMetricSleepState, 1, &value);
     cl_assert_equal_i(value, ActivitySleepStateRestfulSleep);
 
-    prv_feed_canned_accel_data(10 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+    prv_feed_canned_accel_data(10 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
   }
 
   // 30 minute "morning walk" 4 hours later at 2:30am
-  prv_feed_canned_accel_data(30 * SECONDS_PER_MINUTE, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(30 * PBL_SEC_PER_MIN, 50, ActivitySleepStateAwake);
   activity_get_metric(ActivityMetricSleepState, 1, &value);
   cl_assert_equal_i(value, ActivitySleepStateAwake);
   cl_assert_equal_i(health_service_peek_current_activities(), HealthActivityNone);
 
-  int exp_value = 22 * SECONDS_PER_HOUR + 30 * SECONDS_PER_MINUTE; // 10:30pm in minutes
+  int exp_value = 22 * PBL_SEC_PER_HOUR + 30 * PBL_SEC_PER_MIN; // 10:30pm in minutes
   activity_get_metric(ActivityMetricSleepEnterAtSeconds, 1, &value);
   cl_assert_equal_i(value, exp_value);
 
   activity_get_metric(ActivityMetricSleepStateSeconds, 1, &value);
-  // Ideally it would show 40 minutes, but we only sample once every ACTIVITY_SESSION_UPDATE_MIN minutes
-  cl_assert(value <= 40 * SECONDS_PER_MINUTE
-            && value >= (40 - ACTIVITY_SESSION_UPDATE_MIN) * SECONDS_PER_MINUTE);
+  // Ideally it would show 40 minutes, but we only sample once every ACTIVITY_SESSION_UPDATE_MIN
+  // minutes
+  cl_assert(value <= 40 * PBL_SEC_PER_MIN &&
+            value >= (40 - ACTIVITY_SESSION_UPDATE_MIN) * PBL_SEC_PER_MIN);
 
   // Verify the root metrics. Since we also verify these using the health_service api, set
   // the task to the app task now
   stub_pebble_tasks_set_current(PebbleTask_App);
   activity_get_metric(ActivityMetricSleepTotalSeconds, 1, &value);
-  cl_assert_equal_i(value, 220 * SECONDS_PER_MINUTE);
-  cl_assert_equal_i(health_service_sum_today(HealthMetricSleepSeconds), 220 * SECONDS_PER_MINUTE);
+  cl_assert_equal_i(value, 220 * PBL_SEC_PER_MIN);
+  cl_assert_equal_i(health_service_sum_today(HealthMetricSleepSeconds), 220 * PBL_SEC_PER_MIN);
 
   activity_get_metric(ActivityMetricSleepRestfulSeconds, 1, &value);
-  cl_assert_equal_i(value, 100 * SECONDS_PER_MINUTE);
+  cl_assert_equal_i(value, 100 * PBL_SEC_PER_MIN);
   cl_assert_equal_i(health_service_sum_today(HealthMetricSleepRestfulSeconds),
-                    100 * SECONDS_PER_MINUTE);
+                    100 * PBL_SEC_PER_MIN);
 
   activity_get_metric(ActivityMetricSleepExitAtSeconds, 1, &value);
-  cl_assert_equal_i(value, 2 * SECONDS_PER_HOUR + 20 * SECONDS_PER_MINUTE
+  cl_assert_equal_i(value, 2 * PBL_SEC_PER_HOUR + 20 * PBL_SEC_PER_MIN
                     /* 2:20am in minutes */);
 }
 
+// ---------------------------------------------------------------------------------------
+// A sleep state restored without its sleep session (lost across a reboot) must not stick
+void test_activity__sleep_state_without_session(void) {
+  int32_t value;
+
+  activity_start_tracking(false /*test_mode*/);
+  fake_system_task_callbacks_invoke_pending();
+
+  activity_private_state()->sleep_data.cur_state = ActivitySleepStateRestfulSleep;
+  activity_private_state()->sleep_data.cur_state_elapsed_minutes = 30;
+
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * ACTIVITY_SESSION_UPDATE_MIN, 50,
+                             ActivitySleepStateAwake);
+
+  activity_get_metric(ActivityMetricSleepState, 1, &value);
+  cl_assert_equal_i(value, ActivitySleepStateAwake);
+  activity_get_metric(ActivityMetricSleepStateSeconds, 1, &value);
+  cl_assert_equal_i(value, 0);
+  cl_assert_equal_i(health_service_peek_current_activities(), HealthActivityNone);
+}
 
 // ---------------------------------------------------------------------------------------
 // Test that sleep sessions get registered in the correct day
@@ -1537,39 +1516,38 @@ void test_activity__sleep_history(void) {
   // All of our tests start at 5pm. Let's enter a sleep cycle where the user has a sleep session
   // before the cut-off for the new day
   // Light walking, 50 steps/minute, until 6pm
-  prv_feed_canned_accel_data(1 * SECONDS_PER_HOUR, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(1 * PBL_SEC_PER_HOUR, 50, ActivitySleepStateAwake);
 
   // 2.5 hours of sleep, put's us at 8:30pm. The cut-off for the next day is
   // ACTIVITY_LAST_SLEEP_MINUTE_OF_DAY, currently set for 9pm so this session should be
   // registered for today
-  prv_feed_canned_accel_data(150 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+  prv_feed_canned_accel_data(150 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
 
   // Awake for 30 minutes which puts us at 9pm.
-  prv_feed_canned_accel_data(30 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(30 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
 
   // Another 2 hour sleep session starting at 9pm. This will leave us at 11pm. Since this
   // session ends after the the cutoff, it should be registered for the next day
-  prv_feed_canned_accel_data(120 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+  prv_feed_canned_accel_data(120 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
 
   // Awake for 2 hours which puts us at 1am
-  prv_feed_canned_accel_data(120 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(120 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
 
   // Now if we get sleep history, we should have 2.5 hours yesterday, and 2 hours today
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){120 * SECONDS_PER_MINUTE,
-                                                150 * SECONDS_PER_MINUTE}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){120 * PBL_SEC_PER_MIN, 150 * PBL_SEC_PER_MIN}));
 
   // Another 2 hour sleep session starting at 1am. This will leave us at 3am.
-  prv_feed_canned_accel_data(120 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+  prv_feed_canned_accel_data(120 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
 
   // Awake for 1 hour which puts us at 4am
-  prv_feed_canned_accel_data(60 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(60 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
 
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){240 * SECONDS_PER_MINUTE,
-                                                150 * SECONDS_PER_MINUTE}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){240 * PBL_SEC_PER_MIN, 150 * PBL_SEC_PER_MIN}));
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test raw sample capturing
@@ -1616,7 +1594,6 @@ void test_activity__raw_sample_collection(void) {
     cl_assert_equal_m(raw_data, captured_data, k_raw_samples * sizeof(AccelRawData));
   }
 
-
   // ---------------------------------------------------------------------------------------
   // Feed in some raw samples with some runs
   {
@@ -1654,7 +1631,6 @@ void test_activity__raw_sample_collection(void) {
   }
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test getting the sleep sessions
 void test_activity__get_sleep_sessions(void) {
@@ -1666,22 +1642,22 @@ void test_activity__get_sleep_sessions(void) {
   fake_system_task_callbacks_invoke_pending();
 
   // Light walking, 50 steps/minute, until 10pm
-  prv_feed_canned_accel_data(5 * SECONDS_PER_HOUR, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(5 * PBL_SEC_PER_HOUR, 50, ActivitySleepStateAwake);
 
   // Falling asleep for 30 minutes
-  prv_feed_canned_accel_data(30 * SECONDS_PER_MINUTE, 5, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(30 * PBL_SEC_PER_MIN, 5, ActivitySleepStateAwake);
 
   // Starting at 10:30pm: 2 Cycles of light (60 min), deep (50 min), awake (10 min)
   for (int i = 0; i < 2; i++) {
-    prv_feed_canned_accel_data(60 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+    prv_feed_canned_accel_data(60 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
 
-    prv_feed_canned_accel_data(50 * SECONDS_PER_MINUTE, 0, ActivitySleepStateRestfulSleep);
+    prv_feed_canned_accel_data(50 * PBL_SEC_PER_MIN, 0, ActivitySleepStateRestfulSleep);
 
-    prv_feed_canned_accel_data(10 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+    prv_feed_canned_accel_data(10 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
   }
 
   // 30 minute "morning walk" 4 hours later at 2:30am
-  prv_feed_canned_accel_data(30 * SECONDS_PER_MINUTE, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(30 * PBL_SEC_PER_MIN, 50, ActivitySleepStateAwake);
   activity_get_metric(ActivityMetricSleepState, 1, &value);
   cl_assert_equal_i(value, ActivitySleepStateAwake);
 
@@ -1690,11 +1666,9 @@ void test_activity__get_sleep_sessions(void) {
   prv_assert_equal_activity_and_health_sleep_sessions(4);
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test getting the minute history
 void test_activity__get_minute_history(void) {
-
   // Start activity tracking. This method assumes it can be called from any task, so we must
   // invoke system callbacks to handle its KernelBG callback.
   activity_start_tracking(false /*test_mode*/);
@@ -1705,7 +1679,7 @@ void test_activity__get_minute_history(void) {
 
   // The last ALG_MINUTES_PER_RECORD of minutes may not be available yet, so start
   // well enough before that
-  time_t utc_start = rtc_get_time() - ((ALG_MINUTES_PER_FILE_RECORD * 2) * SECONDS_PER_MINUTE);
+  time_t utc_start = rtc_get_time() - ((ALG_MINUTES_PER_FILE_RECORD * 2) * PBL_SEC_PER_MIN);
   const time_t exp_utc_start = utc_start;
 
   stub_pebble_tasks_set_current(PebbleTask_App);
@@ -1714,7 +1688,6 @@ void test_activity__get_minute_history(void) {
   cl_assert_equal_i(num_records, exp_num_records);
   cl_assert_equal_i(utc_start, exp_utc_start);
   cl_assert_equal_i(minutes[0].steps, exp_utc_start % 255);
-
 
   // ---------------------------------------------------------------------------------------
   // Once a minute, retrieve the last ALG_MINUTES_PER_RECORD minutes of data. We should
@@ -1733,19 +1706,18 @@ void test_activity__get_minute_history(void) {
   time_t utc_sec = mktime(&start_tm);
   rtc_set_time(utc_sec);
 
-  time_t oldest_to_fetch = rtc_get_time() - (ALG_MINUTES_PER_FILE_RECORD * SECONDS_PER_MINUTE);
+  time_t oldest_to_fetch = rtc_get_time() - (ALG_MINUTES_PER_FILE_RECORD * PBL_SEC_PER_MIN);
   for (int i = 0; i < ALG_MINUTES_PER_FILE_RECORD; i++) {
-
     // Ask for the last ALG_MINUTES_PER_RECORD minutes of data
     num_records = ALG_MINUTES_PER_FILE_RECORD;
-    time_t start_time = oldest_to_fetch + (i * SECONDS_PER_MINUTE);
+    time_t start_time = oldest_to_fetch + (i * PBL_SEC_PER_MIN);
     time_t end_time = utc_sec;
     HealthMinuteData received_records[ALG_MINUTES_PER_FILE_RECORD];
-    num_records = health_service_get_minute_history(received_records, num_records, &start_time,
-                                                    &end_time);
+    num_records =
+        health_service_get_minute_history(received_records, num_records, &start_time, &end_time);
 
     cl_assert_equal_i(num_records, ALG_MINUTES_PER_FILE_RECORD - i);
-    cl_assert_equal_i(start_time, oldest_to_fetch + (i * SECONDS_PER_MINUTE));
+    cl_assert_equal_i(start_time, oldest_to_fetch + (i * PBL_SEC_PER_MIN));
 
     printf("\nReceived %d minute records", (int)num_records);
     for (int j = 0; j < num_records; j++) {
@@ -1754,21 +1726,12 @@ void test_activity__get_minute_history(void) {
 
     // Verify the contents of the records
     for (int j = 0; j < num_records; j++) {
-      cl_assert_equal_i(received_records[j].steps,
-                        (start_time + (j * SECONDS_PER_MINUTE)) % 255);
+      cl_assert_equal_i(received_records[j].steps, (start_time + (j * PBL_SEC_PER_MIN)) % 255);
     }
 
     // Advance another minute.
-    rtc_set_time(utc_sec + (i * SECONDS_PER_MINUTE));
+    rtc_set_time(utc_sec + (i * PBL_SEC_PER_MIN));
   }
-}
-
-
-// ---------------------------------------------------------------------------------------
-// Return the index of the step averages slot that contains the given minute
-static uint16_t prv_step_avg_slot(int hour, int min) {
-  int minutes = hour * MINUTES_PER_HOUR + min;
-  return minutes / (MINUTES_PER_DAY / ACTIVITY_NUM_METRIC_AVERAGES);
 }
 
 // Used by the test_activity__step_averages() method to figure out what steps/min we should
@@ -1786,7 +1749,6 @@ int prv_expected_steps_per_min(int slot, int multiplier) {
   }
 }
 
-
 // ------------------------------------------------------------------------------------
 // Verify that the settings are what we expected from prv_save_known_settings()
 void prv_assert_known_settings(void) {
@@ -1796,27 +1758,27 @@ void prv_assert_known_settings(void) {
 
   prv_activity_init_and_set_enabled(true);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){300, 200, 100, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepTotalSeconds,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS])
-                                  {6 * SECONDS_PER_MINUTE, 4 * SECONDS_PER_MINUTE,
-                                   2 * SECONDS_PER_MINUTE, 0, 0, 0, 0}));
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricSleepRestfulSeconds,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS])
-                                  {3 * SECONDS_PER_MINUTE, 2 * SECONDS_PER_MINUTE,
-                                   1 * SECONDS_PER_MINUTE, 0, 0, 0, 0}));
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){300, 200, 100, 0, 0, 0, 0}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepTotalSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){
+        6 * PBL_SEC_PER_MIN, 4 * PBL_SEC_PER_MIN, 2 * PBL_SEC_PER_MIN, 0, 0, 0, 0
+      }));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricSleepRestfulSeconds,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){
+        3 * PBL_SEC_PER_MIN, 2 * PBL_SEC_PER_MIN, 1 * PBL_SEC_PER_MIN, 0, 0, 0, 0
+      }));
 }
-
 
 // --------------------------------------------------------------------------------------
 // Save the current settings file format with known data to the local file system so that it can
 // be checked in and used for migration tests.
-static void prv_save_known_settings_file(const char *filename) {
-
+PBL_UNUSED static void prv_save_known_settings_file(const char *filename) {
   // Let's include 3 days of history by start at s_init_time_tm - 3 days
   struct tm time_tm = s_init_time_tm;
   time_t utc_sec = mktime(&time_tm);
-  utc_sec -= 2 * SECONDS_PER_DAY;
+  utc_sec -= 2 * PBL_SEC_PER_DAY;
   rtc_set_time(utc_sec);
 
   prv_activity_init_and_set_enabled(true);
@@ -1829,11 +1791,11 @@ static void prv_save_known_settings_file(const char *filename) {
   prv_feed_canned_accel_data(60, 0, ActivitySleepStateLightSleep);
 
   // Wait long enough for our recompute sleep logic to run.
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * ACTIVITY_SESSION_UPDATE_MIN, 0,
-                              ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * ACTIVITY_SESSION_UPDATE_MIN, 0,
+                             ActivitySleepStateAwake);
 
   // Advance to next day
-  prv_feed_canned_accel_data(SECONDS_PER_HOUR * 24, 0, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_HOUR * 24, 0, ActivitySleepStateAwake);
 
   // Feed in 100 steps/min over 2 min, 2 minute of deep and 2 minute of light sleep
   prv_feed_canned_accel_data(120, 100, ActivitySleepStateAwake);
@@ -1841,11 +1803,11 @@ static void prv_save_known_settings_file(const char *filename) {
   prv_feed_canned_accel_data(120, 0, ActivitySleepStateLightSleep);
 
   // Wait long enough for our recompute sleep logic to run.
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * ACTIVITY_SESSION_UPDATE_MIN, 0,
-                              ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * ACTIVITY_SESSION_UPDATE_MIN, 0,
+                             ActivitySleepStateAwake);
 
   // Advance to next day
-  prv_feed_canned_accel_data(SECONDS_PER_HOUR * 24, 0, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_HOUR * 24, 0, ActivitySleepStateAwake);
 
   // Feed in 100 steps/min over 3 min, 3 minute of deep and 3 minute of light sleep
   prv_feed_canned_accel_data(180, 100, ActivitySleepStateAwake);
@@ -1853,15 +1815,14 @@ static void prv_save_known_settings_file(const char *filename) {
   prv_feed_canned_accel_data(180, 0, ActivitySleepStateLightSleep);
 
   // Wait long enough for our recompute sleep logic to run.
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * ACTIVITY_SESSION_UPDATE_MIN, 0,
-                              ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * ACTIVITY_SESSION_UPDATE_MIN, 0,
+                             ActivitySleepStateAwake);
 
   // Make sure they are what we expected
   prv_assert_known_settings();
 
-
   // Extract activity settings file from PFS and save to the local file system
-  char out_path[strlen(CLAR_FIXTURE_PATH) + strlen(ACTIVITY_FIXTURE_PATH)  + strlen(filename) + 3];
+  char out_path[strlen(CLAR_FIXTURE_PATH) + strlen(ACTIVITY_FIXTURE_PATH) + strlen(filename) + 3];
   sprintf(out_path, "%s/%s/%s", CLAR_FIXTURE_PATH, ACTIVITY_FIXTURE_PATH, filename);
 
   // Open and read the settings file from PFS
@@ -1884,11 +1845,10 @@ static void prv_save_known_settings_file(const char *filename) {
   printf("\nSaved current settings file to %s", out_path);
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Create the settings file in PFS from a file saved in the local file system
 static void prv_load_settings_file_onto_pfs(const char *filename, const char *pfs_name) {
-  char in_path[strlen(CLAR_FIXTURE_PATH) + strlen(ACTIVITY_FIXTURE_PATH)  + strlen(filename) + 3];
+  char in_path[strlen(CLAR_FIXTURE_PATH) + strlen(ACTIVITY_FIXTURE_PATH) + strlen(filename) + 3];
   sprintf(in_path, "%s/%s/%s", CLAR_FIXTURE_PATH, ACTIVITY_FIXTURE_PATH, filename);
 
   // check that file exists and fits in buffer
@@ -1910,11 +1870,9 @@ static void prv_load_settings_file_onto_pfs(const char *filename, const char *pf
   pfs_close(fd);
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test that we correctly migrate older versions of activity settings files
 void test_activity__migrate_settings(void) {
-
   // Uncomment this call to prv_save_known_settings_file() in order to save the current version
   // of settings to the fixture directory. After doing this, you will need to git add it and modify
   // this migration test to read it in and verify its contents after migration.
@@ -1927,7 +1885,6 @@ void test_activity__migrate_settings(void) {
   prv_activity_init_and_set_enabled(true);
   prv_assert_known_settings();
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that we correctly migrate version 2 settings files, where metric values were stored
@@ -1942,8 +1899,9 @@ void test_activity__migrate_settings_v2(void) {
   // Build a version 2 settings file by hand
   pfs_remove(ACTIVITY_SETTINGS_FILE_NAME);
   SettingsFile file;
-  cl_assert_equal_i(settings_file_open(&file, ACTIVITY_SETTINGS_FILE_NAME,
-                                       ACTIVITY_SETTINGS_FILE_LEN), S_SUCCESS);
+  cl_assert_equal_i(
+      settings_file_open(&file, ACTIVITY_SETTINGS_FILE_NAME, ACTIVITY_SETTINGS_FILE_LEN),
+      S_SUCCESS);
 
   ActivitySettingsKey key = ActivitySettingsKeyVersion;
   const uint16_t version = 2;
@@ -1955,8 +1913,8 @@ void test_activity__migrate_settings_v2(void) {
     .values = {60000, 65535, 300, 200, 100},
   };
   key = ActivitySettingsKeyStepCountHistory;
-  cl_assert_equal_i(settings_file_set(&file, &key, sizeof(key), &step_history,
-                                      sizeof(step_history)), S_SUCCESS);
+  cl_assert_equal_i(
+      settings_file_set(&file, &key, sizeof(key), &step_history, sizeof(step_history)), S_SUCCESS);
 
   const uint16_t last_vmc = 1234;
   key = ActivitySettingsKeyLastVMC;
@@ -1965,8 +1923,8 @@ void test_activity__migrate_settings_v2(void) {
 
   // Stored sessions are not metric records; the migration must copy them verbatim
   ActivitySession sessions[ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT] = {};
-  sessions[0] = (ActivitySession) {
-    .start_utc = rtc_get_time() - SECONDS_PER_HOUR,
+  sessions[0] = (ActivitySession){
+    .start_utc = rtc_get_time() - PBL_SEC_PER_HOUR,
     .length_min = 42,
     .type = ActivitySessionType_Walk,
     .step_data = {
@@ -1986,9 +1944,9 @@ void test_activity__migrate_settings_v2(void) {
   prv_activity_init_and_set_enabled(true);
 
   // History values must survive the migration, widened to uint32_t
-  ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS])
-                                  {60000, 65535, 300, 200, 100}));
+  ASSERT_EQUAL_METRIC_HISTORY(
+      ActivityMetricStepCount,
+      ((const uint32_t[ACTIVITY_HISTORY_DAYS]){60000, 65535, 300, 200, 100}));
 
   // Scalar metric records must survive too
   int32_t vmc;
@@ -2007,32 +1965,29 @@ void test_activity__migrate_settings_v2(void) {
   cl_assert_equal_i(loaded_sessions[0].step_data.distance_meters, 3000);
 }
 
-
 // ----------------------------------------------------------------------------
 // fake_event callback used to look for sleep events generated by the health_events test
-static PebbleEvent s_captured_sleep_event = { };
+static PebbleEvent s_captured_sleep_event = {};
 static int s_num_captured_sleep_events = 0;
 static void prv_fake_sleep_event_cb(PebbleEvent *event) {
-  if ((event->type == PEBBLE_HEALTH_SERVICE_EVENT)
-      && (event->health_event.type == HealthEventSleepUpdate)) {
+  if ((event->type == PEBBLE_HEALTH_SERVICE_EVENT) &&
+      (event->health_event.type == HealthEventSleepUpdate)) {
     s_captured_sleep_event = *event;
     s_num_captured_sleep_events++;
   }
 }
 
-
 // ----------------------------------------------------------------------------
 // fake_event callback used to look for history update events generated by the health_events test
-static PebbleEvent s_captured_history_event = { };
+static PebbleEvent s_captured_history_event = {};
 static int s_num_captured_history_events = 0;
 static void prv_fake_history_event_cb(PebbleEvent *event) {
-  if ((event->type == PEBBLE_HEALTH_SERVICE_EVENT)
-      && (event->health_event.type == HealthEventSignificantUpdate)) {
+  if ((event->type == PEBBLE_HEALTH_SERVICE_EVENT) &&
+      (event->health_event.type == HealthEventSignificantUpdate)) {
     s_captured_history_event = *event;
     s_num_captured_history_events++;
   }
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that we generate health events at the appropriate time
@@ -2046,11 +2001,11 @@ void test_activity__health_events(void) {
   // Test that we receive step update events
   fake_event_reset_count();
   // Feed in 100 steps/minute over 1 minute. We should get some step update events
-  prv_feed_canned_accel_data(1 * SECONDS_PER_MINUTE, 100, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(1 * PBL_SEC_PER_MIN, 100, ActivitySleepStateAwake);
 
   uint32_t event_count = fake_event_get_count();
   // Our fake algorithm generates a step update once a second
-  cl_assert_equal_i(event_count, 1 * SECONDS_PER_MINUTE);
+  cl_assert_equal_i(event_count, 1 * PBL_SEC_PER_MIN);
 
   PebbleEvent event = fake_event_get_last();
   cl_assert_equal_i(event.type, PEBBLE_HEALTH_SERVICE_EVENT);
@@ -2061,24 +2016,24 @@ void test_activity__health_events(void) {
   prv_reset_captured_dls_data();
 
   // Falling asleep for 30 minutes
-  prv_feed_canned_accel_data(30 * SECONDS_PER_MINUTE, 5, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(30 * PBL_SEC_PER_MIN, 5, ActivitySleepStateAwake);
 
   // Starting at 10:31pm: 1 Cycle of light (60 min), deep (50 min)
   fake_event_reset_count();
   fake_event_set_callback(prv_fake_sleep_event_cb);
-  s_captured_sleep_event = (PebbleEvent) { };
+  s_captured_sleep_event = (PebbleEvent){};
   s_num_captured_sleep_events = 0;
-  prv_feed_canned_accel_data(60 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
-  prv_feed_canned_accel_data(50 * SECONDS_PER_MINUTE, 0, ActivitySleepStateRestfulSleep);
+  prv_feed_canned_accel_data(60 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
+  prv_feed_canned_accel_data(50 * PBL_SEC_PER_MIN, 0, ActivitySleepStateRestfulSleep);
 
-  prv_feed_canned_accel_data(15 * SECONDS_PER_MINUTE, 0, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(15 * PBL_SEC_PER_MIN, 0, ActivitySleepStateAwake);
 
-  prv_feed_canned_accel_data(60 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
-  prv_feed_canned_accel_data(50 * SECONDS_PER_MINUTE, 0, ActivitySleepStateRestfulSleep);
+  prv_feed_canned_accel_data(60 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
+  prv_feed_canned_accel_data(50 * PBL_SEC_PER_MIN, 0, ActivitySleepStateRestfulSleep);
 
   // Wait long enough for our recompute sleep logic to run.
-  prv_feed_canned_accel_data(SECONDS_PER_MINUTE * ACTIVITY_SESSION_UPDATE_MIN, 60,
-                              ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_MIN * ACTIVITY_SESSION_UPDATE_MIN, 60,
+                             ActivitySleepStateAwake);
 
   // See if we got the expected sleep events
   cl_assert(s_num_captured_sleep_events > 0);
@@ -2091,7 +2046,7 @@ void test_activity__health_events(void) {
   // Test that we receive history update events
   fake_event_reset_count();
   fake_event_set_callback(prv_fake_history_event_cb);
-  s_captured_history_event = (PebbleEvent) { };
+  s_captured_history_event = (PebbleEvent){};
   s_num_captured_history_events = 0;
 
   // Get the current day_id
@@ -2100,7 +2055,7 @@ void test_activity__health_events(void) {
 
   // Wait long enough for a midnight rollover. All tests start at 5pm, so if we wait
   // 7 hours, we should get a midnight rollover
-  prv_feed_canned_accel_data(7 * SECONDS_PER_HOUR, 0, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(7 * PBL_SEC_PER_HOUR, 0, ActivitySleepStateAwake);
 
   // See if we got the expected history events
   cl_assert_equal_i(s_num_captured_history_events, 1);
@@ -2109,7 +2064,6 @@ void test_activity__health_events(void) {
   cl_assert_equal_i(event.type, PEBBLE_HEALTH_SERVICE_EVENT);
   cl_assert_equal_i(event.health_event.type, HealthEventSignificantUpdate);
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test derived sleep metrics after the watch goes through a timezone change.
@@ -2122,7 +2076,7 @@ void test_activity__sleep_after_timezone_change(void) {
   // asleep. This replicates the conditions that resulted in PBL-24823
   TimezoneInfo tz_info = {
     .tm_zone = "EST",
-    .tm_gmtoff = -5 * SECONDS_PER_HOUR,
+    .tm_gmtoff = -5 * PBL_SEC_PER_HOUR,
   };
   time_util_update_timezone(&tz_info);
 
@@ -2132,33 +2086,33 @@ void test_activity__sleep_after_timezone_change(void) {
   fake_system_task_callbacks_invoke_pending();
 
   // Advance to 6pm EST
-  prv_feed_canned_accel_data(6 * SECONDS_PER_HOUR, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(6 * PBL_SEC_PER_HOUR, 50, ActivitySleepStateAwake);
 
   // switch into PST (which would be 3pm)
-  tz_info = (TimezoneInfo) {
+  tz_info = (TimezoneInfo){
     .tm_zone = "PST",
-    .tm_gmtoff = -8 * SECONDS_PER_HOUR,
+    .tm_gmtoff = -8 * PBL_SEC_PER_HOUR,
   };
   time_util_update_timezone(&tz_info);
 
   // Walk some more until 11pm PST
-  prv_feed_canned_accel_data(8 * SECONDS_PER_HOUR, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(8 * PBL_SEC_PER_HOUR, 50, ActivitySleepStateAwake);
 
   // Starting at 11pm: 2 Cycles of 3 hrs each light (165 min), awake (15 min)
   for (int i = 0; i < 2; i++) {
-    prv_feed_canned_accel_data(165 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+    prv_feed_canned_accel_data(165 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
 
-    prv_feed_canned_accel_data(15 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+    prv_feed_canned_accel_data(15 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
   }
 
   activity_get_metric(ActivityMetricSleepEnterAtSeconds, 1, &value);
-  cl_assert_equal_i(value, 23 * SECONDS_PER_HOUR /* 11pm */);
+  cl_assert_equal_i(value, 23 * PBL_SEC_PER_HOUR /* 11pm */);
 
   activity_get_metric(ActivityMetricSleepTotalSeconds, 1, &value);
-  cl_assert_equal_i(value, 330 * SECONDS_PER_MINUTE);
+  cl_assert_equal_i(value, 330 * PBL_SEC_PER_MIN);
 
   activity_get_metric(ActivityMetricSleepExitAtSeconds, 1, &value);
-  cl_assert_equal_i(value, 4 * SECONDS_PER_HOUR + 45 * SECONDS_PER_MINUTE /* 4:45am */);
+  cl_assert_equal_i(value, 4 * PBL_SEC_PER_HOUR + 45 * PBL_SEC_PER_MIN /* 4:45am */);
 
   // Assert that we got the same sleep sessions using the activity service as we do using
   // the health API
@@ -2168,36 +2122,35 @@ void test_activity__sleep_after_timezone_change(void) {
   // The previous test left us at 5am PST. Let's try going the other way and switch from PST to
   // EST right before we fall asleep
   // Advance to 11pm PST
-  prv_feed_canned_accel_data(18 * SECONDS_PER_HOUR, 50, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(18 * PBL_SEC_PER_HOUR, 50, ActivitySleepStateAwake);
 
   // It is now 11pm PST. Switch to EST, which would be 2am
-  tz_info = (TimezoneInfo) {
+  tz_info = (TimezoneInfo){
     .tm_zone = "EST",
-    .tm_gmtoff = -5 * SECONDS_PER_HOUR,
+    .tm_gmtoff = -5 * PBL_SEC_PER_HOUR,
   };
   time_util_update_timezone(&tz_info);
 
   // Starting at 2am EST: 2 Cycles of 3 hrs each light (165 min), awake (15 min)
   for (int i = 0; i < 2; i++) {
-    prv_feed_canned_accel_data(165 * SECONDS_PER_MINUTE, 0, ActivitySleepStateLightSleep);
+    prv_feed_canned_accel_data(165 * PBL_SEC_PER_MIN, 0, ActivitySleepStateLightSleep);
 
-    prv_feed_canned_accel_data(15 * SECONDS_PER_MINUTE, 20, ActivitySleepStateAwake);
+    prv_feed_canned_accel_data(15 * PBL_SEC_PER_MIN, 20, ActivitySleepStateAwake);
   }
 
   activity_get_metric(ActivityMetricSleepEnterAtSeconds, 1, &value);
-  cl_assert_equal_i(value, 2 * SECONDS_PER_HOUR /* 2am */);
+  cl_assert_equal_i(value, 2 * PBL_SEC_PER_HOUR /* 2am */);
 
   activity_get_metric(ActivityMetricSleepTotalSeconds, 1, &value);
-  cl_assert_equal_i(value, 330 * SECONDS_PER_MINUTE);
+  cl_assert_equal_i(value, 330 * PBL_SEC_PER_MIN);
 
   activity_get_metric(ActivityMetricSleepExitAtSeconds, 1, &value);
-  cl_assert_equal_i(value, 7 * SECONDS_PER_HOUR + 45 * SECONDS_PER_MINUTE /* 7:45am */);
+  cl_assert_equal_i(value, 7 * PBL_SEC_PER_HOUR + 45 * PBL_SEC_PER_MIN /* 7:45am */);
 
   // Assert that we got the same sleep sessions using the activity service as we do using
   // the health API
   prv_assert_equal_activity_and_health_sleep_sessions(2);
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that the health service correctly interpolates when asked for a metric over partial days
@@ -2206,7 +2159,7 @@ void test_activity__health_service_interpolation(void) {
   // 9am PST.
   TimezoneInfo tz_info = {
     .tm_zone = "PST",
-    .tm_gmtoff = -8 * SECONDS_PER_HOUR,
+    .tm_gmtoff = -8 * PBL_SEC_PER_HOUR,
   };
   time_util_update_timezone(&tz_info);
 
@@ -2216,41 +2169,36 @@ void test_activity__health_service_interpolation(void) {
   fake_system_task_callbacks_invoke_pending();
 
   // Feed in 100 steps/min over 10 minutes, for a total of 1000 steps for today
-  prv_feed_canned_accel_data(10 * SECONDS_PER_MINUTE, 100, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(10 * PBL_SEC_PER_MIN, 100, ActivitySleepStateAwake);
 
   // Wait long enough until we start the next day (15 hours)
-  prv_feed_canned_accel_data(SECONDS_PER_HOUR * 15, 0,
-                              ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(PBL_SEC_PER_HOUR * 15, 0, ActivitySleepStateAwake);
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-                              ((const uint32_t [ACTIVITY_HISTORY_DAYS]){0, 1000, 0, 0, 0, 0, 0}));
-
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){0, 1000, 0, 0, 0, 0, 0}));
 
   // Feed in 100 steps/min over 20 minutes, for a total of 2000 steps for today
-  prv_feed_canned_accel_data(20 * SECONDS_PER_MINUTE, 100, ActivitySleepStateAwake);
+  prv_feed_canned_accel_data(20 * PBL_SEC_PER_MIN, 100, ActivitySleepStateAwake);
 
   ASSERT_EQUAL_METRIC_HISTORY(ActivityMetricStepCount,
-      ((const uint32_t [ACTIVITY_HISTORY_DAYS]){2000, 1000, 0, 0, 0, 0, 0}));
-
+                              ((const uint32_t[ACTIVITY_HISTORY_DAYS]){2000, 1000, 0, 0, 0, 0, 0}));
 
   // If we ask for the sum of the latter half of yesterday, we should get 500
-  HealthValue steps = health_service_sum(
-      HealthMetricStepCount, time_start_of_today() - (12 * SECONDS_PER_HOUR),
-      time_start_of_today());
+  HealthValue steps =
+      health_service_sum(HealthMetricStepCount, time_start_of_today() - (12 * PBL_SEC_PER_HOUR),
+                         time_start_of_today());
   cl_assert_equal_i(steps, 500);
 
   // If we ask for the sum from latter half of yesterday till now, we should get 2500
-  steps = health_service_sum(
-      HealthMetricStepCount, time_start_of_today() - (12 * SECONDS_PER_HOUR), rtc_get_time());
+  steps = health_service_sum(HealthMetricStepCount, time_start_of_today() - (12 * PBL_SEC_PER_HOUR),
+                             rtc_get_time());
   cl_assert_equal_i(steps, 2500);
 
   // If we ask for the sum from latter half of yesterday till half of today, we should get 1500
   time_t elapsed_today = rtc_get_time() - time_start_of_today();
-  steps = health_service_sum(
-    HealthMetricStepCount, time_start_of_today() - (12 * SECONDS_PER_HOUR),
-    time_start_of_today() + (elapsed_today / 2));
+  steps = health_service_sum(HealthMetricStepCount, time_start_of_today() - (12 * PBL_SEC_PER_HOUR),
+                             time_start_of_today() + (elapsed_today / 2));
   cl_assert_equal_i(steps, 1500);
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test distance using various speeds and user dimensions
@@ -2259,7 +2207,7 @@ typedef struct {
   int gender;
   int steps;
   float seconds;
-  int exp_distance_m;  // expected distance
+  int exp_distance_m; // expected distance
 } DistanceTestParams;
 
 void test_activity__distance(void) {
@@ -2269,26 +2217,16 @@ void test_activity__distance(void) {
   stub_pebble_tasks_set_current(PebbleTask_App);
 
   DistanceTestParams tests[] = {
-    {69, ActivityGenderMale, 19177, 6360, 23352},
-    {69, ActivityGenderMale, 10351, 3600, 11764},
-    {69, ActivityGenderMale, 3003, 1560, 2398},
-    {69, ActivityGenderMale, 3423, 2100, 2881},
-    {65, ActivityGenderFemale, 6940, 3120, 8047},
-    {65, ActivityGenderFemale, 4577, 2460, 3508},
-    {63, ActivityGenderFemale, 4738, 1860, 4989},
-    {63, ActivityGenderFemale, 4799, 1860, 5134},
-    {63, ActivityGenderFemale, 2896, 1500, 2334},
-    {71, ActivityGenderMale, 7529, 4020, 5568},
-    {67, ActivityGenderMale, 6592, 3960, 6067},
-    {73, ActivityGenderMale, 4467, 1740, 5118},
-    {73, ActivityGenderMale, 4080, 1800, 5102},
-    {73, ActivityGenderMale, 2890, 1680, 2382},
-    {73, ActivityGenderMale, 4143, 2400, 3251},
-    {64, ActivityGenderMale, 4373, 1823, 4168},
-    {64, ActivityGenderMale, 642, 384, 483},
-    {64, ActivityGenderMale, 4455, 1819, 4072},
-    {64, ActivityGenderMale, 2008, 1229, 1448},
-    {64, ActivityGenderMale, 2217, 1302, 1674},
+    {69, ActivityGenderMale, 19177, 6360, 23352}, {69, ActivityGenderMale, 10351, 3600, 11764},
+    {69, ActivityGenderMale, 3003, 1560, 2398},   {69, ActivityGenderMale, 3423, 2100, 2881},
+    {65, ActivityGenderFemale, 6940, 3120, 8047}, {65, ActivityGenderFemale, 4577, 2460, 3508},
+    {63, ActivityGenderFemale, 4738, 1860, 4989}, {63, ActivityGenderFemale, 4799, 1860, 5134},
+    {63, ActivityGenderFemale, 2896, 1500, 2334}, {71, ActivityGenderMale, 7529, 4020, 5568},
+    {67, ActivityGenderMale, 6592, 3960, 6067},   {73, ActivityGenderMale, 4467, 1740, 5118},
+    {73, ActivityGenderMale, 4080, 1800, 5102},   {73, ActivityGenderMale, 2890, 1680, 2382},
+    {73, ActivityGenderMale, 4143, 2400, 3251},   {64, ActivityGenderMale, 4373, 1823, 4168},
+    {64, ActivityGenderMale, 642, 384, 483},      {64, ActivityGenderMale, 4455, 1819, 4072},
+    {64, ActivityGenderMale, 2008, 1229, 1448},   {64, ActivityGenderMale, 2217, 1302, 1674},
     {64, ActivityGenderMale, 4568, 1820, 4152},
   };
 
@@ -2300,14 +2238,14 @@ void test_activity__distance(void) {
   fake_system_task_callbacks_invoke_pending();
 
   int act_distance[ARRAY_LENGTH(tests)];
-  const int k_elapsed_sec = 2 * SECONDS_PER_MINUTE;
+  const int k_elapsed_sec = 2 * PBL_SEC_PER_MIN;
 
   // Evaluate each test case
   for (int i = 0; i < ARRAY_LENGTH(tests); i++) {
     DistanceTestParams *params = &tests[i];
 
     // Advance to new day to reset the distance
-    utc_sec += SECONDS_PER_DAY;
+    utc_sec += PBL_SEC_PER_DAY;
     rtc_set_time(utc_sec);
     prv_activity_init_and_set_enabled(true);
 
@@ -2322,22 +2260,24 @@ void test_activity__distance(void) {
 
     // Feed in the test cadence for 2 minutes. Compute the expected distance in 2 minutes
     // as well
-    int steps_per_minute = (int)((float)params->steps / params->seconds * SECONDS_PER_MINUTE);
+    int steps_per_minute = (int)((float)params->steps / params->seconds * PBL_SEC_PER_MIN);
     int exp_distance_m = ROUND(params->exp_distance_m * k_elapsed_sec, params->seconds);
 
     // Feed in the test cadence for the given amount of time
     prv_feed_canned_accel_data(k_elapsed_sec, steps_per_minute, ActivitySleepStateAwake);
 
     activity_get_metric(ActivityMetricStepCount, 1, &value);
-    cl_assert_near(value, ROUND(steps_per_minute * k_elapsed_sec, SECONDS_PER_MINUTE), 5);
+    cl_assert_near(value, ROUND(steps_per_minute * k_elapsed_sec, PBL_SEC_PER_MIN), 5);
 
     activity_get_metric(ActivityMetricDistanceMeters, 1, &value);
     act_distance[i] = value;
     float err = abs(exp_distance_m - value);
     float pct_err = err * 100.0 / exp_distance_m;
-    printf("\nTest %d: height:%d, steps:%d, seconds:%.1f, exp_distance:%d, exp_distance_2min:%d, "
-           "act_distance_2min:%"PRIu32", pct_err: %.2f%% \n", i, params->height_in, params->steps,
-           params->seconds, params->exp_distance_m, exp_distance_m, value, pct_err);
+    printf(
+        "\nTest %d: height:%d, steps:%d, seconds:%.1f, exp_distance:%d, exp_distance_2min:%d, "
+        "act_distance_2min:%" PRIu32 ", pct_err: %.2f%% \n",
+        i, params->height_in, params->steps, params->seconds, params->exp_distance_m,
+        exp_distance_m, value, pct_err);
 
     // Check the percent error
     cl_assert(pct_err < 25);
@@ -2354,13 +2294,13 @@ void test_activity__distance(void) {
   for (int i = 0; i < ARRAY_LENGTH(tests); i++) {
     DistanceTestParams *params = &tests[i];
 
-    int steps_per_minute = (int)((float)params->steps / params->seconds * SECONDS_PER_MINUTE);
+    int steps_per_minute = (int)((float)params->steps / params->seconds * PBL_SEC_PER_MIN);
     int exp_distance_m = ROUND(params->exp_distance_m * k_elapsed_sec, params->seconds);
     float err = act_distance[i] - exp_distance_m;
     float pct_err = err * 100.0 / exp_distance_m;
-    printf("\n%4d  %5d   %4d   %7.2f  %7d   %7d  %13d  %13d    %+.2f",
-           i, params->height_in, params->steps, params->seconds, steps_per_minute,
-           params->exp_distance_m, exp_distance_m, act_distance[i], pct_err);
+    printf("\n%4d  %5d   %4d   %7.2f  %7d   %7d  %13d  %13d    %+.2f", i, params->height_in,
+           params->steps, params->seconds, steps_per_minute, params->exp_distance_m, exp_distance_m,
+           act_distance[i], pct_err);
     pct_err_sum += pct_err >= 0 ? pct_err : -pct_err;
   }
 
@@ -2371,7 +2311,6 @@ void test_activity__distance(void) {
   // Check the overall percent error
   cl_assert(avg_pct_err < 10);
 }
-
 
 // --------------------------------------------------------------------------------------------
 // Advance through time simulating the heart rate manager calls
@@ -2393,12 +2332,11 @@ static void prv_advance_time_hr(uint32_t num_sec, uint8_t bpm, HRMQuality qualit
       prv_hrm_subscription_cb(&hrm_event, NULL);
       s_num_hrm_callbacks++;
     }
-    if ((rtc_get_time() % SECONDS_PER_MINUTE) == 0) {
+    if ((rtc_get_time() % PBL_SEC_PER_MIN) == 0) {
       prv_minute_system_task_cb(NULL);
     }
   }
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that we subscribe to the HR events at the expected times
@@ -2409,7 +2347,8 @@ void test_activity__hrm_sampling_period(void) {
   fake_system_task_callbacks_invoke_pending();
   s_test_alg_state.orientation = 0x11; // Not flat
 
-  prv_advance_time_hr((10 * SECONDS_PER_MINUTE), 100 /*bpm*/, HRMQuality_Good, false /*force_continuous*/);
+  prv_advance_time_hr((10 * PBL_SEC_PER_MIN), 100 /*bpm*/, HRMQuality_Good,
+                      false /*force_continuous*/);
 
   // Should be 1 second sampling when we start up
   cl_assert_equal_i(s_hrm_manager_update_interval, 1);
@@ -2421,8 +2360,8 @@ void test_activity__hrm_sampling_period(void) {
 
   // Simulate callbacks one second away from turning down the sampling rate
   // Use Acceptable because of the short circuiting in `prv_heart_rate_subscription_update`
-  prv_advance_time_hr(ACTIVITY_DEFAULT_HR_ON_TIME_SEC - 1, 100 /*bpm*/,
-                      HRMQuality_Acceptable, false /*force_continuous*/);
+  prv_advance_time_hr(ACTIVITY_DEFAULT_HR_ON_TIME_SEC - 1, 100 /*bpm*/, HRMQuality_Acceptable,
+                      false /*force_continuous*/);
 
   // The last update time should be within a second
   activity_get_metric(ActivityMetricHeartRateRawUpdatedTimeUTC, 1, &last_update_utc);
@@ -2435,18 +2374,19 @@ void test_activity__hrm_sampling_period(void) {
   // Tick one more second, should trigger slow sampling
   prv_advance_time_hr(1, 100 /*bpm*/, HRMQuality_Good, false /*force_continuous*/);
   // Should be back to no sampling by now (very large sampling period)
-  cl_assert(s_hrm_manager_update_interval > SECONDS_PER_HOUR);
+  cl_assert(s_hrm_manager_update_interval > PBL_SEC_PER_HOUR);
 
   // Advance to our next sampling period, but the watch is flat so we shouldn't start sampling
   s_test_alg_state.orientation = 0x00; // Flat
-  prv_advance_time_hr((10 * SECONDS_PER_MINUTE), 100 /*bpm*/, HRMQuality_Good, false /*force_continuous*/);
-  cl_assert(s_hrm_manager_update_interval > SECONDS_PER_HOUR);
+  prv_advance_time_hr((10 * PBL_SEC_PER_MIN), 100 /*bpm*/, HRMQuality_Good,
+                      false /*force_continuous*/);
+  cl_assert(s_hrm_manager_update_interval > PBL_SEC_PER_HOUR);
 
   // Advance to our next sampling period, the watch is no longer flat so we should be sampling.
   // The period has already expired during the flat advance above, so just advance until
   // the next minute boundary triggers the subscription update and starts sampling.
   s_test_alg_state.orientation = 0x22; // Not flat
-  for (uint32_t i = 0; i < (10 * SECONDS_PER_MINUTE); i++) {
+  for (uint32_t i = 0; i < (10 * PBL_SEC_PER_MIN); i++) {
     prv_advance_time_hr(1, 100 /*bpm*/, HRMQuality_Good, false /*force_continuous*/);
     if (s_hrm_manager_update_interval == 1) {
       break;
@@ -2454,7 +2394,6 @@ void test_activity__hrm_sampling_period(void) {
   }
   cl_assert_equal_i(s_hrm_manager_update_interval, 1);
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test that average heart rate is reported correctly
@@ -2516,7 +2455,6 @@ void test_activity__hrm_median(void) {
   cl_assert_equal_i(last_median, 51);
   cl_assert(last_update_utc >= rtc_get_time() - 1);
   cl_assert(last_update_utc <= rtc_get_time());
-
 }
 
 static uint32_t s_num_hr_events;
@@ -2529,8 +2467,6 @@ static void prv_fake_hr_event_handler(PebbleEvent *e) {
 // ---------------------------------------------------------------------------------------
 // Test that some HRM events aren't passed on from activity service
 void test_activity__hrm_ignore(void) {
-  int32_t median, total_weight;
-
   s_num_hr_events = 0;
 
   // Start activity tracking. This method assumes it can be called from any task, so we must
@@ -2581,13 +2517,13 @@ void test_activity__prv_set_metric(void) {
   int32_t metric_values[ACTIVITY_HISTORY_DAYS] = {0};
 
   // Set today's value
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Thursday, 1111);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_THURSDAY, 1111);
 
   // Set yesterday's value
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Wednesday, 2222);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_WEDNESDAY, 2222);
 
   // Set last friday value
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Friday, 3333);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_FRIDAY, 3333);
   activity_get_metric(ActivityMetricStepCount, 7, metric_values);
   cl_assert_equal_i(metric_values[0], 1111);
   cl_assert_equal_i(metric_values[1], 2222);
@@ -2598,68 +2534,68 @@ void test_activity__prv_set_metric(void) {
   cl_assert_equal_i(metric_values[6], 3333);
 
   // Set the current value to something larger
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Thursday, 4444);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_THURSDAY, 4444);
   activity_get_metric(ActivityMetricStepCount, 1, metric_values);
   cl_assert_equal_i(metric_values[0], 4444);
 
   // Set the current value to something smaller (will be ignored)
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Thursday, 1);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_THURSDAY, 1);
   activity_get_metric(ActivityMetricStepCount, 1, metric_values);
   cl_assert_equal_i(metric_values[0], 4444);
 
   // Values above UINT16_MAX must not wrap, for today or for history days (FIRM-3071)
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Thursday, 79396);
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Wednesday, 70000);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_THURSDAY, 79396);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_WEDNESDAY, 70000);
   activity_get_metric(ActivityMetricStepCount, 2, metric_values);
   cl_assert_equal_i(metric_values[0], 79396);
   cl_assert_equal_i(metric_values[1], 70000);
 
   // Verify some other metrics work
-  activity_metrics_prv_set_metric(ActivityMetricActiveSeconds, Thursday, 60);
+  activity_metrics_prv_set_metric(ActivityMetricActiveSeconds, PBL_THURSDAY, 60);
   activity_get_metric(ActivityMetricActiveSeconds, 1, metric_values);
   cl_assert_equal_i(metric_values[0], 60);
 
-  activity_metrics_prv_set_metric(ActivityMetricDistanceMeters, Thursday, 66);
-  activity_metrics_prv_set_metric(ActivityMetricDistanceMeters, Wednesday, 22);
+  activity_metrics_prv_set_metric(ActivityMetricDistanceMeters, PBL_THURSDAY, 66);
+  activity_metrics_prv_set_metric(ActivityMetricDistanceMeters, PBL_WEDNESDAY, 22);
   activity_get_metric(ActivityMetricDistanceMeters, 2, metric_values);
   cl_assert_equal_i(metric_values[0], 66);
   cl_assert_equal_i(metric_values[1], 22);
-  cl_assert_equal_i(activity_metrics_prv_get_distance_mm(), 66 * MM_PER_METER);
+  cl_assert_equal_i(activity_metrics_prv_get_distance_mm(), 66 * PBL_MM_PER_M);
 
-  activity_metrics_prv_set_metric(ActivityMetricActiveKCalories, Thursday, 22);
-  activity_metrics_prv_set_metric(ActivityMetricActiveKCalories, Wednesday, 33);
+  activity_metrics_prv_set_metric(ActivityMetricActiveKCalories, PBL_THURSDAY, 22);
+  activity_metrics_prv_set_metric(ActivityMetricActiveKCalories, PBL_WEDNESDAY, 33);
   activity_get_metric(ActivityMetricActiveKCalories, 2, metric_values);
   cl_assert_equal_i(metric_values[0], 22);
   cl_assert_equal_i(metric_values[1], 33);
   cl_assert_equal_i(activity_metrics_prv_get_active_calories(), 22 * ACTIVITY_CALORIES_PER_KCAL);
 
-  activity_metrics_prv_set_metric(ActivityMetricRestingKCalories, Thursday, 2000);
-  activity_metrics_prv_set_metric(ActivityMetricRestingKCalories, Wednesday, 44);
+  activity_metrics_prv_set_metric(ActivityMetricRestingKCalories, PBL_THURSDAY, 2000);
+  activity_metrics_prv_set_metric(ActivityMetricRestingKCalories, PBL_WEDNESDAY, 44);
   activity_get_metric(ActivityMetricRestingKCalories, 2, metric_values);
   cl_assert_equal_i(metric_values[0], 2000);
   cl_assert_equal_i(metric_values[1], 44);
   cl_assert_equal_i(activity_metrics_prv_get_resting_calories(), 2000 * ACTIVITY_CALORIES_PER_KCAL);
 
-  activity_metrics_prv_set_metric(ActivityMetricSleepTotalSeconds, Thursday, 60);
+  activity_metrics_prv_set_metric(ActivityMetricSleepTotalSeconds, PBL_THURSDAY, 60);
   activity_get_metric(ActivityMetricSleepTotalSeconds, 1, metric_values);
   cl_assert_equal_i(metric_values[0], 60);
 
-  activity_metrics_prv_set_metric(ActivityMetricSleepRestfulSeconds, Wednesday, 60);
+  activity_metrics_prv_set_metric(ActivityMetricSleepRestfulSeconds, PBL_WEDNESDAY, 60);
   activity_get_metric(ActivityMetricSleepRestfulSeconds, 2, metric_values);
   cl_assert_equal_i(metric_values[1], 60);
 
-  activity_metrics_prv_set_metric(ActivityMetricSleepEnterAtSeconds, Thursday, 60);
+  activity_metrics_prv_set_metric(ActivityMetricSleepEnterAtSeconds, PBL_THURSDAY, 60);
   activity_get_metric(ActivityMetricSleepEnterAtSeconds, 1, metric_values);
   cl_assert_equal_i(metric_values[0], 60);
 
-  activity_metrics_prv_set_metric(ActivityMetricSleepExitAtSeconds, Wednesday, 60);
+  activity_metrics_prv_set_metric(ActivityMetricSleepExitAtSeconds, PBL_WEDNESDAY, 60);
   activity_get_metric(ActivityMetricSleepExitAtSeconds, 2, metric_values);
   cl_assert_equal_i(metric_values[1], 60);
 
   activity_stop_tracking();
   fake_system_task_callbacks_invoke_pending();
 
-  activity_metrics_prv_set_metric(ActivityMetricStepCount, Thursday, 5555);
+  activity_metrics_prv_set_metric(ActivityMetricStepCount, PBL_THURSDAY, 5555);
   activity_get_metric(ActivityMetricStepCount, 1, metric_values);
   cl_assert_equal_i(metric_values[0], 79396);
 }
@@ -2687,7 +2623,7 @@ void test_activity__activity_sessions_run_ongoing_then_end(void) {
   rtc_set_time(utc_sec);
 
   // Add a run session
-  const time_t time_elapsed = (20 * SECONDS_PER_MINUTE);
+  const time_t time_elapsed = (20 * PBL_SEC_PER_MIN);
   ActivitySession run_activity = {
     .start_utc = utc_sec - time_elapsed,
     .length_min = time_elapsed,
@@ -2701,7 +2637,7 @@ void test_activity__activity_sessions_run_ongoing_then_end(void) {
   cl_assert_equal_i(HealthActivityRun, health_service_peek_current_activities());
 
   // Finish the run session
-  utc_sec += (10 * SECONDS_PER_MINUTE);
+  utc_sec += (10 * PBL_SEC_PER_MIN);
   rtc_set_time(utc_sec);
   run_activity.ongoing = false;
 
@@ -2737,7 +2673,7 @@ void test_activity__activity_sessions_sleep_ongoing_then_delete(void) {
   rtc_set_time(utc_sec);
 
   // Add a Sleep session
-  const time_t time_elapsed = (120 * SECONDS_PER_MINUTE);
+  const time_t time_elapsed = (120 * PBL_SEC_PER_MIN);
   ActivitySession sleep_session = {
     .start_utc = utc_sec - time_elapsed,
     .length_min = time_elapsed,
@@ -2789,7 +2725,7 @@ void test_activity__activity_sessions_ongoing_multiple(void) {
   time_t utc_sec = mktime(&start_tm);
   rtc_set_time(utc_sec);
 
-  const time_t time_elapsed = (20 * SECONDS_PER_MINUTE);
+  const time_t time_elapsed = (20 * PBL_SEC_PER_MIN);
 
   // Add a run session
   ActivitySession run_activity = {
@@ -2825,7 +2761,8 @@ void test_activity__activity_sessions_ongoing_multiple(void) {
   cl_assert_equal_b(true, activity_sessions_is_session_type_ongoing(ActivitySessionType_Run));
   cl_assert_equal_b(true, activity_sessions_is_session_type_ongoing(ActivitySessionType_Walk));
   cl_assert_equal_b(true, activity_sessions_is_session_type_ongoing(ActivitySessionType_Sleep));
-  cl_assert_equal_i(HealthActivityRun | HealthActivityWalk | HealthActivitySleep , health_service_peek_current_activities());
+  cl_assert_equal_i(HealthActivityRun | HealthActivityWalk | HealthActivitySleep,
+                    health_service_peek_current_activities());
 }
 
 static void prv_set_median_hr_for_minutes(int bpm, int num_minutes) {
@@ -2926,7 +2863,7 @@ void test_activity__update_time_in_hr_zones(void) {
 
   // Advance to a new day. The HR zone stats should get reset
   time_t utc_sec = rtc_get_time();
-  utc_sec += SECONDS_PER_DAY;
+  utc_sec += PBL_SEC_PER_DAY;
   rtc_set_time(utc_sec);
   prv_minute_system_task_cb(NULL);
   cl_assert_equal_b(prv_is_hr_elevated(), true); // stays elevated
@@ -2961,7 +2898,6 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
   cl_assert_equal_m(&activity_private_state()->activity_sessions[0], &empty_session,
                     sizeof(ActivitySession));
 
-
   // Add lots of sessions then delete from the front
   for (int i = 0; i < ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT; i++) {
     ActivitySession activity = walk_activity;
@@ -2969,7 +2905,7 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
     activity_sessions_prv_add_activity_session(&activity);
     cl_assert_equal_i(activity_private_state()->activity_sessions_count, i + 1);
     cl_assert_equal_m(&activity_private_state()->activity_sessions[i], &activity,
-                     sizeof(ActivitySession));
+                      sizeof(ActivitySession));
   }
 
   for (int i = 0; i < ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT; i++) {
@@ -2990,7 +2926,6 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
   cl_assert_equal_m(&activity_private_state()->activity_sessions[0], &empty_session,
                     sizeof(ActivitySession));
 
-
   // Add lots of sessions then delete from the back
   for (int i = 0; i < ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT; i++) {
     ActivitySession activity = walk_activity;
@@ -2998,7 +2933,7 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
     activity_sessions_prv_add_activity_session(&activity);
     cl_assert_equal_i(activity_private_state()->activity_sessions_count, i + 1);
     cl_assert_equal_m(&activity_private_state()->activity_sessions[i], &activity,
-                     sizeof(ActivitySession));
+                      sizeof(ActivitySession));
   }
 
   for (int i = ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT - 1; i >= 0; i--) {
@@ -3018,7 +2953,6 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
   cl_assert_equal_m(&activity_private_state()->activity_sessions[0], &empty_session,
                     sizeof(ActivitySession));
 
-
   // Add 3 sessions and delete from the middle
   ActivitySession a1 = walk_activity;
   a1.start_utc = 1;
@@ -3033,9 +2967,6 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
 
   activity_sessions_prv_delete_activity_session(&a2);
   cl_assert_equal_i(activity_private_state()->activity_sessions_count, 2);
-  cl_assert_equal_m(&activity_private_state()->activity_sessions[0], &a1,
-                    sizeof(ActivitySession));
-  cl_assert_equal_m(&activity_private_state()->activity_sessions[1], &a3,
-                    sizeof(ActivitySession));
-
+  cl_assert_equal_m(&activity_private_state()->activity_sessions[0], &a1, sizeof(ActivitySession));
+  cl_assert_equal_m(&activity_private_state()->activity_sessions[1], &a3, sizeof(ActivitySession));
 }

@@ -7,53 +7,53 @@
 // This huge list is mainly due to the inclusion of timeline_actions.c which handles both UI and
 // a large portion of action logic, which will hopefully be fixed eventually
 
-#include "applib/ui/action_menu_window_private.h"
-#include "pbl/services/blob_db/ios_notif_pref_db.h"
-#include "pbl/services/blob_db/sync.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/phone_call_util.h"
-#include "pbl/services/timeline/actions_endpoint.h"
-#include "pbl/services/timeline/timeline.h"
-#include "pbl/services/timeline/timeline_actions.h"
-#include "pbl/util/size.h"
+#include <pbl/services/blob_db/ios_notif_pref_db.h>
+#include <pbl/services/blob_db/sync.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/services/phone_call_util.h>
+#include <pbl/services/timeline/actions_endpoint.h>
+#include <pbl/services/timeline/timeline.h>
+#include <pbl/services/timeline/timeline_actions.h>
+#include <pbl/util/size.h>
 
-#include "stubs_action_chaining_window.h"
-#include "stubs_action_menu.h"
-#include "stubs_analytics.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_app_manager.h"
-#include "stubs_app_state.h"
-#include "stubs_blob_db_sync.h"
-#include "stubs_dialog.h"
-#include "stubs_event_service_client.h"
-#include "stubs_evented_timer.h"
-#include "stubs_events.h"
-#include "stubs_expandable_dialog.h"
-#include "stubs_gcolor.h"
-#include "stubs_hexdump.h"
-#include "stubs_i18n.h"
-#include "stubs_layout_layer.h"
-#include "stubs_logging.h"
-#include "stubs_modal_manager.h"
-#include "stubs_mutex.h"
-#include "stubs_notification_storage.h"
-#include "stubs_notifications.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_pin_db.h"
-#include "stubs_progress_window.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_regular_timer.h"
-#include "stubs_reminder_db.h"
-#include "stubs_rtc.h"
-#include "stubs_simple_dialog.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_ui_window.h"
-#include "stubs_window_manager.h"
-#include "stubs_window_stack.h"
+#include <applib/ui/action_menu_window_private.h>
+#include <stubs_action_chaining_window.h>
+#include <stubs_action_menu.h>
+#include <stubs_analytics.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_manager.h>
+#include <stubs_app_state.h>
+#include <stubs_blob_db_sync.h>
+#include <stubs_dialog.h>
+#include <stubs_event_service_client.h>
+#include <stubs_evented_timer.h>
+#include <stubs_events.h>
+#include <stubs_expandable_dialog.h>
+#include <stubs_gcolor.h>
+#include <stubs_hexdump.h>
+#include <stubs_i18n.h>
+#include <stubs_layout_layer.h>
+#include <stubs_logging.h>
+#include <stubs_modal_manager.h>
+#include <stubs_mutex.h>
+#include <stubs_notification_storage.h>
+#include <stubs_notifications.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_pin_db.h>
+#include <stubs_progress_window.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_regular_timer.h>
+#include <stubs_reminder_db.h>
+#include <stubs_rtc.h>
+#include <stubs_simple_dialog.h>
+#include <stubs_task_wdt.h>
+#include <stubs_ui_window.h>
+#include <stubs_window_manager.h>
+#include <stubs_window_stack.h>
 
-PebblePhoneCaller* phone_call_util_create_caller(const char *number, const char *name) {
+PebblePhoneCaller *phone_call_util_create_caller(const char *number, const char *name) {
   return NULL;
 }
 
@@ -75,15 +75,16 @@ void timeline_pin_window_push_modal(TimelineItem *item) {
 
 CommSession *comm_session_get_system_session(void) {
   // This can't be NULL (in that case we don't try to send the message)
-  return (CommSession *) 1;
+  return (CommSession *)1;
 }
 
-void comm_session_set_responsiveness(
-    CommSession *session, BtConsumer consumer, ResponseTimeState state, uint16_t max_period_secs) {
+void comm_session_set_responsiveness(CommSession *session, enum pbl_bt_consumer consumer,
+                                     enum pbl_bt_response_time_state state,
+                                     uint16_t max_period_secs) {
   return;
 }
 
-void* event_service_claim_buffer(PebbleEvent *e) {
+void *event_service_claim_buffer(PebbleEvent *e) {
   return NULL;
 }
 
@@ -100,11 +101,11 @@ bool notification_window_is_modal(void) {
   return false;
 }
 
-size_t string_list_count(StringList *list) {
+size_t pbl_string_list_count(struct pbl_string_list *list) {
   return 0;
 }
 
-char *string_list_get_at(StringList *list, size_t index) {
+char *pbl_string_list_get_at(struct pbl_string_list *list, size_t index) {
   return NULL;
 }
 

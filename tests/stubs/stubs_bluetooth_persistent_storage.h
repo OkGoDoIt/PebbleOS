@@ -3,11 +3,11 @@
 
 #pragma once
 
-#include "pbl/services/comm_session/session_remote_version.h"
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/comm_session/session_remote_version.h>
 
-void WEAK bt_persistent_storage_get_cached_system_capabilities(
-    PebbleProtocolCapabilities *capabilities_out) {
+void PBL_WEAK
+bt_persistent_storage_get_cached_system_capabilities(PebbleProtocolCapabilities *capabilities_out) {
   if (capabilities_out) {
     capabilities_out->flags = 0;
   }

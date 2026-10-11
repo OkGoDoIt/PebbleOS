@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/ui/kino/kino_reel.h"
+#include <applib/ui/kino/kino_reel.h>
 
 KinoReel *kino_reel_create_with_resource(uint32_t resource_id) {
   return NULL;
@@ -34,7 +34,7 @@ uint32_t kino_reel_get_duration(KinoReel *reel) {
 }
 
 GSize kino_reel_get_size(KinoReel *reel) {
-  return (GSize) {};
+  return (GSize){};
 }
 
 GDrawCommandImage *kino_reel_get_gdraw_command_image(KinoReel *reel) {

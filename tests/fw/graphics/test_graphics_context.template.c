@@ -1,23 +1,23 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/gtypes.h"
-#include "applib/graphics/graphics.h"
-#include "pbl/util/attributes.h"
+#include <applib/graphics/gtypes.h>
+#include <applib/graphics/graphics.h>
+#include <pbl/kernel/compiler.h>
 
-#include "clar.h"
+#include <clar.h>
 #include "util.h"
 
 
 // Helper Functions
 ////////////////////////////////////
 #include "test_graphics.h"
-#include "${BIT_DEPTH_NAME}/test_framebuffer.h"
+#include <${BIT_DEPTH_NAME}/test_framebuffer.h>
 
 // Stubs
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
-#include "stubs_applib_resource.h"
+#include <stubs_applib_resource.h>
 
 // Definitions
 #define SW_EVEN 4
@@ -25,7 +25,7 @@
 
 // Includes all possible fields for all shapes
 // The fields that are not needed for a particular shape will be zeroed out.
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   char func[30];
   GContext ctx;
   GPoint p0;

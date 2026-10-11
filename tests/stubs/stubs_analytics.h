@@ -3,9 +3,10 @@
 
 #pragma once
 
-#include "pbl/services/analytics/analytics.h"
+#include <pbl/services/analytics/analytics.h>
 
-void pbl_analytics_init(void) {}
+void pbl_analytics_init(void) {
+}
 
 void sys_pbl_analytics_set_signed(enum pbl_analytics_key key, int32_t signed_value) {
   (void)key;

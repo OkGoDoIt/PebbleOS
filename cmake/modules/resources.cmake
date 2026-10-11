@@ -31,7 +31,7 @@ endfunction()
 # Called once, after every directory has been added, so the dynamic
 # resources are all registered.
 function(pbl_resources)
-  set(fw_bin ${PROJECT_BINARY_DIR}/src/fw)
+  set(fw_bin ${PROJECT_BINARY_DIR}/fw)
   set(manifest ${PROJECT_BINARY_DIR}/resources/manifest.pickle)
   set(ball ${PROJECT_BINARY_DIR}/system_resources.resball)
   set(pbpack ${PROJECT_BINARY_DIR}/system_resources.pbpack)
@@ -51,12 +51,18 @@ function(pbl_resources)
     list(APPEND dynamic ${tzdata})
   endif()
 
+  # A board may share the resource maps of another one.
+  set(resources_board ${PBL_BOARD_NAME})
+  if(CONFIG_RESOURCES_BOARD)
+    set(resources_board ${CONFIG_RESOURCES_BOARD})
+  endif()
+
   # Resolve the resource maps into per-resource build rules.
   execute_process(
     COMMAND ${PYTHON_EXECUTABLE} ${PBL_RESOURCES_PY} manifest
       --builddir ${PROJECT_BINARY_DIR}
       --platform ${PBL_PLATFORM_NAME}
-      --board-name ${PBL_BOARD_NAME}
+      --board-name ${resources_board}
       --variant ${VARIANT}
       --config ${PBL_DOTCONFIG}
       --output ${manifest}

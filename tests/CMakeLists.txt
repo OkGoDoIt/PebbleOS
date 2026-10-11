@@ -36,6 +36,7 @@ set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
 
 include(extensions)
 include(pbl_test)
+include(nanopb)
 
 option(PBL_TEST_IMAGES "Build the image fixtures the graphics tests render against" ON)
 option(PBL_TEST_COVERAGE "Instrument the tests for gcov/lcov coverage" OFF)
@@ -50,6 +51,7 @@ add_compile_options(${PBL_TEST_C_FLAGS})
 set(PBL_TEST_DEFINES
   "CLAR_FIXTURE_PATH=\"${PBL_BASE}/tests/fixtures/\""
   CONFIG_LOG=1
+  CONFIG_BACKLIGHT_STANDARD_INTENSITY=50
   CONFIG_KERNEL_NUM_PRIORITIES=5
   CONFIG_KERNEL_THREAD_TLS_SLOTS=2
   CONFIG_KERNEL_STACK_ALIGN=8
@@ -57,6 +59,9 @@ set(PBL_TEST_DEFINES
   CONFIG_KERNEL_TICK_HZ=1024
   CONFIG_KERNEL_IRQ_PRIO_KERNEL=255
   CONFIG_KERNEL_IRQ_PRIO_MAX_SYSCALL=191
+  "UPNG_CONFIG_FILE=\"upng_config.h\""
+  UZLIB_CONF_PARANOID_CHECKS=1
+  UZLIB_CONF_LENGTHS_IN_STATE=1
 )
 add_compile_definitions(${PBL_TEST_DEFINES})
 
@@ -80,11 +85,13 @@ add_custom_target(pbl_generated_headers)
 pbl_include_directories(${PBL_BASE}/include ${PBL_BASE}/include/pbl)
 
 add_subdirectory(${PBL_BASE}/third_party/nanopb ${CMAKE_BINARY_DIR}/third_party/nanopb)
-add_subdirectory(${PBL_BASE}/src/idl ${CMAKE_BINARY_DIR}/src/idl)
+add_subdirectory(${PBL_BASE}/fw/services/protobuf_log/proto
+                 ${CMAKE_BINARY_DIR}/fw/services/protobuf_log/proto)
 add_subdirectory(${PBL_BASE}/lib/util ${CMAKE_BINARY_DIR}/lib/util)
 add_subdirectory(${PBL_BASE}/lib/btutil ${CMAKE_BINARY_DIR}/lib/btutil)
+add_subdirectory(${PBL_BASE}/subsys/crc ${CMAKE_BINARY_DIR}/libcrc)
 add_subdirectory(${PBL_BASE}/tools/pdc2png ${CMAKE_BINARY_DIR}/tools/pdc2png)
-set(PBL_IDL_INCLUDE_DIR ${CMAKE_BINARY_DIR}/src/idl)
+set(PBL_PROTO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/fw/services/protobuf_log/proto)
 
 add_subdirectory(vendor/duma)
 

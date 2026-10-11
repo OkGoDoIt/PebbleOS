@@ -1,13 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "kernel/util/interval_timer.h"
+#include <clar.h>
+#include <fakes/fake_rtc.h>
+#include <kernel/util/interval_timer.h>
 
-#include "fakes/fake_rtc.h"
-
-#include "clar.h"
-
-void passert_failed_no_message(const char* filename, int line_number) {
+void passert_failed_no_message(const char *filename, int line_number) {
 }
 
 void pbl_irq_lock(void) {
@@ -127,21 +125,21 @@ void test_interval_timer__big_interval(void) {
 
   num_intervals = interval_timer_get(&timer, &average_ms);
   cl_assert_equal_i(num_intervals, 1);
-  cl_assert_equal_i(average_ms, 3000000000);
+  cl_assert(average_ms == 3000000000U);
 
   fake_rtc_increment_time_ms(3000000000);
   interval_timer_take_sample(&timer);
 
   num_intervals = interval_timer_get(&timer, &average_ms);
   cl_assert_equal_i(num_intervals, 2);
-  cl_assert_equal_i(average_ms, 3000000000);
+  cl_assert(average_ms == 3000000000U);
 
   fake_rtc_increment_time_ms(3000000000);
   interval_timer_take_sample(&timer);
 
   num_intervals = interval_timer_get(&timer, &average_ms);
   cl_assert_equal_i(num_intervals, 3);
-  cl_assert_equal_i(average_ms, 3000000000);
+  cl_assert(average_ms == 3000000000U);
 }
 
 void test_interval_timer__moving_average(void) {
@@ -222,4 +220,3 @@ void test_interval_timer__moving_average(void) {
   // = 1027
   cl_assert_equal_i(average_ms, 1027);
 }
-

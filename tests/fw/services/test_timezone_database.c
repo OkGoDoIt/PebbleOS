@@ -1,26 +1,26 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-
-#include "pbl/services/timezone_database.h"
-#include "pbl/services/clock.h"
-
 #include "../timezone_fixture.auto.h"
 
-#include "stubs_logging.h"
-#include "stubs_passert.h"
-
 #include <string.h>
+
+#include <pbl/services/clock.h>
+#include <pbl/services/time.h>
+#include <pbl/services/timezone_database.h>
+
+#include <clar.h>
+#include <stubs_logging.h>
+#include <stubs_passert.h>
 
 //! Find a region ID for the given region name.
 //! @return a valid, matching region ID, or -1 if no region was found
 int timezone_database_find_region_by_name(const char *region_name, int region_name_length);
 
-#include "resource/resource.h"
+#include <resource/resource.h>
 size_t resource_load_byte_range_system(ResAppNum app_num, uint32_t resource_id,
                                        uint32_t start_offset, uint8_t *data, size_t num_bytes) {
-  memcpy(data, ((uint8_t*) s_timezone_database) + start_offset, num_bytes);
+  memcpy(data, ((uint8_t *)s_timezone_database) + start_offset, num_bytes);
   return num_bytes;
 }
 
@@ -87,12 +87,14 @@ void test_timezone_database__load_dst_rule_los_angeles(void) {
 
   TimezoneInfo tz_info;
   bool result = timezone_database_load_region_info(america_los_angeles_region, &tz_info);
+  cl_assert(result);
   cl_assert_equal_s("P*T", tz_info.tm_zone);
   cl_assert_equal_i(-8 * 60 * 60, tz_info.tm_gmtoff);
 
   TimezoneDSTRule start;
   TimezoneDSTRule end;
   result = timezone_database_load_dst_rule(tz_info.dst_id, &start, &end);
+  cl_assert(result);
 
   cl_assert_equal_i(start.ds_label, 'D');
   cl_assert_equal_i(start.month, 2);

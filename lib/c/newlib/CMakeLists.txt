@@ -3,4 +3,4 @@
 
 pbl_library()
 pbl_library_sources(vsnprintf.c)
-pbl_library_compile_options(-fno-builtin -fno-lto -Wno-error=char-subscripts)
+pbl_library_compile_options(-fno-builtin -fno-lto)

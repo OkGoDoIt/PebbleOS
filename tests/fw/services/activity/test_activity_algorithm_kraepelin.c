@@ -1,53 +1,54 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/accel_service.h"
-#include "applib/data_logging.h"
-#include <pbl/drivers/ambient_light.h>
-#include <pbl/drivers/rtc.h>
-#include "pbl/services/regular_timer.h"
-#include "pbl/services/battery/battery_state.h"
-#include "pbl/services/activity/activity.h"
-#include "pbl/services/activity/activity_private.h"
-#include "pbl/services/activity/activity_algorithm.h"
-#include "pbl/services/activity/kraepelin/activity_algorithm_kraepelin.h"
-#include "pbl/services/activity/kraepelin/kraepelin_algorithm.h"
-#include "pbl/services/data_logging/data_logging_service.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/settings/settings_file.h"
-#include "pbl/services/system_task.h"
-#include "pbl/util/math.h"
-#include "pbl/util/size.h"
-
 #include <stdint.h>
 #include <string.h>
+
+#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/rtc.h>
+#include <pbl/services/activity/activity.h>
+#include <pbl/services/activity/activity_algorithm.h>
+#include <pbl/services/activity/activity_private.h>
+#include <pbl/services/activity/kraepelin/activity_algorithm_kraepelin.h>
+#include <pbl/services/activity/kraepelin/kraepelin_algorithm.h>
+#include <pbl/services/battery/battery_state.h>
+#include <pbl/services/data_logging/data_logging_service.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/services/regular_timer.h>
+#include <pbl/services/settings/settings_file.h>
+#include <pbl/services/system_task.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+
+#include <applib/accel_service.h>
+#include <applib/data_logging.h>
 #include <applib/health_service.h>
+#include <clar.h>
 #include <services/activity/kraepelin/activity_algorithm_kraepelin.h>
 
-#include "clar.h"
-
 // Stubs
-#include "stubs_analytics.h"
-#include "stubs_irq.h"
-#include "stubs_hexdump.h"
-#include "stubs_hr_util.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_prompt.h"
-#include "stubs_sleep.h"
-#include "stubs_task_watchdog.h"
+#include <stubs_analytics.h>
+#include <stubs_hexdump.h>
+#include <stubs_hr_util.h>
+#include <stubs_irq.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_sleep.h>
+#include <stubs_task_wdt.h>
 
 // Fakes
-#include "fake_accel_service.h"
-#include "fake_new_timer.h"
-#include "fake_rtc.h"
-#include "fake_spi_flash.h"
-#include "fake_system_task.h"
+#include <pbl/services/time.h>
+#include <pbl/util/units.h>
 
+#include <fake_accel_service.h>
+#include <fake_new_timer.h>
+#include <fake_rtc.h>
+#include <fake_spi_flash.h>
+#include <fake_system_task.h>
 
-#define ASSERT_EQUAL_I(i1,i2,file,line) \
-        clar__assert_equal_i((i1),(i2),file,line,#i1 " != " #i2, 1)
+#define ASSERT_EQUAL_I(i1, i2, file, line) \
+  clar__assert_equal_i((i1), (i2), file, line, #i1 " != " #i2, 1)
 
 // Globals
 AccelSamplingRate s_sample_rate;
@@ -69,13 +70,7 @@ static uint8_t s_alg_next_orientation;
 static uint8_t s_alg_next_light;
 static bool s_alg_next_plugged_in;
 
-static struct tm s_start_time_tm = {
-  .tm_hour = 17,
-  .tm_mday = 1,
-  .tm_mon = 0,
-  .tm_year = 115
-};
-
+static struct tm s_start_time_tm = {.tm_hour = 17, .tm_mday = 1, .tm_mon = 0, .tm_year = 115};
 
 // ============================================================================================
 // Misc stubs
@@ -97,7 +92,15 @@ BatteryChargeState battery_get_charge_state(void) {
   return state;
 }
 
-void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable) {}
+void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable) {
+}
+
+bool kalg_activity_hrm_is_active(KAlgState *kalg_state) {
+  return false;
+}
+
+void kalg_activity_hrm_set_paused(KAlgState *kalg_state, bool paused) {
+}
 
 bool activity_tracking_on(void) {
   return true;
@@ -130,8 +133,8 @@ void activity_sessions_prv_add_activity_session(ActivitySession *session) {
   // If this is a duplicate activity, ignore it
   ActivitySession *stored_session = s_activity_sessions;
   for (uint16_t i = 0; i < s_activity_sessions_count; i++, stored_session++) {
-    if ((session->type == stored_session->type)
-        && (session->start_utc == stored_session->start_utc)) {
+    if ((session->type == stored_session->type) &&
+        (session->start_utc == stored_session->start_utc)) {
       return;
     }
   }
@@ -149,7 +152,6 @@ void activity_sessions_prv_add_activity_session(ActivitySession *session) {
 // ------------------------------------------------------------------------------------
 void activity_sessions_prv_delete_activity_session(ActivitySession *session) {
 }
-
 
 // =============================================================================================
 // Data logging stubs
@@ -181,7 +183,6 @@ DataLoggingSession *dls_create(uint32_t tag, DataLoggingItemType item_type, uint
 void dls_send_all_sessions(void) {
 }
 
-
 // ============================================================================================
 // Activity service stubs
 // --------------------------------------------------------------------------------------------
@@ -197,17 +198,14 @@ uint32_t activity_metrics_prv_get_steps(void) {
   return 0;
 }
 
-
 uint32_t activity_metrics_prv_get_distance_mm(void) {
   return s_activity_next_distance_mm;
 }
-
 
 // --------------------------------------------------------------------------------------------
 uint32_t activity_metrics_prv_get_resting_calories(void) {
   return s_activity_next_resting_calories;
 }
-
 
 // --------------------------------------------------------------------------------------------
 uint32_t activity_metrics_prv_get_active_calories(void) {
@@ -225,7 +223,11 @@ void activity_metrics_prv_get_median_hr_bpm(int32_t *median, int32_t *total_weig
   if (total_weight) {
     *total_weight = s_activity_next_heart_rate_heart_rate_total_weight_x100;
   }
+}
 
+void activity_metrics_prv_get_spo2_sample(uint8_t *percent_out, uint8_t *quality_out) {
+  *percent_out = 0;
+  *quality_out = 0;
 }
 
 void activity_metrics_prv_reset_hr_stats(void) {
@@ -240,7 +242,6 @@ bool activity_metrics_prv_is_hrm_offwrist(time_t now_utc) {
   return false;
 }
 
-
 // =============================================================================================
 // Algorithm stubs
 uint32_t kalg_state_size(void) {
@@ -251,7 +252,8 @@ bool kalg_init(KAlgState *state, KAlgStatsCallback stats_cb) {
   return true;
 }
 
-void kalg_deinit(KAlgState *state) {}
+void kalg_deinit(KAlgState *state) {
+}
 
 uint32_t kalg_analyze_samples(KAlgState *state, AccelRawData *data, uint32_t num_samples,
                               uint32_t *consumed_samples) {
@@ -270,8 +272,8 @@ void kalg_set_weight(KAlgState *state, uint32_t grams) {
 
 void kalg_activities_update(KAlgState *state, time_t utc_now, uint16_t steps, uint16_t vmc,
                             uint8_t orientation, bool definitely_not_worn,
-                            uint32_t resting_calories,
-                            uint32_t active_calories, uint32_t distance_mm, bool shutting_down,
+                            uint32_t resting_calories, uint32_t active_calories,
+                            uint32_t distance_mm, bool shutting_down,
                             KAlgActivitySessionCallback sessions_cb, void *context) {
 }
 
@@ -285,24 +287,24 @@ static uint16_t s_kalg_sleep_m;
 
 void kalg_get_sleep_stats(KAlgState *alg_state, KAlgOngoingSleepStats *stats) {
   time_t now = rtc_get_time();
-  if (s_kalg_sleep_start_utc == 0 || now < s_kalg_sleep_start_utc + SECONDS_PER_HOUR) {
+  if (s_kalg_sleep_start_utc == 0 || now < s_kalg_sleep_start_utc + PBL_SEC_PER_HOUR) {
     // We are before the requested sleep time
-    *stats = (KAlgOngoingSleepStats) { };
+    *stats = (KAlgOngoingSleepStats){};
   } else {
     // We are somewhere after the start of sleep
-    time_t sleep_end = s_kalg_sleep_start_utc + s_kalg_sleep_m * SECONDS_PER_MINUTE;
+    time_t sleep_end = s_kalg_sleep_start_utc + s_kalg_sleep_m * PBL_SEC_PER_MIN;
     if (now < sleep_end + KALG_MAX_UNCERTAIN_SLEEP_M) {
       // Still haven't detected the end of sleep, the last KALG_MAX_UNCERTAIN_SLEEP_M minutes are
       // uncertain
-      *stats = (KAlgOngoingSleepStats) {
+      *stats = (KAlgOngoingSleepStats){
         .sleep_start_utc = s_kalg_sleep_start_utc,
-        .sleep_len_m = (now - s_kalg_sleep_start_utc) / SECONDS_PER_MINUTE
-                       - KALG_MAX_UNCERTAIN_SLEEP_M,
-        .uncertain_start_utc = now - KALG_MAX_UNCERTAIN_SLEEP_M * SECONDS_PER_MINUTE,
+        .sleep_len_m =
+            (now - s_kalg_sleep_start_utc) / PBL_SEC_PER_MIN - KALG_MAX_UNCERTAIN_SLEEP_M,
+        .uncertain_start_utc = now - KALG_MAX_UNCERTAIN_SLEEP_M * PBL_SEC_PER_MIN,
       };
     } else {
       // The sleep was in the past and has ended
-      *stats = (KAlgOngoingSleepStats) {
+      *stats = (KAlgOngoingSleepStats){
         .sleep_start_utc = s_kalg_sleep_start_utc,
         .sleep_len_m = s_kalg_sleep_m,
         .uncertain_start_utc = 0,
@@ -310,7 +312,6 @@ void kalg_get_sleep_stats(KAlgState *alg_state, KAlgOngoingSleepStats *stats) {
     }
   }
 }
-
 
 // --------------------------------------------------------------------------------------------
 // Create sample data for testing sleep and data logging
@@ -327,7 +328,7 @@ static void prv_create_test_data(uint32_t num_minutes, AlgMinuteDLSSample *minut
 
   bool next_plugged_in = false;
   for (int i = 0; i < num_minutes; i++) {
-    minute_data[i] = (AlgMinuteDLSSample) { };
+    minute_data[i] = (AlgMinuteDLSSample){};
     minute_data[i].base.steps = i;
     minute_data[i].base.vmc = next_vmc++;
     if (next_vmc == 65533) {
@@ -343,14 +344,13 @@ static void prv_create_test_data(uint32_t num_minutes, AlgMinuteDLSSample *minut
     minute_data[i].active_calories = next_active_calories++;
     minute_data[i].resting_calories = next_resting_calories++;
     minute_data[i].distance_cm = next_distance_cm++;
-    minute_data[i].base.active = (minute_data[i].base.steps >= ACTIVITY_ACTIVE_MINUTE_MIN_STEPS)
-                                 ? 1 : 0;
+    minute_data[i].base.active =
+        (minute_data[i].base.steps >= ACTIVITY_ACTIVE_MINUTE_MIN_STEPS) ? 1 : 0;
     minute_data[i].heart_rate_bpm = next_heart_rate_bpm++;
     minute_data[i].heart_rate_total_weight_x100 = next_heart_rate_heart_rate_total_weight_x100++;
     minute_data[i].heart_rate_zone = next_heart_rate_zone++;
   }
 }
-
 
 // --------------------------------------------------------------------------------------------
 // Feed in sleep data
@@ -359,9 +359,9 @@ static void prv_feed_minute_data(uint32_t num_minutes, AlgMinuteDLSSample *minut
   // Call the minute handler, which computes the minute stats and saves them to data logging
   // as well as the sleep PFS file.
   for (int i = 0; i < num_minutes; i++) {
-    fake_rtc_increment_time(SECONDS_PER_MINUTE);
+    fake_rtc_increment_time(PBL_SEC_PER_MIN);
     s_alg_next_steps = minute_data[i].base.steps;
-    AccelRawData samples[100] = { };
+    AccelRawData samples[100] = {};
     uint64_t timestamp = 0;
     // Calling activity_algorithm_handle_accel() on our stub algorithm gives it the step
     // counts for this minute
@@ -381,7 +381,8 @@ static void prv_feed_minute_data(uint32_t num_minutes, AlgMinuteDLSSample *minut
     s_activity_next_resting_calories += minute_data[i].resting_calories;
     s_activity_next_active_calories += minute_data[i].active_calories;
     s_activity_next_heart_rate_bpm = minute_data[i].heart_rate_bpm;
-    s_activity_next_heart_rate_heart_rate_total_weight_x100 = minute_data[i].heart_rate_total_weight_x100;
+    s_activity_next_heart_rate_heart_rate_total_weight_x100 =
+        minute_data[i].heart_rate_total_weight_x100;
     s_activity_next_heart_rate_zone = minute_data[i].heart_rate_zone;
     AlgMinuteRecord minute_record = {};
     activity_algorithm_minute_handler(rtc_get_time(), &minute_record);
@@ -390,7 +391,6 @@ static void prv_feed_minute_data(uint32_t num_minutes, AlgMinuteDLSSample *minut
     }
   }
 }
-
 
 // =============================================================================================
 // Start of unit tests
@@ -413,13 +413,11 @@ void test_activity_algorithm_kraepelin__initialize(void) {
   activity_algorithm_init(&s_sample_rate);
 }
 
-
 // ---------------------------------------------------------------------------------------
 void test_activity_algorithm_kraepelin__cleanup(void) {
   fake_system_task_callbacks_invoke_pending();
   activity_algorithm_deinit();
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test to make sure that the minute data gets sent to data logging correctly
@@ -441,28 +439,25 @@ void test_activity_algorithm_kraepelin__data_logging_test(void) {
     cl_assert_equal_i(s_dls_records[j].hdr.version, ALG_DLS_MINUTES_RECORD_VERSION);
     for (int i = 0; i < ALG_MINUTES_PER_DLS_RECORD; i++) {
       cl_assert_equal_m(&s_dls_records[j].samples[i],
-                        &minute_data[(j * ALG_MINUTES_PER_DLS_RECORD) + i],
-                        sizeof(minute_data[i]));
+                        &minute_data[(j * ALG_MINUTES_PER_DLS_RECORD) + i], sizeof(minute_data[i]));
     }
   }
 }
-
 
 // ------------------------------------------------------------------------------------
 static void prv_assert_minute_data(HealthMinuteData *actual, AlgMinuteDLSSample *expected) {
   cl_assert_equal_i(actual->steps, expected->base.steps);
   cl_assert_equal_i(actual->orientation, expected->base.orientation);
   cl_assert_equal_i(actual->vmc, expected->base.vmc);
-  cl_assert_equal_i(actual->light, ambient_light_level_to_enum(
-    expected->base.light * ALG_RAW_LIGHT_SENSOR_DIVIDE_BY));
+  cl_assert_equal_i(actual->light, ambient_light_level_to_enum(expected->base.light *
+                                                               ALG_RAW_LIGHT_SENSOR_DIVIDE_BY));
   cl_assert_equal_i(actual->heart_rate_bpm, expected->heart_rate_bpm);
-
 }
 
 // ---------------------------------------------------------------------------------------
 // Test to make sure that when we re-boot we correctly get the saved minute data
 void test_activity_algorithm_kraepelin__minute_data_after_boot(void) {
-  const int num_minutes = 4 * MINUTES_PER_HOUR;
+  const int num_minutes = 4 * PBL_MIN_PER_HOUR;
   time_t start_utc = rtc_get_time();
 
   // The test data
@@ -493,14 +488,13 @@ void test_activity_algorithm_kraepelin__minute_data_after_boot(void) {
   }
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test to make sure that the minute data file gets compacted correctly. If we write more than
 // ALG_MINUTE_DATA_FILE_LEN worth of data to the sleep file, it's size should be capped at
 // ALG_MINUTE_DATA_FILE_LEN and we should be able to successfully read back the most recent
 // data we wrote.
 void test_activity_algorithm_kraepelin__sleep_data_compaction_test(void) {
-  const int num_minutes = ALG_SLEEP_HISTORY_HOURS_FOR_TODAY * MINUTES_PER_HOUR;
+  const int num_minutes = ALG_SLEEP_HISTORY_HOURS_FOR_TODAY * PBL_MIN_PER_HOUR;
 
   // The test data
   AlgMinuteDLSSample minute_data[num_minutes];
@@ -513,9 +507,9 @@ void test_activity_algorithm_kraepelin__sleep_data_compaction_test(void) {
   // Make sure it's a multiple of ALG_MINUTES_PER_RECORD
   max_minutes = (max_minutes / ALG_MINUTES_PER_FILE_RECORD) * ALG_MINUTES_PER_FILE_RECORD;
   for (int i = 0; i < max_minutes; i++) {
-    fake_rtc_increment_time(SECONDS_PER_MINUTE);
+    fake_rtc_increment_time(PBL_SEC_PER_MIN);
     s_alg_next_steps = 0x1234;
-    AccelRawData samples[100] = { };
+    AccelRawData samples[100] = {};
     uint64_t timestamp = 0;
     activity_algorithm_handle_accel(samples, s_sample_rate, timestamp);
 
@@ -536,7 +530,6 @@ void test_activity_algorithm_kraepelin__sleep_data_compaction_test(void) {
   cl_assert(minutes < ALG_MINUTE_FILE_MAX_ENTRIES * ALG_MINUTES_PER_FILE_RECORD);
   cl_assert(minutes > ALG_MINUTE_FILE_MAX_ENTRIES * ALG_MINUTES_PER_FILE_RECORD / 2);
 
-
   // Now, put in our expected data
   // Call the minute handler, which computes the minute stats and saves them to data logging
   // as well as the sleep PFS file.
@@ -546,7 +539,8 @@ void test_activity_algorithm_kraepelin__sleep_data_compaction_test(void) {
   // Retrieve the minute data now
   HealthMinuteData retrieve[num_minutes];
   num_records = num_minutes;
-  time_t start = start_of_data_utc;  // starting just past the minute to test that &start gets updated
+  time_t start =
+      start_of_data_utc; // starting just past the minute to test that &start gets updated
   activity_algorithm_get_minute_history(retrieve, &num_records, &start);
   cl_assert_equal_i(num_records, num_minutes);
   cl_assert_equal_i(start, start_of_data_utc);
@@ -555,15 +549,14 @@ void test_activity_algorithm_kraepelin__sleep_data_compaction_test(void) {
   }
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test that the call to retrieve minute history from flash works correctly
 void test_activity_algorithm_kraepelin__get_flash_minute_history(void) {
-  const int num_minutes = 4 * MINUTES_PER_HOUR;
+  const int num_minutes = 4 * PBL_MIN_PER_HOUR;
   time_t start_utc = rtc_get_time();
 
   // Let's start time not on a 15 minute boundary to aggravate the get_minute logic
-  start_utc += 7 * SECONDS_PER_MINUTE;
+  start_utc += 7 * PBL_SEC_PER_MIN;
   rtc_set_time(start_utc);
 
   // The test data
@@ -577,7 +570,7 @@ void test_activity_algorithm_kraepelin__get_flash_minute_history(void) {
   // Retrieve all of the minute data at once
   HealthMinuteData retrieve[num_minutes * 2];
   uint32_t num_records = num_minutes;
-  time_t start = start_utc + 5;  // starting just past the minute to test that &start gets updated
+  time_t start = start_utc + 5; // starting just past the minute to test that &start gets updated
   activity_algorithm_get_minute_history(retrieve, &num_records, &start);
   cl_assert_equal_i(num_records, num_minutes);
   cl_assert_equal_i(start, start_utc);
@@ -588,7 +581,7 @@ void test_activity_algorithm_kraepelin__get_flash_minute_history(void) {
   // Retrieve, trying to start from a lot farther back, it should return the UTC of the first
   // record available. Also ask for more than what is available
   num_records = num_minutes * 2;
-  start = start_utc - SECONDS_PER_DAY;
+  start = start_utc - PBL_SEC_PER_DAY;
   activity_algorithm_get_minute_history(retrieve, &num_records, &start);
   cl_assert_equal_i(num_records, num_minutes);
   cl_assert_equal_i(start, start_utc);
@@ -608,7 +601,7 @@ void test_activity_algorithm_kraepelin__get_flash_minute_history(void) {
     cl_assert_equal_i(start, first_ts);
     num_records_left -= chunk;
     num_records_found += chunk;
-    start += chunk * SECONDS_PER_MINUTE;
+    start += chunk * PBL_SEC_PER_MIN;
   }
   cl_assert_equal_i(num_records_found, num_minutes);
   for (int i = 0; i < num_minutes; i++) {
@@ -620,11 +613,11 @@ void test_activity_algorithm_kraepelin__get_flash_minute_history(void) {
 // Test that retrieving the most recent minute history works correctly. This test insures that
 // we correctly include the minute history that has not yet been saved to flash
 void test_activity_algorithm_kraepelin__get_ram_minute_history(void) {
-  const int num_minutes = 1 * MINUTES_PER_HOUR;
+  const int num_minutes = 1 * PBL_MIN_PER_HOUR;
   time_t start_utc = rtc_get_time();
 
   // Let's start time not on a 15 minute boundary to aggravate the get_minute logic
-  start_utc += 7 * SECONDS_PER_MINUTE;
+  start_utc += 7 * PBL_SEC_PER_MIN;
   rtc_set_time(start_utc);
 
   // The test data
@@ -640,11 +633,10 @@ void test_activity_algorithm_kraepelin__get_ram_minute_history(void) {
   // get ALG_MINUTES_PER_RECORD records each time. We know that the activity algorithm code only
   // writes a new minute data record to flash once every ALG_MINUTES_PER_RECORD minutes, but
   // the records that are not yet saved to flash should be correctly retrieved from RAM.
-  time_t oldest_to_fetch = rtc_get_time() - (ALG_MINUTES_PER_FILE_RECORD * SECONDS_PER_MINUTE);
+  time_t oldest_to_fetch = rtc_get_time() - (ALG_MINUTES_PER_FILE_RECORD * PBL_SEC_PER_MIN);
   uint32_t next_read_minute_idx = 0;
-  for (int i = 0; i < ALG_MINUTES_PER_FILE_RECORD; i++, oldest_to_fetch += SECONDS_PER_MINUTE,
-    next_read_minute_idx++, next_write_minute_idx++) {
-
+  for (int i = 0; i < ALG_MINUTES_PER_FILE_RECORD;
+       i++, oldest_to_fetch += PBL_SEC_PER_MIN, next_read_minute_idx++, next_write_minute_idx++) {
     // Ask for the last ALG_MINUTES_PER_RECORD minutes of data
     uint32_t num_records = ALG_MINUTES_PER_FILE_RECORD;
     time_t start = oldest_to_fetch;
@@ -670,10 +662,10 @@ void test_activity_algorithm_kraepelin__get_ram_minute_history(void) {
 
   // Let's add data for a partial minute and make sure that gets returned
   const int exp_steps = 23;
-  oldest_to_fetch = rtc_get_time() - SECONDS_PER_MINUTE;
+  oldest_to_fetch = rtc_get_time() - PBL_SEC_PER_MIN;
   fake_rtc_increment_time(30); // 30 seconds
   s_alg_next_steps = exp_steps;
-  AccelRawData samples[100] = { };
+  AccelRawData samples[100] = {};
   uint64_t timestamp = 0;
   // Calling activity_algorithm_handle_accel() on our stub algorithm registers the new steps
   // counts for this minute
@@ -691,7 +683,6 @@ void test_activity_algorithm_kraepelin__get_ram_minute_history(void) {
   cl_assert_equal_i(received_records[1].steps, exp_steps);
 }
 
-
 // ---------------------------------------------------------------------------------------
 // Test the logic that detects naps. This logic is performed by the
 // prv_sleep_sessions_post_process() method.
@@ -699,19 +690,19 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   // NOTE: All tests by default start at 5pm. Let's advance time to 9pm to give us more
   // time to test the various nap scenarios
   time_t now_utc = rtc_get_time();
-  now_utc += 4 * SECONDS_PER_HOUR;
+  now_utc += 4 * PBL_SEC_PER_HOUR;
   rtc_set_time(now_utc);
   time_t start_of_today = time_util_get_midnight_of(now_utc);
 
   { // Create a 2 hour session at 1pm ==> should be a nap
     ActivitySession sessions[] = {
       {
-        .start_utc = start_of_today + (13 * SECONDS_PER_HOUR),  // 1pm
-        .length_min = 2 * MINUTES_PER_HOUR,
+        .start_utc = start_of_today + (13 * PBL_SEC_PER_HOUR), // 1pm
+        .length_min = 2 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
       },
       {
-        .start_utc = start_of_today + (13 * SECONDS_PER_HOUR) + (15 * SECONDS_PER_MINUTE), // 1:15pm
+        .start_utc = start_of_today + (13 * PBL_SEC_PER_HOUR) + (15 * PBL_SEC_PER_MIN), // 1:15pm
         .length_min = 20,
         .type = ActivitySessionType_RestfulSleep,
       },
@@ -726,8 +717,8 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   { // Create a 4 hour session at 1pm ==> should be regular sleep
     ActivitySession sessions[] = {
       {
-        .start_utc = start_of_today + (13 * (SECONDS_PER_HOUR)),  // 1pm
-        .length_min = 4 * MINUTES_PER_HOUR,
+        .start_utc = start_of_today + (13 * (PBL_SEC_PER_HOUR)), // 1pm
+        .length_min = 4 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
       },
     };
@@ -740,13 +731,13 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   { // Create two 2 hour sessions, they should both be considered as separate naps
     ActivitySession sessions[] = {
       {
-        .start_utc = start_of_today + (13 * SECONDS_PER_HOUR),  // 1pm
-        .length_min = 2 * MINUTES_PER_HOUR,
+        .start_utc = start_of_today + (13 * PBL_SEC_PER_HOUR), // 1pm
+        .length_min = 2 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
       },
       {
-        .start_utc = start_of_today + (17 * SECONDS_PER_HOUR), // 5pm
-        .length_min = 2 * MINUTES_PER_HOUR,
+        .start_utc = start_of_today + (17 * PBL_SEC_PER_HOUR), // 5pm
+        .length_min = 2 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
       },
     };
@@ -760,8 +751,8 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   { // Create a 2 hour session that ends after 9pm ==> should be regular sleep
     ActivitySession sessions[] = {
       {
-        .start_utc = start_of_today + (20 * SECONDS_PER_HOUR),  // 8pm
-        .length_min = 2 * MINUTES_PER_HOUR,
+        .start_utc = start_of_today + (20 * PBL_SEC_PER_HOUR), // 8pm
+        .length_min = 2 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
       },
     };
@@ -774,8 +765,8 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   { // Create a 2 hour session that starts before 12pm ==> should be regular sleep
     ActivitySession sessions[] = {
       {
-        .start_utc = start_of_today + (11 * SECONDS_PER_HOUR),  // 11am
-        .length_min = 2 * MINUTES_PER_HOUR,
+        .start_utc = start_of_today + (11 * PBL_SEC_PER_HOUR), // 11am
+        .length_min = 2 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
       },
     };
@@ -786,16 +777,16 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   }
 
   { // Create a 2 hour session that is still on-going - should register as normal sleep
-    time_t sleep_start_utc = now_utc - (2 * SECONDS_PER_HOUR);
+    time_t sleep_start_utc = now_utc - (2 * PBL_SEC_PER_HOUR);
     ActivitySession sessions[] = {
       {
         .start_utc = sleep_start_utc,
-        .length_min = 2 * MINUTES_PER_HOUR,
+        .length_min = 2 * PBL_MIN_PER_HOUR,
         .type = ActivitySessionType_Sleep,
         .ongoing = true,
       },
       {
-        .start_utc = sleep_start_utc + (15 * SECONDS_PER_MINUTE),
+        .start_utc = sleep_start_utc + (15 * PBL_SEC_PER_MIN),
         .length_min = 20,
         .type = ActivitySessionType_RestfulSleep,
         .ongoing = true,
@@ -810,8 +801,8 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
   { // Create a 2h 39m  session that starts at 11:59pm ==> should be regular sleep
     ActivitySession sessions[] = {
       {
-        .start_utc = start_of_today - (1 * SECONDS_PER_MINUTE),  // 11:59pm
-        .length_min = (2 * MINUTES_PER_HOUR) + 39,
+        .start_utc = start_of_today - (1 * PBL_SEC_PER_MIN), // 11:59pm
+        .length_min = (2 * PBL_MIN_PER_HOUR) + 39,
         .type = ActivitySessionType_Sleep,
       },
     };
@@ -820,7 +811,6 @@ void test_activity_algorithm_kraepelin__sleep_post_process(void) {
     activity_algorithm_post_process_sleep_sessions(session_entries, sessions);
     cl_assert_equal_i(sessions[0].type, ActivitySessionType_Sleep);
   }
-
 }
 
 // ---------------------------------------------------------------------------------------
@@ -872,7 +862,6 @@ void test_activity_algorithm_kraepelin__steps_during_sleep(void) {
   }
   cl_assert_equal_i(steps_awake_120m, exp_steps);
 
-
   // -------------------------------------------------------------------------------
   // Try again while sleeping
   time_t start_utc = rtc_get_time();
@@ -906,7 +895,6 @@ void test_activity_algorithm_kraepelin__steps_during_sleep(void) {
   // We should only get the steps counted from the last 20 minutes after waking
   cl_assert_equal_i(steps_asleep_120m, steps_awake_120m - steps_awake_100m);
 }
-
 
 // ---------------------------------------------------------------------------------------
 // Test to make sure that the minute data we save has no steps during sleep
@@ -948,10 +936,9 @@ void test_activity_algorithm_kraepelin__minute_data_steps_during_sleep(void) {
     }
     cl_assert_equal_i(retrieve[i].orientation, minute_data[i].base.orientation);
     cl_assert_equal_i(retrieve[i].vmc, minute_data[i].base.vmc);
-    cl_assert_equal_i(retrieve[i].light, ambient_light_level_to_enum(
-      minute_data[i].base.light * ALG_RAW_LIGHT_SENSOR_DIVIDE_BY));
+    cl_assert_equal_i(
+        retrieve[i].light,
+        ambient_light_level_to_enum(minute_data[i].base.light * ALG_RAW_LIGHT_SENSOR_DIVIDE_BY));
     cl_assert_equal_i(retrieve[i].heart_rate_bpm, minute_data[i].heart_rate_bpm);
   }
 }
-
-

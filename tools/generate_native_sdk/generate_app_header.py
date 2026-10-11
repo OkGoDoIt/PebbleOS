@@ -4,6 +4,7 @@
 import os
 
 import exports
+from doc_comments import to_bang_comments
 
 
 def writeline(f, line=""):
@@ -12,6 +13,8 @@ def writeline(f, line=""):
 
 def strip_internal_comments(comment_string):
     """Takes a multiline comment string and strips out the parts of the comment after an @internal keyword"""
+    if "@internal" in comment_string:
+        comment_string = to_bang_comments(comment_string)
     result = []
     for line in comment_string.splitlines():
         if "@internal" in line:
@@ -23,6 +26,8 @@ def strip_internal_comments(comment_string):
 
 def strip_internal_subcomments(string):
     """Takes a multiline comment string and strips out the parts of the comment after an @internal keyword"""
+    if "@internal" in string:
+        string = to_bang_comments(string)
     result = []
     in_internal_comment = False
     for line in string.splitlines():
@@ -64,6 +69,7 @@ def make_app_header(exports_tree, output_filename, header_type, inject_text):
         writeline(f, "#include <string.h>")
         writeline(f, "#include <time.h>")
         writeline(f)
+        writeline(f, '#include "pbl/kernel/compiler.h"')
         writeline(f, '#include "pebble_warn_unsupported_functions.h"')
         if header_type == "app":
             writeline(f, '#include "pebble_sdk_version.h"')

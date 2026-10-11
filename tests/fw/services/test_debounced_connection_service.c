@@ -1,31 +1,29 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <pbl/services/debounced_connection_service.h>
+#include <pbl/services/regular_timer.h>
 
-#include "pbl/services/debounced_connection_service.h"
-#include "pbl/services/regular_timer.h"
-#include "syscall/syscall.h"
-
-#include "fake_new_timer.h"
-#include "fake_rtc.h"
-#include "fake_system_task.h"
-#include "fake_pbl_malloc.h"
-#include "fake_session.h"
-#include "stubs_alerts.h"
-#include "stubs_alerts_preferences.h"
-#include "stubs_bt_lock.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_hexdump.h"
-#include "stubs_passert.h"
-#include "stubs_vibe_score.h"
-#include "stubs_vibe_score_info.h"
+#include <clar.h>
+#include <fake_new_timer.h>
+#include <fake_pbl_malloc.h>
+#include <fake_rtc.h>
+#include <fake_session.h>
+#include <fake_system_task.h>
+#include <stubs_alerts.h>
+#include <stubs_alerts_preferences.h>
+#include <stubs_bt_lock.h>
+#include <stubs_hexdump.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_vibe_score.h>
+#include <stubs_vibe_score_info.h>
+#include <syscall/syscall.h>
 
 // Fakes
 ///////////////////////////////////////////////////////////
 
-static TimerID s_debounce_timer;
 static bool s_default_connection_state;
 static unsigned int s_event_count = 0;
 static PebbleEvent s_cached_event;
@@ -37,10 +35,10 @@ bool remote_is_connected(void) {
   return s_default_connection_state;
 }
 
-void event_put(PebbleEvent* event) {
+void event_put(PebbleEvent *event) {
   s_event_count++;
 
-  s_cached_event = (PebbleEvent) {
+  s_cached_event = (PebbleEvent){
     .type = event->type,
     .bluetooth.comm_session_event = event->bluetooth.comm_session_event
   };
@@ -53,7 +51,7 @@ static void init(bool connected) {
     s_transport = fake_transport_create(TransportDestinationSystem, NULL, NULL);
     s_session = fake_transport_set_connected(s_transport, true);
   }
-  
+
   s_default_connection_state = connected;
 
   regular_timer_init();

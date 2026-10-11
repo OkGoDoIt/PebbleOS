@@ -1,30 +1,28 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/graphics.h"
-#include "applib/graphics/graphics_private.h"
-#include "applib/graphics/graphics_private_raw.h"
-#include "applib/graphics/framebuffer.h"
-
-#include "applib/ui/window_private.h"
-#include "applib/ui/layer.h"
-
-
-#include "clar.h"
 #include "util.h"
 
 #include <stdio.h>
 
+#include <applib/graphics/framebuffer.h>
+#include <applib/graphics/graphics.h>
+#include <applib/graphics/graphics_private.h>
+#include <applib/graphics/graphics_private_raw.h>
+#include <applib/ui/layer.h>
+#include <applib/ui/window_private.h>
+#include <clar.h>
+
 // Helper Functions
 ////////////////////////////////////
-#include "test_graphics.h"
 #include "8bit/test_framebuffer.h"
-
+#include "test_graphics.h"
 
 // Stubs
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
-#include "stubs_applib_resource.h"
+
+#include <stubs_applib_resource.h>
 
 // State
 ////////////////////////////////////
@@ -48,7 +46,7 @@ static FrameBuffer *fb = NULL;
 // Setup
 void test_graphics_draw_implementation__initialize(void) {
   fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(fb, &(GSize) { DISP_COLS, DISP_ROWS });
+  framebuffer_init(fb, &(GSize){DISP_COLS, DISP_ROWS});
   memset(s_raw_drawing_function_counters, 0, sizeof(s_raw_drawing_function_counters));
 }
 
@@ -70,20 +68,19 @@ static void prv_fake_raw_assign_vertical_line(GContext *ctx, int16_t x, Fixed_S1
   s_raw_drawing_function_counters[GDrawRawFunctionTypeAssignVerticalLine]++;
 }
 
-static void prv_fake_raw_blend_horizontal_line(GContext *ctx, int16_t y, int16_t x1,
-                                               int16_t x2, GColor color) {
+static void prv_fake_raw_blend_horizontal_line(GContext *ctx, int16_t y, int16_t x1, int16_t x2,
+                                               GColor color) {
   s_raw_drawing_function_counters[GDrawRawFunctionTypeBlendHorizontalLine]++;
 }
 
-static void prv_fake_raw_blend_vertical_line(GContext *ctx, int16_t x, int16_t y1,
-                                             int16_t y2, GColor color) {
+static void prv_fake_raw_blend_vertical_line(GContext *ctx, int16_t x, int16_t y1, int16_t y2,
+                                             GColor color) {
   s_raw_drawing_function_counters[GDrawRawFunctionTypeBlendVerticalLine]++;
 }
 
-static void prv_fake_raw_assign_horizontal_line_delta(GContext *ctx, int16_t y,
-                                                      Fixed_S16_3 x1, Fixed_S16_3 x2,
-                                                      uint8_t left_aa_offset,
-                                                      uint8_t right_aa_offset,
+static void prv_fake_raw_assign_horizontal_line_delta(GContext *ctx, int16_t y, Fixed_S16_3 x1,
+                                                      Fixed_S16_3 x2, int16_t left_aa_offset,
+                                                      int16_t right_aa_offset,
                                                       int16_t clip_box_min_x,
                                                       int16_t clip_box_max_x, GColor color) {
   s_raw_drawing_function_counters[GDrawRawFunctionTypeAssignHorizontalLineDelta]++;
@@ -103,7 +100,7 @@ void test_graphics_draw_implementation__fill_circle_aa(void) {
   // Set the draw implementation functions to the fake ones in this file that just increment some
   // counters, then call graphics_fill_circle() and check the values of the counters
 
-  ctx.draw_state.draw_implementation = &(GDrawRawImplementation) {
+  ctx.draw_state.draw_implementation = &(GDrawRawImplementation){
     .assign_horizontal_line = prv_fake_raw_assign_horizontal_line,
     .assign_vertical_line = prv_fake_raw_assign_vertical_line,
     .blend_horizontal_line = prv_fake_raw_blend_horizontal_line,

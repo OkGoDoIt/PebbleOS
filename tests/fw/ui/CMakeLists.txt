@@ -3,48 +3,48 @@
 
 pbl_clar_test(test_layer
   SOURCES
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/graphics_private_raw.c
     tests/fakes/fake_gbitmap_png.c
-    src/fw/applib/ui/layer.c
+    fw/applib/ui/layer.c
   DEFINES CONFIG_TOUCH
 )
 
 pbl_clar_test(test_layer_rect
   SOURCES
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtypes.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtypes.c
     tests/fakes/fake_gbitmap_png.c
-    src/fw/applib/ui/layer.c
+    fw/applib/ui/layer.c
 )
 
 pbl_clar_test(test_scroll_layer
   SOURCES
-    src/fw/applib/graphics/gtypes.c
+    fw/applib/graphics/gtypes.c
     tests/stubs/stubs_animation.c
     tests/fakes/fake_gbitmap_png.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/scroll_layer.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/scroll_layer.c
 )
 
 pbl_clar_test(test_scroll_layer_touch
   SOURCES
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/gcolor_definitions.c
     tests/fakes/fake_gbitmap_png.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/animation_timing.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/recognizer/recognizer.c
-    src/fw/applib/ui/recognizer/recognizer_manager.c
-    src/fw/applib/ui/recognizer/pan.c
-    src/fw/applib/ui/recognizer/swipe.c
-    src/fw/applib/ui/recognizer/tap.c
-    src/fw/applib/ui/recognizer/touch_nav.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/animation_timing.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/recognizer/recognizer.c
+    fw/applib/ui/recognizer/recognizer_manager.c
+    fw/applib/ui/recognizer/pan.c
+    fw/applib/ui/recognizer/swipe.c
+    fw/applib/ui/recognizer/tap.c
+    fw/applib/ui/recognizer/touch_nav.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
   DEFINES CONFIG_TOUCH
@@ -52,82 +52,84 @@ pbl_clar_test(test_scroll_layer_touch
 
 pbl_clar_test(test_status_bar_layer
   SOURCES
-    src/fw/applib/graphics/8_bit/framebuffer.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/8_bit/bitblt_private.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/fonts/codepoint.c
+    fw/applib/graphics/8_bit/framebuffer.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/8_bit/bitblt_private.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/utf8.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/fonts/codepoint.c
     tests/fakes/fake_clock.c
     tests/fakes/fake_fonts.c
     tests/fakes/fake_gbitmap_png.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/status_bar_layer.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/status_bar_layer.c
   DEFINES FONT_KEY_GOTHIC_14="RESOURCE_ID_GOTHIC_14"
 )
 
 pbl_clar_test(test_animation
   SOURCES
-    src/fw/applib/ui/animation.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/animation_timing.c
-    src/fw/applib/ui/property_animation.c
-    src/fw/applib/legacy2/ui/animation_legacy2.c
-    src/fw/applib/legacy2/ui/property_animation_legacy2.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/ui/layer.c
+    fw/applib/ui/animation.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/animation_timing.c
+    fw/applib/ui/property_animation.c
+    fw/applib/legacy2/ui/animation_legacy2.c
+    fw/applib/legacy2/ui/property_animation_legacy2.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/ui/layer.c
     tests/fakes/fake_events.c
     tests/fakes/fake_rtc.c
     tests/fakes/fake_gbitmap_png.c
-    src/fw/services/animation_service/service.c
+    fw/services/animation_service/service.c
   DEFINES DUMA_DISABLED
 )
 
 pbl_clar_test(test_animation_interpolate
   SOURCES
-    src/fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/animation_interpolate.c
 )
 
 pbl_clar_test(test_animation_timing
   SOURCES
-    src/fw/applib/ui/animation_timing.c
+    fw/applib/ui/animation_timing.c
 )
 
 pbl_clar_test(test_kino_reel
   SOURCES
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_custom.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/vendor/uPNG/upng.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_custom.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gbitmap_png.c
+    third_party/upng/upng/upng.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_sequence.c
     tests/fakes/fake_resource_syscalls.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_rtc.c
@@ -136,27 +138,29 @@ pbl_clar_test(test_kino_reel
 
 pbl_clar_test(test_kino_player
   SOURCES
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/kino/kino_player.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_custom.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/vendor/uPNG/upng.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/kino/kino_player.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_custom.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gbitmap_png.c
+    third_party/upng/upng/upng.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_sequence.c
     tests/stubs/stubs_animation.c
     tests/fakes/fake_resource_syscalls.c
     tests/fakes/fake_rtc.c
@@ -165,14 +169,14 @@ pbl_clar_test(test_kino_player
 
 pbl_clar_test(test_window_stack
   SOURCES
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/ui/app_window_stack.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/window.c
-    src/fw/applib/ui/window_manager.c
-    src/fw/applib/ui/window_stack.c
-    src/fw/kernel/ui/modals/modal_manager.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/ui/app_window_stack.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/window.c
+    fw/applib/ui/window_manager.c
+    fw/applib/ui/window_stack.c
+    fw/kernel/ui/modals/modal_manager.c
     tests/fakes/fake_animation.c
     tests/fakes/fake_events.c
     tests/stubs/stubs_click.c
@@ -181,20 +185,20 @@ pbl_clar_test(test_window_stack
 
 pbl_clar_test(test_modal_touch_nav
   SOURCES
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/ui/app_window_stack.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/window.c
-    src/fw/applib/ui/window_manager.c
-    src/fw/applib/ui/window_stack.c
-    src/fw/applib/ui/recognizer/recognizer.c
-    src/fw/applib/ui/recognizer/recognizer_manager.c
-    src/fw/applib/ui/recognizer/tap.c
-    src/fw/applib/ui/recognizer/pan.c
-    src/fw/applib/ui/recognizer/swipe.c
-    src/fw/applib/ui/recognizer/touch_nav.c
-    src/fw/kernel/ui/modals/modal_manager.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/ui/app_window_stack.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/window.c
+    fw/applib/ui/window_manager.c
+    fw/applib/ui/window_stack.c
+    fw/applib/ui/recognizer/recognizer.c
+    fw/applib/ui/recognizer/recognizer_manager.c
+    fw/applib/ui/recognizer/tap.c
+    fw/applib/ui/recognizer/pan.c
+    fw/applib/ui/recognizer/swipe.c
+    fw/applib/ui/recognizer/touch_nav.c
+    fw/kernel/ui/modals/modal_manager.c
     tests/fakes/fake_animation.c
     tests/fakes/fake_events.c
     tests/fakes/fake_rtc.c
@@ -205,28 +209,27 @@ pbl_clar_test(test_modal_touch_nav
 
 pbl_clar_test(test_content_indicator
   SOURCES
-    src/fw/applib/graphics/gtypes.c
-    src/fw/util/buffer.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/content_indicator.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/content_indicator.c
 )
 
 pbl_clar_test(test_menu_layer
   SOURCES
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/menu_layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/animation_timing.c
-    src/fw/applib/ui/recognizer/recognizer.c
-    src/fw/applib/ui/recognizer/recognizer_manager.c
-    src/fw/applib/ui/recognizer/pan.c
-    src/fw/applib/ui/recognizer/swipe.c
-    src/fw/applib/ui/recognizer/tap.c
-    src/fw/applib/ui/recognizer/touch_nav.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/menu_layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/animation_timing.c
+    fw/applib/ui/recognizer/recognizer.c
+    fw/applib/ui/recognizer/recognizer_manager.c
+    fw/applib/ui/recognizer/pan.c
+    fw/applib/ui/recognizer/swipe.c
+    fw/applib/ui/recognizer/tap.c
+    fw/applib/ui/recognizer/touch_nav.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
   DEFINES CONFIG_TOUCH
@@ -234,82 +237,83 @@ pbl_clar_test(test_menu_layer
 
 pbl_clar_test(test_action_menu_layer
   SOURCES
-    src/fw/applib/ui/action_menu_layer.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/menu_layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/animation_timing.c
-    src/fw/applib/ui/recognizer/recognizer.c
-    src/fw/applib/ui/recognizer/recognizer_manager.c
-    src/fw/applib/ui/recognizer/pan.c
-    src/fw/applib/ui/recognizer/swipe.c
-    src/fw/applib/ui/recognizer/tap.c
-    src/fw/applib/ui/recognizer/touch_nav.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
+    fw/applib/ui/action_menu_layer.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/menu_layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/animation_timing.c
+    fw/applib/ui/recognizer/recognizer.c
+    fw/applib/ui/recognizer/recognizer_manager.c
+    fw/applib/ui/recognizer/pan.c
+    fw/applib/ui/recognizer/swipe.c
+    fw/applib/ui/recognizer/tap.c
+    fw/applib/ui/recognizer/touch_nav.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
   DEFINES CONFIG_TOUCH
+  PLATFORMS obelix gabbro
 )
 
 pbl_clar_test(test_menu_layer_system_cells
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -319,70 +323,70 @@ pbl_clar_test(test_menu_layer_system_cells
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/shell/system_theme.c
+    fw/shell/system_theme.c
     tests/fakes/fake_fonts.c
     tests/fixtures/resources/timeline_resource_table.auto.c
-  PLATFORMS obelix gabbro
+  PLATFORMS obelix gabbro asterix
   OVERRIDES dummy_board
   TEST_IMAGES
 )
 
 pbl_clar_test(test_action_menu_window
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -392,79 +396,81 @@ pbl_clar_test(test_action_menu_window
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/action_menu_hierarchy.c
-    src/fw/applib/ui/action_menu_layer.c
-    src/fw/applib/ui/action_menu_window.c
-    src/fw/applib/ui/crumbs_layer.c
-    src/fw/applib/ui/window.c
-    src/fw/applib/ui/menu_layer.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/inverter_layer.c
-    src/fw/applib/ui/content_indicator.c
+    fw/applib/ui/action_menu_hierarchy.c
+    fw/applib/ui/action_menu_layer.c
+    fw/applib/ui/action_menu_window.c
+    fw/applib/ui/crumbs_layer.c
+    fw/applib/ui/window.c
+    fw/applib/ui/menu_layer.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/inverter_layer.c
+    fw/applib/ui/content_indicator.c
     tests/fakes/fake_fonts.c
-    src/fw/shell/system_theme.c
-    src/fw/applib/ui/shadows.c
-  PLATFORMS obelix gabbro
+    tests/fakes/fake_firmware_emoji_resources.c
+    fw/shell/system_theme.c
+    fw/applib/ui/shadows.c
+  DEFINES "FIRMWARE_EMOJI_DIR=\"${PBL_BASE}/resources/normal/base/pbf\""
+  PLATFORMS obelix gabbro asterix
   OVERRIDES dummy_board
   TEST_IMAGES
 )
 
 pbl_clar_test(test_notification_window
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -474,31 +480,31 @@ pbl_clar_test(test_notification_window
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/action_button.c
-    src/fw/applib/ui/kino/kino_layer.c
-    src/fw/applib/ui/kino/kino_player.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/status_bar_layer.c
-    src/fw/applib/ui/window.c
-    src/fw/apps/system/timeline/text_node.c
-    src/fw/popups/notifications/notification_window.c
-    src/fw/popups/notifications/notifications_presented_list.c
-    src/fw/services/notifications/notification_image.c
-    src/fw/services/timeline/attribute.c
-    src/fw/services/timeline/layout_layer.c
-    src/fw/services/timeline/layout_node.c
-    src/fw/services/timeline/notification_layout.c
-    src/fw/services/timeline/swap_layer.c
-    src/fw/services/timeline/timeline_layout.c
-    src/fw/services/timeline/timeline_resources.c
-    src/fw/shell/system_theme.c
+    fw/applib/ui/action_button.c
+    fw/applib/ui/kino/kino_layer.c
+    fw/applib/ui/kino/kino_player.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/status_bar_layer.c
+    fw/applib/ui/window.c
+    fw/apps/system/timeline/text_node.c
+    fw/popups/notifications/notification_window.c
+    fw/popups/notifications/notifications_presented_list.c
+    fw/services/notifications/notification_image.c
+    fw/services/timeline/attribute.c
+    fw/services/timeline/layout_layer.c
+    fw/services/timeline/layout_node.c
+    fw/services/timeline/notification_layout.c
+    fw/services/timeline/swap_layer.c
+    fw/services/timeline/timeline_layout.c
+    fw/services/timeline/timeline_resources.c
+    fw/shell/system_theme.c
     tests/fakes/fake_animation.c
     tests/fakes/fake_fonts.c
     tests/fakes/fake_graphics_context.c
     tests/fixtures/resources/timeline_resource_table.auto.c
     tests/stubs/stubs_clock.c
-  PLATFORMS obelix gabbro
+  PLATFORMS obelix gabbro asterix
   DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1
   OVERRIDES dummy_board
   TEST_IMAGES
@@ -506,60 +512,60 @@ pbl_clar_test(test_notification_window
 
 pbl_clar_test(test_simple_dialog
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -569,84 +575,84 @@ pbl_clar_test(test_simple_dialog
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/dialogs/simple_dialog.c
-    src/fw/applib/ui/dialogs/dialog.c
-    src/fw/applib/ui/dialogs/dialog_private.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/kino/kino_layer.c
-    src/fw/applib/ui/kino/kino_player.c
-    src/fw/applib/ui/kino/kino_reel_custom.c
-    src/fw/applib/ui/kino/kino_reel/transform.c
-    src/fw/applib/ui/text_layer.c
-    src/fw/applib/ui/text_layer_flow.c
-    src/fw/applib/ui/window.c
-    src/fw/applib/ui/menu_layer.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/inverter_layer.c
-    src/fw/applib/ui/content_indicator.c
+    fw/applib/ui/dialogs/simple_dialog.c
+    fw/applib/ui/dialogs/dialog.c
+    fw/applib/ui/dialogs/dialog_private.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/kino/kino_layer.c
+    fw/applib/ui/kino/kino_player.c
+    fw/applib/ui/kino/kino_reel_custom.c
+    fw/applib/ui/kino/kino_reel/transform.c
+    fw/applib/ui/text_layer.c
+    fw/applib/ui/text_layer_flow.c
+    fw/applib/ui/window.c
+    fw/applib/ui/menu_layer.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/inverter_layer.c
+    fw/applib/ui/content_indicator.c
     tests/fakes/fake_fonts.c
-  PLATFORMS obelix gabbro
+  PLATFORMS obelix gabbro asterix
   OVERRIDES dummy_board
   TEST_IMAGES
 )
 
 pbl_clar_test(test_emoji_fonts
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -656,67 +662,67 @@ pbl_clar_test(test_emoji_fonts
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/fonts/fonts.c
+    fw/applib/fonts/fonts.c
   OVERRIDES dummy_board
   TEST_IMAGES
 )
 
 pbl_clar_test(test_expandable_dialog
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -726,23 +732,23 @@ pbl_clar_test(test_expandable_dialog
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/action_bar_layer.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/content_indicator.c
-    src/fw/applib/ui/dialogs/dialog.c
-    src/fw/applib/ui/dialogs/dialog_private.c
-    src/fw/applib/ui/dialogs/expandable_dialog.c
-    src/fw/applib/ui/inverter_layer.c
-    src/fw/applib/ui/kino/kino_layer.c
-    src/fw/applib/ui/kino/kino_player.c
-    src/fw/applib/ui/kino/kino_reel/transform.c
-    src/fw/applib/ui/kino/kino_reel_custom.c
-    src/fw/applib/ui/menu_layer.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/text_layer.c
-    src/fw/applib/ui/text_layer_flow.c
-    src/fw/applib/ui/window.c
+    fw/applib/ui/action_bar_layer.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/content_indicator.c
+    fw/applib/ui/dialogs/dialog.c
+    fw/applib/ui/dialogs/dialog_private.c
+    fw/applib/ui/dialogs/expandable_dialog.c
+    fw/applib/ui/inverter_layer.c
+    fw/applib/ui/kino/kino_layer.c
+    fw/applib/ui/kino/kino_player.c
+    fw/applib/ui/kino/kino_reel/transform.c
+    fw/applib/ui/kino/kino_reel_custom.c
+    fw/applib/ui/menu_layer.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/text_layer.c
+    fw/applib/ui/text_layer_flow.c
+    fw/applib/ui/window.c
     tests/fakes/fake_fonts.c
   PLATFORMS gabbro
   DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1
@@ -752,68 +758,68 @@ pbl_clar_test(test_expandable_dialog
 
 pbl_clar_test(test_text_layer
   SOURCES
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/text_layer.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/text_layer.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
 )
 
 pbl_clar_test(test_selection_windows
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -823,93 +829,92 @@ pbl_clar_test(test_selection_windows
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/date_time_selection_window_private.c
-    src/fw/applib/ui/selection_layer.c
-    src/fw/applib/ui/text_layer.c
-    src/fw/applib/ui/time_range_selection_window.c
-    src/fw/applib/ui/time_selection_window.c
-    src/fw/applib/ui/window.c
-    src/fw/shell/system_theme.c
-    src/fw/util/date.c
+    fw/applib/ui/date_time_selection_window_private.c
+    fw/applib/ui/selection_layer.c
+    fw/applib/ui/text_layer.c
+    fw/applib/ui/time_range_selection_window.c
+    fw/applib/ui/time_selection_window.c
+    fw/applib/ui/window.c
+    fw/shell/system_theme.c
     tests/fakes/fake_clock.c
     tests/fakes/fake_fonts.c
-  PLATFORMS obelix gabbro
+  PLATFORMS obelix gabbro asterix
   OVERRIDES dummy_board
   TEST_IMAGES
 )
 
 pbl_clar_test(test_text_layer_flow
   SOURCES
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/text_layer.c
-    src/fw/applib/ui/text_layer_flow.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gtypes.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/text_layer.c
+    fw/applib/ui/text_layer_flow.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gtypes.c
 )
 
 pbl_clar_test(test_jumboji
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/services/timeline/notification_layout.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/utf8.c
+    fw/services/timeline/notification_layout.c
 )
 
 pbl_clar_test(test_timeline_peek
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -919,26 +924,26 @@ pbl_clar_test(test_timeline_peek
     tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/kino/kino_layer.c
-    src/fw/applib/ui/kino/kino_player.c
-    src/fw/applib/ui/text_layer.c
-    src/fw/applib/ui/text_layer_flow.c
-    src/fw/applib/ui/window.c
-    src/fw/apps/system/timeline/text_node.c
-    src/fw/popups/timeline/peek.c
-    src/fw/services/timeline/attribute.c
-    src/fw/services/timeline/attribute_group.c
-    src/fw/services/timeline/attributes_actions.c
-    src/fw/services/timeline/generic_layout.c
-    src/fw/services/timeline/item.c
-    src/fw/services/timeline/layout_layer.c
-    src/fw/services/timeline/layout_node.c
-    src/fw/services/timeline/timeline_layout.c
-    src/fw/services/timeline/timeline_resources.c
-    src/fw/shell/system_theme.c
-    src/fw/util/stringlist.c
-    src/fw/util/time/time.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/kino/kino_layer.c
+    fw/applib/ui/kino/kino_player.c
+    fw/applib/ui/text_layer.c
+    fw/applib/ui/text_layer_flow.c
+    fw/applib/ui/window.c
+    fw/apps/system/timeline/text_node.c
+    fw/popups/timeline/peek.c
+    fw/services/timeline/attribute.c
+    fw/services/timeline/attribute_group.c
+    fw/services/timeline/attributes_actions.c
+    fw/services/timeline/generic_layout.c
+    fw/services/timeline/item.c
+    fw/services/timeline/layout_layer.c
+    fw/services/timeline/layout_node.c
+    fw/services/timeline/timeline_layout.c
+    fw/services/timeline/timeline_resources.c
+    fw/shell/system_theme.c
+    fw/services/clock/time.c
+    lib/c/time/gmtime.c
     tests/fakes/fake_clock.c
     tests/fakes/fake_fonts.c
     tests/fixtures/resources/timeline_resource_table.auto.c
@@ -946,7 +951,7 @@ pbl_clar_test(test_timeline_peek
     tests/stubs/stubs_clock.c
     tests/stubs/stubs_timeline_layout.c
     tests/stubs/stubs_timeline_peek.c
-  PLATFORMS obelix gabbro
+  PLATFORMS obelix gabbro asterix
   DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1 CONFIG_SERVICE_PEEK_WIDGETS=1
   OVERRIDES dummy_board
   TEST_IMAGES
@@ -954,60 +959,60 @@ pbl_clar_test(test_timeline_peek
 
 pbl_clar_test(test_option_menu_window
   SOURCES
-    src/fw/applib/fonts/codepoint.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    src/fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    src/fw/applib/graphics/bitblt.c
-    src/fw/applib/graphics/framebuffer.c
-    src/fw/applib/graphics/gbitmap.c
-    src/fw/applib/graphics/gbitmap_png.c
-    src/fw/applib/graphics/gbitmap_sequence.c
-    src/fw/applib/graphics/gcolor_definitions.c
-    src/fw/applib/graphics/gdraw_command.c
-    src/fw/applib/graphics/gdraw_command_frame.c
-    src/fw/applib/graphics/gdraw_command_image.c
-    src/fw/applib/graphics/gdraw_command_list.c
-    src/fw/applib/graphics/gdraw_command_sequence.c
-    src/fw/applib/graphics/gpath.c
-    src/fw/applib/graphics/graphics.c
-    src/fw/applib/graphics/graphics_bitmap.c
-    src/fw/applib/graphics/graphics_circle.c
-    src/fw/applib/graphics/graphics_line.c
-    src/fw/applib/graphics/graphics_private.c
-    src/fw/applib/graphics/graphics_private_raw.c
-    src/fw/applib/graphics/gtransform.c
-    src/fw/applib/graphics/gtypes.c
-    src/fw/applib/graphics/perimeter.c
-    src/fw/applib/graphics/text_layout.c
-    src/fw/applib/graphics/rtl_support.c
-    src/fw/applib/graphics/arabic_shaping.c
-    src/fw/applib/graphics/text_render.c
-    src/fw/applib/graphics/text_resources.c
-    src/fw/applib/graphics/utf8.c
-    src/fw/applib/ui/kino/kino_reel.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap.c
-    src/fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    src/fw/applib/ui/kino/kino_reel_pdci.c
-    src/fw/applib/ui/kino/kino_reel_pdcs.c
-    src/fw/applib/ui/layer.c
-    src/fw/applib/ui/menu_layer_system_cells.c
-    src/fw/board/displays/display_getafix.c
-    src/fw/drivers/flash/flash_crc.c
-    src/fw/flash_region/filesystem_regions.c
-    src/fw/flash_region/flash_region.c
-    src/fw/resource/resource.c
-    src/fw/resource/resource_storage.c
-    src/fw/resource/resource_storage_builtin.c
-    src/fw/resource/resource_storage_file.c
-    src/fw/resource/resource_storage_flash.c
-    src/fw/services/filesystem/app_file.c
-    src/fw/services/filesystem/flash_translation.c
-    src/fw/services/filesystem/pfs.c
-    src/fw/system/hexdump.c
-    src/fw/util/crc8.c
-    src/fw/util/legacy_checksum.c
-    src/fw/applib/vendor/tinflate/tinflate.c
-    src/fw/applib/vendor/uPNG/upng.c
+    fw/applib/fonts/codepoint.c
+    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
+    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
+    fw/applib/graphics/bitblt.c
+    fw/applib/graphics/framebuffer.c
+    fw/applib/graphics/gbitmap.c
+    fw/applib/graphics/gbitmap_png.c
+    fw/applib/graphics/gbitmap_sequence.c
+    fw/applib/graphics/gcolor_definitions.c
+    fw/applib/graphics/gdraw_command.c
+    fw/applib/graphics/gdraw_command_frame.c
+    fw/applib/graphics/gdraw_command_image.c
+    fw/applib/graphics/gdraw_command_list.c
+    fw/applib/graphics/gdraw_command_sequence.c
+    fw/applib/graphics/gpath.c
+    fw/applib/graphics/graphics.c
+    fw/applib/graphics/graphics_bitmap.c
+    fw/applib/graphics/graphics_circle.c
+    fw/applib/graphics/graphics_line.c
+    fw/applib/graphics/graphics_private.c
+    fw/applib/graphics/graphics_private_raw.c
+    fw/applib/graphics/gtransform.c
+    fw/applib/graphics/gtypes.c
+    fw/applib/graphics/perimeter.c
+    fw/applib/graphics/text_layout.c
+    fw/applib/graphics/bidi.c
+    fw/applib/graphics/arabic_shaping.c
+    fw/applib/graphics/text_render.c
+    fw/applib/graphics/text_resources.c
+    fw/applib/graphics/utf8.c
+    fw/applib/ui/kino/kino_reel.c
+    fw/applib/ui/kino/kino_reel_gbitmap.c
+    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
+    fw/applib/ui/kino/kino_reel_pdci.c
+    fw/applib/ui/kino/kino_reel_pdcs.c
+    fw/applib/ui/layer.c
+    fw/applib/ui/menu_layer_system_cells.c
+    fw/board/displays/display_getafix.c
+    drivers/flash/flash_crc.c
+    fw/flash_region/filesystem_regions.c
+    fw/flash_region/flash_region.c
+    fw/resource/resource.c
+    fw/resource/resource_storage.c
+    fw/resource/resource_storage_builtin.c
+    fw/resource/resource_storage_file.c
+    fw/resource/resource_storage_flash.c
+    fw/services/filesystem/app_file.c
+    fw/services/filesystem/flash_translation.c
+    fw/services/filesystem/pfs.c
+    fw/system/hexdump.c
+    third_party/uzlib/uzlib/src/tinflate.c
+    third_party/uzlib/uzlib/src/adler32.c
+    third_party/uzlib/uzlib/src/crc32.c
+    third_party/upng/upng/upng.c
     tests/fakes/fake_applib_resource.c
     tests/fakes/fake_display.c
     tests/fakes/fake_gbitmap_get_data_row.c
@@ -1015,22 +1020,23 @@ pbl_clar_test(test_option_menu_window
     tests/fakes/fake_spi_flash.c
     tests/fixtures/resources/builtin_resources.auto.c
     tests/fixtures/resources/pfs_resource_table.c
+    tests/fixtures/screen_grid.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
-    src/fw/applib/ui/animation_interpolate.c
-    src/fw/applib/ui/content_indicator.c
-    src/fw/applib/ui/inverter_layer.c
-    src/fw/applib/ui/menu_layer.c
-    src/fw/applib/ui/option_menu_window.c
-    src/fw/applib/ui/scroll_layer.c
-    src/fw/applib/ui/shadows.c
-    src/fw/applib/ui/status_bar_layer.c
-    src/fw/applib/ui/window.c
-    src/fw/shell/system_theme.c
+    fw/applib/ui/animation_interpolate.c
+    fw/applib/ui/content_indicator.c
+    fw/applib/ui/inverter_layer.c
+    fw/applib/ui/menu_layer.c
+    fw/applib/ui/option_menu_window.c
+    fw/applib/ui/scroll_layer.c
+    fw/applib/ui/shadows.c
+    fw/applib/ui/status_bar_layer.c
+    fw/applib/ui/window.c
+    fw/shell/system_theme.c
     tests/fakes/fake_clock.c
     tests/fakes/fake_fonts.c
     tests/fakes/fake_graphics_context.c
-  PLATFORMS obelix gabbro
+  PLATFORMS obelix gabbro asterix
   DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1
   OVERRIDES dummy_board
   TEST_IMAGES

@@ -1,0 +1,84 @@
+name: PR labels
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Add labels based on modified paths
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+
+  submodules:
+    name: pr-labels-submodules
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled'
+    runs-on: ubuntu-24.04
+    env:
+      BASE: ${{ github.event.pull_request.base.sha }}
+      HEAD: ${{ github.event.pull_request.head.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Fetch pull request head
+        run: git fetch -q --filter=blob:none origin "refs/pull/$PR/head"
+
+      - name: Check submodule updates
+        id: check
+        run: .github/scripts/check-submodules.sh "$BASE" "$HEAD"
+
+      - name: Update label
+        if: ${{ !cancelled() && steps.check.outputs.pending != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: pending:submodule-merge
+          PENDING: ${{ steps.check.outputs.pending }}
+        run: |
+          api="repos/${{ github.repository }}/issues/$PR/labels"
+          present=$(gh api "$api" --jq "any(.[]; .name == \"$LABEL\")")
+          if [ "$PENDING" = true ] && [ "$present" = false ]; then
+            gh api -X POST "$api" -f "labels[]=$LABEL" --silent
+          elif [ "$PENDING" = false ] && [ "$present" = true ]; then
+            gh api -X DELETE "$api/$(jq -rn --arg l "$LABEL" '$l | @uri')" --silent
+          fi
+
+  blocking:
+    name: pr-labels-blocking
+    needs: [label, submodules]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/blocking-labels.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Check for blocking labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          blocking=$(yq -o=json -I=0 .github/blocking-labels.yml)
+          labels=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" \
+            --jq '[.labels[].name]')
+          found=$(jq -nr --argjson l "$labels" --argjson b "$blocking" \
+            '$l - ($l - $b) | .[]')
+          if [ -n "$found" ]; then
+            while read -r label; do
+              echo "::error::Pull request has blocking label '$label'"
+            done <<< "$found"
+            exit 1
+          fi

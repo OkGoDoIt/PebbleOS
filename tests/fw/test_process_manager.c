@@ -1,47 +1,51 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <errno.h>
 
-#include "process_management/process_manager.h"
-#include "process_management/app_install_manager.h"
-#include "process_management/pebble_process_info.h"
-#include "pbl/services/blob_db/app_db.h"
-#include "pbl/util/size.h"
+#include <pbl/services/blob_db/app_db.h>
+#include <pbl/util/size.h>
+
+#include <clar.h>
+#include <process_management/app_install_manager.h>
+#include <process_management/pebble_process_info.h>
+#include <process_management/process_manager.h>
+
+// Fakes
+#include <fake_pebble_tasks.h>
 
 // Stubs
-#include "stubs_accel_service.h"
-#include "stubs_analytics.h"
-#include "stubs_animation_service.h"
-#include "stubs_app_cache.h"
-#include "stubs_app_manager.h"
-#include "stubs_app_state.h"
-#include "stubs_dls.h"
-#include "stubs_evented_timer.h"
-#include "stubs_expandable_dialog.h"
-#include "stubs_irq.h"
-#include "stubs_heap.h"
-#include "stubs_i18n.h"
-#include "stubs_logging.h"
-#include "stubs_modal_manager.h"
-#include "stubs_new_timer.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_process_md.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_persist.h"
-#include "stubs_resources.h"
-#include "stubs_syscalls.h"
-#include "stubs_thread.h"
-#include "stubs_tick.h"
-#include "stubs_watchface.h"
-#include "stubs_worker_manager.h"
-#include "stubs_worker_state.h"
+#include <stubs_accel_service.h>
+#include <stubs_analytics.h>
+#include <stubs_animation_service.h>
+#include <stubs_app_cache.h>
+#include <stubs_app_manager.h>
+#include <stubs_app_state.h>
+#include <stubs_dls.h>
+#include <stubs_evented_timer.h>
+#include <stubs_expandable_dialog.h>
+#include <stubs_heap.h>
+#include <stubs_i18n.h>
+#include <stubs_irq.h>
+#include <stubs_logging.h>
+#include <stubs_modal_manager.h>
+#include <stubs_new_timer.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_process_md.h>
+#include <stubs_persist.h>
+#include <stubs_resources.h>
+#include <stubs_syscalls.h>
+#include <stubs_thread.h>
+#include <stubs_tick.h>
+#include <stubs_watchface.h>
+#include <stubs_worker_manager.h>
+#include <stubs_worker_state.h>
 
-char __APP_RAM__[1024*128];
-char *__APP_RAM_end__ = &__APP_RAM__[1024*128];
-char __WORKER_RAM__[1024*12];
-char *__WORKER_RAM_end__ = &__APP_RAM__[1024*12];
+char __APP_RAM__[1024 * 128];
+char *__APP_RAM_end__ = &__APP_RAM__[1024 * 128];
+char __WORKER_RAM__[1024 * 12];
+char *__WORKER_RAM_end__ = &__APP_RAM__[1024 * 12];
 
 typedef struct {
   AppInstallEntry entry;
@@ -49,70 +53,76 @@ typedef struct {
 } AppInstallEntryTestCase;
 
 static AppInstallEntryTestCase s_test_cases[] = {
-  {
-    .entry = (AppInstallEntry) {
-      .install_id = 1,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR
-      }
-    },
-    .should_pass = true
-  }, {
-    .entry = (AppInstallEntry) {
-      .install_id = 2,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR - 1,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR
-      }
-    },
-    .should_pass = false
-  }, {
-    .entry = (AppInstallEntry) {
-      .install_id = 3,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR + 1,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR
-      }
-    },
-    .should_pass = false
-  }, {
-    .entry = (AppInstallEntry) {
-      .install_id = 4,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR - 10
-      }
-    },
-    .should_pass = true
-  }, {
-    .entry = (AppInstallEntry) {
-      .install_id = 5,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR + 10
-      }
-    },
-    .should_pass = false
-  }, {
-    .entry = (AppInstallEntry) {
-      .install_id = 6,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR + 1,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR + 10
-      }
-    },
-    .should_pass = false
-  }, {
-    .entry = (AppInstallEntry) {
-      .install_id = 7,
-      .sdk_version = (Version) {
-        .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR - 1,
-        .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR - 10
-      }
-    },
-    .should_pass = false
-  }
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 1,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR
+             }
+       },
+   .should_pass = true},
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 2,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR - 1,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR
+             }
+       },
+   .should_pass = false},
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 3,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR + 1,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR
+             }
+       },
+   .should_pass = false},
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 4,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR - 10
+             }
+       },
+   .should_pass = true},
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 5,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR + 10
+             }
+       },
+   .should_pass = false},
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 6,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR + 1,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR + 10
+             }
+       },
+   .should_pass = false},
+  {.entry =
+       (AppInstallEntry){
+         .install_id = 7,
+         .sdk_version =
+             (Version){
+               .major = PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR - 1,
+               .minor = PROCESS_INFO_CURRENT_SDK_VERSION_MINOR - 10
+             }
+       },
+   .should_pass = false}
 };
 
 PlatformType process_metadata_get_app_sdk_platform(const PebbleProcessMd *md) {
@@ -124,7 +134,14 @@ uint32_t pbl_msgq_num_used(const struct pbl_msgq *q) {
   return 0;
 }
 
+static int s_pbl_msgq_get__interrupted_count;
+static PebbleEvent s_pbl_msgq_get__event;
 int pbl_msgq_get(struct pbl_msgq *q, void *msg, pbl_timeout_t timeout) {
+  if (s_pbl_msgq_get__interrupted_count > 0) {
+    s_pbl_msgq_get__interrupted_count--;
+    return -EINTR;
+  }
+  *(PebbleEvent *)msg = s_pbl_msgq_get__event;
   return 0;
 }
 
@@ -133,6 +150,9 @@ int pbl_msgq_put(struct pbl_msgq *q, const void *msg, pbl_timeout_t timeout) {
 }
 
 void event_queue_cleanup_and_reset(struct pbl_msgq *queue) {
+}
+
+void pebble_task_unregister(PebbleTask task) {
 }
 
 void event_service_clear_process_subscriptions(void) {
@@ -180,16 +200,21 @@ int process_metadata_get_res_bank_num(const PebbleProcessMd *md) {
   return s_process_metadata_get_res_bank_num__result;
 }
 
-static PebbleEvent* s_event_put__event;
-void event_put(PebbleEvent* event) {
+static PebbleEvent *s_event_put__event;
+void event_put(PebbleEvent *event) {
   s_event_put__event = event;
   cl_assert(event != NULL);
 }
 
-void event_put_from_app(PebbleEvent* event) { cl_fail("unexpected"); }
-void event_put_from_process(PebbleTask task, PebbleEvent* event) { cl_fail("unexpected"); }
-void event_reset_from_process_queue(PebbleTask task) { cl_fail("unexpected"); }
-
+void event_put_from_app(PebbleEvent *event) {
+  cl_fail("unexpected");
+}
+void event_put_from_process(PebbleTask task, PebbleEvent *event) {
+  cl_fail("unexpected");
+}
+void event_reset_from_process_queue(PebbleTask task) {
+  cl_fail("unexpected");
+}
 
 void test_process_manager__initialize(void) {
   s_app_install_get_md__result = NULL;
@@ -199,6 +224,9 @@ void test_process_manager__initialize(void) {
   s_app_manager_launch_new_app__callcount = 0;
   s_app_manager_launch_new_app__config = (__typeof__(s_app_manager_launch_new_app__config)){};
   s_event_put__event = NULL;
+  s_pbl_msgq_get__interrupted_count = 0;
+  s_pbl_msgq_get__event = (PebbleEvent){};
+  stub_pebble_tasks_set_current(PebbleTask_KernelMain);
 }
 
 void test_process_manager__check_SDK_compatible(void) {
@@ -217,7 +245,7 @@ static const Uuid s_uuid_b = {0x49, 0x82, 0x77, 0x22, 0x00, 0x11, 0x22, 0x33,
 //! by a previous install leaves a stale binary at that ID. Launching must notice and refetch
 //! rather than silently running the wrong app.
 void test_process_manager__stale_cache_entry_is_refetched(void) {
-  static PebbleProcessMdFlash s_stale_md = { .common = { .uuid = {0} } };
+  static PebbleProcessMdFlash s_stale_md = {.common = {.uuid = {0}}};
   s_stale_md.common.uuid = s_uuid_b;
   s_app_install_get_md__result = (PebbleProcessMd *)&s_stale_md;
 
@@ -225,7 +253,7 @@ void test_process_manager__stale_cache_entry_is_refetched(void) {
   s_app_db_get_app_entry_for_install_id__entry.uuid = s_uuid_a;
   s_app_db_get_app_entry_for_install_id__result = S_SUCCESS;
 
-  process_manager_launch_process(&(ProcessLaunchConfig) { .id = 1 });
+  process_manager_launch_process(&(ProcessLaunchConfig){.id = 1});
 
   cl_assert(s_event_put__event != NULL);
   cl_assert_equal_i(s_event_put__event->type, PEBBLE_APP_FETCH_REQUEST_EVENT);
@@ -234,16 +262,63 @@ void test_process_manager__stale_cache_entry_is_refetched(void) {
 }
 
 void test_process_manager__matching_cache_entry_launches(void) {
-  static PebbleProcessMdFlash s_good_md = { .common = { .uuid = {0} } };
+  static PebbleProcessMdFlash s_good_md = {.common = {.uuid = {0}}};
   s_good_md.common.uuid = s_uuid_a;
   s_app_install_get_md__result = (PebbleProcessMd *)&s_good_md;
 
   s_app_db_get_app_entry_for_install_id__entry.uuid = s_uuid_a;
   s_app_db_get_app_entry_for_install_id__result = S_SUCCESS;
 
-  process_manager_launch_process(&(ProcessLaunchConfig) { .id = 1 });
+  process_manager_launch_process(&(ProcessLaunchConfig){.id = 1});
 
   cl_assert(s_event_put__event == NULL);
   cl_assert_equal_i(s_app_manager_launch_new_app__callcount, 1);
 }
 
+//! A requested forced close has to reach the app manager, or it's treated as a crash
+void test_process_manager__requested_kill_reaches_the_app_manager(void) {
+  static PebbleProcessMdFlash s_good_md = {.common = {.uuid = {0}}};
+  s_good_md.common.uuid = s_uuid_a;
+  s_app_install_get_md__result = (PebbleProcessMd *)&s_good_md;
+  s_app_db_get_app_entry_for_install_id__entry.uuid = s_uuid_a;
+  s_app_db_get_app_entry_for_install_id__result = S_SUCCESS;
+
+  process_manager_launch_process(
+      &(ProcessLaunchConfig){.id = 1, .forcefully = true, .kill_requested = true});
+
+  cl_assert_equal_i(s_app_manager_launch_new_app__callcount, 1);
+  cl_assert(s_app_manager_launch_new_app__config.forcefully);
+  cl_assert(s_app_manager_launch_new_app__config.kill_requested);
+}
+
+//! An app that isn't cached yet goes through the fetch UI, so the request has to survive it
+void test_process_manager__requested_kill_survives_a_fetch(void) {
+  static PebbleProcessMdFlash s_stale_md = {.common = {.uuid = {0}}};
+  s_stale_md.common.uuid = s_uuid_b;
+  s_app_install_get_md__result = (PebbleProcessMd *)&s_stale_md;
+  s_app_db_get_app_entry_for_install_id__entry.uuid = s_uuid_a;
+  s_app_db_get_app_entry_for_install_id__result = S_SUCCESS;
+
+  process_manager_launch_process(
+      &(ProcessLaunchConfig){.id = 1, .forcefully = true, .kill_requested = true});
+
+  cl_assert(s_event_put__event != NULL);
+  cl_assert_equal_i(s_event_put__event->type, PEBBLE_APP_FETCH_REQUEST_EVENT);
+  const AppFetchUIArgs *fetch_args = s_event_put__event->app_fetch_request.fetch_args;
+  cl_assert(fetch_args != NULL);
+  cl_assert(fetch_args->forcefully);
+  cl_assert(fetch_args->kill_requested);
+}
+
+//! A forced close's suspend and resume ends the wait with -EINTR and no event, so it waits again.
+//! Runs as the worker, the context the stubs provide. The app waits on the same syscall.
+void test_process_manager__get_pebble_event_waits_again_after_an_interrupted_wait(void) {
+  stub_pebble_tasks_set_current(PebbleTask_Worker);
+  s_pbl_msgq_get__interrupted_count = 1;
+  s_pbl_msgq_get__event = (PebbleEvent){.type = PEBBLE_PROCESS_DEINIT_EVENT};
+  PebbleEvent event = {};
+
+  sys_get_pebble_event(&event);
+
+  cl_assert_equal_i(event.type, PEBBLE_PROCESS_DEINIT_EVENT);
+}

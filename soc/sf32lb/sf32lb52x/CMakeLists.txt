@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 pbl_library()
+pbl_include_directories(.)
 pbl_library_sources(
   init.c
   sleep.c
   idle.c
 )
-pbl_linker_sources(ram-sections ramfunc.ld)
+pbl_linker_sources(ramfunc ramfunc.ld)

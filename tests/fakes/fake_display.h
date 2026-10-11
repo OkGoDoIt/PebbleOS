@@ -3,20 +3,21 @@
 
 #pragma once
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #define DISP_BYTES_LINE DISP_COLS / 8
-// Bytes_per_line + 1 byte for the line address + 1 byte for a null trailer + 1 optional byte for a write command
+// Bytes_per_line + 1 byte for the line address + 1 byte for a null trailer + 1 optional byte for a
+// write command
 #define DISP_DMA_BUFFER_SIZE (DISP_BYTES_LINE + 3)
 
 typedef struct {
   uint8_t address;
-  uint8_t* data;
+  uint8_t *data;
 } DisplayRow;
 
-typedef bool(*NextRowCallback)(DisplayRow* row);
-typedef void(*UpdateCompleteCallback)(void);
+typedef bool (*NextRowCallback)(DisplayRow *row);
+typedef void (*UpdateCompleteCallback)(void);
 
 typedef enum {
   DISPLAY_STATE_IDLE,
@@ -28,7 +29,6 @@ typedef struct {
   NextRowCallback get_next_row;
   UpdateCompleteCallback complete;
 } DisplayContext;
-
 
 void display_init(void);
 

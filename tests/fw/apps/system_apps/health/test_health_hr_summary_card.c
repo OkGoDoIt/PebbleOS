@@ -1,13 +1,15 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "apps/system/health/data.h"
-#include "apps/system/health/data_private.h"
-#include "apps/system/health/hr_summary_card.h"
-#include "apps/system/health/hr_detail_card.h"
-#include "apps/system/health/detail_card.h"
-
 #include "test_health_app_includes.h"
+
+#include <pbl/util/units.h>
+
+#include <apps/system/health/data.h>
+#include <apps/system/health/data_private.h>
+#include <apps/system/health/detail_card.h>
+#include <apps/system/health/hr_detail_card.h>
+#include <apps/system/health/hr_summary_card.h>
 
 // Fakes
 ////////////////////////////////////
@@ -29,7 +31,7 @@ GContext *graphics_context_get_current_context(void) {
 
 void test_health_hr_summary_card__initialize(void) {
   // Setup graphics context
-  framebuffer_init(&s_fb, &(GSize) {DISP_COLS, DISP_ROWS});
+  framebuffer_init(&s_fb, &(GSize){DISP_COLS, DISP_ROWS});
   framebuffer_clear(&s_fb);
   graphics_context_init(&s_ctx, &s_fb, GContextInitializationMode_App);
   s_app_state_get_graphics_context = &s_ctx;
@@ -69,7 +71,7 @@ static void prv_create_card_and_render(HealthData *health_data) {
 //////////////////////
 
 void test_health_hr_summary_card__render_no_data(void) {
-  prv_create_card_and_render(&(HealthData) {});
+  prv_create_card_and_render(&(HealthData){});
   cl_check(gbitmap_pbi_eq(&s_ctx.dest_bitmap, TEST_PBI_FILE));
 }
 
@@ -83,11 +85,11 @@ void test_health_hr_summary_card__render_current_bpm(void) {
 }
 
 void test_health_hr_summary_card__render_timestamp(void) {
-  rtc_set_time(SECONDS_PER_DAY + (SECONDS_PER_HOUR * 12));
+  rtc_set_time(PBL_SEC_PER_DAY + (PBL_SEC_PER_HOUR * 12));
 
   HealthData health_data = {
     .current_hr_bpm = 110,
-    .hr_last_updated = rtc_get_time() - (SECONDS_PER_MINUTE * 5),
+    .hr_last_updated = rtc_get_time() - (PBL_SEC_PER_MIN * 5),
   };
 
   prv_create_card_and_render(&health_data);

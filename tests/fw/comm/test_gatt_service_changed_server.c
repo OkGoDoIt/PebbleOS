@@ -1,58 +1,55 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "comm/ble/gatt_service_changed.h"
-#include "comm/ble/gap_le_connection.h"
-
-#include "kernel/events.h"
-
-#include "clar.h"
-
 #include <pbl/btutil/bt_device.h>
+
+#include <clar.h>
+#include <comm/ble/gap_le_connection.h>
+#include <comm/ble/gatt_service_changed.h>
+#include <kernel/events.h>
 
 extern void gatt_service_changed_server_init(void);
 
 // Fakes
 ///////////////////////////////////////////////////////////
 
-#include "fake_bt_driver_gatt.h"
-#include "fake_pbl_malloc.h"
-#include "fake_new_timer.h"
-#include "fake_rtc.h"
-#include "fake_system_task.h"
+#include <fake_bt_gatt.h>
+#include <fake_new_timer.h>
+#include <fake_pbl_malloc.h>
+#include <fake_rtc.h>
+#include <fake_system_task.h>
 
 // Stubs
 ///////////////////////////////////////////////////////////
 
-#include "stubs_bt_lock.h"
-#include "stubs_events.h"
-#include "stubs_gatt_client_subscriptions.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_prompt.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_regular_timer.h"
+#include <stubs_bt_lock.h>
+#include <stubs_events.h>
+#include <stubs_gatt_client_subscriptions.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_regular_timer.h>
 
 uint16_t gaps_get_starting_att_handle(void) {
   return 4;
 }
 
-BLEService gatt_client_att_handle_get_service(
-      GAPLEConnection *connection, uint16_t att_handle, const GATTServiceNode **service_node_out) {
+pbl_bt_service_t gatt_client_att_handle_get_service(GAPLEConnection *connection,
+                                                    uint16_t att_handle,
+                                                    const GATTServiceNode **service_node_out) {
   return 0;
 }
 
 uint8_t gatt_client_copy_service_refs_by_discovery_generation(
-                                    const BTDeviceInternal *device, BLEService services_out[],
-                                    uint8_t num_services, uint8_t discovery_gen) {
+    const struct pbl_bt_device_internal *device, pbl_bt_service_t services_out[],
+    uint8_t num_services, uint8_t discovery_gen) {
   return 0;
 }
 
 void gatt_client_service_get_all_characteristics_and_descriptors(
-                                     GAPLEConnection *connection, GATTService *service,
-                                     BLECharacteristic *characteristic_hdls_out,
-                                     BLEDescriptor *descriptor_hdls_out) {
+    GAPLEConnection *connection, struct pbl_bt_gatt_service *service,
+    pbl_bt_characteristic_t *characteristic_hdls_out, pbl_bt_descriptor_t *descriptor_hdls_out) {
 }
 
 void launcher_task_add_callback(void (*callback)(void *data), void *data) {
@@ -62,10 +59,15 @@ void launcher_task_add_callback(void (*callback)(void *data), void *data) {
 // Helpers
 ///////////////////////////////////////////////////////////
 
-static const BTDeviceInternal s_device = {
+static const struct pbl_bt_device_internal s_device = {
   .address = {
     .octets = {
-      1, 2, 3, 4, 5, 6,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
     },
   },
 };
@@ -75,12 +77,12 @@ static uint32_t s_connection_id = 1;
 static GAPLEConnection *s_connection;
 
 static void prv_cccd_write(bool is_subscribing) {
-  GattServerSubscribeEvent event = {
+  struct pbl_bt_gatt_server_subscribe_event event = {
     .connection_id = s_connection_id,
     .dev_address = s_device.address,
     .is_subscribing = is_subscribing,
   };
-  bt_driver_cb_gatt_service_changed_server_subscribe(&event);
+  pbl_bt_cb_gatt_service_changed_server_subscribe(&event);
 }
 
 static void prv_process_pending_callbacks(GAPLEConnection *connection) {
@@ -90,15 +92,14 @@ static void prv_process_pending_callbacks(GAPLEConnection *connection) {
   fake_system_task_callbacks_invoke_pending();
 }
 
-#define prv_expect_service_changed_indication_api_call_count(expected_count) \
-{ \
-  prv_process_pending_callbacks(s_connection); \
-  cl_assert_equal_i(fake_gatt_get_service_changed_indication_count(), expected_count); \
-}
+#define prv_expect_service_changed_indication_api_call_count(expected_count)             \
+  {                                                                                      \
+    prv_process_pending_callbacks(s_connection);                                         \
+    cl_assert_equal_i(fake_gatt_get_service_changed_indication_count(), expected_count); \
+  }
 
 // Tests
 ///////////////////////////////////////////////////////////
-
 
 void test_gatt_service_changed_server__initialize(void) {
   gatt_service_changed_server_init();
@@ -202,8 +203,9 @@ void test_gatt_service_changed_server__indication_carries_connection_and_full_ra
   // The service layer must hand the driver the connection currently subscribed,
   // and a "rediscover everything" range (0x0001 - 0xFFFF) so the remote cache is
   // fully invalidated after the firmware update.
-  cl_assert(bt_device_equal(fake_gatt_get_service_changed_last_device(), &s_connection->device));
-  const ATTHandleRange range = fake_gatt_get_service_changed_last_range();
+  cl_assert(
+      bt_device_internal_equal(fake_gatt_get_service_changed_last_device(), &s_connection->device));
+  const struct pbl_bt_att_handle_range range = fake_gatt_get_service_changed_last_range();
   cl_assert_equal_i(range.start, 0x0001);
   cl_assert_equal_i(range.end, 0xFFFF);
 }

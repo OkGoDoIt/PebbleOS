@@ -3,22 +3,27 @@
 
 #pragma once
 
-#include "applib/ui/layer.h"
-
-#include "pbl/util/attributes.h"
-
 #include "stubs_unobstructed_area.h"
 
-WEAK void layer_init(Layer *layer, const GRect *frame) { }
+#include <pbl/kernel/compiler.h>
 
-WEAK void layer_deinit(Layer *layer) { }
+#include <applib/ui/layer.h>
 
-WEAK void layer_add_child(Layer *parent, Layer *child) { }
+PBL_WEAK void layer_init(Layer *layer, const GRect *frame) {
+}
 
-WEAK void layer_mark_dirty(Layer *layer) { }
+PBL_WEAK void layer_deinit(Layer *layer) {
+}
 
-WEAK void layer_set_update_proc(Layer *layer, LayerUpdateProc update_proc) { }
+PBL_WEAK void layer_add_child(Layer *parent, Layer *child) {
+}
 
-WEAK bool layer_is_status_bar_layer(Layer *layer) {
+PBL_WEAK void layer_mark_dirty(Layer *layer) {
+}
+
+PBL_WEAK void layer_set_update_proc(Layer *layer, LayerUpdateProc update_proc) {
+}
+
+PBL_WEAK bool layer_is_status_bar_layer(Layer *layer) {
   return false;
 }

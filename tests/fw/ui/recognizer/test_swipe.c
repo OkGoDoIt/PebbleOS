@@ -1,27 +1,29 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <pbl/drivers/rtc.h>
 
-#include "applib/ui/recognizer/recognizer.h"
-#include "applib/ui/recognizer/recognizer_impl.h"
-#include "applib/ui/recognizer/recognizer_private.h"
-#include "applib/ui/recognizer/swipe.h"
-
-#include "pbl/drivers/rtc.h"
+#include <applib/ui/recognizer/recognizer.h>
+#include <applib/ui/recognizer/recognizer_impl.h>
+#include <applib/ui/recognizer/recognizer_private.h>
+#include <applib/ui/recognizer/swipe.h>
+#include <clar.h>
 
 // Fakes
-#include "fake_rtc.h"
+#include <fake_rtc.h>
 
 // Stubs
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_logging.h"
-
 #include "test_recognizer_impl.h"
 
+#include <pbl/util/units.h>
+
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+
 // The manager is not under test here; swallow the notification.
-void recognizer_manager_handle_state_change(RecognizerManager *manager, Recognizer *changed) {}
+void recognizer_manager_handle_state_change(RecognizerManager *manager, Recognizer *changed) {
+}
 
 #define ALL_DIRECTIONS \
   (SwipeDirection_Up | SwipeDirection_Down | SwipeDirection_Left | SwipeDirection_Right)
@@ -38,7 +40,8 @@ void test_swipe__initialize(void) {
   fake_rtc_init(0, 0);
 }
 
-void test_swipe__cleanup(void) {}
+void test_swipe__cleanup(void) {
+}
 
 // Helpers
 static void prv_dispatch(Recognizer *r, TouchEventType type, int16_t x, int16_t y) {
@@ -51,7 +54,7 @@ static void prv_dispatch(Recognizer *r, TouchEventType type, int16_t x, int16_t 
 }
 
 static void prv_advance_ms(uint32_t ms) {
-  fake_rtc_increment_ticks((RtcTicks)ms * RTC_TICKS_HZ / MS_PER_SECOND);
+  fake_rtc_increment_ticks((RtcTicks)ms * RTC_TICKS_HZ / PBL_MSEC_PER_SEC);
 }
 
 // SWIPE_MAX_DURATION_MS (300) / SWIPE_MIN_LENGTH_PX (30) are private to swipe.c;
@@ -61,7 +64,7 @@ static void prv_advance_ms(uint32_t ms) {
 #define SWIPE_CAP_MS (300)
 #define SWIPE_MIN_PX (30)
 static RtcTicks prv_ticks_for_floored_ms(uint32_t ms) {
-  return ((RtcTicks)ms * RTC_TICKS_HZ + (MS_PER_SECOND - 1)) / MS_PER_SECOND;
+  return ((RtcTicks)ms * RTC_TICKS_HZ + (PBL_MSEC_PER_SEC - 1)) / PBL_MSEC_PER_SEC;
 }
 
 // Drive a single straight swipe from (sx, sy) to (ex, ey) over a fast duration, with the liftoff
@@ -116,7 +119,7 @@ void test_swipe__too_short_fails(void) {
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
   prv_advance_ms(20);
-  prv_dispatch(r, TouchEvent_PositionUpdate, 30, 50);  // only 20px, below the 30px minimum
+  prv_dispatch(r, TouchEvent_PositionUpdate, 30, 50); // only 20px, below the 30px minimum
   prv_advance_ms(20);
   prv_dispatch(r, TouchEvent_Liftoff, 0, 0);
 
@@ -128,7 +131,7 @@ void test_swipe__too_slow_fails(void) {
   NEW_RECOGNIZER(r) = swipe_recognizer_create(prv_event_cb, NULL, ALL_DIRECTIONS);
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
-  prv_advance_ms(400);  // exceeds the 300ms max duration
+  prv_advance_ms(400); // exceeds the 300ms max duration
   prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50);
 
   cl_assert_equal_i(recognizer_get_state(r), RecognizerState_Failed);
@@ -156,8 +159,8 @@ void test_swipe__slow_liftoff_after_fast_path_fails(void) {
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
   prv_advance_ms(50);
-  prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50);  // 60px, still within the window
-  prv_advance_ms(400);  // finger lingers; no further update, so the early check stays silent
+  prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50); // 60px, still within the window
+  prv_advance_ms(400); // finger lingers; no further update, so the early check stays silent
   prv_dispatch(r, TouchEvent_Liftoff, 70, 50);
 
   cl_assert_equal_i(recognizer_get_state(r), RecognizerState_Failed);
@@ -169,7 +172,7 @@ void test_swipe__duration_at_boundary_completes(void) {
   NEW_RECOGNIZER(r) = swipe_recognizer_create(prv_event_cb, NULL, ALL_DIRECTIONS);
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
-  prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50);  // 60px, same tick (fast)
+  prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50); // 60px, same tick (fast)
   fake_rtc_increment_ticks(prv_ticks_for_floored_ms(SWIPE_CAP_MS));
   prv_dispatch(r, TouchEvent_Liftoff, 70, 50);
 
@@ -182,7 +185,7 @@ void test_swipe__length_at_boundary_completes(void) {
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
   prv_advance_ms(20);
-  prv_dispatch(r, TouchEvent_PositionUpdate, 10 + SWIPE_MIN_PX, 50);  // exactly 30px
+  prv_dispatch(r, TouchEvent_PositionUpdate, 10 + SWIPE_MIN_PX, 50); // exactly 30px
   prv_advance_ms(20);
   prv_dispatch(r, TouchEvent_Liftoff, 0, 0);
 
@@ -196,7 +199,7 @@ void test_swipe__length_below_boundary_fails(void) {
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
   prv_advance_ms(20);
-  prv_dispatch(r, TouchEvent_PositionUpdate, 10 + SWIPE_MIN_PX - 1, 50);  // 29px
+  prv_dispatch(r, TouchEvent_PositionUpdate, 10 + SWIPE_MIN_PX - 1, 50); // 29px
   prv_advance_ms(20);
   prv_dispatch(r, TouchEvent_Liftoff, 0, 0);
 
@@ -251,8 +254,8 @@ void test_swipe__zero_dt_velocity_zero(void) {
   NEW_RECOGNIZER(r) = swipe_recognizer_create(prv_event_cb, NULL, ALL_DIRECTIONS);
 
   prv_dispatch(r, TouchEvent_Touchdown, 10, 50);
-  prv_dispatch(r, TouchEvent_PositionUpdate, 40, 50);  // same tick
-  prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50);  // same tick
+  prv_dispatch(r, TouchEvent_PositionUpdate, 40, 50); // same tick
+  prv_dispatch(r, TouchEvent_PositionUpdate, 70, 50); // same tick
   prv_dispatch(r, TouchEvent_Liftoff, 0, 0);
 
   cl_assert_equal_i(recognizer_get_state(r), RecognizerState_Completed);

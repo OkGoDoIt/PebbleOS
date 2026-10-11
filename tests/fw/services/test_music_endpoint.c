@@ -1,50 +1,47 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <pbl/services/comm_session/session.h>
+#include <pbl/services/comm_session/session_remote_os.h>
+#include <pbl/services/music.h>
+#include <pbl/services/music_endpoint.h>
+#include <pbl/services/music_endpoint_types.h>
+#include <pbl/services/music_internal.h>
+#include <pbl/util/size.h>
 
-#include "pbl/services/music.h"
-#include "pbl/services/music_endpoint.h"
-#include "pbl/services/music_endpoint_types.h"
-#include "pbl/services/music_internal.h"
-
-#include "pbl/services/comm_session/session.h"
-#include "pbl/services/comm_session/session_remote_os.h"
-
-#include "kernel/events.h"
-
-#include "pbl/util/size.h"
+#include <applib/graphics/gtypes.h>
+#include <clar.h>
+#include <kernel/events.h>
 
 // Stubs & Fakes
 ///////////////////////////////////////////////////////////
 
-#include "fake_events.h"
-#include "fake_rtc.h"
-#include "fake_session.h"
-#include "fake_system_task.h"
+#include <fake_events.h>
+#include <fake_rtc.h>
+#include <fake_session.h>
+#include <fake_system_task.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_manager.h>
+#include <stubs_bt_lock.h>
+#include <stubs_hexdump.h>
+#include <stubs_imaging.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_serial.h>
+#include <stubs_tick.h>
 
-#include "stubs_app_manager.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_bt_lock.h"
-#include "stubs_hexdump.h"
-#include "stubs_imaging.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_serial.h"
-#include "stubs_tick.h"
+void ams_music_disconnect(void) {
+}
 
-void ams_music_disconnect(void) {}
-
-
-extern void music_protocol_msg_callback(CommSession *session, const uint8_t* msg, size_t length);
+extern void music_protocol_msg_callback(CommSession *session, const uint8_t *msg, size_t length);
 
 // Helpers
 ///////////////////////////////////////////////////////////
 
 static void prv_receive_app_info_event_for_os(RemoteOS os) {
-  const PebbleRemoteAppInfoEvent app_info_event = (const PebbleRemoteAppInfoEvent) {
+  const PebbleRemoteAppInfoEvent app_info_event = (const PebbleRemoteAppInfoEvent){
     .os = os,
   };
   music_endpoint_handle_mobile_app_info_event(&app_info_event);
@@ -55,10 +52,8 @@ static void prv_receive_app_info_event(bool is_android) {
 }
 
 static void prv_receive_app_event(bool is_open) {
-  const PebbleCommSessionEvent app_event = (const PebbleCommSessionEvent) {
-    .is_open = is_open,
-    .is_system = true
-  };
+  const PebbleCommSessionEvent app_event =
+      (const PebbleCommSessionEvent){.is_open = is_open, .is_system = true};
   music_endpoint_handle_mobile_app_event(&app_event);
 }
 
@@ -68,8 +63,8 @@ static void prv_receive_pp_data(const uint8_t *data, uint16_t length) {
 }
 
 static void prv_receive_and_assert_now_playing(bool expect_is_handled) {
-  uint8_t msg[] = { 0x10, 3, 'o', 'n', 'e', 3, 't', 'w', 'o', 5, 't', 'h', 'r', 'e', 'e', 0xAA,
-                    0x00, 0x00, 0x00, 0xAA, 0x00, 0xAA, 0x00 };
+  uint8_t msg[] = {0x10, 3,   'o', 'n',  'e',  3,    't',  'w',  'o',  5,    't', 'h',
+                   'r',  'e', 'e', 0xAA, 0x00, 0x00, 0x00, 0xAA, 0x00, 0xAA, 0x00};
   prv_receive_pp_data(msg, sizeof(msg));
 
   PebbleEvent e = fake_event_get_last();
@@ -96,7 +91,7 @@ static void prv_receive_and_assert_now_playing(bool expect_is_handled) {
 }
 
 static void prv_receive_and_assert_play_state(bool expect_is_handled) {
-  uint8_t msg[] = { 0x11, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x01 };
+  uint8_t msg[] = {0x11, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x01};
   prv_receive_pp_data(msg, sizeof(msg));
 
   PebbleEvent e = fake_event_get_last();
@@ -116,7 +111,7 @@ static void prv_receive_and_assert_play_state(bool expect_is_handled) {
 }
 
 static void prv_receive_and_assert_volume_info(bool expect_is_handled) {
-  uint8_t msg[] = { 0x12, 0x33 };
+  uint8_t msg[] = {0x12, 0x33};
   prv_receive_pp_data(msg, sizeof(msg));
 
   PebbleEvent e = fake_event_get_last();
@@ -132,8 +127,8 @@ static void prv_receive_and_assert_volume_info(bool expect_is_handled) {
 }
 
 static void prv_receive_and_assert_player_info(bool expect_is_handled) {
-  uint8_t msg[] = { 0x13, 17, 'c', 'o', 'm', '.', 's', 'p', 'o', 't', 'i', 'f', 'y', '.', 'm',
-                    'u', 's', 'i', 'c', 7, 'S', 'p', 'o', 't', 'i', 'f', 'y' };
+  uint8_t msg[] = {0x13, 17,  'c', 'o', 'm', '.', 's', 'p', 'o', 't', 'i', 'f', 'y', '.',
+                   'm',  'u', 's', 'i', 'c', 7,   'S', 'p', 'o', 't', 'i', 'f', 'y'};
   prv_receive_pp_data(msg, sizeof(msg));
 
   PebbleEvent e = fake_event_get_last();
@@ -157,45 +152,56 @@ static void prv_receive_and_assert_all(bool expect_is_handled) {
   prv_receive_and_assert_player_info(expect_is_handled);
 }
 
-
 static const MusicServerImplementation s_dummy_server_implementation = {};
 static void prv_set_dummy_server_connected(bool connected) {
-  music_set_connected_server(&s_dummy_server_implementation,
-                             connected /* connected */);
+  music_set_connected_server(&s_dummy_server_implementation, connected /* connected */);
 }
 
-static void prv_assert_no_data_sent_cb(uint16_t endpoint_id,
-                                       const uint8_t* data, unsigned int data_length) {
+static GBitmap *prv_make_album_art(void) {
+  GBitmap *bitmap = kernel_zalloc(sizeof(*bitmap));
+  bitmap->addr = kernel_zalloc(4);
+  bitmap->palette = kernel_zalloc(sizeof(GColor));
+  return bitmap;
+}
+
+static void prv_assert_no_data_sent_cb(uint16_t endpoint_id, const uint8_t *data,
+                                       unsigned int data_length) {
   cl_assert(false);
 }
 
 static bool s_now_playing_requested;
-static void prv_assert_now_playing_requested_cb(uint16_t endpoint_id,
-                                                const uint8_t* data, unsigned int data_length) {
+static void prv_assert_now_playing_requested_cb(uint16_t endpoint_id, const uint8_t *data,
+                                                unsigned int data_length) {
   cl_assert_equal_i(data_length, 1);
-  cl_assert_equal_i(data[0], 0x08);  // MusicEndpointCmdIDGetAllInfo
+  cl_assert_equal_i(data[0], 0x08); // MusicEndpointCmdIDGetAllInfo
   s_now_playing_requested = true;
 }
 
 static bool s_next_track_command_sent;
-static void prv_assert_next_track_command_sent_cb(uint16_t endpoint_id,
-                                                  const uint8_t* data, unsigned int data_length) {
+static void prv_assert_next_track_command_sent_cb(uint16_t endpoint_id, const uint8_t *data,
+                                                  unsigned int data_length) {
   cl_assert_equal_i(data_length, 1);
-  cl_assert_equal_i(data[0], 0x04);  // MusicEndpointCmdIDNextTrack
+  cl_assert_equal_i(data[0], 0x04); // MusicEndpointCmdIDNextTrack
   s_next_track_command_sent = true;
 }
 
 static bool s_is_playback_cmd_sent;
 static uint8_t s_playback_cmd_sent;
-static void prv_assert_playback_command_sent_cb(uint16_t endpoint_id,
-                                                const uint8_t* data, unsigned int data_length) {
+static void prv_assert_playback_command_sent_cb(uint16_t endpoint_id, const uint8_t *data,
+                                                unsigned int data_length) {
   cl_assert_equal_i(data_length, 1);
   if (!s_is_playback_cmd_sent) {
     s_playback_cmd_sent = data[0];
     s_is_playback_cmd_sent = true;
   } else {
     // Playback command is always followed by:
-    cl_assert_equal_i(data[0], 0x08);  // MusicEndpointCmdIDGetAllInfo
+    cl_assert_equal_i(data[0], 0x08); // MusicEndpointCmdIDGetAllInfo
+  }
+}
+
+static void prv_take_event(PebbleEvent *e) {
+  if (e->type == PEBBLE_MEDIA_EVENT) {
+    music_handle_media_event(&e->media);
   }
 }
 
@@ -210,6 +216,7 @@ void test_music_endpoint__initialize(void) {
   s_is_playback_cmd_sent = false;
   s_playback_cmd_sent = ~0;
   fake_event_init();
+  fake_event_set_callback(prv_take_event);
   fake_rtc_init(0, 0);
   fake_comm_session_init();
   music_init();
@@ -230,6 +237,101 @@ void test_music_endpoint__cleanup(void) {
   fake_comm_session_cleanup();
 }
 
+void test_music_endpoint__coalesce_untaken_events(void) {
+  fake_event_set_callback(NULL);
+  fake_event_reset_count();
+
+  music_update_now_playing("one", 3, "artist", 6, "album", 5);
+  music_update_track_position(1000);
+  cl_assert_equal_i(fake_event_get_count(), 2);
+
+  music_update_now_playing("two", 3, "artist", 6, "album", 5);
+  music_update_track_title("three", 5);
+  music_update_track_position(2000);
+  music_update_track_duration(5000);
+  cl_assert_equal_i(fake_event_get_count(), 2);
+
+  char title[MUSIC_BUFFER_LENGTH];
+  music_get_now_playing(title, NULL, NULL);
+  cl_assert_equal_s(title, "three");
+  uint32_t track_position, track_duration;
+  music_get_pos(&track_position, &track_duration);
+  cl_assert_equal_i(track_position, 2000);
+  cl_assert_equal_i(track_duration, 5000);
+
+  music_update_player_volume_percent(10);
+  music_update_player_volume_percent(20);
+  cl_assert_equal_i(fake_event_get_count(), 4);
+}
+
+void test_music_endpoint__post_again_once_taken(void) {
+  fake_event_set_callback(NULL);
+  fake_event_reset_count();
+
+  music_update_now_playing("one", 3, "artist", 6, "album", 5);
+  music_update_track_position(1000);
+  cl_assert_equal_i(fake_event_get_count(), 2);
+
+  PebbleMediaEvent taken = {.type = PebbleMediaEventTypeNowPlayingChanged};
+  music_handle_media_event(&taken);
+  music_update_now_playing("two", 3, "artist", 6, "album", 5);
+  music_update_track_position(2000);
+  cl_assert_equal_i(fake_event_get_count(), 3);
+  PebbleEvent e = fake_event_get_last();
+  cl_assert_equal_i(e.media.type, PebbleMediaEventTypeNowPlayingChanged);
+
+  taken.type = PebbleMediaEventTypeTrackPosChanged;
+  music_handle_media_event(&taken);
+  music_update_track_position(3000);
+  cl_assert_equal_i(fake_event_get_count(), 4);
+  e = fake_event_get_last();
+  cl_assert_equal_i(e.media.type, PebbleMediaEventTypeTrackPosChanged);
+}
+
+void test_music_endpoint__album_art_transfer_failure_does_not_latch(void) {
+  music_update_now_playing("one", 3, "artist", 6, "album", 5);
+  const uint8_t first_generation = music_get_now_playing_generation();
+  music_set_album_art(NULL, first_generation);
+  cl_assert(music_album_art_is_current());
+
+  music_update_now_playing("two", 3, "artist", 6, "album", 5);
+  const uint8_t failed_generation = music_get_now_playing_generation();
+  fake_event_clear_last();
+  music_album_art_transfer_failed(failed_generation);
+
+  cl_assert(!music_album_art_is_current());
+  const PebbleEvent event = fake_event_get_last();
+  cl_assert_equal_i(event.type, PEBBLE_MEDIA_EVENT);
+  cl_assert_equal_i(event.media.type, PebbleMediaEventTypeAlbumArtUpdated);
+}
+
+void test_music_endpoint__no_art_response_latches_generation(void) {
+  music_update_now_playing("no art", 6, "artist", 6, "album", 5);
+  const uint8_t generation = music_get_now_playing_generation();
+  fake_event_clear_last();
+  music_set_album_art(NULL, generation);
+
+  cl_assert(music_album_art_is_current());
+  const PebbleEvent event = fake_event_get_last();
+  cl_assert_equal_i(event.media.type, PebbleMediaEventTypeAlbumArtUpdated);
+}
+
+void test_music_endpoint__held_art_is_released_when_transfer_starts(void) {
+  music_update_now_playing("first", 5, "artist", 6, "album", 5);
+  music_set_album_art(prv_make_album_art(), music_get_now_playing_generation());
+  music_update_now_playing("second", 6, "artist", 6, "album", 5);
+  const uint8_t generation = music_get_now_playing_generation();
+
+  music_update_now_playing("second", 6, "artist", 6, "album", 5);
+  cl_assert(music_album_art_lock() != NULL);
+  music_album_art_unlock();
+
+  cl_assert(s_imaging_will_receive_handlers[ImagingImageTypeAlbumArt] != NULL);
+  s_imaging_will_receive_handlers[ImagingImageTypeAlbumArt](generation);
+  cl_assert(music_album_art_lock() == NULL);
+  music_album_art_unlock();
+}
+
 void test_music_endpoint__ignore_now_playing_while_not_connected(void) {
   // Don't connect app, but receive Now Playing info. Should be ignored:
   prv_receive_and_assert_all(false /* expect_is_handled */);
@@ -243,7 +345,7 @@ void test_music_endpoint__ignore_now_playing_while_other_server_connected(void) 
   prv_receive_app_info_event(true /* is_android */);
 
   // Receive Now Playing info. Should be ignored, because other server is connected:
- prv_receive_and_assert_all(false /* expect_is_handled*/);
+  prv_receive_and_assert_all(false /* expect_is_handled*/);
 
   // Disconnect dummy server, to clean up after ourselves:
   prv_set_dummy_server_connected(false /* connected */);
@@ -291,7 +393,7 @@ void test_music_endpoint__receive_now_playing_while_connected(void) {
 void test_music_endpoint__ignore_unknown_message(void) {
   // Android app connects:
   prv_receive_app_info_event(true /* is_android */);
-  uint8_t unknown_msg[] = { 0xff };
+  uint8_t unknown_msg[] = {0xff};
   prv_receive_pp_data(unknown_msg, sizeof(unknown_msg));
   PebbleEvent e = fake_event_get_last();
   cl_assert_equal_i(e.type, PEBBLE_NULL_EVENT);
@@ -303,7 +405,7 @@ void test_music_endpoint__receive_zero_length_now_playing(void) {
   prv_receive_and_assert_all(true /* expect_is_handled*/);
   cl_assert_equal_b(music_has_now_playing(), true);
 
-  uint8_t zero_length_now_playing[] = { 0x10, 0, 0, 0 };
+  uint8_t zero_length_now_playing[] = {0x10, 0, 0, 0};
   prv_receive_pp_data(zero_length_now_playing, sizeof(zero_length_now_playing));
   cl_assert_equal_b(music_has_now_playing(), false);
 }
@@ -311,27 +413,23 @@ void test_music_endpoint__receive_zero_length_now_playing(void) {
 void test_music_endpoint__ignore_malformatted_messages(void) {
   // Android app connects:
   prv_receive_app_info_event(true /* is_android */);
-  const uint8_t malformatted_artist[] = {
-    0x10, 14, 'o', 'n', 'e', 3, 't', 'w', 'o', 5, 't', 'h', 'r', 'e', 'e'
-  };
-  const uint8_t malformatted_album[] = {
-    0x10, 3, 'o', 'n', 'e', 10, 't', 'w', 'o', 5, 't', 'h', 'r', 'e', 'e'
-  };
-  const uint8_t malformatted_title[] = {
-    0x10, 3, 'o', 'n', 'e', 3, 't', 'w', 'o', 6, 't', 'h', 'r', 'e', 'e'
-  };
-  const uint8_t malformatted_player[] = {
-    0x13, 17, 'c', 'o', 'm', '.', 's', 'p', 'o', 't', 'i', 'f', 'y', '.', 'm', 'u', 's', 'i', 'c',
-    9, 'S', 'p', 'o', 't', 'i', 'f', 'y'
-  };
+  const uint8_t malformatted_artist[] = {0x10, 14, 'o', 'n', 'e', 3,   't', 'w',
+                                         'o',  5,  't', 'h', 'r', 'e', 'e'};
+  const uint8_t malformatted_album[] = {0x10, 3, 'o', 'n', 'e', 10,  't', 'w',
+                                        'o',  5, 't', 'h', 'r', 'e', 'e'};
+  const uint8_t malformatted_title[] = {0x10, 3, 'o', 'n', 'e', 3,   't', 'w',
+                                        'o',  6, 't', 'h', 'r', 'e', 'e'};
+  const uint8_t malformatted_player[] = {0x13, 17,  'c', 'o', 'm', '.', 's', 'p', 'o',
+                                         't',  'i', 'f', 'y', '.', 'm', 'u', 's', 'i',
+                                         'c',  9,   'S', 'p', 'o', 't', 'i', 'f', 'y'};
   struct {
     const uint8_t *data;
     uint16_t length;
   } test_vectors[] = {
-    { malformatted_artist, sizeof(malformatted_artist) },
-    { malformatted_album, sizeof(malformatted_album) },
-    { malformatted_title, sizeof(malformatted_title) },
-    { malformatted_player, sizeof(malformatted_player) }
+    {malformatted_artist, sizeof(malformatted_artist)},
+    {malformatted_album, sizeof(malformatted_album)},
+    {malformatted_title, sizeof(malformatted_title)},
+    {malformatted_player, sizeof(malformatted_player)}
   };
   for (int i = 0; i < ARRAY_LENGTH(test_vectors); ++i) {
     prv_receive_pp_data(test_vectors[i].data, test_vectors[i].length);
@@ -352,13 +450,9 @@ void test_music_endpoint__supported_capabilities(void) {
   cl_assert_equal_b(music_needs_user_to_start_playback_on_phone(), false);
   for (MusicCommand cmd = 0; cmd < NumMusicCommand; ++cmd) {
     bool expect_supported = true;
-    if (cmd == MusicCommandAdvanceRepeatMode ||
-        cmd == MusicCommandAdvanceShuffleMode ||
-        cmd == MusicCommandSkipForward ||
-        cmd == MusicCommandSkipBackward ||
-        cmd == MusicCommandLike ||
-        cmd == MusicCommandDislike ||
-        cmd == MusicCommandBookmark) {
+    if (cmd == MusicCommandAdvanceRepeatMode || cmd == MusicCommandAdvanceShuffleMode ||
+        cmd == MusicCommandSkipForward || cmd == MusicCommandSkipBackward ||
+        cmd == MusicCommandLike || cmd == MusicCommandDislike || cmd == MusicCommandBookmark) {
       expect_supported = false;
     }
     cl_assert_equal_b(music_is_command_supported(cmd), expect_supported);
@@ -369,12 +463,25 @@ void test_music_endpoint__skip_seeks_within_track(void) {
   prv_receive_app_info_event(true /* is_android */);
 
   // Phone apps that predate the flag send the shorter message.
-  uint8_t no_flags[] = { 0x11, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x01 };
+  uint8_t no_flags[] = {0x11, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x01};
   prv_receive_pp_data(no_flags, sizeof(no_flags));
   cl_assert_equal_b(music_skip_seeks_within_track(), false);
 
-  uint8_t seeks[] = { 0x11, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x01,
-                      MusicEndpointSkipSeeksWithinTrack };
+  uint8_t seeks[] = {
+    0x11,
+    0x01,
+    0xAA,
+    0x00,
+    0x00,
+    0x00,
+    0xAA,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x01,
+    MusicEndpointSkipSeeksWithinTrack
+  };
   prv_receive_pp_data(seeks, sizeof(seeks));
   cl_assert_equal_b(music_skip_seeks_within_track(), true);
 
@@ -406,7 +513,7 @@ void test_music_endpoint__low_latency_for_period(void) {
 void test_music_endpoint__send_unsupported_command(void) {
   // Android app connects:
   prv_receive_app_info_event(true /* is_android */);
-  fake_comm_session_process_send_next();  // send out any pending data
+  fake_comm_session_process_send_next(); // send out any pending data
 
   // Attempting to send an unsupported command should not result in any data getting sent out:
   fake_transport_set_sent_cb(s_transport, prv_assert_no_data_sent_cb);
@@ -417,7 +524,7 @@ void test_music_endpoint__send_unsupported_command(void) {
 void test_music_endpoint__send_next_track_command(void) {
   // Android app connects:
   prv_receive_app_info_event(true /* is_android */);
-  fake_comm_session_process_send_next();  // send out any pending data
+  fake_comm_session_process_send_next(); // send out any pending data
 
   fake_transport_set_sent_cb(s_transport, prv_assert_next_track_command_sent_cb);
   music_command_send(MusicCommandNextTrack);
@@ -429,7 +536,7 @@ void test_music_endpoint__send_next_track_command(void) {
 void test_music_endpoint__send_playback_command(void) {
   // Android app connects:
   prv_receive_app_info_event(true /* is_android */);
-  fake_comm_session_process_send_next();  // send out any pending data
+  fake_comm_session_process_send_next(); // send out any pending data
 
   MusicCommand cmds[] = {
     MusicCommandTogglePlayPause,

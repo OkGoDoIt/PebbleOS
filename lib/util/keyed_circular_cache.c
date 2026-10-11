@@ -1,11 +1,10 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/util/keyed_circular_cache.h"
-
-#include "pbl/util/assert.h"
-
 #include <string.h>
+
+#include <pbl/util/assert.h>
+#include <pbl/util/keyed_circular_cache.h>
 
 void keyed_circular_cache_init(KeyedCircularCache *c, KeyedCircularCacheKey *key_buffer,
                                void *data_buffer, size_t item_size, size_t total_items) {
@@ -14,7 +13,7 @@ void keyed_circular_cache_init(KeyedCircularCache *c, KeyedCircularCacheKey *key
   UTIL_ASSERT(data_buffer);
   UTIL_ASSERT(item_size);
 
-  *c = (KeyedCircularCache) {
+  *c = (KeyedCircularCache){
     .cache_keys = key_buffer,
     .cache_data = (uint8_t *)data_buffer,
     .item_size = item_size,

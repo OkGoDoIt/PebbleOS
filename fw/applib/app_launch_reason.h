@@ -1,0 +1,62 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+//! @addtogroup Foundation
+//! @{
+//!   @addtogroup LaunchReason Launch Reason
+//!   \brief API for checking what caused the application to launch.
+//!
+//!   This includes the system, launch by user interaction (User selects the
+//!   application from the launcher menu),
+//!   launch by the mobile or a mobile companion application,
+//!   or launch by a scheduled wakeup event for the specified application.
+//!
+//!   @{
+
+//! AppLaunchReason is used to inform the application about how it was launched
+//! @note New launch reasons may be added in the future. As a best practice, it
+//! is recommended to only handle the cases that the app needs to know about,
+//! rather than trying to handle all possible launch reasons.
+typedef enum {
+  APP_LAUNCH_SYSTEM = 0,      //!< App launched by the system
+  APP_LAUNCH_USER,            //!< App launched by user selection in launcher menu
+  APP_LAUNCH_PHONE,           //!< App launched by mobile or companion app
+  APP_LAUNCH_WAKEUP,          //!< App launched by wakeup event
+  APP_LAUNCH_WORKER,          //!< App launched by worker calling worker_launch_app()
+  APP_LAUNCH_QUICK_LAUNCH,    //!< App launched by user using quick launch
+  APP_LAUNCH_TIMELINE_ACTION, //!< App launched by user opening it from a pin
+  APP_LAUNCH_SMARTSTRAP,      //!< App launched by a smartstrap
+  APP_LAUNCH_PEEK_WIDGET,     //!< App launched from its Quick View widget on the watchface
+} AppLaunchReason;
+
+//! Provides the method used to launch the current application.
+//! @return The method or reason the current application was launched
+AppLaunchReason app_launch_reason(void);
+
+//! Details about how an app was quick launched.
+//! Returned by \ref app_launch_get_quick_launch_action.
+typedef enum {
+  APP_QUICK_LAUNCH_ACTION_NONE = 0, //!< App was not launched via Quick Launch
+  APP_QUICK_LAUNCH_ACTION_HOLD,     //!< User held a single button
+  APP_QUICK_LAUNCH_ACTION_TAP,      //!< User tapped a button (single click)
+  APP_QUICK_LAUNCH_ACTION_COMBO,    //!< User held a button combination
+} AppQuickLaunchAction;
+
+//! Get the argument passed to the app when it was launched.
+//! @note Arguments are passed to apps by an openWatchApp action on a pin, or by the app's
+//! Quick View widget when the widget's button shortcut launches the app.
+//! @return The argument passed to the app, or 0 if the app was launched some other way
+uint32_t app_launch_get_args(void);
+
+//! Get the action that was used to quick launch the app.
+//! @return The \ref AppQuickLaunchAction used to launch the app, or
+//! APP_QUICK_LAUNCH_ACTION_NONE if the app was not launched via Quick Launch.
+AppQuickLaunchAction app_launch_get_quick_launch_action(void);
+
+//!   @} // group Launch_Reason
+//! @} // group Foundation

@@ -1,112 +1,107 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-/************************************************************************************************
- * New Logging
- *
- * The NewLogging system provides in place hashing during the compile stage of building, removing
- * logging strings from the source code and replacing them with a unique token, conserving space in
- * the firmware.
- *
- * The unique token is (well, see below) actually just a pointer to a new section in the .elf
- * named .log_strings. The .log_strings section is mapped to an unused portion of memory and
- * isn't compiled into the final firmware binary image.
- *
- * Token format:
- *   The token is actually a packed uint32_t. The format is as follows:
- *   31-29: num fmt conversions  [0-7]
- *   28-26: string index 2       [0-7], 1 based. 0 if no second string. 1-7 otherwise
- *   25-23: string index 1       [0-7], 1 based. 0 if no first string. 1-7 otherwise
- *   22-20: log level            [0-5] mapped onto LOG_LEVEL_ALWAYS through LOG_LEVEL_DEBUG_VERBOSE
- *      19: reserved
- *   18- 0: Offset info .log_strings section. This allows 512 KB of strings.
- *
- * Note: it might not be necessary to use so many bits for the log level. Dynamic flitering might
- * not be so important, and 'log to flash' could be 1 bit, or Curried to a set of function calls.
- * These changes would require more work in the logging infrastructure.
- *
- * .log_strings Section is formatted as follows:
- *  - .log_string.header: "NL<M><m>:<offset-mask>=<token-list>"
- *    where:
- *      - <M> is XX major version -- increase means not backwards compatible change
- *      - <m> is YY minor version -- increase means backwards compatible change
- *      - <offset-mask> defines the number of bits used in the token for the section offset
- *      - <token-list>: <token>:<token-list>
- *                    : '\0'
- *      - <token>: <file>
- *               : <line>
- *               : <level>
- *               : <color>
- *               : <fmt>
- *  - .log_core_number: "CORE<C>"
- *    where:
- *      - <C> is the core number. This will be two bits.
- *         For now, the primary core will be 00; the Bluetooth chip will be 01.
- *         These definitions will be different for every system -- all that matters is that they're
- *         internally consistent.
- *  - .log_string
- *    which is a list of <token-list> representing the log strings from the source code.
- *    Entries of the form "MODULE:<file>:<module-name>", emitted by PBL_LOG_MODULE_DEFINE /
- *    PBL_LOG_MODULE_DECLARE, are metadata mapping a source file to its log module; they are
- *    never referenced by a token.
- *
- * Note: this code must be compiled with -Os or the codesize will explode!
- *
- * Limitations:
- * - maximum 7 format conversions per print
- * - maximum 2 string conversions per print
- * - string parameters may not be flagged or formatted in any way --'%s' only.
- * - printing the '%' is not supported --  '%%' is not allowed.
- * - only 32 bit (or fewer) parameters currently supported automatically. Multi-word parameters
- *     require special handling.
- * - errors are not automatically detected. This will have to be done later by a script. Sorry.
- *
- * Extensions (to be implemented at some point):
- * - Colour groups/overrides
- * - MAC/BT address print: format specifier: %M/m
- * - ENUM print: %u[<enum name>]
- *
- * LogHash.dict:
- *   See https://pebbletechnology.atlassian.net/wiki/display/DEV/New+Logging.
- ***********************************************************************************************/
 #pragma once
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "pbl/util/attributes.h"
 
+#include <pbl/kernel/compiler.h>
+#include <pbl/logging/logging.h>
+
+/**
+ * @defgroup logging_log_hashing Log hashing
+ * @ingroup logging
+ * @brief Compile-time replacement of log strings by tokens (@c CONFIG_LOG_HASHED).
+ *
+ * Each PBL_LOG call site places "file:line:level:color:format" in the @c .log_strings section,
+ * which is linked at @ref LOG_STRINGS_SECTION_ADDRESS, outside the firmware image, and logs a
+ * token instead of the string. The host turns tokens back into messages with the dictionary
+ * extracted from the ELF file.
+ *
+ * Token layout:
+ * - bits 31-29: number of format conversions, 0 to 7;
+ * - bits 28-23: 1-based indices of up to two @c \%s conversions, 3 bits each, 0 for none;
+ * - bits 22-20: level, 0 to 5 for @ref LOG_LEVEL_ALWAYS to @ref LOG_LEVEL_DEBUG_VERBOSE;
+ * - bit 19: reserved;
+ * - bits 18-0: offset of the string in @c .log_strings (512 KiB).
+ *
+ * The @c .log_strings section holds:
+ * - @c .log_string.header: "NL\<major\>\<minor\>:\<offset mask\>=\<token list\>", the format
+ *   version and description of the entries;
+ * - @c .log_core_number: "CORE\<number\>", the core the strings belong to;
+ * - @c .log_string: the strings of every call site, plus "MODULE:\<file\>:\<module\>" entries
+ *   emitted by PBL_LOG_MODULE_DEFINE() and PBL_LOG_MODULE_DECLARE() that map files to log
+ *   modules and are never referenced by a token.
+ *
+ * Limitations: at most 7 conversions per message, at most 2 of them @c \%s, without flags or
+ * width; no @c \%\%; only arguments of 32 bits or less (see SPLIT_64_BIT_ARG()). Formats
+ * breaking them are not detected at build time. The code must be built with @c -Os, or the
+ * token computation is not folded.
+ * @{
+ */
+
+/** @brief Version of the @c .log_strings format, major and minor on two digits each. */
 #define NEW_LOG_VERSION "0102"
 
+/** @brief Address the @c .log_strings section is linked at; tokens are offsets from it. */
 #define LOG_STRINGS_SECTION_ADDRESS 0xC0000000
 
-#define PACKED_CORE_OFFSET 30        // 2 bits - Core number
-#define PACKED_CORE_MASK   0x03
+/** @brief Position of the core number in a message ID. */
+#define PACKED_CORE_OFFSET 30 // 2 bits - Core number
+/** @brief Mask of the core number, 2 bits. */
+#define PACKED_CORE_MASK 0x03
 
-#define PACKED_NUM_FMT_OFFSET 29     // 3 bits - Number format conversions
+/** @brief Position of the number of format conversions in a token. */
+#define PACKED_NUM_FMT_OFFSET 29 // 3 bits - Number format conversions
+/** @brief Mask of the number of format conversions, 3 bits. */
 #define PACKED_NUM_FMT_MASK 0x07
-#define PACKED_STR1FMT_OFFSET 26     // 3 bits - indicies of string parameter 1 format conversion
+/** @brief Position of the first string conversion index in a token. */
+#define PACKED_STR1FMT_OFFSET 26 // 3 bits - indicies of string parameter 1 format conversion
+/** @brief Mask of the first string conversion index, 3 bits. */
 #define PACKED_STR1FMT_MASK 0x07
-#define PACKED_STR2FMT_OFFSET 23     // 3 bits - indicies of string parameter 2 format conversion
+/** @brief Position of the second string conversion index in a token. */
+#define PACKED_STR2FMT_OFFSET 23 // 3 bits - indicies of string parameter 2 format conversion
+/** @brief Mask of the second string conversion index, 3 bits. */
 #define PACKED_STR2FMT_MASK 0x07
-#define PACKED_STRFMTS_OFFSET 23     // 6 bits - indicies of string parameters 1 & 2.
+/** @brief Position of both string conversion indices in a token. */
+#define PACKED_STRFMTS_OFFSET 23 // 6 bits - indicies of string parameters 1 & 2.
+/** @brief Mask of both string conversion indices, 6 bits. */
 #define PACKED_STRFMTS_MASK 0x3f
-#define PACKED_LEVEL_OFFSET 20       // 3 bits  - log level
+/** @brief Position of the packed level in a token. */
+#define PACKED_LEVEL_OFFSET 20 // 3 bits  - log level
+/** @brief Mask of the packed level, 3 bits. */
 #define PACKED_LEVEL_MASK 0x07
+/** @brief Position of the string offset in a token. */
 #define PACKED_HASH_OFFSET 0
-#define PACKED_HASH_MASK 0x7FFFF     // 19 bits - string table offset (512 KB)
+/** @brief Mask of the string offset, 19 bits. */
+#define PACKED_HASH_MASK 0x7FFFF // 19 bits - string table offset (512 KB)
 
-#define MSGID_STR_AND_HASH_MASK ((PACKED_STRFMTS_MASK << PACKED_STRFMTS_OFFSET) | \
-                                 (PACKED_HASH_MASK << PACKED_HASH_OFFSET))
-#define MSGID_CORE_AND_HASH_MASK ((PACKED_CORE_MASK << PACKED_CORE_OFFSET) | \
-                                  (PACKED_HASH_MASK << PACKED_HASH_OFFSET))
+/** @brief Mask of the string indices and string offset of a message ID. */
+#define MSGID_STR_AND_HASH_MASK \
+  ((PACKED_STRFMTS_MASK << PACKED_STRFMTS_OFFSET) | (PACKED_HASH_MASK << PACKED_HASH_OFFSET))
+/** @brief Mask of the core number and string offset of a message ID. */
+#define MSGID_CORE_AND_HASH_MASK \
+  ((PACKED_CORE_MASK << PACKED_CORE_OFFSET) | (PACKED_HASH_MASK << PACKED_HASH_OFFSET))
 
 #ifndef STRINGIFY
-  #define STRINGIFY_NX(a) #a
-  #define STRINGIFY(a) STRINGIFY_NX(a)
+/**
+ * @brief Turn the argument into a string literal without expanding it.
+ *
+ * @param a Argument.
+ */
+#define STRINGIFY_NX(a) #a
+/**
+ * @brief Turn the expansion of the argument into a string literal.
+ *
+ * @param a Argument.
+ */
+#define STRINGIFY(a) STRINGIFY_NX(a)
 #endif // STRINGIFY
 
+/** @cond INTERNAL_HIDDEN */
 /* Printf Format argument checking.
  *
  * NB: it's critical that the 'if (false)' tag is included before the call to
@@ -116,19 +111,18 @@
  * evaluated twice. This is fine with normal parameters, but could result in macros or functions
  * being called twice and messing up globals in unexpected ways.
  */
-void PBL_LOG_x_printf_arg_check(const char *fmt, ...) FORMAT_PRINTF(1, 2);
+void PBL_LOG_x_printf_arg_check(const char *fmt, ...) PBL_FORMAT_PRINTF(1, 2);
 
-#define NEW_LOG_HASH(logfunc, level, color, fmt, ...) \
-{ \
-  static const char str[] __attribute__((nocommon, section(".log_strings"))) = \
-    __FILE__ ":" STRINGIFY(__LINE__) ":" STRINGIFY(level) ":" color ":" fmt; \
-  _Pragma("GCC diagnostic push"); _Pragma("GCC diagnostic ignored \"-Warray-bounds\""); \
-  logfunc((uint32_t)&str[LOG_SECTION_OFFSET(level, fmt)], ##__VA_ARGS__); \
-  _Pragma("GCC diagnostic pop"); \
-  if (0) PBL_LOG_x_printf_arg_check(fmt, ##__VA_ARGS__); \
-}
+#define NEW_LOG_HASH(logfunc, level, color, fmt, ...)                                    \
+  {                                                                                      \
+    static const char str[] PBL_NOCOMMON PBL_SECTION(".log_strings") =                   \
+        __FILE__ ":" STRINGIFY(__LINE__) ":" STRINGIFY(level) ":" color ":" fmt;         \
+    logfunc((uint32_t)((uintptr_t)str + LOG_SECTION_OFFSET(level, fmt)), ##__VA_ARGS__); \
+    if (0)                                                                               \
+      PBL_LOG_x_printf_arg_check(fmt, ##__VA_ARGS__);                                    \
+  }
 
-ALWAYS_INLINE static uint32_t LOG_SECTION_OFFSET(const uint8_t level, const char *fmt) {
+PBL_ALWAYS_INLINE static uint32_t LOG_SECTION_OFFSET(const uint8_t level, const char *fmt) {
   const char *p1 = NULL, *p2 = NULL, *p3 = NULL, *p4 = NULL;
   const char *p5 = NULL, *p6 = NULL, *p7 = NULL, *p8 = NULL;
   const char *s1 = NULL, *s2 = NULL, *s3 = NULL, *s4 = NULL;
@@ -136,19 +130,26 @@ ALWAYS_INLINE static uint32_t LOG_SECTION_OFFSET(const uint8_t level, const char
 
   // Search for % characters in fmt. p1-p8 point to the character immediately succeeding the first
   // 8 % characters in fmt (or NULL, if there aren't 8 % characters in fmt).
-  p1 = __builtin_strchr(fmt, '%') ? (__builtin_strchr(fmt, '%') + 1) : NULL;
-  if (p1) p2 = __builtin_strchr(p1, '%') ? (__builtin_strchr(p1, '%') + 1) : NULL;
-  if (p2) p3 = __builtin_strchr(p2, '%') ? (__builtin_strchr(p2, '%') + 1) : NULL;
-  if (p3) p4 = __builtin_strchr(p3, '%') ? (__builtin_strchr(p3, '%') + 1) : NULL;
-  if (p4) p5 = __builtin_strchr(p4, '%') ? (__builtin_strchr(p4, '%') + 1) : NULL;
-  if (p5) p6 = __builtin_strchr(p5, '%') ? (__builtin_strchr(p5, '%') + 1) : NULL;
-  if (p6) p7 = __builtin_strchr(p6, '%') ? (__builtin_strchr(p6, '%') + 1) : NULL;
-  if (p7) p8 = __builtin_strchr(p7, '%') ? (__builtin_strchr(p7, '%') + 1) : NULL;
+  p1 = strchr(fmt, '%') ? (strchr(fmt, '%') + 1) : NULL;
+  if (p1)
+    p2 = strchr(p1, '%') ? (strchr(p1, '%') + 1) : NULL;
+  if (p2)
+    p3 = strchr(p2, '%') ? (strchr(p2, '%') + 1) : NULL;
+  if (p3)
+    p4 = strchr(p3, '%') ? (strchr(p3, '%') + 1) : NULL;
+  if (p4)
+    p5 = strchr(p4, '%') ? (strchr(p4, '%') + 1) : NULL;
+  if (p5)
+    p6 = strchr(p5, '%') ? (strchr(p5, '%') + 1) : NULL;
+  if (p6)
+    p7 = strchr(p6, '%') ? (strchr(p6, '%') + 1) : NULL;
+  if (p7)
+    p8 = strchr(p7, '%') ? (strchr(p7, '%') + 1) : NULL;
 
   // Check that fmt doesn't contain the escaped % symbol, '%%'. It's too hard to handle correctly
   // in every case.
-  if ((p1 + 1 == p2) || (p2 + 1 == p3) || (p3 + 1 == p4) || (p4 + 1 == p5) ||
-      (p5 + 1 == p6) || (p6 + 1 == p7) || (p7 + 1 == p8)) {
+  if ((p1 + 1 == p2) || (p2 + 1 == p3) || (p3 + 1 == p4) || (p4 + 1 == p5) || (p5 + 1 == p6) ||
+      (p6 + 1 == p7) || (p7 + 1 == p8)) {
     return 0;
   }
 
@@ -163,13 +164,20 @@ ALWAYS_INLINE static uint32_t LOG_SECTION_OFFSET(const uint8_t level, const char
   // Search for an 's' character succeeding the % characters in fmt. s1-s7 point to the first 's'
   // charactres in fmt after the previously found % characters (or NULL if there aren't 7 's'
   // characters in fmt).
-  if (p1) s1 = __builtin_strchr(p1, 's');
-  if (p2) s2 = __builtin_strchr(p2, 's');
-  if (p3) s3 = __builtin_strchr(p3, 's');
-  if (p4) s4 = __builtin_strchr(p4, 's');
-  if (p5) s5 = __builtin_strchr(p5, 's');
-  if (p6) s6 = __builtin_strchr(p6, 's');
-  if (p7) s7 = __builtin_strchr(p7, 's');
+  if (p1)
+    s1 = strchr(p1, 's');
+  if (p2)
+    s2 = strchr(p2, 's');
+  if (p3)
+    s3 = strchr(p3, 's');
+  if (p4)
+    s4 = strchr(p4, 's');
+  if (p5)
+    s5 = strchr(p5, 's');
+  if (p6)
+    s6 = strchr(p6, 's');
+  if (p7)
+    s7 = strchr(p7, 's');
 
   // See if the 's' characters immediately succeed the '%' characters. If so, set flag psX.
   const int ps1 = p1 ? (p1 == s1) : 0;
@@ -201,7 +209,6 @@ ALWAYS_INLINE static uint32_t LOG_SECTION_OFFSET(const uint8_t level, const char
   const int a7 = ps7 ? (a6 << 3) + 7 : a6;
   const int string_indicies = a7;
 
-
   // Convert level to packed_level
   int packed_level = LOG_LEVEL_ALWAYS;
   if (level == LOG_LEVEL_ERROR) {
@@ -216,9 +223,12 @@ ALWAYS_INLINE static uint32_t LOG_SECTION_OFFSET(const uint8_t level, const char
     packed_level = 5;
   }
 
-  const uint32_t offset =  (((num_params & PACKED_NUM_FMT_MASK) << PACKED_NUM_FMT_OFFSET) |
-                            ((packed_level & PACKED_LEVEL_MASK) << PACKED_LEVEL_OFFSET) |
-                            ((string_indicies & PACKED_STRFMTS_MASK) << PACKED_STRFMTS_OFFSET));
+  const uint32_t offset = (((num_params & PACKED_NUM_FMT_MASK) << PACKED_NUM_FMT_OFFSET) |
+                           ((packed_level & PACKED_LEVEL_MASK) << PACKED_LEVEL_OFFSET) |
+                           ((string_indicies & PACKED_STRFMTS_MASK) << PACKED_STRFMTS_OFFSET));
 
   return (offset - LOG_STRINGS_SECTION_ADDRESS);
 }
+/** @endcond */
+
+/** @} */

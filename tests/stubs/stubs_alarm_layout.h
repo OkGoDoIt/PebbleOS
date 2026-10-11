@@ -3,13 +3,13 @@
 
 #pragma once
 
-#include "pbl/services/timeline/alarm_layout.h"
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/timeline/alarm_layout.h>
 
-LayoutLayer * WEAK alarm_layout_create(const LayoutLayerConfig *config) {
+LayoutLayer *PBL_WEAK alarm_layout_create(const LayoutLayerConfig *config) {
   return NULL;
 }
 
-bool WEAK alarm_layout_verify(bool existing_attributes[]) {
+bool PBL_WEAK alarm_layout_verify(bool existing_attributes[]) {
   return false;
 }

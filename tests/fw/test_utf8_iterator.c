@@ -1,20 +1,21 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/util/iterator.h"
 #include "utf8_test_data.h"
-#include "applib/graphics/utf8.h"
-
-#include "clar.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <pbl/util/iterator.h>
+
+#include <applib/graphics/utf8.h>
+#include <clar.h>
+
 // Stubs
 ///////////////////////////////////////////////////////////
-#include "stubs_logging.h"
-#include "stubs_passert.h"
+#include <stubs_logging.h>
+#include <stubs_passert.h>
 
 ///////////////////////////////////////////////////////////
 // Tests
@@ -119,7 +120,7 @@ void test_utf8_iterator__decode_valid_string_backwards(void) {
   utf8_iter_init(&utf8_iter, &utf8_iter_state, &utf8_bounds, utf8_bounds.end);
 
   // Tests
-  int i = sizeof(s_valid_test_codepoints) / sizeof(s_valid_test_codepoints[0]);
+  int i = NUM_VALID_CODEPOINTS;
   while (iter_prev(&utf8_iter)) {
     cl_assert(utf8_iter_state.current >= utf8_bounds.start);
     cl_assert(i > 0);
@@ -142,7 +143,7 @@ static int s_each_count = 0;
 
 static bool prv_each_codepoint(int index, Codepoint codepoint, void *context) {
   static int s_index = 0;
-  static Codepoint s_codes[] = { 0xf0, 'a' };
+  static Codepoint s_codes[] = {0xf0, 'a'};
   cl_assert_equal_i(s_codes[index], codepoint);
   cl_assert_equal_i(s_index++, index);
   cl_assert_equal_p(context, &s_context);
@@ -152,7 +153,9 @@ static bool prv_each_codepoint(int index, Codepoint codepoint, void *context) {
 
 void test_utf8_iterator__each_codepoint(void) {
   void *context = &s_context;
-  const char *str = "\xc3\xb0" "a";
+  const char *str =
+      "\xc3\xb0"
+      "a";
   s_each_count = 0;
   cl_assert_equal_b(utf8_each_codepoint(str, prv_each_codepoint, context), true);
   cl_assert_equal_i(s_each_count, 2);
@@ -160,7 +163,7 @@ void test_utf8_iterator__each_codepoint(void) {
 
 static bool prv_each_codepoint_break(int index, Codepoint codepoint, void *context) {
   static int s_index = 0;
-  static Codepoint s_codes[] = { 'a', 'b', 'c', 'd', 'e' };
+  static Codepoint s_codes[] = {'a', 'b', 'c', 'd', 'e'};
   cl_assert_equal_i(s_index++, index);
   cl_assert_equal_i(s_codes[index], codepoint);
   cl_assert_equal_p(context, &s_context);

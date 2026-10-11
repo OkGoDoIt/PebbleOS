@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -142,7 +142,7 @@ typedef enum {
 
 // ---- Wire structs (exact layouts; see PROTOCOL.md) ----
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t info_version;
   uint8_t protocol_min;
   uint8_t protocol_max;
@@ -173,7 +173,7 @@ typedef struct PACKED {
   uint32_t fault_lr;
 } AudioCompanionInfo;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t proto_version;
   uint8_t request_token;
@@ -182,13 +182,13 @@ typedef struct PACKED {
   //! Followed by name_len bytes of UTF-8 name
 } AudioCompanionAuthRequestHeader;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
   uint8_t receiver_id[AUDIO_COMPANION_RECEIVER_ID_BYTES];
 } AudioCompanionAuthRevokeMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
   uint32_t stream_id;
@@ -198,23 +198,23 @@ typedef struct PACKED {
   uint32_t free_storage_hint_kb;
 } AudioCompanionCheckpointMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
   uint8_t reason;
 } AudioCompanionPauseRequestMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
 } AudioCompanionResumeRequestMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
 } AudioCompanionEnableRequestMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
   uint8_t battery_pct;
@@ -222,36 +222,36 @@ typedef struct PACKED {
   uint32_t queue_depth_frames;
 } AudioCompanionReceiverHealthMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
   uint8_t status;
   uint8_t granted_proto_version;
 } AudioCompanionAuthResultMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t reason;
 } AudioCompanionRevokedMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
   uint8_t status;
 } AudioCompanionAckMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t service_state;
 } AudioCompanionStateChangedMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t error_code;
   uint32_t detail;
 } AudioCompanionErrorMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t protocol_version;
   uint32_t stream_id;
@@ -266,7 +266,7 @@ typedef struct PACKED {
   uint32_t flags;
 } AudioCompanionStreamStartMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint32_t stream_id;
   uint32_t first_sequence;
@@ -276,7 +276,7 @@ typedef struct PACKED {
   //! Followed by frame_count * (uint16_t length + payload[length])
 } AudioCompanionStreamDataHeader;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint32_t stream_id;
   uint32_t first_missing_sequence;
@@ -286,7 +286,7 @@ typedef struct PACKED {
   uint32_t watch_drop_counter;
 } AudioCompanionStreamGapMsg;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint32_t stream_id;
   uint8_t reason;

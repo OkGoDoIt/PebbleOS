@@ -1,19 +1,21 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include "kernel.h"
+
 #include <string.h>
 
-#include "pbl/kernel/msgq.h"
-#include "pbl/kernel/poll.h"
-
-#include "kernel.h"
+#include <pbl/kernel/msgq.h>
+#include <pbl/kernel/poll.h>
 
 void pbl_msgq_init(struct pbl_msgq *q, void *buf, size_t msg_size, uint32_t max_msgs) {
   KERNEL_ASSERT(buf != NULL && msg_size > 0 && max_msgs > 0);
   *q = (struct pbl_msgq)PBL_MSGQ_INITIALIZER(buf, msg_size, max_msgs);
 }
 
-void pbl_msgq_deinit(struct pbl_msgq *q) { KERNEL_ASSERT(q->group == NULL); }
+void pbl_msgq_deinit(struct pbl_msgq *q) {
+  KERNEL_ASSERT(q->group == NULL);
+}
 
 static uint8_t *prv_slot(struct pbl_msgq *q, uint32_t index) {
   return (uint8_t *)q->buf + index * q->msg_size;
@@ -114,6 +116,10 @@ void pbl_msgq_purge(struct pbl_msgq *q) {
   pbl_irq_unlock();
 }
 
-uint32_t pbl_msgq_num_used(const struct pbl_msgq *q) { return q->backend.count; }
+uint32_t pbl_msgq_num_used(const struct pbl_msgq *q) {
+  return q->backend.count;
+}
 
-uint32_t pbl_msgq_num_free(const struct pbl_msgq *q) { return q->max_msgs - q->backend.count; }
+uint32_t pbl_msgq_num_free(const struct pbl_msgq *q) {
+  return q->max_msgs - q->backend.count;
+}

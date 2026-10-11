@@ -3,15 +3,15 @@
 
 #pragma once
 
-#include "pbl/services/system_task.h"
 #include "fake_pebble_tasks.h"
 
-#include "pbl/util/list.h"
-
-#include "clar_asserts.h"
-
-#include <string.h>
 #include <stdint.h>
+#include <string.h>
+
+#include <pbl/services/system_task.h>
+#include <pbl/util/list.h>
+
+#include <clar_asserts.h>
 
 typedef struct {
   ListNode node;
@@ -24,7 +24,7 @@ static bool s_invoke_as_current = false;
 static uint32_t system_task_available_space = ~(uint32_t)0;
 
 bool system_task_add_callback(SystemTaskEventCallback cb, void *data) {
-  SystemTaskCallbackNode *node = (SystemTaskCallbackNode *) malloc(sizeof(SystemTaskCallbackNode));
+  SystemTaskCallbackNode *node = (SystemTaskCallbackNode *)malloc(sizeof(SystemTaskCallbackNode));
   cl_assert(node != NULL);
   list_init(&node->node);
 
@@ -38,16 +38,16 @@ bool system_task_add_callback(SystemTaskEventCallback cb, void *data) {
   return true;
 }
 
-bool system_task_add_callback_from_isr(SystemTaskEventCallback cb, void *data,
-                                       bool *should_context_switch) {
-  *should_context_switch = false;
+bool system_task_add_callback_from_isr(SystemTaskEventCallback cb, void *data) {
   return system_task_add_callback(cb, data);
 }
 
-bool system_task_add_callback_from_isr_droppable(SystemTaskEventCallback cb, void *data,
-                                                 bool *should_context_switch) {
-  *should_context_switch = false;
+bool system_task_add_callback_droppable(SystemTaskEventCallback cb, void *data) {
   return system_task_add_callback(cb, data);
+}
+
+bool system_task_add_callback_from_isr_droppable(SystemTaskEventCallback cb, void *data) {
+  return system_task_add_callback_droppable(cb, data);
 }
 
 uint32_t system_task_get_available_space(void) {
@@ -77,7 +77,8 @@ void fake_system_task_callbacks_invoke(int num_to_invoke) {
   }
 
   // Start at tail ("oldest" callback):
-  SystemTaskCallbackNode *node = (SystemTaskCallbackNode *) list_get_tail(s_system_task_callback_head);
+  SystemTaskCallbackNode *node =
+      (SystemTaskCallbackNode *)list_get_tail(s_system_task_callback_head);
   while (node && num_to_invoke) {
     // do callback first, in case callback enqueues more callbacks
     if (node->callback) {
@@ -85,7 +86,7 @@ void fake_system_task_callbacks_invoke(int num_to_invoke) {
       node->callback(node->data);
       s_fake_system_task_current_cb = NULL;
     }
-    SystemTaskCallbackNode *prev = (SystemTaskCallbackNode *) list_get_prev(&node->node);
+    SystemTaskCallbackNode *prev = (SystemTaskCallbackNode *)list_get_prev(&node->node);
     list_remove(&node->node, &s_system_task_callback_head, NULL);
     free(node);
     node = prev;
@@ -106,9 +107,9 @@ void fake_system_task_callbacks_invoke_pending(void) {
 }
 
 void fake_system_task_callbacks_cleanup(void) {
-  SystemTaskCallbackNode *node = (SystemTaskCallbackNode *) s_system_task_callback_head;
+  SystemTaskCallbackNode *node = (SystemTaskCallbackNode *)s_system_task_callback_head;
   while (node) {
-    SystemTaskCallbackNode *next = (SystemTaskCallbackNode *) list_get_next(&node->node);
+    SystemTaskCallbackNode *next = (SystemTaskCallbackNode *)list_get_next(&node->node);
     list_remove(&node->node, &s_system_task_callback_head, NULL);
     free(node);
     node = next;
@@ -130,6 +131,6 @@ bool system_task_is_ready_to_run(void) {
   return true;
 }
 
-void* system_task_get_current_callback(void) {
+void *system_task_get_current_callback(void) {
   return s_fake_system_task_current_cb;
 }

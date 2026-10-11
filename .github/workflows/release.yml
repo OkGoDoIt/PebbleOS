@@ -13,10 +13,14 @@ jobs:
   build-firmware:
     uses: ./.github/workflows/build-firmware.yml
     secrets: inherit
+    with:
+      sbom: true
 
   build-prf:
     uses: ./.github/workflows/build-prf.yml
     secrets: inherit
+    with:
+      sbom: true
 
   build-qemu:
     uses: ./.github/workflows/build-qemu.yml
@@ -44,9 +48,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download artifacts
+      - name: Download firmware artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: firmware-*
+          path: artifacts
+
+      - name: Download PRF artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: prf-*
           path: artifacts
 
       - name: Collect release files

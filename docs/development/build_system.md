@@ -40,7 +40,7 @@ pbl_library_sources(service.c util.c)
   has to list them. Dependencies between firmware libraries do not need
   declaring either: they resolve at the final link.
 - The library is named after its directory
-  (`src/fw/services/timeline` → `src__fw__services__timeline`). Give it a
+  (`fw/services/timeline` → `fw__services__timeline`). Give it a
   name of its own with `pbl_library_named()` when something refers to it,
   or when one directory builds more than one library.
 - The target is only created once the library gets its first source file,
@@ -83,7 +83,7 @@ hand-written neighbours.
 Headers are global; there is no per-consumer opt-in. A library that is not
 always needed is gated behind a Kconfig symbol instead, as Zephyr does:
 its directory is added with `pbl_add_subdirectory_ifdef()`, and consumers
-`select` (or `imply`) the symbol in their own Kconfig, e.g. `BT_FW_NIMBLE`
+`select` (or `imply`) the symbol in their own Kconfig, e.g. `BT`
 selects `MBEDTLS` and `SERVICE_VOICE` selects `SPEEX`.
 
 Prebuilt vendor archives are registered with
@@ -99,6 +99,10 @@ pbl_linker_sources(memory linker.ld)
 ```
 
 See `cmake/modules/linker.cmake` for the available hooks.
+
+Sources that must run from RAM are marked with
+`pbl_library_ramfunc(file.c ...)`; see [the kernel](../architecture/kernel.md)
+for the `.ramfunc` section.
 
 ## Generated sources
 

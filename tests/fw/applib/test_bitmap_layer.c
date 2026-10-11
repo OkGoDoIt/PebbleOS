@@ -1,32 +1,31 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-
-#include "applib/graphics/graphics.h"
-#include "applib/ui/bitmap_layer.h"
+#include <applib/graphics/graphics.h>
+#include <applib/ui/bitmap_layer.h>
+#include <clar.h>
 
 // Stubs
 /////////////////////
-#include "stubs_app_state.h"
-#include "stubs_graphics.h"
-#include "stubs_graphics_context.h"
-#include "stubs_heap.h"
-#include "stubs_logging.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_resources.h"
-#include "stubs_syscalls.h"
-#include "stubs_ui_window.h"
-#include "stubs_unobstructed_area.h"
+#include <stubs_app_state.h>
+#include <stubs_graphics.h>
+#include <stubs_graphics_context.h>
+#include <stubs_heap.h>
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_resources.h>
+#include <stubs_syscalls.h>
+#include <stubs_ui_window.h>
+#include <stubs_unobstructed_area.h>
 
 // Fakes
 /////////////////////
 
 static GRect s_graphics_draw_bitmap_in_rect__rect = GRectZero;
 
-void graphics_draw_bitmap_in_rect(GContext* ctx, const GBitmap *src_bitmap, const GRect *rect) {
+void graphics_draw_bitmap_in_rect(GContext *ctx, const GBitmap *src_bitmap, const GRect *rect) {
   s_graphics_draw_bitmap_in_rect__rect = *rect;
 }
 
@@ -50,7 +49,7 @@ void test_bitmap_layer__cleanup(void) {
 // on recent SDKs but that a previous bug is kept for 2.x SDK
 void test_bitmap_layer__nonzero_bounds(void) {
   GContext ctx = {
-    .draw_state = (GDrawState) {
+    .draw_state = (GDrawState){
       .clip_box = GRect(0, 0, 144, 168),
       .drawing_box = GRect(0, 0, 144, 168),
     },

@@ -1,44 +1,44 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-
-#include "applib/app_glance.h"
 #include <pbl/drivers/rtc.h>
-#include "kernel/pbl_malloc.h"
-#include "process_management/app_install_manager.h"
-#include "resource/resource_ids.auto.h"
-#include "pbl/services/app_glances/app_glance_service.h"
-#include "pbl/services/blob_db/app_glance_db.h"
-#include "pbl/services/blob_db/app_glance_db_private.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/util/uuid.h"
+#include <pbl/services/app_glances/app_glance_service.h>
+#include <pbl/services/blob_db/app_glance_db.h>
+#include <pbl/services/blob_db/app_glance_db_private.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/util/uuid.h>
+
+#include <applib/app_glance.h>
+#include <clar.h>
+#include <kernel/pbl_malloc.h>
+#include <process_management/app_install_manager.h>
+#include <resource/resource_ids.auto.h>
 
 // Fakes
 ////////////////////////////////////////////////////////////////
 
-#include "fake_settings_file.h"
+#include <fake_settings_file.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////
 
-#include "stubs_app_cache.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_events.h"
-#include "stubs_event_service_client.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
+#include <stubs_app_cache.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_event_service_client.h>
+#include <stubs_events.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
 
 status_t pfs_remove(const char *name) {
   fake_settings_file_reset();
   return S_SUCCESS;
 }
 
-#define APP_GLANCE_TEST_UUID \
-    (UuidMake(0x3d, 0xc6, 0xb9, 0x4c, 0x4, 0x2, 0x48, 0xf4, \
-              0xbe, 0x14, 0x81, 0x17, 0xf1, 0xa, 0xa9, 0xc4))
+#define APP_GLANCE_TEST_UUID                                                                       \
+  (UuidMake(0x3d, 0xc6, 0xb9, 0x4c, 0x4, 0x2, 0x48, 0xf4, 0xbe, 0x14, 0x81, 0x17, 0xf1, 0xa, 0xa9, \
+            0xc4))
 
 // Setup
 ////////////////////////////////////////////////////////////////
@@ -87,7 +87,7 @@ void test_app_glance_service__get_current_slice_basic(void) {
   cl_assert_equal_b(app_glance_service_get_current_slice(&APP_GLANCE_TEST_UUID, NULL), false);
 
   // Insert a glance
-  const AppGlance glance = (AppGlance) {
+  const AppGlance glance = (AppGlance){
     .num_slices = 1,
     .slices = {
       {
@@ -118,16 +118,17 @@ void test_app_glance_service__get_current_slice_basic(void) {
 void test_app_glance_service__get_current_slice_from_glance_with_multiple_unsorted_slices(void) {
   // Insert a glance with multiple, unsorted slices
   // Note that the expiration time for each of these are a minimum of 10 seconds apart
-  const AppGlance glance = (AppGlance) {
+  const AppGlance glance = (AppGlance){
     .num_slices = 2,
     .slices = {
       {
         .expiration_time = 1464734504, // (Tue, 31 May 2016 22:41:44 GMT)
         .type = AppGlanceSliceType_IconAndSubtitle,
-        .icon_and_subtitle = {
-          .icon_resource_id = RESOURCE_ID_SETTINGS_ICON_BLUETOOTH_ALT,
-          .template_string = "Test subtitle 2",
-        },
+        .icon_and_subtitle =
+            {
+              .icon_resource_id = RESOURCE_ID_SETTINGS_ICON_BLUETOOTH_ALT,
+              .template_string = "Test subtitle 2",
+            },
       },
       {
         .expiration_time = 1464734484, // (Tue, 31 May 2016 22:41:24 GMT)
@@ -160,19 +161,20 @@ void test_app_glance_service__get_current_slice_from_glance_with_multiple_unsort
 void test_app_glance_service__slice_with_no_expiration(void) {
   // Insert a glance with multiple, unsorted slices
   // Note that the expiration time for each of these are a minimum of 10 seconds apart
-  const AppGlance glance = (AppGlance) {
+  const AppGlance glance = (AppGlance){
     .num_slices = 2,
     .slices = {
       {
         .expiration_time = APP_GLANCE_SLICE_NO_EXPIRATION,
         .type = AppGlanceSliceType_IconAndSubtitle,
-        .icon_and_subtitle = {
-          .icon_resource_id = RESOURCE_ID_SETTINGS_ICON_AIRPLANE,
-          .template_string = "Test subtitle 2",
-        },
+        .icon_and_subtitle =
+            {
+              .icon_resource_id = RESOURCE_ID_SETTINGS_ICON_AIRPLANE,
+              .template_string = "Test subtitle 2",
+            },
       },
       {
-      .expiration_time = 1464734504, // (Tue, 31 May 2016 22:41:44 GMT)
+        .expiration_time = 1464734504, // (Tue, 31 May 2016 22:41:44 GMT)
         .type = AppGlanceSliceType_IconAndSubtitle,
         .icon_and_subtitle = {
           .icon_resource_id = RESOURCE_ID_SETTINGS_ICON_BLUETOOTH_ALT,

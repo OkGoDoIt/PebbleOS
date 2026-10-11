@@ -4,21 +4,21 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/idle.h>
+#include <pbl/mcu/interrupts.h>
+#include <pbl/mcu/mpu.h>
+
 #include <cmsis_core.h>
+#include <kernel.h>
 
-#include "pbl/drivers/mpu.h"
-#include "pbl/kernel/idle.h"
-#include "pbl/mcu/interrupts.h"
-
-#include "kernel.h"
-
-#if defined(__VFP_FP__) && !defined(__SOFTFP__)
+#ifdef CONFIG_CPU_HAS_FPU
 #define HAS_FPU 1
 #else
 #define HAS_FPU 0
 #endif
 
-#ifdef CONFIG_MPU_TYPE_ARMV8M
+#ifdef CONFIG_CPU_CORTEX_M_HAS_SPLIM
 #define HAS_PSPLIM 1
 #else
 #define HAS_PSPLIM 0
@@ -27,31 +27,29 @@
 #define NUM_MPU_REGIONS 4
 #ifdef CONFIG_SOC_SF32LB52
 #define FIRST_MPU_REGION 8
-#elif defined(CONFIG_QEMU) && defined(CONFIG_CORTEX_M33)
-#define FIRST_MPU_REGION 4
 #else
 #define FIRST_MPU_REGION 4
 #endif
 
-#define SVC_START 0
-#define SVC_YIELD 1
+#define SVC_START           0
+#define SVC_YIELD           1
 #define SVC_RAISE_PRIVILEGE 2
 
-#define INITIAL_XPSR 0x01000000u
-#define INITIAL_EXC_RETURN 0xfffffffdu
-#define CONTROL_PRIVILEGED 0x02u
-#define CONTROL_UNPRIVILEGED 0x03u
+#define INITIAL_XPSR           0x01000000u
+#define INITIAL_EXC_RETURN     0xfffffffdu
+#define CONTROL_PRIVILEGED     0x02u
+#define CONTROL_UNPRIVILEGED   0x03u
 #define EXC_RETURN_FP_INACTIVE 0x10u
-#define XPSR_STACK_PADDING 0x200u
-#define FPCCR_ASPEN_LSPEN (0x3u << 30)
+#define XPSR_STACK_PADDING     0x200u
+#define FPCCR_ASPEN_LSPEN      (0x3u << 30)
 
 // System handler priority registers, byte-indexed like the NVIC ones.
-#define SHPR_BYTES ((volatile uint8_t *)0xE000ED18u)
-#define SHPR_SVCALL 7
-#define SHPR_PENDSV 10
+#define SHPR_BYTES   ((volatile uint8_t *)0xE000ED18u)
+#define SHPR_SVCALL  7
+#define SHPR_PENDSV  10
 #define SHPR_SYSTICK 11
 
-struct pbl_thread *pbl_cur __attribute__((section(".kernel_unpriv_ro_bss")));
+struct pbl_thread *pbl_cur PBL_SECTION(".kernel_unpriv_ro_bss");
 
 //! Saved context, lowest address first. Matches the layout core dump tooling
 //! learned from the FreeRTOS port so the canonical register walk is unchanged.
@@ -90,11 +88,11 @@ struct pbl_kernel_debug_layout {
   uint16_t ctx_control;
   uint16_t ctx_r4;
   uint16_t ctx_exc_return;
-  uint16_t ctx_hw;        // hardware frame when no FP context is stacked
-  uint16_t ctx_fp_extra;  // bytes of s16-s31 that precede it otherwise
+  uint16_t ctx_hw;       // hardware frame when no FP context is stacked
+  uint16_t ctx_fp_extra; // bytes of s16-s31 that precede it otherwise
 };
 
-const struct pbl_kernel_debug_layout pbl_kernel_debug_layout __attribute__((used)) = {
+const struct pbl_kernel_debug_layout pbl_kernel_debug_layout PBL_USED = {
   .version = 1,
   .thread_sp = offsetof(struct pbl_thread, backend.sp),
   .thread_all_next = offsetof(struct pbl_thread, backend.all_next),
@@ -119,7 +117,9 @@ static inline bool prv_fp_active(uint32_t exc_return) {
 
 // ---- threads ----------------------------------------------------------------
 
-static void prv_thread_return(void) { pbl_thread_abort(NULL); }
+static void prv_thread_return(void) {
+  pbl_thread_abort(NULL);
+}
 
 void arch_thread_init(struct pbl_thread *t, void (*entry)(void *), void *arg) {
   uintptr_t top = ((uintptr_t)t->stack + t->stack_size) & ~7u;
@@ -139,21 +139,25 @@ void arch_thread_init(struct pbl_thread *t, void (*entry)(void *), void *arg) {
 
 // The port expects the attribute word to hold RASR/RLAR verbatim and derives
 // RBAR from the base: on ARMv7-M the region number and VALID bit are ORed in
-// so no RNR write is needed per region.
+// so no RNR write is needed per region. An empty slot must still carry them:
+// an RBAR write with VALID clear lands on whatever region RNR last selected,
+// i.e. it would wipe the slot programmed just before it.
 void arch_thread_regions_set(struct pbl_thread *t, const MpuRegion *const *regions) {
   for (unsigned int i = 0; i < NUM_MPU_REGIONS; i++) {
     const MpuRegion *r = regions ? regions[i] : NULL;
     uint32_t rbar = 0;
     uint32_t attr = 0;
+#ifndef CONFIG_ARMV8_M_MAINLINE
+    rbar = MPU_RBAR_VALID_Msk | (FIRST_MPU_REGION + i);
+#endif
     if (r != NULL) {
       KERNEL_ASSERT(r->region_num == FIRST_MPU_REGION + i);
       uint32_t base_reg;
       mpu_get_register_settings(r, &base_reg, &attr);
-#ifdef CONFIG_MPU_TYPE_ARMV8M
+#ifdef CONFIG_ARMV8_M_MAINLINE
       rbar = base_reg;
 #else
-      rbar = (base_reg & ~(MPU_RBAR_VALID_Msk | MPU_RBAR_REGION_Msk)) | MPU_RBAR_VALID_Msk |
-             (FIRST_MPU_REGION + i);
+      rbar |= base_reg & ~(MPU_RBAR_VALID_Msk | MPU_RBAR_REGION_Msk);
 #endif
     }
     t->backend.arch.mpu[2 * i] = rbar;
@@ -164,7 +168,9 @@ void arch_thread_regions_set(struct pbl_thread *t, const MpuRegion *const *regio
 #endif
 }
 
-void arch_thread_aborted(struct pbl_thread *t) { (void)t; }
+void arch_thread_aborted(struct pbl_thread *t) {
+  (void)t;
+}
 
 void arch_thread_exit(void) {
   // The switch requested by the abort takes over as soon as we get here.
@@ -175,7 +181,9 @@ void arch_thread_exit(void) {
 
 // ---- interrupts -------------------------------------------------------------
 
-bool arch_in_isr(void) { return mcu_state_is_isr(); }
+bool arch_in_isr(void) {
+  return mcu_state_is_isr();
+}
 
 void arch_irq_disable(void) {
   __set_BASEPRI(PBL_IRQ_PRIO_MAX_SYSCALL);
@@ -183,7 +191,9 @@ void arch_irq_disable(void) {
   __ISB();
 }
 
-void arch_irq_enable(void) { __set_BASEPRI(0); }
+void arch_irq_enable(void) {
+  __set_BASEPRI(0);
+}
 
 void arch_switch_request(void) {
   SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
@@ -194,26 +204,26 @@ void arch_switch_request(void) {
 // ---- context switch ---------------------------------------------------------
 
 #define STR_(x) #x
-#define STR(x) STR_(x)
+#define STR(x)  STR_(x)
 
 #if HAS_FPU
-#define SAVE_FP "  tst r14, #0x10 \n it eq \n vstmdbeq r0!, {s16-s31} \n"
+#define SAVE_FP    "  tst r14, #0x10 \n it eq \n vstmdbeq r0!, {s16-s31} \n"
 #define RESTORE_FP "  tst r14, #0x10 \n it eq \n vldmiaeq r0!, {s16-s31} \n"
 #else
-#define SAVE_FP ""
+#define SAVE_FP    ""
 #define RESTORE_FP ""
 #endif
 
 #if HAS_PSPLIM
-#define SAVE_REGS "  mrs r1, control \n mrs r12, psplim \n stmdb r0!, {r1, r4-r12, r14} \n"
+#define SAVE_REGS    "  mrs r1, control \n mrs r12, psplim \n stmdb r0!, {r1, r4-r12, r14} \n"
 #define RESTORE_REGS "  ldmia r0!, {r3, r4-r12, r14} \n msr control, r3 \n msr psplim, r12 \n"
 #else
-#define SAVE_REGS "  mrs r1, control \n stmdb r0!, {r1, r4-r11, r14} \n"
+#define SAVE_REGS    "  mrs r1, control \n stmdb r0!, {r1, r4-r11, r14} \n"
 #define RESTORE_REGS "  ldmia r0!, {r3, r4-r11, r14} \n msr control, r3 \n"
 #endif
 
 // r1 -> thread's MPU words; clobbers r2, r4-r11.
-#define RESTORE_MPU                                                          \
+#define RESTORE_MPU \
   "  ldr r2, =0xe000ed98 \n"            /* MPU_RNR */                      \
   "  mov r4, #" STR(FIRST_MPU_REGION) " \n"                                  \
   "  str r4, [r2] \n"                                                        \
@@ -221,50 +231,43 @@ void arch_switch_request(void) {
   "  ldmia r1!, {r4-r11} \n"                                                 \
   "  stmia r2!, {r4-r11} \n"
 
-__attribute__((naked)) void PendSV_Handler(void) {
+PBL_NAKED void PendSV_Handler(void) {
   __asm volatile(
       "  mrs r0, psp \n"
       "  isb \n"
       "  ldr r3, =pbl_cur \n"
-      "  ldr r2, [r3] \n"
-      SAVE_FP
-      SAVE_REGS
-      "  str r0, [r2] \n"              /* pbl_cur->backend.sp */
+      "  ldr r2, [r3] \n" SAVE_FP SAVE_REGS
+      "  str r0, [r2] \n" /* pbl_cur->backend.sp */
       "  stmdb sp!, {r3, r14} \n"
       "  mov r0, %0 \n"
       "  msr basepri, r0 \n"
       "  dsb \n"
       "  isb \n"
-      "  bl sched_switch_in \n"        /* returns the next thread */
+      "  bl sched_switch_in \n" /* returns the next thread */
       "  mov r4, r0 \n"
       "  mov r0, #0 \n"
       "  msr basepri, r0 \n"
       "  ldmia sp!, {r3, r14} \n"
-      "  ldr r0, [r4] \n"              /* next->backend.sp */
-      "  add r1, r4, #4 \n"            /* next->backend.arch.mpu */
-      RESTORE_MPU
-      RESTORE_REGS
-      RESTORE_FP
+      "  ldr r0, [r4] \n"   /* next->backend.sp */
+      "  add r1, r4, #4 \n" /* next->backend.arch.mpu */
+      RESTORE_MPU RESTORE_REGS RESTORE_FP
       "  msr psp, r0 \n"
       "  isb \n"
       "  bx r14 \n"
-      "  .ltorg \n"
-      ::"i"(PBL_IRQ_PRIO_MAX_SYSCALL));
+      "  .ltorg \n" ::"i"(PBL_IRQ_PRIO_MAX_SYSCALL));
 }
 
 // Loads the first thread's context. MSP is reset to the top of the ISR stack.
-__attribute__((naked)) static void prv_restore_first_thread(void) {
+PBL_NAKED static void prv_restore_first_thread(void) {
   __asm volatile(
-      "  ldr r0, =0xE000ED08 \n"       /* VTOR: initial MSP is the first vector */
+      "  ldr r0, =0xE000ED08 \n" /* VTOR: initial MSP is the first vector */
       "  ldr r0, [r0] \n"
       "  ldr r0, [r0] \n"
       "  msr msp, r0 \n"
       "  ldr r3, =pbl_cur \n"
       "  ldr r4, [r3] \n"
       "  ldr r0, [r4] \n"
-      "  add r1, r4, #4 \n"
-      RESTORE_MPU
-      RESTORE_REGS
+      "  add r1, r4, #4 \n" RESTORE_MPU RESTORE_REGS
       "  msr psp, r0 \n"
       "  mov r0, #0 \n"
       "  msr basepri, r0 \n"
@@ -291,7 +294,7 @@ static uintptr_t prv_original_sp(const uint32_t *frame, uint32_t exc_return) {
 #define SYSCALL_STACK_ARG_WORDS 16u
 
 // Boards without a dedicated syscall stack run syscalls on the caller's.
-__attribute__((weak)) uint32_t *pbl_kernel_syscall_stack(uintptr_t *base_out) {
+PBL_WEAK uint32_t *pbl_kernel_syscall_stack(uintptr_t *base_out) {
   (void)base_out;
   return NULL;
 }
@@ -336,7 +339,7 @@ static void prv_raise_privilege(uint32_t *frame, uint32_t exc_return) {
   __ISB();
 }
 
-__attribute__((noinline, used)) static void prv_svc(uint32_t *frame, uint32_t exc_return) {
+PBL_NOINLINE PBL_USED static void prv_svc(uint32_t *frame, uint32_t exc_return) {
   uint8_t number = ((uint8_t *)frame[6])[-2];
   switch (number) {
     case SVC_START:
@@ -355,7 +358,7 @@ __attribute__((noinline, used)) static void prv_svc(uint32_t *frame, uint32_t ex
   }
 }
 
-__attribute__((naked)) void SVC_Handler(void) {
+PBL_NAKED void SVC_Handler(void) {
   __asm volatile(
       "  tst lr, #4 \n"
       "  ite eq \n"
@@ -367,7 +370,8 @@ __attribute__((naked)) void SVC_Handler(void) {
 
 // ---- start and tick ---------------------------------------------------------
 
-void arch_init(void) {}
+void arch_init(void) {
+}
 
 void arch_start(void) {
   // PendSV and SysTick at the lowest priority; SVC follows once started.
@@ -392,7 +396,9 @@ void arch_start(void) {
 }
 
 #ifndef CONFIG_SOC_SF32LB52
-void SysTick_Handler(void) { pbl_kernel_tick_isr(); }
+void SysTick_Handler(void) {
+  pbl_kernel_tick_isr();
+}
 #endif
 
 void arch_idle(pbl_tick_t max_ticks) {
@@ -408,8 +414,8 @@ void arch_thread_saved_regs(const struct pbl_thread *t, struct pbl_thread_saved_
   if (t == pbl_cur && arch_in_isr()) {
     // The running thread's registers are live on its stack, not saved.
     const uint32_t *frame = (const uint32_t *)__get_PSP();
-    *regs = (struct pbl_thread_saved_regs){
-      .pc = frame[6], .lr = frame[5], .control = __get_CONTROL() };
+    *regs =
+        (struct pbl_thread_saved_regs){.pc = frame[6], .lr = frame[5], .control = __get_CONTROL()};
     return;
   }
   const struct saved_context *ctx = t->backend.sp;
@@ -417,7 +423,7 @@ void arch_thread_saved_regs(const struct pbl_thread *t, struct pbl_thread_saved_
   if (prv_fp_active(ctx->exc_return)) {
     hw += NUM_EXTRA_FP_REGS;
   }
-  *regs = (struct pbl_thread_saved_regs){ .pc = hw[6], .lr = hw[5], .control = ctx->control };
+  *regs = (struct pbl_thread_saved_regs){.pc = hw[6], .lr = hw[5], .control = ctx->control};
 }
 
 void arch_thread_info_regs(const struct pbl_thread *t, uint32_t regs[PBL_THREAD_REG_COUNT]) {

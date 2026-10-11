@@ -42,8 +42,10 @@ Enable manufacturing-only functionality in the PRF build.
 
 ## Debugging
 
-:`-DCONFIG_NO_WATCHDOG=y`:
-Disable watchdog
+:`-DCONFIG_WATCHDOG=n`:
+Build without the hardware watchdog driver. Software failures then halt
+with interrupts disabled for a debugger instead of rebooting, and the task
+watchdog only logs the stalls it detects.
 
 :`-DCONFIG_DEBUG_INFO_MACROS=y`:
 Compile with `-g3` rather than `-g`, so a debugger can expand the
@@ -81,6 +83,20 @@ Default log level, where `<LEVEL>` is one of `ERROR`, `WARNING`,
 :`-DCONFIG_LOG_HASHED=n`:
 Disable log messages hashing.
 This will increase ROM usage, but will not require a dictionary file to decode logs.
+
+:`-DCONFIG_<MODULE>_LOG_LEVEL_RUNTIME=y`:
+Keep all log messages of a module in the image and filter them at runtime,
+using `CONFIG_<MODULE>_LOG_LEVEL` as the initial level. The level is changed
+with `PBL_LOG_MODULE_LEVEL_SET(name, level)` and read with
+`PBL_LOG_MODULE_LEVEL_GET(name)`, where `name` is the one given to
+`PBL_LOG_MODULE_DEFINE`. Messages accepted by the module level skip the
+serial and flash log level filters. This will increase ROM usage for that module.
+
+The **Settings → System → Debugging → Vibe Log Info** preference sets the alert UI,
+vibe score, and vibe pattern modules to DEBUG, so their traces reach bug reports.
+Normal firmware enables runtime levels for these modules by default. Disabling
+the preference restores each module's configured level; the preference is also
+applied at boot. Recovery firmware keeps compile-time logging by default.
 
 These and many more options can also be browsed and changed interactively with
 `pbl menuconfig` after configuring.

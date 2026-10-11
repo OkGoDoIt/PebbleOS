@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig EXTI
+    bool "External Interrupt"
+    help
+      External Interrupt Drivers
+
+if EXTI
+
+config EXTI_NRF5
+    bool "Nordic nRF5"
+    default y if SOC_NRF52
+    select HAL_NORDIC
+    help
+      Support for the Nordic nRF5 external interrupt controller.
+
+config EXTI_SF32LB
+    bool "SiFli SF32LB"
+    default y if SOC_SF32LB52
+    select HAL_SIFLI
+    select HAL_SIFLI_GPIO
+    help
+      Support for the SiFli SF32LB external interrupt controller.
+
+module = DRIVER_EXTI
+module-str = External Interrupt
+source "subsys/logging/Kconfig.template.log_level"
+
+endif # EXTI

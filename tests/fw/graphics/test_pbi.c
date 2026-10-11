@@ -1,30 +1,30 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/gtypes.h"
-
-#include "clar.h"
 #include "util.h"
 
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
+
+#include <applib/graphics/gtypes.h>
+#include <clar.h>
 
 // Stubs
 ////////////////////////////////////
-#include "stubs_applib_resource.h"
-#include "stubs_app_state.h"
-#include "stubs_heap.h"
-#include "stubs_resources.h"
-#include "stubs_syscalls.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_logging.h"
+#include <stubs_app_state.h>
+#include <stubs_applib_resource.h>
+#include <stubs_heap.h>
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_resources.h>
+#include <stubs_syscalls.h>
 
 // Tests
 ////////////////////////////////////
 
 // Reference PNGs reside in "tests/fw/graphics/test_images/"
-// and are created at build time, with the test PBI file generated 
+// and are created at build time, with the test PBI file generated
 // by bitmapgen.py from the reference PNG copied to TEST_IMAGES_PATH
 // covers 1,2,4,8 bit palettized
 // covers 1,2,4,8 bit palettized with transparency
@@ -92,4 +92,3 @@ void test_pbi__color_8_bit_transparent(void) {
   GBitmap *bitmap = setup_pbi_test(TEST_PBI_FILE);
   cl_assert(gbitmap_pbi_eq(bitmap, TEST_PBI_FILE));
 }
-

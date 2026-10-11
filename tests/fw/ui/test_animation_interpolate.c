@@ -1,14 +1,13 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/ui/animation_interpolate.h"
-#include "applib/ui/animation.h"
-#include "pbl/util/size.h"
+#include <pbl/util/size.h>
 
-#include "clar.h"
-
-#include "stubs/stubs_logging.h"
-#include "stubs/stubs_passert.h"
+#include <applib/ui/animation.h>
+#include <applib/ui/animation_interpolate.h>
+#include <clar.h>
+#include <stubs/stubs_logging.h>
+#include <stubs/stubs_passert.h>
 
 InterpolateInt64Function s_animation_private_current_interpolate_override;
 
@@ -23,6 +22,18 @@ void test_animation_interpolate__initialize(void) {
 void test_animation_interpolate__override_is_null(void) {
   cl_assert_equal_i(-10000, interpolate_int16(0, -10000, 10000));
   cl_assert_equal_i(10000, interpolate_int16(ANIMATION_NORMALIZED_MAX, -10000, 10000));
+}
+
+void test_animation_interpolate__gsize(void) {
+  const GSize from = GSize(10, 100);
+  const GSize to = GSize(30, 300);
+  const int32_t half = ANIMATION_NORMALIZED_MAX / 2;
+  const GSize mid = interpolate_gsize(half, from, to);
+  cl_assert_equal_i(interpolate_int16(half, from.w, to.w), mid.w);
+  cl_assert_equal_i(interpolate_int16(half, from.h, to.h), mid.h);
+  const GSize end = interpolate_gsize(ANIMATION_NORMALIZED_MAX, from, to);
+  cl_assert_equal_i(30, end.w);
+  cl_assert_equal_i(300, end.h);
 }
 
 static AnimationProgress s_override_progress;
@@ -60,8 +71,8 @@ void test_animation_interpolate__moook(void) {
   const int num_frames = ARRAY_LENGTH(expected);
   for (int i = 0; i < num_frames; i++) {
     printf("frame: %d\n", i);
-    cl_assert_equal_i(interpolate_moook((i * ANIMATION_NORMALIZED_MAX) / num_frames,
-                                        -20000, 20000), expected[i]);
+    cl_assert_equal_i(interpolate_moook((i * ANIMATION_NORMALIZED_MAX) / num_frames, -20000, 20000),
+                      expected[i]);
   }
 }
 
@@ -70,11 +81,11 @@ void test_animation_interpolate__moook_in(void) {
   const int num_frames = ARRAY_LENGTH(expected);
   for (int i = 0; i < num_frames; i++) {
     printf("frame: %d\n", i);
-    cl_assert_equal_i(interpolate_moook_in_only((i * ANIMATION_NORMALIZED_MAX) / num_frames,
-                                                -20000, 20000), expected[i]);
+    cl_assert_equal_i(
+        interpolate_moook_in_only((i * ANIMATION_NORMALIZED_MAX) / num_frames, -20000, 20000),
+        expected[i]);
   }
-  cl_assert_equal_i(interpolate_moook_in_only(ANIMATION_NORMALIZED_MAX,
-                                              -20000, 20000), 20000);
+  cl_assert_equal_i(interpolate_moook_in_only(ANIMATION_NORMALIZED_MAX, -20000, 20000), 20000);
 }
 
 void test_animation_interpolate__moook_out(void) {
@@ -82,8 +93,9 @@ void test_animation_interpolate__moook_out(void) {
   const int num_frames = ARRAY_LENGTH(expected);
   for (int i = 0; i < num_frames; i++) {
     printf("frame: %d\n", i);
-    cl_assert_equal_i(interpolate_moook_out((i * ANIMATION_NORMALIZED_MAX) / num_frames,
-                                            -20000, 20000, 0, true), expected[i]);
+    cl_assert_equal_i(
+        interpolate_moook_out((i * ANIMATION_NORMALIZED_MAX) / num_frames, -20000, 20000, 0, true),
+        expected[i]);
   }
 }
 
@@ -92,11 +104,11 @@ void test_animation_interpolate__moook_soft(void) {
   cl_assert_equal_i(-20000, interpolate_moook_soft(0, -20000, 20000, moook_num_soft_frames));
 
   // mid frame is closer to end due to more end frames
-  cl_assert_equal_i(6676, interpolate_moook_soft(ANIMATION_NORMALIZED_MAX / 2, -20000,
-                                                 20000, moook_num_soft_frames));
+  cl_assert_equal_i(6676, interpolate_moook_soft(ANIMATION_NORMALIZED_MAX / 2, -20000, 20000,
+                                                 moook_num_soft_frames));
 
-  cl_assert_equal_i(20000, interpolate_moook_soft(ANIMATION_NORMALIZED_MAX, -20000,
-                                                  20000, moook_num_soft_frames));
+  cl_assert_equal_i(20000, interpolate_moook_soft(ANIMATION_NORMALIZED_MAX, -20000, 20000,
+                                                  moook_num_soft_frames));
 }
 
 static const int32_t s_custom_moook_in[] = {0, 2, 8};
@@ -115,9 +127,9 @@ void test_animation_interpolate__moook_custom(void) {
   cl_assert_equal_i(-20000, interpolate_moook_custom(0, -20000, 20000, &s_custom_moook));
 
   // mid frame is closer to end due to more end frames
-  cl_assert_equal_i(6683, interpolate_moook_custom(ANIMATION_NORMALIZED_MAX / 2, -20000, 20000,
-                                                   &s_custom_moook));
+  cl_assert_equal_i(
+      6683, interpolate_moook_custom(ANIMATION_NORMALIZED_MAX / 2, -20000, 20000, &s_custom_moook));
 
-  cl_assert_equal_i(20000, interpolate_moook_custom(ANIMATION_NORMALIZED_MAX, -20000, 20000,
-                                                    &s_custom_moook));
+  cl_assert_equal_i(
+      20000, interpolate_moook_custom(ANIMATION_NORMALIZED_MAX, -20000, 20000, &s_custom_moook));
 }

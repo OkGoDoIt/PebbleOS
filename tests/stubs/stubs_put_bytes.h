@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include "pbl/services/prf_update.h"
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/prf_update.h>
 
-void WEAK put_bytes_cancel(void) {}
-
+void PBL_WEAK put_bytes_cancel(void) {
+}

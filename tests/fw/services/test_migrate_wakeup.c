@@ -1,55 +1,54 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "flash_region/flash_region.h"
-#include "syscall/syscall.h"
-#include "pbl/services/wakeup.h"
-#include "pbl/services/event_service.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/settings/settings_file.h"
-#include "process_management/app_install_manager.h"
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/event_service.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/services/settings/settings_file.h>
+#include <pbl/services/wakeup.h>
 
-#include "clar.h"
+#include <clar.h>
+#include <flash_region/flash_region.h>
+#include <process_management/app_install_manager.h>
+#include <syscall/syscall.h>
 
 // Fakes
 //////////////////////////////////////////////////////////
-#include "fake_app_manager.h"
-#include "fake_new_timer.h"
-#include "fake_pbl_malloc.h"
-#include "fake_rtc.h"
-#include "fake_spi_flash.h"
-#include "fake_system_task.h"
-#include "fake_time.h"
+#include <fake_app_manager.h>
+#include <fake_new_timer.h>
+#include <fake_pbl_malloc.h>
+#include <fake_rtc.h>
+#include <fake_spi_flash.h>
+#include <fake_system_task.h>
+#include <fake_time.h>
 
 // Stubs
 //////////////////////////////////////////////////////////
-#include "stubs_analytics.h"
-#include "stubs_events.h"
-#include "stubs_logging.h"
-#include "stubs_print.h"
-#include "stubs_serial.h"
-#include "stubs_passert.h"
-#include "stubs_sleep.h"
-#include "stubs_mutex.h"
-#include "stubs_hexdump.h"
-#include "stubs_pebble_process_md.h"
-#include "stubs_prompt.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_compiled_with_legacy2_sdk.h"
-#include "stubs_memory_layout.h"
+#include <stubs_analytics.h>
+#include <stubs_compiled_with_legacy2_sdk.h>
+#include <stubs_events.h>
+#include <stubs_hexdump.h>
+#include <stubs_logging.h>
+#include <stubs_memory_layout.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pebble_process_md.h>
+#include <stubs_print.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_serial.h>
+#include <stubs_sleep.h>
+#include <stubs_task_wdt.h>
 
-#define SETTINGS_FILE_NAME  "wakeup"
-#define SETTINGS_FILE_SIZE  2048
+#define SETTINGS_FILE_NAME "wakeup"
+#define SETTINGS_FILE_SIZE 2048
 
-#define WAKEUP_REASON       0x1337
-#define TIMESTAMP           1337
+#define WAKEUP_REASON 0x1337
+#define TIMESTAMP     1337
 
 // Structures
 ////////////////////////////////////
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   Uuid uuid;
   int32_t reason;
   bool repeating;
@@ -57,28 +56,20 @@ typedef struct PACKED {
   bool notify_if_missed;
 } WakeupEntryV1;
 
-typedef struct PACKED {
+typedef struct PBL_PACKED {
   Uuid uuid;
   int32_t reason;
   bool repeating;
   uint16_t repeat_hours_missed;
   bool notify_if_missed;
-  time_t timestamp;
+  int32_t timestamp;
   bool utc;
 } WakeupEntryV2;
 
 // Globals
 ////////////////////////////////////
 
-static const Uuid app_uuid = (Uuid) {
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5
-};
-
-static PebbleProcessMd s_test_app_md = {
-  .uuid = (Uuid) {
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5
-  }
-};
+static const Uuid app_uuid = (Uuid){0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5};
 
 static AppInstallEntry s_app_install_entry = {
   .install_id = 1,
@@ -89,7 +80,7 @@ static WakeupEntryV1 w_entry;
 // Local Stubs
 ////////////////////////////////////
 void event_service_init(PebbleEventType type, EventServiceAddSubscriberCallback start_cb,
-    EventServiceRemoveSubscriberCallback stop_cb) {
+                        EventServiceRemoveSubscriberCallback stop_cb) {
   return;
 }
 
@@ -130,7 +121,7 @@ void test_migrate_wakeup__initialize(void) {
   const int32_t timestamp = TIMESTAMP;
 
   // Create the Migration Entry
-  w_entry = (WakeupEntryV1) {
+  w_entry = (WakeupEntryV1){
     .uuid = app_uuid,
     .reason = WAKEUP_REASON,
     .repeating = false,
@@ -140,8 +131,8 @@ void test_migrate_wakeup__initialize(void) {
 
   open_settings_file(&file);
 
-  cl_must_pass(settings_file_set(&file, (uint8_t*)&timestamp, sizeof(timestamp),
-      (uint8_t*)&w_entry, sizeof(w_entry)));
+  cl_must_pass(settings_file_set(&file, (uint8_t *)&timestamp, sizeof(timestamp),
+                                 (uint8_t *)&w_entry, sizeof(w_entry)));
 
   close_settings_file(&file);
 }
@@ -153,8 +144,8 @@ void test_migrate_wakeup__test_migration_of_wakeup_entries(void) {
 
   open_settings_file(&file);
 
-  cl_must_pass(settings_file_get(&file, (uint8_t*)&wakeup_id, sizeof(wakeup_id),
-      (uint8_t*)&wakeup_entry_v1, sizeof(wakeup_entry_v1)));
+  cl_must_pass(settings_file_get(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id),
+                                 (uint8_t *)&wakeup_entry_v1, sizeof(wakeup_entry_v1)));
   cl_assert_equal_i(wakeup_entry_v1.reason, WAKEUP_REASON);
   cl_assert_equal_i(wakeup_entry_v1.repeat_hours_missed, 0);
   cl_assert(!wakeup_entry_v1.repeating);
@@ -171,11 +162,11 @@ void test_migrate_wakeup__test_migration_of_wakeup_entries(void) {
 
   open_settings_file(&file);
 
-  cl_must_pass(settings_file_exists(&file, (uint8_t*)&wakeup_id, sizeof(wakeup_id)));
-  cl_assert_equal_i(settings_file_get_len(&file, (uint8_t*)&wakeup_id, sizeof(wakeup_id)),
-      sizeof(WakeupEntryV2));
-  cl_must_pass(settings_file_get(&file, (uint8_t*)&wakeup_id, sizeof(wakeup_id),
-      (uint8_t*)&wakeup_entry_v2, sizeof(wakeup_entry_v2)));
+  cl_must_pass(settings_file_exists(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id)));
+  cl_assert_equal_i(settings_file_get_len(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id)),
+                    sizeof(WakeupEntryV2));
+  cl_must_pass(settings_file_get(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id),
+                                 (uint8_t *)&wakeup_entry_v2, sizeof(wakeup_entry_v2)));
 
   cl_assert_equal_i(wakeup_entry_v2.reason, wakeup_entry_v1.reason);
   cl_assert_equal_i(wakeup_entry_v2.repeat_hours_missed, wakeup_entry_v1.repeat_hours_missed);

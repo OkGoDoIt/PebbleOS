@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Third-party code kept in the firmware tree, see docs/development/sbom.md.
+
+components:
+  - name: freebsd-timelocal
+    paths: [applib/pbl_std/timelocal.c, applib/pbl_std/timelocal.h]
+    supplier: The FreeBSD Project
+    description: locale time formatting tables from FreeBSD libc
+    license: BSD-2-Clause
+
+  - name: citrus-mo
+    paths: [services/i18n/i18n.c, ../include/pbl/services/i18n/mo.h]
+    supplier: Citrus Project
+    description: gettext message catalog reader from the Citrus Project
+    license: BSD-2-Clause
+
+  - name: kraepelin
+    paths:
+      - services/activity/kraepelin/kraepelin_algorithm.c
+      - ../include/pbl/services/activity/kraepelin/kraepelin_algorithm.h
+    supplier: Nathaniel T. Stockham
+    description: step counting and sleep detection algorithm
+    license: MIT

@@ -7,7 +7,62 @@
 set(PBL_FIRMWARE_PY ${PBL_BASE}/tools/cmake/firmware.py)
 set(PBL_GENERATE_PY ${PBL_BASE}/tools/cmake/generate.py)
 
+# Without the linker script, the image is a host executable: no images.
+function(pbl_link_native)
+  get_property(object_libs GLOBAL PROPERTY PBL_OBJECT_LIBS)
+  get_property(static_libs GLOBAL PROPERTY PBL_STATIC_LIBS)
+
+  add_executable(pebbleos ${PBL_RESOURCE_SOURCES} ${PBL_FIRMWARE_SOURCES})
+  set_target_properties(pebbleos PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
+  add_dependencies(pebbleos pbl_generated_headers)
+
+  foreach(lib ${object_libs})
+    target_sources(pebbleos PRIVATE $<TARGET_OBJECTS:${lib}>)
+  endforeach()
+
+  # The host side keeps none of the firmware's include paths and flags.
+  get_property(host_sources GLOBAL PROPERTY PBL_HOST_SOURCES)
+  get_property(host_includes GLOBAL PROPERTY PBL_HOST_INCLUDE_DIRS)
+  get_property(host_options GLOBAL PROPERTY PBL_HOST_COMPILE_OPTIONS)
+  add_library(pbl_host OBJECT ${host_sources})
+  set_target_properties(pbl_host PROPERTIES
+    INCLUDE_DIRECTORIES "${host_includes}"
+    COMPILE_OPTIONS "-g;-Wall;-Wextra;-Wno-unused-parameter;${host_options}"
+    COMPILE_DEFINITIONS ""
+  )
+  target_sources(pebbleos PRIVATE $<TARGET_OBJECTS:pbl_host>)
+
+  if(APPLE)
+    target_link_libraries(pebbleos PRIVATE pbl_interface ${static_libs} ${PBL_LIBC_LIBS})
+  else()
+    target_link_libraries(pebbleos PRIVATE pbl_interface
+      -Wl,--start-group ${static_libs} ${PBL_LIBC_LIBS} -Wl,--end-group)
+  endif()
+  get_property(link_options GLOBAL PROPERTY PBL_LINK_OPTIONS)
+  target_link_options(pebbleos PRIVATE ${link_options})
+  # As on the target, code nothing calls is dropped, along with what only it
+  # refers to.
+  if(APPLE)
+    # Packed structs hold pointers at unaligned offsets, which chained fixups
+    # cannot rebase.
+    target_link_options(pebbleos PRIVATE -Wl,-dead_strip -Wl,-no_fixup_chains)
+  else()
+    target_link_options(pebbleos PRIVATE -Wl,--gc-sections)
+  endif()
+
+  set(artifacts pebbleos)
+  if(PBL_PBPACK)
+    list(APPEND artifacts ${PBL_PBPACK} ${PBL_LAYOUTS})
+  endif()
+  add_custom_target(pbl_firmware ALL DEPENDS ${artifacts})
+endfunction()
+
 function(pbl_link_firmware)
+  if(NOT PBL_LINKER_SCRIPT)
+    pbl_link_native()
+    return()
+  endif()
+
   get_property(object_libs GLOBAL PROPERTY PBL_OBJECT_LIBS)
   get_property(static_libs GLOBAL PROPERTY PBL_STATIC_LIBS)
 
@@ -97,9 +152,22 @@ function(pbl_link_firmware)
 
   set(artifacts ${hex} ${bin})
 
+  set(syscalls_stamp ${PROJECT_BINARY_DIR}/pebbleos.syscalls)
+  add_custom_command(
+    OUTPUT ${syscalls_stamp}
+    COMMAND ${PBL_TOOLCHAIN_ENV} ${PYTHON_EXECUTABLE} ${PBL_FIRMWARE_PY} check-syscalls
+            --elf ${elf} --objdump ${CMAKE_OBJDUMP}
+    COMMAND ${CMAKE_COMMAND} -E touch ${syscalls_stamp}
+    DEPENDS pebbleos ${PBL_FIRMWARE_PY}
+    WORKING_DIRECTORY ${PBL_BASE}
+    COMMENT "Checking syscall privilege checks"
+    VERBATIM
+  )
+  list(APPEND artifacts ${syscalls_stamp})
+
   # Hashed log strings: the dictionary the console and the bundle use to
   # turn hashes back into messages.
-  set(loghash ${PROJECT_BINARY_DIR}/src/fw/loghash_dict.json)
+  set(loghash ${PROJECT_BINARY_DIR}/fw/loghash_dict.json)
   if(CONFIG_LOG_HASHED)
     set(fw_loghash ${PROJECT_BINARY_DIR}/pebbleos_loghash_dict.json)
     add_custom_command(
@@ -166,6 +234,31 @@ function(pbl_link_firmware)
     VERBATIM
   )
 
+  # --- Software bill of materials ----------------------------------------
+
+  # Built on request only: it reads ninja's dependency logs, so it needs
+  # the Ninja generator.
+  if(CMAKE_GENERATOR MATCHES "Ninja")
+    get_filename_component(toolchain_root ${CMAKE_C_COMPILER} DIRECTORY)
+    get_filename_component(toolchain_root ${toolchain_root} DIRECTORY)
+    add_custom_target(sbom
+      COMMAND ${PBL_TOOLCHAIN_ENV} ${PYTHON_EXECUTABLE} ${PBL_BASE}/tools/cmake/sbom.py generate
+              --ninja ${CMAKE_MAKE_PROGRAM}
+              --build-dir ${PROJECT_BINARY_DIR}
+              --target pebbleos.elf
+              --image ${bin}
+              --board ${PBL_BOARD_NORMALIZED}
+              --variant ${VARIANT}
+              --toolchain-root ${toolchain_root}
+              --compiler-version ${CMAKE_C_COMPILER_VERSION}
+              --output ${PROJECT_BINARY_DIR}/pebbleos.cdx.json
+      DEPENDS pbl_firmware
+      WORKING_DIRECTORY ${PBL_BASE}
+      COMMENT "Generating the software bill of materials"
+      VERBATIM
+    )
+  endif()
+
   # --- QEMU flash images --------------------------------------------------
 
   if(CONFIG_QEMU)
@@ -176,15 +269,15 @@ function(pbl_link_firmware)
       WORKING_DIRECTORY ${PBL_BASE}
       VERBATIM
     )
+    set(spi_args --config ${PBL_DOTCONFIG} --output ${PROJECT_BINARY_DIR}/qemu_spi_flash.bin)
     if(PBL_PBPACK)
-      add_custom_target(qemu_image_spi
-        COMMAND ${PBL_TOOLCHAIN_ENV} ${PYTHON_EXECUTABLE} ${PBL_FIRMWARE_PY} qemu-image-spi
-                --config ${PBL_DOTCONFIG} --pbpack ${PBL_PBPACK}
-                --output ${PROJECT_BINARY_DIR}/qemu_spi_flash.bin
-        DEPENDS pbl_firmware
-        WORKING_DIRECTORY ${PBL_BASE}
-        VERBATIM
-      )
+      list(APPEND spi_args --pbpack ${PBL_PBPACK})
     endif()
+    add_custom_target(qemu_image_spi
+      COMMAND ${PBL_TOOLCHAIN_ENV} ${PYTHON_EXECUTABLE} ${PBL_FIRMWARE_PY} qemu-image-spi ${spi_args}
+      DEPENDS pbl_firmware
+      WORKING_DIRECTORY ${PBL_BASE}
+      VERBATIM
+    )
   endif()
 endfunction()

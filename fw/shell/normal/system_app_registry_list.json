@@ -1,0 +1,718 @@
+{
+  "warning_one": [
+    " 1. DO NOT CHANGE OR REUSE THE ID OF ANY APPLICATION IN THE LIST ",
+    " 2. Read the directions                                           "
+  ],
+  "directions": [
+    " - The System Apps are the applications that are actually coded",
+    "   into the firmware with static PebbleProcessMd's.            ",
+    " - The Resource Apps are the applications that are stored in   ",
+    "   the resource pack included with the firmware.               ",
+    " - The section 'system_apps' only lists the PebbleProcessMd*   ",
+    "   functions                                                   ",
+    " - Resource app entry requires a UUID, then bin_resource_id    ",
+    "   then an icon_resource_id                                    ",
+    " - To enable only certain applications on a certain            ",
+    "   add the particular DEFINE variable into the 'ifdefs' field  ",
+    "   Doing so will add that application to the generated list    ",
+    " - To disable applications entirely, add a 'DISABLED' define to",
+    "   the list of defines for the application                     "
+  ],
+  "warning_two": [
+    " 1. DO NOT CHANGE OR REUSE THE ID OF ANY APPLICATION IN THE LIST ",
+    " 2. Read the directions                                          "
+  ],
+  "system_apps": [
+    {
+      "id": -69,
+      "enum": "TICTOC",
+      "md_fn": "tictoc_get_app_info"
+    },
+    {
+      "id": -98,
+      "enum": "KICKSTART",
+      "md_fn": "kickstart_get_app_info"
+    },
+    {
+      "id": -2,
+      "enum": "LOW_POWER_FACE",
+      "md_fn": "low_power_face_get_app_info"
+    },
+    {
+      "id": -7,
+      "enum": "SETTINGS",
+      "md_fn": "settings_get_app_info",
+      "color_argb8": "GColorLightGrayARGB8"
+    },
+    {
+      "id": -3,
+      "enum": "MUSIC",
+      "md_fn": "music_app_get_info",
+      "color_argb8": "GColorOrangeARGB8"
+    },
+    {
+      "id": -4,
+      "enum": "NOTIFICATIONS",
+      "md_fn": "notifications_app_get_info",
+      "color_argb8": "GColorSunsetOrangeARGB8"
+    },
+    {
+      "id": -5,
+      "enum": "ALARMS",
+      "md_fn": "alarms_app_get_info",
+      "color_argb8": "GColorJaegerGreenARGB8"
+    },
+    {
+      "id": -6,
+      "enum": "WATCHFACES",
+      "md_fn": "watchfaces_get_app_info",
+      "color_argb8": "GColorJazzberryJamARGB8"
+    },
+    {
+      "id": -9,
+      "enum": "QUICK_LAUNCH_SETUP",
+      "md_fn": "quick_launch_setup_get_app_info"
+    },
+    {
+      "id": -10,
+      "enum": "TIMELINE",
+      "md_fn": "timeline_get_app_info"
+    },
+    {
+      "id": -96,
+      "enum": "TIMELINE_PAST",
+      "md_fn": "timeline_past_get_app_info"
+    },
+    {
+      "id": -12,
+      "enum": "BOUNCING_BOX_DEMO",
+      "md_fn": "bouncing_box_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_BOUNCING_BOX_DEMO"
+      ]
+    },
+    {
+      "id": -13,
+      "enum": "PEBBLE_COLORS",
+      "md_fn": "pebble_colors_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_PEBBLE_COLORS"
+      ]
+    },
+    {
+      "id": -14,
+      "enum": "PEBBLE_SHAPES",
+      "md_fn": "pebble_shapes_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_PEBBLE_SHAPES"
+      ]
+    },
+    {
+      "id": -17,
+      "enum": "MOVABLE_LINE",
+      "md_fn": "movable_line_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MOVABLE_LINE"
+      ]
+    },
+    {
+      "id": -18,
+      "enum": "GFX_TESTS",
+      "md_fn": "gfx_tests_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_GFX_TESTS"
+      ]
+    },
+    {
+      "id": -19,
+      "enum": "TEST_ARGS_RECEIVER",
+      "md_fn": "test_args_receiver_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEST_ARGS_RECEIVER"
+      ]
+    },
+    {
+      "id": -20,
+      "enum": "TEST_ARGS_SENDER",
+      "md_fn": "test_args_sender_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEST_ARGS_SENDER"
+      ]
+    },
+    {
+      "id": -21,
+      "enum": "FLASH_DIAGNOSTIC",
+      "md_fn": "flash_diagnostic_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_FLASH_DIAGNOSTIC"
+      ]
+    },
+    {
+      "id": -22,
+      "enum": "FS_RESOURCES",
+      "md_fn": "fs_resources_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_FS_RESOURCES"
+      ]
+    },
+    {
+      "id": -23,
+      "enum": "EXIT",
+      "md_fn": "exit_app_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_EXIT"
+      ]
+    },
+    {
+      "id": -25,
+      "enum": "APP_HEAP_DEMO",
+      "md_fn": "app_heap_demo_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_APP_HEAP_DEMO"
+      ]
+    },
+    {
+      "id": -26,
+      "enum": "DATA_LOGGING_TEST",
+      "md_fn": "data_logging_test_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_DATA_LOGGING_TEST"
+      ]
+    },
+    {
+      "id": -27,
+      "enum": "KILL_BT",
+      "md_fn": "kill_bt_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_KILL_BT"
+      ]
+    },
+    {
+      "id": -28,
+      "enum": "TRIGGER_ALARM",
+      "md_fn": "trigger_alarm_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TRIGGER_ALARM"
+      ]
+    },
+    {
+      "id": -29,
+      "enum": "ANIMATED_DEMO",
+      "md_fn": "animated_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_ANIMATED_DEMO"
+      ]
+    },
+    {
+      "id": -31,
+      "enum": "TEXT_LAYOUT",
+      "md_fn": "text_layout_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEXT_LAYOUT"
+      ]
+    },
+    {
+      "id": -33,
+      "enum": "MENU",
+      "md_fn": "menu_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MENU"
+      ]
+    },
+    {
+      "id": -34,
+      "enum": "SIMPLE_MENU",
+      "md_fn": "simple_menu_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_SIMPLE_MENU"
+      ]
+    },
+    {
+      "id": -35,
+      "enum": "SCROLL",
+      "md_fn": "scroll_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_SCROLL"
+      ]
+    },
+    {
+      "id": -36,
+      "enum": "CLICK",
+      "md_fn": "click_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_CLICK"
+      ]
+    },
+    {
+      "id": -37,
+      "enum": "PROGRESS",
+      "md_fn": "progress_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_PROGRESS"
+      ]
+    },
+    {
+      "id": -38,
+      "enum": "NUMBER_FIELD",
+      "md_fn": "number_field_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_NUMBER_FIELD"
+      ]
+    },
+    {
+      "id": -39,
+      "enum": "FW_UPDATE_PROGRESS_SIM",
+      "md_fn": "fw_update_progress_sim_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_FW_UPDATE_PROGRESS_SIM"
+      ]
+    },
+    {
+      "id": -41,
+      "enum": "EVENT_SERVICE",
+      "md_fn": "event_service_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_EVENT_SERVICE"
+      ]
+    },
+    {
+      "id": -192,
+      "enum": "ACCEL_DEMO",
+      "md_fn": "accel_demo_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_ACCEL_DEMO"
+      ]
+    },
+    {
+      "id": -43,
+      "enum": "PERSIST",
+      "md_fn": "persist_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_PERSIST"
+      ]
+    },
+    {
+      "id": -44,
+      "enum": "TIMER",
+      "md_fn": "timer_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TIMER"
+      ]
+    },
+    {
+      "id": -45,
+      "enum": "TEST_SYS_TIMER",
+      "md_fn": "test_sys_timer_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEST_SYS_TIMER"
+      ]
+    },
+    {
+      "id": -46,
+      "enum": "TEST_CORE_DUMP",
+      "md_fn": "test_core_dump_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEST_CORE_DUMP"
+      ]
+    },
+    {
+      "id": -47,
+      "enum": "FLASH_PROF",
+      "md_fn": "flash_prof_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_FLASH_PROF"
+      ]
+    },
+    {
+      "id": -48,
+      "enum": "TEST_BLUETOOTH",
+      "md_fn": "test_bluetooth_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEST_BLUETOOTH"
+      ]
+    },
+    {
+      "id": -50,
+      "enum": "VIBE_AND_LOGS",
+      "md_fn": "vibe_and_logs_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_VIBE_AND_LOGS"
+      ]
+    },
+    {
+      "id": -51,
+      "enum": "MENU_OVERFLOW",
+      "md_fn": "menu_overflow_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MENU_OVERFLOW"
+      ]
+    },
+    {
+      "id": -54,
+      "enum": "LAUNCHER_MENU",
+      "md_fn": "launcher_menu_app_get_app_info"
+    },
+    {
+      "id": -55,
+      "enum": "TEXT_CLIPPING",
+      "md_fn": "text_clipping_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEXT_CLIPPING"
+      ]
+    },
+    {
+      "id": -56,
+      "enum": "LIGHT_CONFIG",
+      "md_fn": "light_config_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_LIGHT_CONFIG"
+      ]
+    },
+    {
+      "id": -57,
+      "enum": "STROKE_WIDTH",
+      "md_fn": "stroke_width_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_STROKE_WIDTH"
+      ]
+    },
+    {
+      "id": -58,
+      "enum": "AMB_LIGHT_READ",
+      "md_fn": "ambient_light_reading_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_AMB_LIGHT_READ"
+      ]
+    },
+    {
+      "id": -59,
+      "enum": "WEATHER",
+      "md_fn": "weather_app_get_info",
+      "color_argb8": "GColorBlueMoonARGB8"
+    },
+    {
+      "id": -95,
+      "enum": "WORKOUT",
+      "md_fn": "workout_app_get_info",
+      "color_argb8": "GColorYellowARGB8"
+    },
+    {
+      "id": -61,
+      "enum": "SWAP_LAYER",
+      "md_fn": "swap_layer_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_SWAP_LAYER"
+      ]
+    },
+    {
+      "id": -62,
+      "enum": "BATTERY_CRITICAL",
+      "md_fn": "battery_critical_get_app_info"
+    },
+    {
+      "id": -63,
+      "enum": "TEXT_SPACING",
+      "md_fn": "text_spacing_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEXT_SPACING"
+      ]
+    },
+    {
+      "id": -100,
+      "enum": "FONT_TEST",
+      "md_fn": "font_test_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_FONT_TEST"
+      ]
+    },
+    {
+      "id": -64,
+      "enum": "KINO_LAYER",
+      "md_fn": "kino_layer_demo_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_KINO_LAYER"
+      ]
+    },
+    {
+      "id": -65,
+      "enum": "DIALOGS",
+      "md_fn": "dialogs_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_DIALOGS"
+      ]
+    },
+    {
+      "id": -66,
+      "enum": "STATUSBAR",
+      "md_fn": "statusbar_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_STATUSBAR"
+      ]
+    },
+    {
+      "id": -68,
+      "enum": "MORPH_SQUARE",
+      "md_fn": "morph_square_demo_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MORPH_SQUARE"
+      ]
+    },
+    {
+      "id": -70,
+      "enum": "MENU_RIGHT_ICON",
+      "md_fn": "menu_layer_right_icon_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MENU_RIGHT_ICON"
+      ]
+    },
+    {
+      "id": -71,
+      "enum": "VIBE_STRENGTH",
+      "md_fn": "vibe_strength_demo_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_VIBE_STRENGTH"
+      ]
+    },
+    {
+      "id": -72,
+      "enum": "ACTION_MENU",
+      "md_fn": "action_menu_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_ACTION_MENU"
+      ]
+    },
+    {
+      "id": -73,
+      "enum": "OPTION_MENU",
+      "md_fn": "option_menu_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_OPTION_MENU"
+      ]
+    },
+    {
+      "id": -74,
+      "enum": "PROFILE_MUTEXES",
+      "md_fn": "profile_mutexes_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_PROFILE_MUTEXES"
+      ]
+    },
+    {
+      "id": -75,
+      "enum": "DEADLOCK",
+      "md_fn": "deadlock_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_DEADLOCK"
+      ]
+    },
+    {
+      "id": -76,
+      "enum": "TIMELINE_PINS",
+      "md_fn": "timeline_pins_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TIMELINE_PINS"
+      ]
+    },
+    {
+      "id": -77,
+      "enum": "TEXT_FLOW",
+      "md_fn": "text_flow_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEXT_FLOW"
+      ]
+    },
+    {
+      "id": -78,
+      "enum": "MENU_ROUND",
+      "md_fn": "menu_round_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MENU_ROUND"
+      ],
+      "target_platforms": [
+        "getafix",
+        "qemu_gabbro"
+      ]
+    },
+    {
+      "id": -79,
+      "enum": "ACTIVITY_DEMO",
+      "md_fn": "activity_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_ACTIVITY_DEMO"
+      ]
+    },
+    {
+      "id": -80,
+      "enum": "ACTIVITY_TEST",
+      "md_fn": "activity_test_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_ACTIVITY_TEST"
+      ]
+    },
+    {
+      "id": -81,
+      "enum": "DOUBLE_TAP_TEST",
+      "md_fn": "double_tap_test_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_DOUBLE_TAP_TEST"
+      ]
+    },
+    {
+      "id": -82,
+      "enum": "HEALTH_APP",
+      "md_fn": "health_app_get_info",
+      "color_argb8": "GColorSunsetOrangeARGB8"
+    },
+    {
+      "id": -83,
+      "enum": "SEND_TEXT",
+      "md_fn": "send_text_app_get_info"
+    },
+    {
+      "id": -84,
+      "enum": "VIBE_SCORE",
+      "md_fn": "vibe_score_demo_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_VIBE_SCORE"
+      ]
+    },
+    {
+      "id": -86,
+      "enum": "IDL",
+      "md_fn": "idl_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_IDL"
+      ]
+    },
+    {
+      "id": -87,
+      "enum": "TEMPERATURE_DEMO",
+      "md_fn": "temperature_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_TEMPERATURE_DEMO"
+      ]
+    },
+    {
+      "id": -88,
+      "enum": "GDRAWMASK_DEMO",
+      "md_fn": "gdrawmask_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_GDRAWMASK_DEMO"
+      ]
+    },
+    {
+      "id": -89,
+      "enum": "HRM_DEMO",
+      "md_fn": "hrm_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_HRM_DEMO",
+        "CONFIG_HRM"
+      ]
+    },
+    {
+      "id": -193,
+      "enum": "SPO2_TEST",
+      "md_fn": "spo2_test_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_SPO2_TEST",
+        "CONFIG_HRM"
+      ]
+    },
+    {
+      "id": -194,
+      "enum": "VOICE_DEMO",
+      "md_fn": "voice_demo_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_VOICE_DEMO"
+      ]
+    },
+    {
+      "id": -90,
+      "enum": "REMINDERS",
+      "md_fn": "reminder_app_get_info",
+      "color_argb8": "GColorChromeYellowARGB8"
+    },
+    {
+      "id": -91,
+      "enum": "MPU_TEST",
+      "md_fn": "test_mpu_cache_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MPU_TEST"
+      ]
+    },
+    {
+      "id": -191,
+      "enum": "MPU_VIOLATION_TEST",
+      "md_fn": "test_mpu_violation_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MPU_VIOLATION_TEST"
+      ]
+    },
+    {
+      "id": -192,
+      "enum": "EMOJI_TEST",
+      "md_fn": "emoji_test_app_get_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_EMOJI_TEST"
+      ]
+    },
+    {
+      "id": -92,
+      "enum": "QUIET_TIME_TOGGLE",
+      "md_fn": "quiet_time_toggle_get_app_info"
+    },
+    {
+      "id": -99,
+      "enum": "BACKLIGHT_STATE_TOGGLE_UUID",
+      "md_fn": "backlight_state_toggle_get_app_info"
+    },
+    {
+      "id": -94,
+      "enum": "MOTION_BACKLIGHT_TOGGLE",
+      "md_fn": "motion_backlight_toggle_get_app_info"
+    },
+    {
+      "id": -93,
+      "enum": "AIRPLANE_MODE_TOGGLE",
+      "md_fn": "airplane_mode_toggle_get_app_info"
+    },
+    {
+      "id": -97,
+      "enum": "SPORTS",
+      "md_fn": "sports_app_get_info"
+    },
+    {
+      "id": -32,
+      "enum": "TIMELINE_FULL",
+      "md_fn": "timeline_full_get_app_info"
+    },
+    {
+      "id": -100,
+      "enum": "NOTIFICATIONS_CLEAR_HISTORY",
+      "md_fn": "notifications_clear_history_app_get_info"
+    },
+    {
+      "id": -101,
+      "enum": "QUICK_LAUNCH_NOTHING",
+      "md_fn": "quick_launch_nothing_get_app_info"
+    },
+    {
+      "id": -102,
+      "enum": "TOUCH_TOGGLE",
+      "md_fn": "touch_toggle_get_app_info",
+      "ifdefs": [
+        "CONFIG_TOUCH"
+      ]
+    }
+  ],
+  "resource_apps": [
+    {
+      "id": -52,
+      "enum": "GOLF",
+      "name": "Golf",
+      "uuid": "cf1e816a-9db0-4511-bbb8-f60c48ca8fac",
+      "bin_resource_id": "RESOURCE_ID_STORED_APP_GOLF",
+      "icon_resource_id": "DEFAULT_MENU_ICON"
+    }
+  ]
+}

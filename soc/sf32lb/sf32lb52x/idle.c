@@ -2,32 +2,34 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <inttypes.h>
-#include <stdio.h>
 
-#include "board/board.h"
-#include "console/prompt.h"
-#include "drivers/flash.h"
-#include "drivers/rtc.h"
-#include "drivers/sf32lb52/rc10k.h"
-#include "drivers/task_watchdog.h"
-#include "kernel/util/idle.h"
-#include "pbl/kernel/irq.h"
-#include "pbl/services/analytics/analytics.h"
-#include "pbl/soc/sf32lb/sleep.h"
-#include "pbl/util/math.h"
-#include "system/passert.h"
+#include <pbl/services/analytics/analytics.h>
+#include <pbl/soc/sf32lb/sleep.h>
+#include <pbl/util/math.h>
+
+#include <board/board.h>
+#include <drivers/flash.h>
+#include <drivers/rtc.h>
+#include <drivers/sf32lb52/rc10k.h>
+#include <kernel/util/idle.h>
+#include <system/passert.h>
+
+#ifdef CONFIG_SHELL
+#include <pbl/shell/shell.h>
+#endif
+
+#include <pbl/kernel/idle.h>
+#include <pbl/kernel/irq.h>
+#include <pbl/kernel/section.h>
 
 #include <bf0_hal.h>
-
 #include <ipc_queue.h>
-
-#include "pbl/kernel/idle.h"
 
 // HAL tick counter (milliseconds) - used by HAL timeout functions
 extern __IO uint32_t uwTick;
 
 static LPTIM_HandleTypeDef s_lptim = {
-    .Instance = LPTIM1,
+  .Instance = LPTIM1,
 };
 
 // CPU analytics tracking
@@ -60,10 +62,10 @@ static uint32_t s_audio_profile_holders;
 //! Program the clock tree for the next deep WFI. Called with IRQs locked, and once at boot.
 static void prv_apply_deep_wfi_profile(void) {
   if (s_audio_profile_holders > 0) {
-    // Audio DMA is running. This is the vendor's own PM_SCENARIO_AUDIO recipe
-    // (SiFli-SDK middleware/system/bf0_pm.c): keep HCLK at the full 48 MHz deep-WFI
-    // source (PCLK1 = 48 MHz, PCLK2 = 24 MHz) and force the HP clock on, so the PDM /
-    // audprc DMA keeps moving while the core has its pipeline stopped.
+    // Audio DMA is running. The vendor's PM_SCENARIO_AUDIO recipe (SiFli-SDK
+    // middleware/system/bf0_pm.c): keep HCLK at the full 48 MHz deep-WFI source
+    // (PCLK1 = 48 MHz, PCLK2 = 24 MHz) and force the HP clock on, so the PDM DMA
+    // keeps moving while the core has its pipeline stopped.
     HAL_RCC_HCPU_SetDeepWFIDiv(1, 0, 1);
     hwp_hpsys_rcc->DBGR |= HPSYS_RCC_DBGR_FORCE_HP;
   } else {
@@ -89,16 +91,6 @@ void soc_sf32lb_deep_wfi_audio_profile_release(void) {
   --s_audio_profile_holders;
   prv_apply_deep_wfi_profile();
   pbl_irq_unlock();
-}
-
-static void prv_wdt_feed(uint16_t elapsed_ticks) {
-  static uint32_t wdt_feed_ticks;
-
-  wdt_feed_ticks += elapsed_ticks;
-  if (wdt_feed_ticks >= (RTC_TICKS_HZ / (1000 / TASK_WATCHDOG_FEED_PERIOD_MS))) {
-    wdt_feed_ticks = 0U;
-    task_watchdog_feed();
-  }
 }
 
 static void prv_save_iser(void) {
@@ -138,7 +130,7 @@ static void prv_enter_deepwfi(void) {
   SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
 }
 
-static void prv_enter_deepslep(void) {
+PBL_SECTION_RAM static void prv_enter_deepslep(void) {
   QSPIPortState *flash_state;
   uint32_t dll1_freq = 0UL;
   int clk_src;
@@ -219,17 +211,17 @@ static uint32_t prv_calc_elapsed_ticks(uint32_t gtimer_cyc) {
   return elapsed_ticks;
 }
 
-void pbl_soc_idle(pbl_tick_t max_ticks) {
+PBL_SECTION_RAM void pbl_soc_idle(pbl_tick_t max_ticks) {
   if (!idle_is_allowed()) {
     return;
   }
 
+  __disable_irq();
+
   if (!ipc_queue_check_idle()) {
     s_analytics_ipc_not_idle_count++;
-    return;
+    goto end;
   }
-
-  __disable_irq();
 
   if (pbl_idle_confirm()) {
     SocSf32lbSleepLevel max_level = soc_sf32lb_sleep_max_level();
@@ -265,8 +257,7 @@ void pbl_soc_idle(pbl_tick_t max_ticks) {
 
         // configure LPTIM to wake us up after expected idle time
         sleep_ticks = max_ticks - EARLY_WAKEUP_TICKS;
-        lptim_ticks = MIN(sleep_ticks * rc10k_get_freq_hz() / RTC_TICKS_HZ,
-                          MAX_LPTIM_CNT);
+        lptim_ticks = MIN(sleep_ticks * rc10k_get_freq_hz() / RTC_TICKS_HZ, MAX_LPTIM_CNT);
         HAL_LPTIM_Counter_Start_IT(&s_lptim, lptim_ticks);
 
         gtimer_start = HAL_GTIMER_READ();
@@ -292,8 +283,6 @@ void pbl_soc_idle(pbl_tick_t max_ticks) {
         // increment HAL tick counter by elapsed ticks
         uwTick += elapsed_ticks;
 
-        prv_wdt_feed(elapsed_ticks);
-
         // Force RTC synchronization of shadow registers
         hwp_rtc->ISR &= RTC_RSF_MASK;
 
@@ -312,6 +301,7 @@ void pbl_soc_idle(pbl_tick_t max_ticks) {
     }
   }
 
+end:
   __enable_irq();
 }
 
@@ -352,24 +342,21 @@ bool pbl_soc_tick_enable(void) {
   return true;
 }
 
-void AON_IRQHandler(void)
-{
-    uint32_t status;
+PBL_IRQ_DIRECT(AON, 0, PBL_IRQ_ZERO_LATENCY) {
+  uint32_t status;
 
-    NVIC_DisableIRQ(AON_IRQn);
-    HAL_HPAON_CLEAR_POWER_MODE();
+  NVIC_DisableIRQ(AON_IRQn);
+  HAL_HPAON_CLEAR_POWER_MODE();
 
-    status = HAL_HPAON_GET_WSR();
-    status &= ~HPSYS_AON_WSR_PIN_ALL;
-    HAL_HPAON_CLEAR_WSR(status);
+  status = HAL_HPAON_GET_WSR();
+  status &= ~HPSYS_AON_WSR_PIN_ALL;
+  HAL_HPAON_CLEAR_WSR(status);
 }
 
 void SysTick_Handler(void) {
   pbl_kernel_tick_isr();
 
   HAL_IncTick();
-
-  prv_wdt_feed(1U);
 
   if (s_last_sleep_type == SleepTypeWfi) {
     s_analytics_wfi_ticks++;
@@ -382,42 +369,6 @@ void SysTick_Handler(void) {
   // TODO(SF32LB52): we may need to handle tick loss compensation when using
   // SysTick due to flash erase times (runs with IRQs disabled to not interfere
   // with XIP, and can easily span multiple ticks)
-}
-
-void dump_current_runtime_stats(void) {
-  uint32_t wfi_ticks = s_analytics_wfi_ticks;
-  uint32_t deepwfi_ticks = s_analytics_deepwfi_ticks;
-  uint32_t deepsleep_ticks = s_analytics_deepsleep_ticks;
-
-  RtcTicks now_ticks = rtc_get_ticks();
-  uint32_t total_ticks = (uint32_t)(now_ticks - s_last_ticks);
-  uint32_t running_ticks = total_ticks - wfi_ticks - deepwfi_ticks - deepsleep_ticks;
-
-  char buf[160];
-  snprintf(buf, sizeof(buf), "Run:       %"PRIu32" ticks (%"PRIu32" %%)",
-           running_ticks, (running_ticks * 100) / total_ticks);
-  prompt_send_response(buf);
-  snprintf(buf, sizeof(buf), "WFI:       %"PRIu32" ticks (%"PRIu32" %%)",
-           wfi_ticks, (wfi_ticks * 100) / total_ticks);
-  prompt_send_response(buf);
-  snprintf(buf, sizeof(buf), "Deep WFI:  %"PRIu32" ticks (%"PRIu32" %%)",
-           deepwfi_ticks, (deepwfi_ticks * 100) / total_ticks);
-  prompt_send_response(buf);
-  snprintf(buf, sizeof(buf), "Deepsleep: %"PRIu32" ticks (%"PRIu32" %%)",
-           deepsleep_ticks, (deepsleep_ticks * 100) / total_ticks);
-  prompt_send_response(buf);
-  snprintf(buf, sizeof(buf), "Tot:       %"PRIu32" ticks", total_ticks);
-  prompt_send_response(buf);
-}
-
-void command_force_wfi(const char *arg) {
-  if (arg[0] == '1') {
-    s_force_wfi = true;
-    prompt_send_response("WFI forced ON (deep WFI and deep sleep disabled)");
-  } else {
-    s_force_wfi = false;
-    prompt_send_response("WFI forced OFF (deep WFI and deep sleep allowed)");
-  }
 }
 
 void pbl_analytics_external_collect_cpu_stats(void) {
@@ -455,3 +406,40 @@ void pbl_analytics_external_collect_cpu_stats(void) {
   s_analytics_deepsleep_ticks = 0;
   s_analytics_ipc_not_idle_count = 0;
 }
+
+#ifdef CONFIG_SHELL
+static int prv_cmd_cpustats(const struct pbl_shell *sh, size_t argc, char **argv) {
+  uint32_t wfi_ticks = s_analytics_wfi_ticks;
+  uint32_t deepwfi_ticks = s_analytics_deepwfi_ticks;
+  uint32_t deepsleep_ticks = s_analytics_deepsleep_ticks;
+
+  RtcTicks now_ticks = rtc_get_ticks();
+  uint32_t total_ticks = (uint32_t)(now_ticks - s_last_ticks);
+  uint32_t running_ticks = total_ticks - wfi_ticks - deepwfi_ticks - deepsleep_ticks;
+
+  pbl_shell_print(sh, "Run:       %" PRIu32 " ticks (%" PRIu32 " %%)", running_ticks,
+                  (running_ticks * 100) / total_ticks);
+  pbl_shell_print(sh, "WFI:       %" PRIu32 " ticks (%" PRIu32 " %%)", wfi_ticks,
+                  (wfi_ticks * 100) / total_ticks);
+  pbl_shell_print(sh, "Deep WFI:  %" PRIu32 " ticks (%" PRIu32 " %%)", deepwfi_ticks,
+                  (deepwfi_ticks * 100) / total_ticks);
+  pbl_shell_print(sh, "Deepsleep: %" PRIu32 " ticks (%" PRIu32 " %%)", deepsleep_ticks,
+                  (deepsleep_ticks * 100) / total_ticks);
+  pbl_shell_print(sh, "Tot:       %" PRIu32 " ticks", total_ticks);
+  return 0;
+}
+
+static int prv_cmd_wfi(const struct pbl_shell *sh, size_t argc, char **argv) {
+  if (argv[1][0] == '1') {
+    s_force_wfi = true;
+    pbl_shell_print(sh, "WFI forced ON (deep WFI and deep sleep disabled)");
+  } else {
+    s_force_wfi = false;
+    pbl_shell_print(sh, "WFI forced OFF (deep WFI and deep sleep allowed)");
+  }
+  return 0;
+}
+
+PBL_SHELL_SUBCMD_ADD(sub_sys, cpustats, NULL, "Show CPU sleep statistics", prv_cmd_cpustats, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys, wfi, NULL, "Force plain WFI when idle <0|1>", prv_cmd_wfi, 2, 0);
+#endif

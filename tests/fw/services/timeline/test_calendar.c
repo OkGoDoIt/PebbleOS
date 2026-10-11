@@ -1,60 +1,59 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "kernel/events.h"
-#include "pbl/services/blob_db/pin_db.h"
-#include "pbl/services/timeline/calendar.h"
-#include "pbl/services/timeline/event.h"
-#include "pbl/services/timeline/timeline.h"
 #include <pbl/logging/logging.h>
+#include <pbl/services/blob_db/pin_db.h>
+#include <pbl/services/timeline/calendar.h>
+#include <pbl/services/timeline/event.h>
+#include <pbl/services/timeline/timeline.h>
 
-#include "clar.h"
+#include <clar.h>
+#include <kernel/events.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include "stubs_analytics.h"
-#include "stubs_ancs.h"
-#include "stubs_ancs_notifications.h"
-#include "stubs_app_cache.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_app_manager.h"
-#include "stubs_blob_db.h"
-#include "stubs_blob_db_sync.h"
-#include "stubs_blob_db_sync_util.h"
-#include "stubs_event_loop.h"
-#include "stubs_event_service_client.h"
-#include "stubs_hexdump.h"
-#include "stubs_i18n.h"
-#include "stubs_layout_layer.h"
-#include "stubs_logging.h"
-#include "stubs_modal_manager.h"
-#include "stubs_mutex.h"
-#include "stubs_notification_storage.h"
-#include "stubs_notifications.h"
-#include "stubs_passert.h"
-#include "stubs_phone_call_util.h"
-#include "stubs_prompt.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_regular_timer.h"
-#include "stubs_reminder_db.h"
-#include "stubs_session.h"
-#include "stubs_sleep.h"
-#include "stubs_system_task.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_text_layer_flow.h"
-#include "stubs_timeline.h"
-#include "stubs_timeline_pin_window.h"
-#include "stubs_window_stack.h"
+#include <stubs_analytics.h>
+#include <stubs_ancs.h>
+#include <stubs_ancs_notifications.h>
+#include <stubs_app_cache.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_manager.h>
+#include <stubs_blob_db.h>
+#include <stubs_blob_db_sync.h>
+#include <stubs_blob_db_sync_util.h>
+#include <stubs_event_loop.h>
+#include <stubs_event_service_client.h>
+#include <stubs_hexdump.h>
+#include <stubs_i18n.h>
+#include <stubs_layout_layer.h>
+#include <stubs_logging.h>
+#include <stubs_modal_manager.h>
+#include <stubs_mutex.h>
+#include <stubs_notification_storage.h>
+#include <stubs_notifications.h>
+#include <stubs_passert.h>
+#include <stubs_phone_call_util.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_regular_timer.h>
+#include <stubs_reminder_db.h>
+#include <stubs_session.h>
+#include <stubs_sleep.h>
+#include <stubs_system_task.h>
+#include <stubs_task_wdt.h>
+#include <stubs_text_layer_flow.h>
+#include <stubs_timeline.h>
+#include <stubs_timeline_pin_window.h>
+#include <stubs_window_stack.h>
 
 // Fakes
 ////////////////////////////////////////////////////////////////
-#include "fake_new_timer.h"
-#include "fake_pbl_malloc.h"
-#include "fake_pebble_tasks.h"
-#include "fake_rtc.h"
-#include "fake_spi_flash.h"
-#include "fake_settings_file.h"
-#include "fake_events.h"
+#include <fake_events.h>
+#include <fake_new_timer.h>
+#include <fake_pbl_malloc.h>
+#include <fake_pebble_tasks.h>
+#include <fake_rtc.h>
+#include <fake_settings_file.h>
+#include <fake_spi_flash.h>
 
 bool calendar_layout_verify(bool existing_attributes[]) {
   return true;
@@ -89,15 +88,17 @@ static Attribute title_attr = {
 };
 
 static TimelineItem item1 = {
-  .header = {
-    .id = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    .timestamp = 10*60,
-    .duration = 10,
-    .type = TimelineItemTypePin,
-    .all_day = false,
-    .layout = LayoutIdCalendar,
-  },
+  .header =
+      {
+        .id =
+            {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 10 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
   .attr_list = {
     .num_attributes = 1,
     .attributes = &title_attr,
@@ -105,15 +106,17 @@ static TimelineItem item1 = {
 };
 
 static TimelineItem item2 = {
-  .header = {
-    .id = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    .timestamp = 15*60,
-    .duration = 20,
-    .type = TimelineItemTypePin,
-    .all_day = false,
-    .layout = LayoutIdCalendar,
-  },
+  .header =
+      {
+        .id =
+            {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 15 * 60,
+        .duration = 20,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
   .attr_list = {
     .num_attributes = 1,
     .attributes = &title_attr,
@@ -121,15 +124,17 @@ static TimelineItem item2 = {
 };
 
 static TimelineItem item3 = {
-  .header = {
-    .id = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    .timestamp = 25*60,
-    .duration = 5,
-    .type = TimelineItemTypePin,
-    .all_day = false,
-    .layout = LayoutIdCalendar,
-  },
+  .header =
+      {
+        .id =
+            {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 25 * 60,
+        .duration = 5,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
   .attr_list = {
     .num_attributes = 1,
     .attributes = &title_attr,
@@ -137,15 +142,17 @@ static TimelineItem item3 = {
 };
 
 static TimelineItem item4 = {
-  .header = {
-    .id = {0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    .timestamp = 100*60,
-    .duration = 10,
-    .type = TimelineItemTypePin,
-    .all_day = false,
-    .layout = LayoutIdCalendar,
-  },
+  .header =
+      {
+        .id =
+            {0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 100 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
   .attr_list = {
     .num_attributes = 1,
     .attributes = &title_attr,
@@ -154,15 +161,17 @@ static TimelineItem item4 = {
 
 // NOT A CALENDAR PIN
 static TimelineItem item5 = {
-  .header = {
-    .id = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    .timestamp = 10*60,
-    .duration = 10,
-    .type = TimelineItemTypePin,
-    .all_day = false,
-    .layout = LayoutIdWeather,
-  },
+  .header =
+      {
+        .id =
+            {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 10 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdWeather,
+      },
   .attr_list = {
     .num_attributes = 1,
     .attributes = &title_attr,
@@ -171,15 +180,17 @@ static TimelineItem item5 = {
 
 // ALL DAY PIN
 static TimelineItem item6 = {
-  .header = {
-    .id = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    .timestamp = 100*60,
-    .duration = 10,
-    .type = TimelineItemTypePin,
-    .all_day = true,
-    .layout = LayoutIdCalendar,
-  },
+  .header =
+      {
+        .id =
+            {0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 100 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = true,
+        .layout = LayoutIdCalendar,
+      },
   .attr_list = {
     .num_attributes = 1,
     .attributes = &title_attr,
@@ -224,7 +235,7 @@ void test_calendar__init_with_future_event(void) {
   TimerID timer_id = stub_new_timer_get_next();
   cl_assert(timer_id != TIMER_INVALID_ID);
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(10*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(10 * 60, stub_new_timer_timeout(timer_id) / 1000);
 }
 
 void test_calendar_handle__future_event_added_and_removed(void) {
@@ -240,7 +251,7 @@ void test_calendar_handle__future_event_added_and_removed(void) {
   cl_assert_equal_i(fake_event_get_count(), 2);
   cl_assert(!prv_get_calendar_ongoing());
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(10*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(10 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   cl_assert(timeline_remove(&item1.header.id));
   timeline_event_handle_blobdb_event();
@@ -260,7 +271,7 @@ void test_calendar__init_with_ongoing_event(void) {
   TimerID timer_id = stub_new_timer_get_next();
   cl_assert(timer_id != TIMER_INVALID_ID);
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(5*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(5 * 60, stub_new_timer_timeout(timer_id) / 1000);
 }
 
 void test_calendar_handle__ongoing_event_added_and_removed(void) {
@@ -277,7 +288,7 @@ void test_calendar_handle__ongoing_event_added_and_removed(void) {
   cl_assert_equal_i(fake_event_get_count(), 2);
   cl_assert(prv_get_calendar_ongoing());
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(5*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(5 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   cl_assert(timeline_remove(&item1.header.id));
   timeline_event_handle_blobdb_event();
@@ -337,35 +348,35 @@ void test_calendar__timer_test(void) {
   TimerID timer_id = stub_new_timer_get_next();
   cl_assert(timer_id != TIMER_INVALID_ID);
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(10*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(10 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   rtc_set_time(10 * 60);
   cl_assert(stub_new_timer_fire(timer_id));
   cl_assert_equal_i(fake_event_get_count(), 2);
   cl_assert(prv_get_calendar_ongoing());
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(10*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(10 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   rtc_set_time(20 * 60);
   cl_assert(stub_new_timer_fire(timer_id));
   cl_assert_equal_i(fake_event_get_count(), 3);
   cl_assert(prv_get_calendar_ongoing());
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(15*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(15 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   rtc_set_time(35 * 60);
   cl_assert(stub_new_timer_fire(timer_id));
   cl_assert_equal_i(fake_event_get_count(), 4);
   cl_assert(!prv_get_calendar_ongoing());
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(65*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(65 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   rtc_set_time(100 * 60);
   cl_assert(stub_new_timer_fire(timer_id));
   cl_assert_equal_i(fake_event_get_count(), 5);
   cl_assert(prv_get_calendar_ongoing());
   cl_assert(stub_new_timer_is_scheduled(timer_id));
-  cl_assert_equal_i(10*60, stub_new_timer_timeout(timer_id) / 1000);
+  cl_assert_equal_i(10 * 60, stub_new_timer_timeout(timer_id) / 1000);
 
   rtc_set_time(110 * 60);
   cl_assert(stub_new_timer_fire(timer_id));

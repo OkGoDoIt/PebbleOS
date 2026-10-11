@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: 2024 Google LLC
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+These schemas define the structures to communicate activity/workout types
+as well the structures of how they are uploaded from the watch to the phone
+and the pipeline API.
+*/
+
+syntax = "proto2";
+
+package pebble.pipeline;
+
+option java_package = "com.getpebble.pipeline";
+
+import "measurements.proto";
+
+message ActivityInterval {
+  required uint32 offset_sec = 1; /// Relative to event.time_utc
+  required uint32 duration_sec = 2;
+}
+
+/**
+ * Supposed to be a child of `Event`.
+ *
+ * The "start time" is `event.time_utc` and
+ * the "end time" is `event.time_utc + event.duration`.
+
+ * The "effective duration" is the sum of all `duration_sec` of the `intervals`.
+ */
+message ActivitySession {
+  enum StartReason {
+    UnknownReason = 0; /// Protocol Buffers uses the first enum as the default
+    Automatic = 1;
+    Manual = 2;
+    AutomaticConvertedToManual = 3;
+  }
+
+  message Summary {
+    repeated MeasurementSet.Type types =
+        1; /// denotes types and order of packed data in each Sample
+    required Measurement measurement = 2;
+  }
+
+  required ActivityType type = 1;
+
+  required StartReason start_reason = 5;
+
+  /**
+   * On pause and resume a new interval is created.
+   *
+   * Number of intervals should be 1 or more.
+   */
+  repeated ActivityInterval intervals = 6;
+
+  /**
+   * Sum/averages of various metrics during the activity but
+   * excluding breaks (i.e. steps should not be counted while
+   * activity is paused).
+   */
+  optional Summary summary = 7;
+}
+
+message ActivityType {
+  enum InternalType {
+    UnknownType = 0; /// Protocol Buffers uses the first enum as the default
+    Sleep = 1;
+    DeepSleep = 2;
+    Nap = 3;
+    DeepNap = 4;
+    Walk = 5;
+    Run = 6;
+    Open = 7;
+    // to be continued
+  }
+
+  oneof type {
+    InternalType internal_type = 1;
+    string custom_type = 2; /// Identifier, locally unique to Pebble/Phone
+  }
+
+  optional string name = 3;
+}
+
+/**
+ * Used to send configuration down to the watch.
+ */
+message ActivityPreset {
+  enum Widget {
+    UnknownWidget = 0; /// Protocol Buffers uses the first enum as the default
+
+    PaceTimePerDistance = 1;
+    SpeedDistancePerTime = 2;
+
+    HeartRateBeatsPerMinute = 3;
+    // to be continued
+  }
+
+  required ActivityType type = 1;
+
+  optional Widget main_widget = 4;
+  repeated Widget bottom_widgets = 5; /// (Probably up to 3)
+}
+
+/**
+ * Container used to send presets down to the watch.
+ */
+message ActivityPresetList {
+  repeated ActivityPreset presets = 1;
+}

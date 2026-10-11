@@ -2,16 +2,31 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Linker script assembly. Libraries that need additions to the master
-# script (src/fw/linker/pebbleos.ld) register fragments against one of its
+# script (fw/linker/pebbleos.ld) register fragments against one of its
 # hook points; the fragments are aggregated into snippets-<location>.ld
 # files that the master script includes.
 
-set(PBL_LINKER_SNIPPET_LOCATIONS memory rom-start ram-sections footer)
+# Whether the image is linked with the firmware linker script. A native build
+# links with the host's default one instead: Mach-O linkers cannot gather
+# sections sorted by name, and ELF hosts do not insert the fragments (yet).
+# Without the script, PBL_SECTION() is a no-op and code collecting objects
+# across files uses PBL_UNSORTED_SECTION().
+if(CONFIG_ARCH_POSIX)
+  set(PBL_LINKER_SCRIPT OFF)
+  add_compile_definitions(PBL_NO_LINKER_SCRIPT)
+else()
+  set(PBL_LINKER_SCRIPT ON)
+endif()
+
+set(PBL_LINKER_SNIPPET_LOCATIONS memory rom-start ram-sections ramfunc footer)
 
 foreach(location ${PBL_LINKER_SNIPPET_LOCATIONS})
   define_property(GLOBAL PROPERTY PBL_LINKER_SNIPPETS_${location}
     BRIEF_DOCS "Linker script fragments for the ${location} hook point")
 endforeach()
+
+define_property(GLOBAL PROPERTY PBL_RAMFUNC_OBJECTS
+  BRIEF_DOCS "Linker input patterns for the objects placed in .ramfunc")
 
 # Fragments are included sorted by (sort key, registration order).
 function(pbl_linker_sources location)
@@ -36,6 +51,29 @@ function(pbl_linker_sources location)
   endforeach()
 endfunction()
 
+# Run the given sources of the current library from RAM: their code and
+# read-only data go to .ramfunc. A no-op without CONFIG_RAMFUNC.
+function(pbl_library_ramfunc)
+  if(NOT CONFIG_RAMFUNC)
+    return()
+  endif()
+  pbl_library_ensure()
+  foreach(source ${ARGN})
+    if(IS_ABSOLUTE ${source})
+      file(RELATIVE_PATH source ${CMAKE_CURRENT_SOURCE_DIR} ${source})
+    endif()
+    string(REPLACE "../" "__/" object ${source}${CMAKE_C_OUTPUT_EXTENSION})
+    if(PBL_CURRENT_LIBRARY_KIND STREQUAL "stlib")
+      get_filename_component(object ${object} NAME)
+      set(archive ${CMAKE_STATIC_LIBRARY_PREFIX}${PBL_CURRENT_LIBRARY}${CMAKE_STATIC_LIBRARY_SUFFIX})
+      set(pattern "*${archive}:${object}")
+    else()
+      set(pattern "*/CMakeFiles/${PBL_CURRENT_LIBRARY}.dir/${object}")
+    endif()
+    set_property(GLOBAL APPEND PROPERTY PBL_RAMFUNC_OBJECTS "${pattern}")
+  endforeach()
+endfunction()
+
 # Writes the snippet files and returns the generated linker script the
 # firmware links against, plus everything it depends on.
 function(pbl_linker_script out_script out_depends)
@@ -57,11 +95,19 @@ function(pbl_linker_script out_script out_depends)
     list(APPEND depends ${snippet})
   endforeach()
 
+  get_property(objects GLOBAL PROPERTY PBL_RAMFUNC_OBJECTS)
+  set(content "")
+  foreach(object ${objects})
+    string(APPEND content "${object} (.text* .rodata*)\n")
+  endforeach()
+  file(CONFIGURE OUTPUT ${dir}/ramfunc-objects.ld CONTENT "${content}" @ONLY)
+  list(APPEND depends ${dir}/ramfunc-objects.ld)
+
   # Fragments included by the master script and by the SoC fragments.
-  file(GLOB_RECURSE common CONFIGURE_DEPENDS ${PBL_BASE}/src/fw/linker/*.ld)
+  file(GLOB_RECURSE common CONFIGURE_DEPENDS ${PBL_BASE}/fw/linker/*.ld)
   list(APPEND depends ${common} ${PBL_AUTOCONF_H})
 
-  set(master ${PBL_BASE}/src/fw/linker/pebbleos.ld)
+  set(master ${PBL_BASE}/fw/linker/pebbleos.ld)
   set(script ${PROJECT_BINARY_DIR}/pebbleos.ld.pre)
 
   # The linker script goes through the C preprocessor, which gives it
@@ -69,7 +115,7 @@ function(pbl_linker_script out_script out_depends)
   add_custom_command(
     OUTPUT ${script}
     COMMAND ${CMAKE_C_COMPILER} -x assembler-with-cpp -nostdinc -undef -E -P
-            -I${dir} -I${PBL_BASE}/src/fw/linker
+            -I${dir} -I${PBL_BASE}/fw/linker
             -include ${PBL_AUTOCONF_H} ${master} -o ${script}
     DEPENDS ${master} ${depends}
     COMMENT "Preprocessing linker script"

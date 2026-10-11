@@ -1,36 +1,37 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
-#include "kernel/events.h"
-#include "pbl/services/comm_session/meta_endpoint.h"
-#include "pbl/services/comm_session/session_receive_router.h"
-#include "pbl/services/comm_session/session_remote_version.h"
-#include "pbl/services/comm_session/session_transport.h"
-#include "pbl/services/comm_session/test_endpoint_ids.h"
 #include <pbl/logging/logging.h>
+#include <pbl/services/comm_session/meta_endpoint.h>
+#include <pbl/services/comm_session/session_receive_router.h>
+#include <pbl/services/comm_session/session_remote_version.h>
+#include <pbl/services/comm_session/session_transport.h>
+#include <pbl/services/comm_session/test_endpoint_ids.h>
+
+#include <clar.h>
+#include <kernel/events.h>
 
 // Stubs
 ///////////////////////////////////////////////////////////
 
-#include "stubs_analytics.h"
-#include "stubs_bt_lock.h"
-#include "stubs_bt_stack.h"
-#include "stubs_events.h"
-#include "stubs_hexdump.h"
-#include "stubs_logging.h"
-#include "stubs_passert.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_syscall_internal.h"
+#include <stubs_analytics.h>
+#include <stubs_bt_lock.h>
+#include <stubs_bt_stack.h>
+#include <stubs_events.h>
+#include <stubs_hexdump.h>
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_syscall_internal.h>
 
 void app_launch_trigger(void) {
 }
 
-bool bt_driver_comm_schedule_send_next_job(CommSession *data) {
+bool pbl_bt_comm_schedule_send_next_job(CommSession *data) {
   return true;
 }
 
-bool bt_driver_comm_is_current_task_send_next_task(void) {
+bool pbl_bt_comm_is_current_task_send_next_task(void) {
   return false;
 }
 
@@ -60,10 +61,10 @@ void bt_persistent_storage_set_cached_system_capabilities(
 // Fakes
 ///////////////////////////////////////////////////////////
 
-#include "fake_kernel_malloc.h"
-#include "fake_session_send_buffer.h"
-#include "fake_system_task.h"
-#include "fake_app_manager.h"
+#include <fake_app_manager.h>
+#include <fake_kernel_malloc.h>
+#include <fake_session_send_buffer.h>
+#include <fake_system_task.h>
 
 MetaResponseInfo s_last_meta_response_info;
 
@@ -78,29 +79,24 @@ void meta_endpoint_send_response_async(const MetaResponseInfo *meta_response_inf
 ///////////////////////////////////////////////////////////
 
 #define PP_MSG_BYTES(endpoint_id, length, ...) \
-  { \
-    length & 0xff, length >> 8, \
-    endpoint_id && 0xff, endpoint_id >> 8, \
-    __VA_ARGS__ \
-  }
+  {length & 0xff, length >> 8, endpoint_id && 0xff, endpoint_id >> 8, __VA_ARGS__}
 
-#define RECEIVE(...) \
-  { \
-    const uint8_t partial_data[] = { __VA_ARGS__ }; \
+#define RECEIVE(...)                                                                  \
+  {                                                                                   \
+    const uint8_t partial_data[] = {__VA_ARGS__};                                     \
     comm_session_receive_router_write(s_session, partial_data, sizeof(partial_data)); \
   }
 
 static void prv_send_next(Transport *transport);
 static void prv_reset(Transport *transport);
-static void prv_set_connection_responsiveness(Transport *transport,
-                                              BtConsumer consumer,
-                                              ResponseTimeState state,
+static void prv_set_connection_responsiveness(Transport *transport, enum pbl_bt_consumer consumer,
+                                              enum pbl_bt_response_time_state state,
                                               uint16_t max_period_secs,
-                                              ResponsivenessGrantedHandler granted_handler);
+                                              pbl_bt_responsiveness_granted_cb_t granted_handler);
 
 CommSession *s_session;
 
-Transport *s_transport = (Transport *) ~0;
+Transport *s_transport = (Transport *)~0;
 
 const TransportImplementation s_transport_implementation = {
   .send_next = prv_send_next,
@@ -109,19 +105,15 @@ const TransportImplementation s_transport_implementation = {
 };
 
 static void prv_send_next(Transport *transport) {
-
 }
 
 static void prv_reset(Transport *transport) {
-
 }
 
-static void prv_set_connection_responsiveness(Transport *transport,
-                                              BtConsumer consumer,
-                                              ResponseTimeState state,
+static void prv_set_connection_responsiveness(Transport *transport, enum pbl_bt_consumer consumer,
+                                              enum pbl_bt_response_time_state state,
                                               uint16_t max_period_secs,
-                                              ResponsivenessGrantedHandler granted_handler) {
-
+                                              pbl_bt_responsiveness_granted_cb_t granted_handler) {
 }
 
 // Referenced from protocol_endpoints_table.auto.h override header:
@@ -136,18 +128,15 @@ typedef enum {
 
 static int s_protocol_callback_counts[NumTestEndpoint];
 
-void private_test_protocol_msg_callback(CommSession *session,
-                                        const uint8_t* data, size_t length) {
+void private_test_protocol_msg_callback(CommSession *session, const uint8_t *data, size_t length) {
   ++s_protocol_callback_counts[TestEndpointPrivate];
 }
 
-void public_test_protocol_msg_callback(CommSession *session,
-                                       const uint8_t* data, size_t length) {
+void public_test_protocol_msg_callback(CommSession *session, const uint8_t *data, size_t length) {
   ++s_protocol_callback_counts[TestEndpointPublic];
 }
 
-void any_test_protocol_msg_callback(CommSession *session,
-                                    const uint8_t* data, size_t length) {
+void any_test_protocol_msg_callback(CommSession *session, const uint8_t *data, size_t length) {
   ++s_protocol_callback_counts[TestEndpointAny];
 }
 
@@ -164,18 +153,17 @@ static uint16_t s_write_length;
 
 static bool s_prepare_return_null = false;
 
-static Receiver * prv_system_test_receiver_prepare(CommSession *session,
-                                                   const PebbleProtocolEndpoint *endpoint,
-                                                   size_t total_msg_length) {
+static Receiver *prv_system_test_receiver_prepare(CommSession *session,
+                                                  const PebbleProtocolEndpoint *endpoint,
+                                                  size_t total_msg_length) {
   ++s_prepare_count;
   if (s_prepare_return_null) {
     return NULL;
   }
-  return (Receiver *) &s_test_receiver_ctx;
+  return (Receiver *)&s_test_receiver_ctx;
 }
 
-static void prv_system_test_receiver_write(Receiver *receiver,
-                                           const uint8_t *data, size_t length) {
+static void prv_system_test_receiver_write(Receiver *receiver, const uint8_t *data, size_t length) {
   cl_assert(s_write_length + length < sizeof(s_write_buffer));
   memcpy(s_write_buffer + s_write_length, data, length);
   s_write_length += length;
@@ -201,16 +189,15 @@ const ReceiverImplementation g_system_test_receiver_imp = {
 // Tests
 ///////////////////////////////////////////////////////////
 
-
 void test_session_receive_router__initialize(void) {
-  s_session = comm_session_open(s_transport, &s_transport_implementation,
-                                TransportDestinationSystem);
+  s_session =
+      comm_session_open(s_transport, &s_transport_implementation, TransportDestinationSystem);
   memset(s_protocol_callback_counts, 0, sizeof(s_protocol_callback_counts));
   s_prepare_count = 0;
   s_finish_count = 0;
   s_cleanup_count = 0;
   s_write_length = 0;
-  s_last_meta_response_info = (const MetaResponseInfo) {};
+  s_last_meta_response_info = (const MetaResponseInfo){};
   s_prepare_return_null = false;
 }
 
@@ -251,8 +238,8 @@ void test_session_receive_router__unhandled_endpoint(void) {
   assert_meta_response_sent(MetaResponseCodeUnhandled);
 
   // Length: 1, Endpoint ID: OTHER_NON_EXISTENT_ENDPOINT_ID, Payload: 0x55
-  RECEIVE(0x00, 0x01,
-          OTHER_NON_EXISTENT_ENDPOINT_ID >> 8, OTHER_NON_EXISTENT_ENDPOINT_ID & 0xff, 0x55);
+  RECEIVE(0x00, 0x01, OTHER_NON_EXISTENT_ENDPOINT_ID >> 8, OTHER_NON_EXISTENT_ENDPOINT_ID & 0xff,
+          0x55);
   cl_assert_equal_i(s_prepare_count, 0);
   assert_meta_response_sent(MetaResponseCodeUnhandled);
 
@@ -266,8 +253,8 @@ void test_session_receive_router__unhandled_and_supported_concat(void) {
   // the message should get eaten even if a supported message immediately follows.
 
   // Length: 1, Endpoint ID: NON_EXISTENT_ENDPOINT_ID, Payload: 0x55
-  RECEIVE(0x00, 0x01, NON_EXISTENT_ENDPOINT_ID >> 8, NON_EXISTENT_ENDPOINT_ID & 0xff, 0x55,
-          0x00, 0x01, PRIVATE_TEST_ENDPOINT_ID >> 8, PRIVATE_TEST_ENDPOINT_ID & 0xff, 0xaa);
+  RECEIVE(0x00, 0x01, NON_EXISTENT_ENDPOINT_ID >> 8, NON_EXISTENT_ENDPOINT_ID & 0xff, 0x55, 0x00,
+          0x01, PRIVATE_TEST_ENDPOINT_ID >> 8, PRIVATE_TEST_ENDPOINT_ID & 0xff, 0xaa);
   assert_meta_response_sent(MetaResponseCodeUnhandled);
   cl_assert_equal_i(s_prepare_count, 1);
 }
@@ -293,8 +280,7 @@ void test_session_receive_router__app_disallowed_endpoint(void) {
   // The message should get eaten and not interfere with whatever comes next.
 
   comm_session_close(s_session, CommSessionCloseReason_UnderlyingDisconnection);
-  s_session = comm_session_open(s_transport, &s_transport_implementation,
-                                TransportDestinationApp);
+  s_session = comm_session_open(s_transport, &s_transport_implementation, TransportDestinationApp);
 
   // Length: 1, Endpoint ID: PUBLIC_TEST_ENDPOINT_ID, Payload: 0xaa
   RECEIVE(0x00, 0x01, PRIVATE_TEST_ENDPOINT_ID >> 8, PRIVATE_TEST_ENDPOINT_ID & 0xff, 0xaa);
@@ -341,12 +327,11 @@ void test_session_receive_router__payload_in_pieces(void) {
   // Expect that when a message's payload is received in pieces, the complete payload will be
   // written and finish will only be called after the whole payload has been received.
 
-  const uint8_t expected_payload[] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee };
+  const uint8_t expected_payload[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee};
 
   // Length: 5, Endpoint ID: PRIVATE_TEST_ENDPOINT_ID, Payload: 0xaa (byte 1)
-  RECEIVE(0x00, sizeof(expected_payload),
-          PRIVATE_TEST_ENDPOINT_ID >> 8, PRIVATE_TEST_ENDPOINT_ID & 0xff,
-          0xaa);
+  RECEIVE(0x00, sizeof(expected_payload), PRIVATE_TEST_ENDPOINT_ID >> 8,
+          PRIVATE_TEST_ENDPOINT_ID & 0xff, 0xaa);
   cl_assert_equal_i(s_write_length, 1);
   cl_assert_equal_i(s_finish_count, 0);
 
@@ -357,7 +342,7 @@ void test_session_receive_router__payload_in_pieces(void) {
 
   // Last payload byte
   RECEIVE(0xee,
-  // New message partial header: Length: 5, Endpoint ID: PRIVATE_TEST_ENDPOINT_ID
+          // New message partial header: Length: 5, Endpoint ID: PRIVATE_TEST_ENDPOINT_ID
           0x00, 0x01, PRIVATE_TEST_ENDPOINT_ID >> 8);
   cl_assert_equal_i(s_finish_count, 1);
   cl_assert_equal_i(s_write_length, sizeof(expected_payload));

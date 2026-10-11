@@ -1,53 +1,56 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/ui/option_menu_window.h"
-#include "resource/resource.h"
-#include "resource/resource_ids.auto.h"
-#include "pbl/services/timeline/timeline_resources.h"
+#include <pbl/services/timeline/timeline_resources.h>
 
-#include "clar.h"
+#include <applib/ui/option_menu_window.h>
+#include <clar.h>
+#include <resource/resource.h>
+#include <resource/resource_ids.auto.h>
+#include <shell/system_theme.h>
 
 // Fakes
 /////////////////////
 
-#include "fake_app_state.h"
-#include "fake_content_indicator.h"
-#include "fake_graphics_context.h"
-#include "fixtures/load_test_resources.h"
+#include <fake_app_state.h>
+#include <fake_content_indicator.h>
+#include <fake_graphics_context.h>
+#include <fixtures/load_test_resources.h>
+#include <fixtures/screen_grid.h>
 
 // Stubs
 /////////////////////
 
-#include "stubs_analytics.h"
-#include "stubs_animation_timing.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_app_state.h"
-#include "stubs_app_timer.h"
-#include "stubs_bootbits.h"
-#include "stubs_buffer.h"
-#include "stubs_click.h"
-#include "stubs_compiled_with_legacy2_sdk.h"
-#include "stubs_event_service_client.h"
-#include "stubs_heap.h"
-#include "stubs_logging.h"
-#include "stubs_memory_layout.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_print.h"
-#include "stubs_process_manager.h"
-#include "stubs_prompt.h"
-#include "stubs_serial.h"
-#include "stubs_shell_prefs.h"
-#include "stubs_sleep.h"
-#include "stubs_syscalls.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_unobstructed_area.h"
-#include "stubs_vibes.h"
-#include "stubs_window_manager.h"
-#include "stubs_window_stack.h"
+#include <pbl/util/units.h>
+
+#include <stubs_analytics.h>
+#include <stubs_animation_timing.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_state.h>
+#include <stubs_app_timer.h>
+#include <stubs_bootbits.h>
+#include <stubs_buffer.h>
+#include <stubs_click.h>
+#include <stubs_compiled_with_legacy2_sdk.h>
+#include <stubs_event_service_client.h>
+#include <stubs_heap.h>
+#include <stubs_logging.h>
+#include <stubs_memory_layout.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_print.h>
+#include <stubs_process_manager.h>
+#include <stubs_serial.h>
+#include <stubs_shell_prefs.h>
+#include <stubs_sleep.h>
+#include <stubs_syscalls.h>
+#include <stubs_task_wdt.h>
+#include <stubs_unobstructed_area.h>
+#include <stubs_vibes.h>
+#include <stubs_window_manager.h>
+#include <stubs_window_stack.h>
 
 // Setup and Teardown
 ////////////////////////////////////
@@ -62,11 +65,12 @@ void test_option_menu_window__initialize(void) {
   fake_app_state_init();
   load_system_resources_fixture();
 
-  s_data = (OptionMenuTestData) {};
-  rtc_set_time(3 * SECONDS_PER_DAY);
+  s_data = (OptionMenuTestData){};
+  rtc_set_time(3 * PBL_SEC_PER_DAY);
 }
 
 void test_option_menu_window__cleanup(void) {
+  system_theme_set_content_size(PreferredContentSizeDefault);
 }
 
 // Helpers
@@ -103,8 +107,8 @@ static void prv_create_menu_and_render(MenuConfig *config) {
   const OptionMenuConfig option_menu_config = {
     .title = config->title ?: "Option Menu",
     .content_type = config->content_type,
-    .status_colors = { GColorWhite, GColorBlack },
-    .highlight_colors = { PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack), GColorWhite },
+    .status_colors = {GColorWhite, GColorBlack},
+    .highlight_colors = {PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack), GColorWhite},
     .icons_enabled = config->icons_enabled,
   };
   option_menu_configure(&s_data.option_menu, &option_menu_config);
@@ -129,34 +133,25 @@ static void prv_create_menu_and_render(MenuConfig *config) {
 
 void prv_create_menu_and_render_long_title(bool icons_enabled, const char *title,
                                            bool special_height) {
-  prv_create_menu_and_render(&(MenuConfig) {
+  prv_create_menu_and_render(&(MenuConfig){
     .title = title,
-    .content_type = special_height ? OptionMenuContentType_DoubleLine :
-                                     OptionMenuContentType_Default,
+    .content_type =
+        special_height ? OptionMenuContentType_DoubleLine : OptionMenuContentType_Default,
     .num_items = 3,
-    .items = (MenuItemConfig[]) {
-      {
-        .title = "Allow All Notifications",
-      }, {
-        .title = "Allow Phone Calls Only",
-      }, {
-        .title = "Mute All Notifications",
-      }
-    },
+    .items =
+        (MenuItemConfig[]){
+          {
+            .title = "Allow All Notifications",
+          },
+          {
+            .title = "Allow Phone Calls Only",
+          },
+          {
+            .title = "Mute All Notifications",
+          }
+        },
     .icons_enabled = icons_enabled,
   });
-}
-
-void test_option_menu_window__long_title_default_height(void) {
-  prv_create_menu_and_render_long_title(false /* icons_enabled */, "Default Height",
-                                        false /* special_height */);
-  FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
-}
-
-void test_option_menu_window__long_title_default_height_icons(void) {
-  prv_create_menu_and_render_long_title(true /* icons_enabled */, "Default Height",
-                                        false /* special_height */);
-  FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
 }
 
 void test_option_menu_window__long_title_special_height(void) {
@@ -165,28 +160,25 @@ void test_option_menu_window__long_title_special_height(void) {
   FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
 }
 
-void test_option_menu_window__long_title_special_height_icons(void) {
-  prv_create_menu_and_render_long_title(true /* icons_enabled */, "Special Height",
-                                        true /* special_height */);
-  FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
-}
-
 void prv_create_menu_and_render_short_title(bool icons_enabled, const char *title,
                                             bool special_height) {
-  prv_create_menu_and_render(&(MenuConfig) {
+  prv_create_menu_and_render(&(MenuConfig){
     .title = title,
-    .content_type = special_height ? OptionMenuContentType_SingleLine :
-                                     OptionMenuContentType_Default,
+    .content_type =
+        special_height ? OptionMenuContentType_SingleLine : OptionMenuContentType_Default,
     .num_items = 3,
-    .items = (MenuItemConfig[]) {
-      {
-        .title = "Smaller",
-      }, {
-        .title = "Default",
-      }, {
-        .title = "Larger",
-      }
-    },
+    .items =
+        (MenuItemConfig[]){
+          {
+            .title = "Smaller",
+          },
+          {
+            .title = "Default",
+          },
+          {
+            .title = "Larger",
+          }
+        },
     .icons_enabled = icons_enabled,
   });
 }
@@ -197,20 +189,67 @@ void test_option_menu_window__short_title_default_height(void) {
   FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
 }
 
-void test_option_menu_window__short_title_default_height_icons(void) {
-  prv_create_menu_and_render_short_title(true /* icons_enabled */, "Default Height",
-                                         false /* special_height */);
-  FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
-}
-
 void test_option_menu_window__short_title_special_height(void) {
   prv_create_menu_and_render_short_title(false /* icons_enabled */, "Special Height",
                                          true /* special_height */);
   FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
 }
 
-void test_option_menu_window__short_title_special_height_icons(void) {
+//! Renders once per content size and checks the screens side by side, from Small
+static void prv_render_for_each_size(void (*render)(void), const char *pbi_file) {
+  ScreenGrid grid;
+  screen_grid_init(&grid, 1);
+  for (PreferredContentSize size = grid.first_size; size <= grid.last_size; size++) {
+    system_theme_set_content_size(size);
+    s_data = (OptionMenuTestData){};
+    render();
+    screen_grid_add(&grid, fake_graphics_context_get_context(), size, 0);
+  }
+
+  screen_grid_check(&grid, pbi_file);
+}
+
+static void prv_render_long_title_default_height(void) {
+  prv_create_menu_and_render_long_title(false /* icons_enabled */, "Default Height",
+                                        false /* special_height */);
+}
+
+static void prv_render_long_title_default_height_icons(void) {
+  prv_create_menu_and_render_long_title(true /* icons_enabled */, "Default Height",
+                                        false /* special_height */);
+}
+
+static void prv_render_long_title_special_height_icons(void) {
+  prv_create_menu_and_render_long_title(true /* icons_enabled */, "Special Height",
+                                        true /* special_height */);
+}
+
+static void prv_render_short_title_default_height_icons(void) {
+  prv_create_menu_and_render_short_title(true /* icons_enabled */, "Default Height",
+                                         false /* special_height */);
+}
+
+static void prv_render_short_title_special_height_icons(void) {
   prv_create_menu_and_render_short_title(true /* icons_enabled */, "Special Height",
                                          true /* special_height */);
-  FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
+}
+
+void test_option_menu_window__content_sizes_long_title_default_height(void) {
+  prv_render_for_each_size(prv_render_long_title_default_height, TEST_PBI_FILE);
+}
+
+void test_option_menu_window__content_sizes_long_title_default_height_icons(void) {
+  prv_render_for_each_size(prv_render_long_title_default_height_icons, TEST_PBI_FILE);
+}
+
+void test_option_menu_window__content_sizes_long_title_special_height_icons(void) {
+  prv_render_for_each_size(prv_render_long_title_special_height_icons, TEST_PBI_FILE);
+}
+
+void test_option_menu_window__content_sizes_short_title_default_height_icons(void) {
+  prv_render_for_each_size(prv_render_short_title_default_height_icons, TEST_PBI_FILE);
+}
+
+void test_option_menu_window__content_sizes_short_title_special_height_icons(void) {
+  prv_render_for_each_size(prv_render_short_title_special_height_icons, TEST_PBI_FILE);
 }

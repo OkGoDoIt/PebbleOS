@@ -3,9 +3,10 @@
 
 #pragma once
 
-#include "applib/event_service_client.h"
+#include <applib/event_service_client.h>
 
-void event_service_client_subscribe(EventServiceInfo * service_info) {}
+void event_service_client_subscribe(EventServiceInfo *service_info) {
+}
 
-void event_service_client_unsubscribe(EventServiceInfo * service_info) {}
-
+void event_service_client_unsubscribe(EventServiceInfo *service_info) {
+}

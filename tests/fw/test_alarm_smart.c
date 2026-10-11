@@ -4,11 +4,13 @@
 #include "test_alarm_common.h"
 
 // Fakes
-#include "fake_rtc.h"
-#include "fake_new_timer.h"
+#include <pbl/services/time.h>
+#include <pbl/util/units.h>
 
-#include "stubs_blob_db_sync.h"
-#include "stubs_blob_db_sync_util.h"
+#include <fake_new_timer.h>
+#include <fake_rtc.h>
+#include <stubs_blob_db_sync.h>
+#include <stubs_blob_db_sync_util.h>
 
 static int s_rand = 0;
 
@@ -75,30 +77,32 @@ void test_alarm_smart__initialize(void) {
 
   timeline_item_destroy(s_last_timeline_item_added);
   s_last_timeline_item_added = NULL;
-  s_last_timeline_item_removed_uuid = (Uuid) {};
+  s_last_timeline_item_removed_uuid = (Uuid){};
+  memset(s_fake_pin_records, 0, sizeof(s_fake_pin_records));
 
   fake_spi_flash_init(0, 0x1000000);
   pfs_init(false);
   pfs_format(false);
 
-  cron_service_init();
+  pbl_cron_init();
 
   alarm_init();
   alarm_service_enable_alarms(true);
 }
 
 void test_alarm_smart__cleanup(void) {
-  cron_service_deinit();
+  pbl_cron_deinit();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //! Smart alarms
 
-#define SMART_ALARM_UPDATE_MIN (SMART_ALARM_SNOOZE_DELAY_S / SECONDS_PER_MINUTE)
+#define SMART_ALARM_UPDATE_MIN (SMART_ALARM_SNOOZE_DELAY_S / PBL_SEC_PER_MIN)
 
 void test_alarm_smart__trigger_30_min_early_awake(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
   cl_assert_equal_i(s_num_timeline_adds, 3);
   cl_assert_equal_i(s_num_timeline_removes, 0);
@@ -110,18 +114,17 @@ void test_alarm_smart__trigger_30_min_early_awake(void) {
 
   time_t next_alarm_time;
   alarm_get_next_enabled_alarm(&next_alarm_time);
-  cl_assert_equal_i(next_alarm_time,
-                    s_current_day + 10 * SECONDS_PER_HOUR + 30 * SECONDS_PER_MINUTE);
+  cl_assert_equal_i(next_alarm_time, s_current_day + 10 * PBL_SEC_PER_HOUR + 30 * PBL_SEC_PER_MIN);
 
   // Don't trigger too early
   prv_set_time(s_current_day, 9, 49);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 0);
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 
   // Trigger at the right time
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 1);
   cl_assert_equal_i(s_num_timeline_adds, 6);
@@ -131,7 +134,8 @@ void test_alarm_smart__trigger_30_min_early_awake(void) {
 
 void test_alarm_smart__trigger_30_min_early_vmc(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
   cl_assert_equal_i(s_num_timeline_adds, 3);
   cl_assert_equal_i(s_num_timeline_removes, 0);
@@ -139,7 +143,7 @@ void test_alarm_smart__trigger_30_min_early_vmc(void) {
   s_sleep_state = ActivitySleepStateLightSleep;
   s_last_vmc = 1;
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 1);
   cl_assert_equal_i(s_last_timeline_item_added->header.timestamp, rtc_get_time());
@@ -147,7 +151,8 @@ void test_alarm_smart__trigger_30_min_early_vmc(void) {
 
 void test_alarm_smart__dont_trigger_30_min_early_deep_sleep(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
   cl_assert_equal_i(s_num_timeline_adds, 3);
   cl_assert_equal_i(s_num_timeline_removes, 0);
@@ -156,25 +161,26 @@ void test_alarm_smart__dont_trigger_30_min_early_deep_sleep(void) {
   s_sleep_state_seconds = 0;
   s_last_vmc = 0;
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 }
 
 void test_alarm_smart__trigger_15_min_early_light_sleep(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
   cl_assert_equal_i(s_num_timeline_adds, 3);
   cl_assert_equal_i(s_num_timeline_removes, 0);
 
   // Begin light sleep
   s_sleep_state = ActivitySleepStateLightSleep;
-  s_sleep_state_seconds = SMART_ALARM_MAX_LIGHT_SLEEP_S - 15 * SECONDS_PER_MINUTE;
+  s_sleep_state_seconds = SMART_ALARM_MAX_LIGHT_SLEEP_S - 15 * PBL_SEC_PER_MIN;
 
   // Smart alarms are first triggered by cron at T-30min
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 
@@ -182,7 +188,7 @@ void test_alarm_smart__trigger_15_min_early_light_sleep(void) {
   const int num_checks = 3;
   for (int i = 0; i < num_checks; i++) {
     // Step forward time and increase light sleep duration
-    s_sleep_state_seconds += 5 * SECONDS_PER_MINUTE;
+    s_sleep_state_seconds += 5 * PBL_SEC_PER_MIN;
     s_last_vmc = i == 2 ? 1 : 0;
     prv_set_time(s_current_day, 10, (i + 1) * 5);
     PBL_LOG_DBG("Iteration #%d, sleep %d seconds", i, s_sleep_state_seconds);
@@ -204,7 +210,8 @@ void test_alarm_smart__trigger_15_min_early_light_sleep(void) {
 
 void test_alarm_smart__trigger_at_timeout(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
   cl_assert_equal_i(s_num_timeline_adds, 3);
   cl_assert_equal_i(s_num_timeline_removes, 0);
@@ -218,7 +225,7 @@ void test_alarm_smart__trigger_at_timeout(void) {
 
   // Smart alarms are first triggered by cron at T-30min
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 
@@ -226,7 +233,7 @@ void test_alarm_smart__trigger_at_timeout(void) {
   const int num_checks = 6;
   for (int i = 0; i < num_checks; i++) {
     // Step forward time and increase light sleep duration
-    s_sleep_state_seconds = (i + 1) * 5 * SECONDS_PER_MINUTE;
+    s_sleep_state_seconds = (i + 1) * 5 * PBL_SEC_PER_MIN;
     s_last_vmc = (i == 5);
     prv_set_time(s_current_day, 10, i * 5);
     PBL_LOG_DBG("Iteration #%d, sleep %d seconds", i, s_sleep_state_seconds);
@@ -248,7 +255,8 @@ void test_alarm_smart__trigger_at_timeout(void) {
 
 void test_alarm_smart__user_snooze_fires_after_delay(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
 
   // Awake, so the smart alarm fires immediately at T-30min
@@ -256,7 +264,7 @@ void test_alarm_smart__user_snooze_fires_after_delay(void) {
   s_sleep_state_seconds = 0;
   s_last_vmc = 0;
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 1);
 
@@ -279,7 +287,8 @@ void test_alarm_smart__user_snooze_fires_after_delay(void) {
 
 void test_alarm_smart__user_snooze_survives_clock_change(void) {
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
 
   // Stay asleep so the sleep poll runs and drives up the smart snooze counter
@@ -288,12 +297,12 @@ void test_alarm_smart__user_snooze_survives_clock_change(void) {
   s_rand = 4;
 
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 
   const int num_checks = 6;
   for (int i = 0; i < num_checks; i++) {
-    s_sleep_state_seconds = (i + 1) * 5 * SECONDS_PER_MINUTE;
+    s_sleep_state_seconds = (i + 1) * 5 * PBL_SEC_PER_MIN;
     s_last_vmc = (i == 5);
     prv_set_time(s_current_day, 10, i * 5);
     stub_new_timer_invoke(1);
@@ -318,7 +327,8 @@ void test_alarm_smart__clock_change_still_force_triggers_sleep_poll(void) {
   // Guards the FIRM-3127 fix: with no user snooze pending, a clock change during the smart
   // window must still force the alarm to fire rather than silently dropping it.
   AlarmId id;
-  id = alarm_create(&(AlarmInfo) { .hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true });
+  id = alarm_create(
+      &(AlarmInfo){.hour = 10, .minute = 30, .kind = ALARM_KIND_EVERYDAY, .is_smart = true});
   prv_assert_alarm_config(id, 10, 30, false, ALARM_KIND_EVERYDAY, s_every_day_schedule);
 
   s_sleep_state = ActivitySleepStateRestfulSleep;
@@ -326,12 +336,12 @@ void test_alarm_smart__clock_change_still_force_triggers_sleep_poll(void) {
   s_rand = 4;
 
   prv_set_time(s_current_day, 10, 0);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 
   // A couple of sleep polls, so the smart snooze counter is non-zero but the alarm has not fired
   for (int i = 0; i < 2; i++) {
-    s_sleep_state_seconds = (i + 1) * 5 * SECONDS_PER_MINUTE;
+    s_sleep_state_seconds = (i + 1) * 5 * PBL_SEC_PER_MIN;
     s_last_vmc = 0;
     prv_set_time(s_current_day, 10, i * 5);
     stub_new_timer_invoke(1);
@@ -349,8 +359,13 @@ void test_alarm_smart__across_midnight_boundary(void) {
 
   AlarmId id;
   bool monday_only[7] = {false, true, false, false, false, false, false};
-  id = alarm_create(&(AlarmInfo) { .hour = 0, .minute = 15, .kind = ALARM_KIND_CUSTOM, .is_smart = true,
-                                   .scheduled_days = &monday_only });
+  id = alarm_create(&(AlarmInfo){
+    .hour = 0,
+    .minute = 15,
+    .kind = ALARM_KIND_CUSTOM,
+    .is_smart = true,
+    .scheduled_days = &monday_only
+  });
   prv_assert_alarm_config(id, 0, 15, false, ALARM_KIND_CUSTOM, monday_only);
   cl_assert_equal_i(s_num_timeline_adds, 1);
   cl_assert_equal_i(s_num_timeline_removes, 0);
@@ -361,13 +376,13 @@ void test_alarm_smart__across_midnight_boundary(void) {
 
   // Don't trigger too early
   prv_set_time(s_sunday, 23, 44);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 0);
   cl_assert_equal_i(s_num_alarm_events_put, 0);
 
   // Trigger at the right time
   prv_set_time(s_sunday, 23, 45);
-  cron_service_wakeup();
+  pbl_cron_wakeup();
   cl_assert_equal_i(s_num_alarms_fired, 1);
   cl_assert_equal_i(s_num_alarm_events_put, 1);
   cl_assert_equal_i(s_num_timeline_adds, 2);

@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig TEMPERATURE
+    bool "Temperature Sensor"
+    help
+      Temperature Sensor Drivers
+
+if TEMPERATURE
+
+config TEMPERATURE_NRF5
+    bool "Nordic nRF5"
+    default y if SOC_NRF52
+    select HAL_NORDIC
+    help
+      Support for the Nordic nRF5 die temperature sensor.
+
+config TEMPERATURE_SF32LB
+    bool "SiFli SF32LB"
+    default y if SOC_SF32LB52
+    select HAL_SIFLI
+    help
+      Support for the SiFli SF32LB temperature sensor.
+
+config TEMPERATURE_QEMU
+    bool "QEMU"
+    default y if SOC_QEMU
+    help
+      QEMU temperature sensor. QEMU emulates none, so it reports a fixed
+      25 degrees Celsius.
+
+config TEMPERATURE_POSIX
+    bool "POSIX"
+    default y if SOC_POSIX
+    help
+      Temperature driver for a native build (fixed value).
+
+endif # TEMPERATURE

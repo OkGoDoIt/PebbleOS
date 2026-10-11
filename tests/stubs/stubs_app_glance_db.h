@@ -1,9 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/services/blob_db/app_glance_db.h"
+#include <pbl/services/blob_db/app_glance_db.h>
 
-void app_glance_db_init(void) {}
+void app_glance_db_init(void) {
+}
 
 status_t app_glance_db_insert(const uint8_t *key, int key_len, const uint8_t *val, int val_len) {
   return S_SUCCESS;

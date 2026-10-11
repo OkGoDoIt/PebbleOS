@@ -1,19 +1,22 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <pbl/services/notifications/ancs/ancs_notifications_util.h>
 
-#include "pbl/services/notifications/ancs/ancs_notifications_util.h"
+#include <clar.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include "stubs_logging.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
+#include <stubs_logging.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
 
 // Fakes
 ////////////////////////////////////////////////////////////////
-#include "fakes/fake_rtc.h"
+#include <pbl/services/time.h>
+#include <pbl/util/units.h>
+
+#include <fakes/fake_rtc.h>
 
 // Tests
 ////////////////////////////////////////////////////////////////
@@ -44,13 +47,13 @@ void test_ancs_notifications_util__parse_timestamp(void) {
     .tm_mon = 3, // Apr
     .tm_year = 2015 - 1900,
     .tm_isdst = 1,
-    .tm_gmtoff = SECONDS_PER_HOUR, // DST offset (base 0 + 1h DST)
+    .tm_gmtoff = PBL_SEC_PER_HOUR, // DST offset (base 0 + 1h DST)
   };
 
   // DST info for US/Canada 2015
   TimezoneInfo tz_info = {
     .dst_start = 1425780000, // Sun, 08 Mar 2015 02:00
-    .dst_end = 1446343200 // Sun, 01 Nov 2015 02:00
+    .dst_end = 1446343200    // Sun, 01 Nov 2015 02:00
   };
   time_util_update_timezone(&tz_info);
 

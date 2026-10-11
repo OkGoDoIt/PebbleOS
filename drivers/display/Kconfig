@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig DISPLAY
+    bool "Display"
+    help
+      Display Drivers
+
+if DISPLAY
+
+config DISPLAY_JDI_SF32LB
+    bool "JDI (SiFli SF32LB)"
+    default y if SOC_SF32LB52
+    select HAL_SIFLI
+    select HAL_SIFLI_LCD
+    help
+      Support for JDI display via SiFli SF32LB.
+
+config DISPLAY_SHARP_LS013B7DH01_NRF5
+    bool "Sharp LS013B7DH01 (nRF5)"
+    default y if SOC_NRF52
+    select HAL_NORDIC
+    help
+      Support for the Sharp LS013B7DH01 display via nRF5.
+
+config DISPLAY_QEMU
+    bool "QEMU Framebuffer Display"
+    default y if SOC_QEMU
+    help
+      Support for the QEMU framebuffer display peripheral.
+
+config DISPLAY_SDL
+    bool "SDL window"
+    default y if SOC_POSIX
+    select SDL
+    help
+      Display shown in an SDL window on the host of a native build.
+
+module = DRIVER_DISPLAY
+module-str = Display
+source "subsys/logging/Kconfig.template.log_level"
+
+endif # DISPLAY

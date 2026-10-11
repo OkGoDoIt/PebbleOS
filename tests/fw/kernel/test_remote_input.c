@@ -1,28 +1,26 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "kernel/remote_input.h"
-
-#include "applib/event_service_client.h"
-#include "applib/ui/recognizer/swipe.h"
-#include <pbl/drivers/display/display.h>
-#include "kernel/events.h"
-#include "pbl/services/touch/touch.h"
-#include "pbl/util/math.h"
-#include "pbl/util/size.h"
-
 #include <string.h>
 
-#include "clar.h"
+#include <pbl/drivers/display/display.h>
+#include <pbl/services/touch/touch.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+
+#include <applib/event_service_client.h>
+#include <applib/ui/recognizer/swipe.h>
+#include <clar.h>
+#include <kernel/events.h>
+#include <kernel/remote_input.h>
 
 // Stubs
 ///////////////////////////////////////////////////////////////////////////////
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-
-#include "fake_pbl_malloc.h"
-#include "fake_new_timer.h"
+#include <fake_new_timer.h>
+#include <fake_pbl_malloc.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
 
 #define MAX_RECORDED 32
 
@@ -87,7 +85,7 @@ static int s_ack_length;
 static int s_ack_count;
 
 bool comm_session_send_data(CommSession *session, uint16_t endpoint_id, const uint8_t *data,
-                           size_t length, uint32_t timeout_ms) {
+                            size_t length, uint32_t timeout_ms) {
   cl_assert(length <= sizeof(s_ack));
   memcpy(s_ack, data, length);
   s_ack_length = length;
@@ -181,8 +179,7 @@ void test_remote_input__zero_presses_leaves_no_button_held(void) {
 }
 
 void test_remote_input__rejects_unknown_button(void) {
-  cl_assert_equal_i(RemoteInputResult_Invalid,
-                    remote_input_button_press(NUM_BUTTONS, 1, 20, 0));
+  cl_assert_equal_i(RemoteInputResult_Invalid, remote_input_button_press(NUM_BUTTONS, 1, 20, 0));
   cl_assert_equal_i(0, s_event_count);
 }
 
@@ -190,8 +187,7 @@ void test_remote_input__second_request_is_busy(void) {
   cl_assert_equal_i(RemoteInputResult_Ok, remote_input_button_press(BUTTON_ID_SELECT, 1, 20, 0));
   cl_assert_equal_i(RemoteInputResult_Busy, remote_input_button_press(BUTTON_ID_UP, 1, 20, 0));
   // Swipes share the timer, so they are single-flight against button presses too.
-  cl_assert_equal_i(RemoteInputResult_Busy,
-                    remote_input_swipe(RemoteInputSwipeDirection_Up, 150));
+  cl_assert_equal_i(RemoteInputResult_Busy, remote_input_swipe(RemoteInputSwipeDirection_Up, 150));
 
   prv_run_sequence();
 
@@ -261,8 +257,7 @@ void test_remote_input__held_buttons_block_sequences(void) {
   cl_assert_equal_i(RemoteInputResult_Ok, remote_input_button_set(1 << BUTTON_ID_BACK));
 
   cl_assert_equal_i(RemoteInputResult_Busy, remote_input_button_press(BUTTON_ID_UP, 1, 20, 0));
-  cl_assert_equal_i(RemoteInputResult_Busy,
-                    remote_input_swipe(RemoteInputSwipeDirection_Up, 150));
+  cl_assert_equal_i(RemoteInputResult_Busy, remote_input_swipe(RemoteInputSwipeDirection_Up, 150));
 
   // Releasing the hold lets sequences through again.
   cl_assert_equal_i(RemoteInputResult_Ok, remote_input_button_set(0));
@@ -413,8 +408,10 @@ void test_remote_input__swipe_aborts_when_injection_is_refused(void) {
 
 void test_remote_input__swipe_stays_on_screen(void) {
   const RemoteInputSwipeDirection directions[] = {
-    RemoteInputSwipeDirection_Up, RemoteInputSwipeDirection_Down,
-    RemoteInputSwipeDirection_Left, RemoteInputSwipeDirection_Right,
+    RemoteInputSwipeDirection_Up,
+    RemoteInputSwipeDirection_Down,
+    RemoteInputSwipeDirection_Left,
+    RemoteInputSwipeDirection_Right,
   };
   for (unsigned d = 0; d < ARRAY_LENGTH(directions); d++) {
     s_touch_count = 0;

@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "applib/ui/dialogs/confirmation_dialog.h"
+#include <applib/ui/dialogs/confirmation_dialog.h>
 
 ConfirmationDialog *confirmation_dialog_create(const char *dialog_name) {
   return NULL;
@@ -18,10 +18,14 @@ ActionBarLayer *confirmation_dialog_get_action_bar(ConfirmationDialog *confirmat
 }
 
 void confirmation_dialog_set_click_config_provider(ConfirmationDialog *confirmation_dialog,
-                                                   ClickConfigProvider click_config_provider) {}
+                                                   ClickConfigProvider click_config_provider) {
+}
 
-void confirmation_dialog_push(ConfirmationDialog *confirmation_dialog, WindowStack *window_stack) {}
+void confirmation_dialog_push(ConfirmationDialog *confirmation_dialog, WindowStack *window_stack) {
+}
 
-void app_confirmation_dialog_push(ConfirmationDialog *confirmation_dialog) {}
+void app_confirmation_dialog_push(ConfirmationDialog *confirmation_dialog) {
+}
 
-void confirmation_dialog_pop(ConfirmationDialog *confirmation_dialog) {}
+void confirmation_dialog_pop(ConfirmationDialog *confirmation_dialog) {
+}

@@ -1,14 +1,12 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/services/timeline/reminders.h"
+#include <pbl/services/blob_db/reminder_db.h>
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/services/timeline/reminders.h>
 
-#include "kernel/events.h"
-#include "pbl/services/blob_db/reminder_db.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/services/regular_timer.h"
-
-#include "clar.h"
+#include <clar.h>
+#include <kernel/events.h>
 
 // Fixture
 ////////////////////////////////////////////////////////////////
@@ -16,15 +14,16 @@
 // Fakes
 ////////////////////////////////////////////////////////////////
 
-#include "fake_pbl_malloc.h"
-#include "fake_pebble_tasks.h"
-#include "fake_regular_timer.h"
-#include "fake_spi_flash.h"
-#include "fake_system_task.h"
-#include "stubs_layout_layer.h"
+#include <pbl/services/time.h>
+
+#include <fake_cron.h>
+#include <fake_pbl_malloc.h>
+#include <fake_pebble_tasks.h>
+#include <fake_spi_flash.h>
+#include <fake_system_task.h>
+#include <stubs_layout_layer.h>
 static time_t now = 0;
 static int num_events_put = 0;
-
 
 time_t rtc_get_time(void) {
   return now;
@@ -40,53 +39,52 @@ void launcher_task_add_callback(CallbackEventCallback callback, void *data) {
   callback(data);
 }
 
-void event_put(PebbleEvent* event) {
+void event_put(PebbleEvent *event) {
   num_events_put++;
 }
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include "stubs_analytics.h"
-#include "stubs_blob_db_sync.h"
-#include "stubs_blob_db_sync_util.h"
-#include "stubs_crc.h"
-#include "stubs_hexdump.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pin_db.h"
-#include "stubs_prompt.h"
-#include "stubs_rand_ptr.h"
-#include "stubs_sleep.h"
-#include "stubs_task_watchdog.h"
+#include <stubs_analytics.h>
+#include <stubs_blob_db_sync.h>
+#include <stubs_blob_db_sync_util.h>
+#include <stubs_hexdump.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pin_db.h>
+#include <stubs_rand_ptr.h>
+#include <stubs_sleep.h>
+#include <stubs_task_wdt.h>
 
-extern RegularTimerInfo *get_reminder_timer(void);
 extern bool get_reminder_armed(void);
 extern time_t get_reminder_timestamp(void);
 extern ReminderId *get_reminder_id(void);
 
-// Drives the seconds-callback the same way the regular_timer service would.
+// Runs the reminder job if it is due at the given time.
 // system_task_add_callback is faked to enqueue, so we then drain the queue.
 static void prv_advance_to_and_fire(time_t target) {
   now = target;
-  fake_regular_timer_trigger(get_reminder_timer());
+  fake_cron_job_fire_if_due(now);
   fake_system_task_callbacks_invoke(1);
 }
 
 static TimelineItem item1 = {
   .header = {
-    .id = {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e,
-             0x8c, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x22, 0xb4},
+    .id =
+        {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x22,
+         0xb4},
     .timestamp = 0,
     .duration = 0,
     .type = TimelineItemTypeReminder,
-  }  // don't care about the rest
+  } // don't care about the rest
 };
 
 static TimelineItem item2 = {
   .header = {
-    .id = {0x55, 0xcb, 0x7c, 0x75, 0x8a, 0x35, 0x44, 0x87,
-             0x90, 0xa4, 0x91, 0x3f, 0x1f, 0xa6, 0x76, 0x01},
+    .id =
+        {0x55, 0xcb, 0x7c, 0x75, 0x8a, 0x35, 0x44, 0x87, 0x90, 0xa4, 0x91, 0x3f, 0x1f, 0xa6, 0x76,
+         0x01},
     .timestamp = 100,
     .duration = 0,
     .type = TimelineItemTypeReminder,
@@ -95,8 +93,9 @@ static TimelineItem item2 = {
 
 static TimelineItem item3 = {
   .header = {
-    .id = {0x7c, 0x65, 0x2e, 0xb9, 0x26, 0xd6, 0x44, 0x2c,
-             0x98, 0x68, 0xa4, 0x36, 0x79, 0x7d, 0xe2, 0x05},
+    .id =
+        {0x7c, 0x65, 0x2e, 0xb9, 0x26, 0xd6, 0x44, 0x2c, 0x98, 0x68, 0xa4, 0x36, 0x79, 0x7d, 0xe2,
+         0x05},
     .timestamp = 300,
     .duration = 0,
     .type = TimelineItemTypeReminder,
@@ -105,8 +104,9 @@ static TimelineItem item3 = {
 
 static TimelineItem item4 = {
   .header = {
-    .id = {0x8c, 0x65, 0x2e, 0xb9, 0x26, 0xd6, 0x44, 0x2c,
-             0x98, 0x68, 0xa4, 0x36, 0x79, 0x7d, 0xe2, 0x05},
+    .id =
+        {0x8c, 0x65, 0x2e, 0xb9, 0x26, 0xd6, 0x44, 0x2c, 0x98, 0x68, 0xa4, 0x36, 0x79, 0x7d, 0xe2,
+         0x05},
     .timestamp = 1337,
     .duration = 0,
     .type = TimelineItemTypeReminder,
@@ -124,7 +124,6 @@ void test_reminders__initialize(void) {
   pfs_init(false);
   reminder_db_init();
 
-  // Register the seconds callback so fake_regular_timer_trigger() can drive it.
   cl_assert_equal_i(reminders_init(), S_SUCCESS);
 
   // add all four explicitly out of order
@@ -138,7 +137,7 @@ void test_reminders__initialize(void) {
 }
 
 void test_reminders__cleanup(void) {
-  //nada
+  // nada
 }
 
 // Tests
@@ -199,7 +198,7 @@ void test_reminders__not_ready_yet(void) {
 
   // item2 has ts=100; before that, tick should do nothing.
   now = 50;
-  fake_regular_timer_trigger(get_reminder_timer());
+  fake_cron_job_fire_if_due(now);
   fake_system_task_callbacks_invoke(1);
   cl_assert_equal_i(num_events_put, 1);
   cl_assert(get_reminder_armed());
@@ -211,8 +210,9 @@ void test_reminders__not_ready_yet(void) {
 
 static TimelineItem s_stale_reminder = {
   .header = {
-    .id = {0x3C, 0xAF, 0x17, 0xD5, 0xBE, 0x15, 0x4B, 0xFD, 0xAE, 0x2A,
-      0xAE, 0x44, 0xC0, 0x96, 0xCB, 0x7D},
+    .id =
+        {0x3C, 0xAF, 0x17, 0xD5, 0xBE, 0x15, 0x4B, 0xFD, 0xAE, 0x2A, 0xAE, 0x44, 0xC0, 0x96, 0xCB,
+         0x7D},
     .timestamp = 60 * 60,
     .duration = 0,
     .type = TimelineItemTypeReminder,
@@ -242,20 +242,22 @@ static TimezoneInfo s_tz = {
 
 static TimelineItem s_all_day_reminder = {
   .header = {
-    .id = {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e,
-             0x8c, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x67, 0xb4},
+    .id =
+        {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x67,
+         0xb4},
     .timestamp = 1425511800, // 23:30 UTC March 4
     .duration = 0,
     .type = TimelineItemTypeReminder,
     .all_day = true,
-  }  // don't care about the rest
+  } // don't care about the rest
 };
 
 // should show up before s_all_day_reminder even though its timestamp is after due to tz adjustment
 static TimelineItem s_reminder_before_all_day_reminder = {
   .header = {
-    .id = {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e,
-             0x8d, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x67, 0xb4},
+    .id =
+        {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8d, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x67,
+         0xb4},
     .timestamp = 1425531600, // 21:00 PST March 4
     .duration = 0,
     .type = TimelineItemTypeReminder,
@@ -273,15 +275,13 @@ void test_reminders__all_day(void) {
   reminders_init();
   cl_assert(get_reminder_armed());
   cl_assert_equal_i(get_reminder_timestamp(), 1425531600);
-  cl_assert(uuid_equal(&s_reminder_before_all_day_reminder.header.id,
-    (Uuid *)get_reminder_id()));
+  cl_assert(uuid_equal(&s_reminder_before_all_day_reminder.header.id, (Uuid *)get_reminder_id()));
   // set time to 21:00 PST March 4
   prv_advance_to_and_fire(1425531600);
 
   // s_all_day_reminder is next.
   cl_assert(get_reminder_armed());
-  cl_assert(uuid_equal(&s_all_day_reminder.header.id,
-    (Uuid *)get_reminder_id()));
+  cl_assert(uuid_equal(&s_all_day_reminder.header.id, (Uuid *)get_reminder_id()));
 }
 
 void test_reminders__stale_all_day(void) {
@@ -295,4 +295,16 @@ void test_reminders__stale_all_day(void) {
   // if the timestamp of s_all_day_reminder isn't adjusted, it would be rejected for being stale
   // since it "seems" to be timestamped at 15:30 PST, but it should be accepted
   cl_assert_equal_i(reminders_insert(&s_all_day_reminder), S_SUCCESS);
+}
+
+void test_reminders__scheduled_at_the_reminder_time(void) {
+  cl_assert_equal_i(reminders_init(), 0);
+  prv_advance_to_and_fire(0);
+  cl_assert_equal_i(num_events_put, 1);
+
+  // item2 is next, at 100: scheduled for exactly that time.
+  cl_assert(s_job != NULL);
+  cl_assert_equal_i(s_job_time, 100);
+  cl_assert(!fake_cron_job_fire_if_due(99));
+  cl_assert_equal_i(num_events_put, 1);
 }

@@ -3,11 +3,19 @@
 
 #pragma once
 
+/**
+ * @defgroup services_registry_endpoint Registry endpoint
+ * @ingroup services
+ * @brief Pebble Protocol registry endpoints.
+ * @{
+ */
+
+/** @brief Registry endpoint identifiers. */
 typedef enum {
+  /** System registry. */
   RegistryEndpointIdSystem = 5000,
+  /** Factory registry. */
   RegistryEndpointIdFactory = 5001,
 } RegistryEndpointId;
 
-void registry_endpoint_callback(CommSession *session, const uint8_t* data, unsigned int length_bytes);
-
-void factory_registry_endpoint_callback(CommSession *session, const uint8_t* data, unsigned int length_bytes);
+/** @} */

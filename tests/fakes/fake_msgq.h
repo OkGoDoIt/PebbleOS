@@ -3,14 +3,13 @@
 
 #pragma once
 
-#include "pbl/util/circular_buffer.h"
-#include "pbl/util/list.h"
-
-#include <pbl/kernel/msgq.h>
-
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <pbl/kernel/msgq.h>
+#include <pbl/util/circular_buffer.h>
+#include <pbl/util/list.h>
 
 //! Message queue fake backed by a ring buffer. A yield callback stands in for
 //! the other task while a put or get would block; it returns the ticks used.
@@ -35,7 +34,7 @@ static FakeMsgq *prv_fake_msgq_get(struct pbl_msgq *q) {
   if (fake == NULL) {
     fake = malloc(sizeof(FakeMsgq));
     const size_t size = q->msg_size * q->max_msgs;
-    *fake = (FakeMsgq) { .q = q, .storage = malloc(size) };
+    *fake = (FakeMsgq){.q = q, .storage = malloc(size)};
     circular_buffer_init(&fake->ring, fake->storage, size);
     s_fake_msgq_list = (FakeMsgq *)list_prepend((ListNode *)s_fake_msgq_list, (ListNode *)fake);
   }

@@ -3,12 +3,11 @@
 
 #pragma once
 
-#include "resource/resource.h"
-
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
+#include <resource/resource.h>
 
 ResAppNum sys_get_current_resource_num(void);
 
@@ -16,10 +15,11 @@ uint32_t sys_resource_load_file_as_resource(const char *filepath, const char *fi
 
 size_t sys_resource_size(ResAppNum app_num, uint32_t handle);
 
-size_t sys_resource_load_range(ResAppNum app_num, uint32_t id, uint32_t start_bytes, uint8_t *buffer, size_t num_bytes);
+size_t sys_resource_load_range(ResAppNum app_num, uint32_t id, uint32_t start_bytes,
+                               uint8_t *buffer, size_t num_bytes);
 
-const uint8_t * sys_resource_read_only_bytes(ResAppNum app_num, uint32_t resource_id,
-                                             size_t *num_bytes_out);
+const uint8_t *sys_resource_read_only_bytes(ResAppNum app_num, uint32_t resource_id,
+                                            size_t *num_bytes_out);
 
 uint32_t sys_resource_get_and_cache(ResAppNum app_num, uint32_t resource_id);
 

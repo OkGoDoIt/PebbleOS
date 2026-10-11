@@ -126,8 +126,7 @@ _DLS_CREATE_RE = re.compile(
 )
 
 
-def parse_heartbeat_dls_create_buffered(path):
-    """Return the `buffered` argument of native.c's heartbeat dls_create call as a bool."""
+def _heartbeat_dls_create_args(path):
     with open(path, encoding="utf-8") as f:
         match = _DLS_CREATE_RE.search(f.read())
     if not match:
@@ -136,14 +135,25 @@ def parse_heartbeat_dls_create_buffered(path):
     args = [a.strip() for a in match.group("args").split(",")]
     if len(args) != 5 or args[2] not in ("true", "false"):
         raise ValueError(f"unexpected dls_create argument shape: {args}")
-    return args[2] == "true"
+    return args
+
+
+def parse_heartbeat_dls_create_buffered(path):
+    """Return the `buffered` argument of native.c's heartbeat dls_create call as a bool."""
+    return _heartbeat_dls_create_args(path)[2] == "true"
+
+
+def parse_heartbeat_dls_create_item_size(path):
+    """Return the `item_size` argument of native.c's heartbeat dls_create call, as written."""
+    return _heartbeat_dls_create_args(path)[1]
 
 
 def parse_dls_session_size_caps(dls_private_h_path, comm_protocol_h_path):
     """Return (max_buffered_item_size, max_unbuffered_item_size) from the DLS headers."""
     with open(dls_private_h_path, encoding="utf-8") as f:
         dls_src = f.read()
-    match = re.search(r"DLS_SESSION_MAX_BUFFERED_ITEM_SIZE\s*=\s*(\d+)", dls_src)
+    # An enum member before v4.40 (`= 300`), a #define after it (`300U`).
+    match = re.search(r"DLS_SESSION_MAX_BUFFERED_ITEM_SIZE(?:\s*=\s*|\s+)(\d+)U?\b", dls_src)
     if not match:
         raise ValueError("DLS_SESSION_MAX_BUFFERED_ITEM_SIZE not found")
     max_buffered = int(match.group(1))

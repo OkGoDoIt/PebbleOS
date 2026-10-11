@@ -1,45 +1,44 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "applib/graphics/framebuffer.h"
-#include "applib/graphics/graphics.h"
-#include "resource/resource.h"
-#include "resource/resource_ids.auto.h"
-#include "util/graphics.h"
-#include "pbl/util/size.h"
-
-#include "clar.h"
-
 #include <stdio.h>
+
+#include <pbl/util/size.h>
+
+#include <applib/graphics/framebuffer.h>
+#include <applib/graphics/graphics.h>
+#include <applib/graphics/raw_image.h>
+#include <clar.h>
+#include <resource/resource.h>
+#include <resource/resource_ids.auto.h>
 
 // Fakes
 /////////////////////
 
-#include "fixtures/load_test_resources.h"
+#include <fixtures/load_test_resources.h>
 
 // Stubs
 /////////////////////
 
-#include "stubs_analytics.h"
-#include "stubs_app_install_manager.h"
-#include "stubs_app_state.h"
-#include "stubs_bootbits.h"
-#include "stubs_heap.h"
-#include "stubs_logging.h"
-#include "stubs_memory_layout.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_print.h"
-#include "stubs_prompt.h"
-#include "stubs_serial.h"
-#include "stubs_shell_prefs.h"
-#include "stubs_sleep.h"
-#include "stubs_syscalls.h"
-#include "stubs_task_watchdog.h"
-#include "stubs_ui_window.h"
-#include "stubs_unobstructed_area.h"
+#include <stubs_analytics.h>
+#include <stubs_app_install_manager.h>
+#include <stubs_app_state.h>
+#include <stubs_bootbits.h>
+#include <stubs_heap.h>
+#include <stubs_logging.h>
+#include <stubs_memory_layout.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_print.h>
+#include <stubs_serial.h>
+#include <stubs_shell_prefs.h>
+#include <stubs_sleep.h>
+#include <stubs_syscalls.h>
+#include <stubs_task_wdt.h>
+#include <stubs_ui_window.h>
+#include <stubs_unobstructed_area.h>
 
 // Helper Functions
 /////////////////////
@@ -67,7 +66,7 @@ void test_emoji_fonts__initialize(void) {
   resource_init();
 
   fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(fb, &(GSize) {DISP_COLS, DISP_ROWS});
+  framebuffer_init(fb, &(GSize){DISP_COLS, DISP_ROWS});
 
   test_graphics_context_init(&s_ctx, fb);
   framebuffer_clear(fb);
@@ -85,10 +84,10 @@ void test_emoji_fonts__cleanup(void) {
 //////////////////////
 
 static char s_emoji_string[] =
-  "😄😃😀😊☺😉😍😘😚😗😙😜😝😛😳😁😔😌😒😞😣😢😂😭😥😪😰😅😓😩😫😨😱"
-  "😠😡😤😖😆😋😷😎😴😵😲😟😧😈👿😮😬😐😕😯😶😇😏😑😺😸😻😽😼🙀😿😹😾💩"
-  "👍👎👌👊✊✌👋✋👐👆👇👉👈🙌🙏☝👏💛💙💜💚❤💔💗💓💕💖💞💘💋🐥🎉💩🍻🍺"
-  "💪🔥🐵🙈→►★🎤🎥📷🎵🎁";
+    "😄😃😀😊☺😉😍😘😚😗😙😜😝😛😳😁😔😌😒😞😣😢😂😭😥😪😰😅😓😩😫😨😱"
+    "😠😡😤😖😆😋😷😎😴😵😲😟😧😈👿😮😬😐😕😯😶😇😏😑😺😸😻😽😼🙀😿😹😾💩"
+    "👍👎👌👊✊✌👋✋👐👆👇👉👈🙌🙏☝👏💛💙💜💚❤💔💗💓💕💖💞💘💋🐥🎉💩🍻🍺"
+    "💪🔥🐵🙈→►★🎤🎥📷🎵🎁";
 
 static void prv_render_text(GContext *ctx, const char *text, GFont const font, const GRect *box,
                             const GTextOverflowMode overflow_mode, const GTextAlignment alignment,
@@ -96,8 +95,7 @@ static void prv_render_text(GContext *ctx, const char *text, GFont const font, c
   if (render) {
     graphics_draw_text(ctx, text, font, *box, overflow_mode, alignment, layout);
   } else {
-    graphics_text_layout_get_max_used_size(ctx, text, font, *box, overflow_mode, alignment,
-                                           layout);
+    graphics_text_layout_get_max_used_size(ctx, text, font, *box, overflow_mode, alignment, layout);
   }
 }
 
@@ -106,8 +104,8 @@ static GSize prv_draw_emoji(GContext *ctx, const GRect *bounds, GFont font, bool
     .line_spacing_delta = 2, // Give some space for the larger emojis
   };
   graphics_context_set_text_color(ctx, GColorBlack);
-  prv_render_text(ctx, s_emoji_string, font, bounds, GTextOverflowModeWordWrap,
-                  GTextAlignmentLeft, (GTextLayoutCacheRef)&layout, true /* render */);
+  prv_render_text(ctx, s_emoji_string, font, bounds, GTextOverflowModeWordWrap, GTextAlignmentLeft,
+                  (GTextLayoutCacheRef)&layout, true /* render */);
   return layout.max_used_size;
 }
 
@@ -128,27 +126,24 @@ void prv_prepare_canvas_and_render_emoji(ResourceId font_handle) {
   // Calculate canvas size necessary
   cl_assert(text_resources_init_font(0, font_handle, 0, &s_font_info));
 
-  const GPoint margin = { 10, 10 }; // Canvas margins
-  const int max_width = 300; // Canvas width, choose any visually pleasing width
-  const int max_height = 2000; // Large size protected from overflow and automatically truncated
-  const GSize max_size = { max_width, max_height };
+  const GPoint margin = {10, 10}; // Canvas margins
+  const int max_width = 300;      // Canvas width, choose any visually pleasing width
+  const int max_height = 2000;    // Large size protected from overflow and automatically truncated
+  const GSize max_size = {max_width, max_height};
 
   // FIXME: PBL-34261 graphics_text_layout_get_max_used_size reports a max of 192px in a unit test
   // with the default aplite framebuffer size. Work around this issue by creating a larger canvas.
   prv_prepare_canvas(max_size, GColorWhite);
 
-  const GRect max_draw_frame = grect_inset_internal((GRect){ .size = max_size },
-                                                    margin.x, margin.y);
-  const GSize used_size = prv_draw_emoji(&s_ctx, &max_draw_frame, &s_font_info,
-                                         false /* render */);
+  const GRect max_draw_frame = grect_inset_internal((GRect){.size = max_size}, margin.x, margin.y);
+  const GSize used_size = prv_draw_emoji(&s_ctx, &max_draw_frame, &s_font_info, false /* render */);
 
   // Resize the canvas to the used size.
-  const GSize canvas_size = { max_width, used_size.h + 2 * margin.y };
+  const GSize canvas_size = {max_width, used_size.h + 2 * margin.y};
   prv_prepare_canvas(canvas_size, GColorWhite);
 
   // Create the new canvas
-  const GRect draw_frame = grect_inset_internal((GRect){ .size = canvas_size },
-                                                margin.x, margin.y);
+  const GRect draw_frame = grect_inset_internal((GRect){.size = canvas_size}, margin.x, margin.y);
   prv_draw_emoji(&s_ctx, &draw_frame, &s_font_info, true /* render */);
 }
 

@@ -24,6 +24,9 @@ set(micro_sources
   SiFli-SDK/drivers/hal/bf0_hal_rcc.c
   SiFli-SDK/drivers/hal/bf0_sys_cfg.c
 )
+set(ramfunc_sources
+  SiFli-SDK/drivers/hal/bf0_hal_rcc.c
+)
 if(CONFIG_HAL_SIFLI_AES OR CONFIG_HAL_SIFLI_HASH)
   list(APPEND micro_sources
     SiFli-SDK/drivers/hal/bf0_hal_aes.c
@@ -33,6 +36,9 @@ if(CONFIG_HAL_SIFLI_AON)
   list(APPEND micro_sources
     SiFli-SDK/drivers/hal/bf0_hal_hpaon.c
     SiFli-SDK/drivers/hal/bf0_hal_lpaon.c
+  )
+  list(APPEND ramfunc_sources
+    SiFli-SDK/drivers/hal/bf0_hal_hpaon.c
   )
 endif()
 if(CONFIG_HAL_SIFLI_ATIM)
@@ -77,6 +83,9 @@ if(CONFIG_HAL_SIFLI_EZIP)
 endif()
 if(CONFIG_HAL_SIFLI_GPIO)
   list(APPEND micro_sources
+    SiFli-SDK/drivers/hal/bf0_hal_gpio.c
+  )
+  list(APPEND ramfunc_sources
     SiFli-SDK/drivers/hal/bf0_hal_gpio.c
   )
 endif()
@@ -136,6 +145,11 @@ if(CONFIG_HAL_SIFLI_MPI)
     SiFli-SDK/drivers/hal/bf0_hal_mpi_ex.c
     SiFli-SDK/drivers/hal/flash_table.c
   )
+  list(APPEND ramfunc_sources
+    SiFli-SDK/drivers/hal/bf0_hal_mpi.c
+    SiFli-SDK/drivers/hal/bf0_hal_mpi_ex.c
+    SiFli-SDK/drivers/hal/flash_table.c
+  )
 endif()
 if(CONFIG_HAL_SIFLI_PCD)
   list(APPEND micro_sources
@@ -149,6 +163,9 @@ if(CONFIG_HAL_SIFLI_PDM)
 endif()
 if(CONFIG_HAL_SIFLI_PINMUX)
   list(APPEND micro_sources
+    SiFli-SDK/drivers/hal/bf0_hal_pinmux.c
+  )
+  list(APPEND ramfunc_sources
     SiFli-SDK/drivers/hal/bf0_hal_pinmux.c
   )
 endif()
@@ -215,6 +232,9 @@ if(CONFIG_HAL_SIFLI_SF32LB52)
     SiFli-SDK/drivers/cmsis/sf32lb52x/bf0_pin_const.c
     sf32lb52/system_bf0_ap.c
   )
+  list(APPEND ramfunc_sources
+    SiFli-SDK/drivers/cmsis/sf32lb52x/bf0_pin_const.c
+  )
   if(CONFIG_HAL_SIFLI_IPC_QUEUE)
     list(APPEND micro_sources
       SiFli-SDK/middleware/ipc_queue/porting/sf32lb52x/hcpu/ipc_hw_port.c
@@ -261,5 +281,6 @@ pbl_include_directories(${micro_includes})
 pbl_library_named(hal_sifli)
 pbl_library_kind(stlib)
 pbl_library_sources(${micro_sources})
+pbl_library_ramfunc(${ramfunc_sources})
 pbl_library_compile_definitions(${micro_defines})
 pbl_library_compile_options(-Wno-unused-value -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -Wno-sign-compare -Wno-type-limits)

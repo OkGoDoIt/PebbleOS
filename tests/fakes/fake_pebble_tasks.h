@@ -3,10 +3,8 @@
 
 #pragma once
 
-#include "stubs_worker_manager.h"
-
-#include "kernel/pebble_tasks.h"
-
+#include <kernel/pebble_tasks.h>
+#include <stubs_worker_manager.h>
 
 static PebbleTask s_current_task = PebbleTask_KernelMain;
 
@@ -18,7 +16,6 @@ void stub_pebble_tasks_set_current(PebbleTask task) {
   s_current_task = task;
 }
 
-const char* pebble_task_get_name(PebbleTask task) {
+const char *pebble_task_get_name(PebbleTask task) {
   return "App <Stub>";
 }
-

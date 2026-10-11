@@ -1,30 +1,29 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "clar.h"
+#include <pbl/services/blob_db/ios_notif_pref_db.h>
+#include <pbl/services/notifications/alerts_preferences.h>
+#include <pbl/services/notifications/ancs/ancs_notifications.h>
 
-#include "pbl/services/notifications/alerts_preferences.h"
-#include "pbl/services/notifications/ancs/ancs_notifications.h"
-#include "pbl/services/blob_db/ios_notif_pref_db.h"
-
+#include <clar.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include "stubs_analytics.h"
-#include "stubs_i18n.h"
-#include "stubs_layout_layer.h"
-#include "stubs_logging.h"
-#include "stubs_notifications.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pin_db.h"
-#include "stubs_regular_timer.h"
-#include "stubs_reminder_db.h"
-#include "stubs_timeline.h"
-#include "stubs_uuid.h"
-#include "stubs_nexmo.h"
+#include <stubs_analytics.h>
+#include <stubs_i18n.h>
+#include <stubs_layout_layer.h>
+#include <stubs_logging.h>
+#include <stubs_nexmo.h>
+#include <stubs_notifications.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pin_db.h>
+#include <stubs_regular_timer.h>
+#include <stubs_reminder_db.h>
+#include <stubs_timeline.h>
+#include <stubs_uuid.h>
 
-iOSNotifPrefs* ios_notif_pref_db_get_prefs(const uint8_t *app_id, int length) {
+iOSNotifPrefs *ios_notif_pref_db_get_prefs(const uint8_t *app_id, int length) {
   return NULL;
 }
 
@@ -32,28 +31,23 @@ void ios_notif_pref_db_free_prefs(iOSNotifPrefs *prefs) {
   return;
 }
 
-void ancs_filtering_record_app(iOSNotifPrefs **app_notif_prefs,
-                               const ANCSAttribute *app_id,
-                               const ANCSAttribute *display_name,
-                               const ANCSAttribute *title) {
+void ancs_filtering_record_app(iOSNotifPrefs **app_notif_prefs, const ANCSAttribute *app_id,
+                               const ANCSAttribute *display_name, const ANCSAttribute *title) {
 }
 
 bool ancs_filtering_is_muted(const iOSNotifPrefs *app_notif_prefs) {
   return false;
 }
 
-bool ancs_filtering_matches_rules(const iOSNotifPrefs *app_notif_prefs,
-                                  const ANCSAttribute *title,
-                                  const ANCSAttribute *subtitle,
-                                  const ANCSAttribute *body) {
+bool ancs_filtering_matches_rules(const iOSNotifPrefs *app_notif_prefs, const ANCSAttribute *title,
+                                  const ANCSAttribute *subtitle, const ANCSAttribute *body) {
   return false;
 }
 
-
 // Fakes
 ////////////////////////////////////////////////////////////////
-#include "fake_events.h"
-#include "fake_notification_storage.h"
+#include <fake_events.h>
+#include <fake_notification_storage.h>
 
 static time_t s_now;
 time_t rtc_get_time(void) {
@@ -74,42 +68,56 @@ void test_ancs_notifications__cleanup(void) {
 }
 
 void test_ancs_notifications__handle_phone_call_message(void) {
-
   const uint8_t app_id[] = {
-      0x00,
-      21, 0x00,
-      'c', 'o', 'm', '.', 'a', 'p', 'p', 'l', 'e', '.',
-      'm', 'o', 'b', 'i', 'l', 'e', 'p', 'h', 'o', 'n', 'e',
+    0x00, 21,  0x00, 'c', 'o', 'm', '.', 'a', 'p', 'p', 'l', 'e',
+    '.',  'm', 'o',  'b', 'i', 'l', 'e', 'p', 'h', 'o', 'n', 'e',
   };
   const uint8_t title[] = {
-      0x01,
-      23, 0x00,
-      // Add some formatting modifiers before and after. iOS 10 seems to be sending phone numbers with them now.
-      0xe2, 0x80, 0xad, '+', '1', ' ', '(', '5', '1', '0', ')', ' ', '4', '4', '4', '-', '3', '3', '3', '3', 0xe2, 0x80, 0xac,
+    0x01,
+    23,
+    0x00,
+    // Add some formatting modifiers before and after. iOS 10 seems to be sending phone numbers with
+    // them now.
+    0xe2,
+    0x80,
+    0xad,
+    '+',
+    '1',
+    ' ',
+    '(',
+    '5',
+    '1',
+    '0',
+    ')',
+    ' ',
+    '4',
+    '4',
+    '4',
+    '-',
+    '3',
+    '3',
+    '3',
+    '3',
+    0xe2,
+    0x80,
+    0xac,
   };
   const uint8_t subtitle[] = {
-      0x02,
-      8, 0x00,
-      'P', 'e', 'b', 'b', 'l', 'e', 'H', 'Q',
+    0x02, 8, 0x00, 'P', 'e', 'b', 'b', 'l', 'e', 'H', 'Q',
   };
   const uint8_t message[] = {
-      0x03,
-      13, 0x00,
-      'I', 'n', 'c', 'o', 'm', 'i', 'n', 'g', ' ', 'C', 'a', 'l', 'l',
+    0x03, 13, 0x00, 'I', 'n', 'c', 'o', 'm', 'i', 'n', 'g', ' ', 'C', 'a', 'l', 'l',
   };
   const uint8_t date[] = {
-      0x05,
-      0x00, 0x00,
+    0x05,
+    0x00,
+    0x00,
   };
   const uint8_t positive_action[] = {
-      0x06,
-      6, 0x00,
-      'A', 'n', 's', 'w', 'e', 'r',
+    0x06, 6, 0x00, 'A', 'n', 's', 'w', 'e', 'r',
   };
   const uint8_t negative_action[] = {
-      0x07,
-      7, 0x00,
-      'D', 'e', 'c', 'l', 'i', 'n', 'e',
+    0x07, 7, 0x00, 'D', 'e', 'c', 'l', 'i', 'n', 'e',
   };
 
   ANCSAttribute *notif_attributes[] = {
@@ -117,15 +125,13 @@ void test_ancs_notifications__handle_phone_call_message(void) {
     [FetchedNotifAttributeIndexTitle] = (ANCSAttribute *)&title,
     [FetchedNotifAttributeIndexSubtitle] = (ANCSAttribute *)&subtitle,
     [FetchedNotifAttributeIndexMessage] = (ANCSAttribute *)&message,
-    [FetchedNotifAttributeIndexDate]= (ANCSAttribute *)&date,
+    [FetchedNotifAttributeIndexDate] = (ANCSAttribute *)&date,
     [FetchedNotifAttributeIndexPositiveActionLabel] = (ANCSAttribute *)&positive_action,
     [FetchedNotifAttributeIndexNegativeActionLabel] = (ANCSAttribute *)&negative_action,
   };
 
   const uint8_t app_display_name[] = {
-    0x00,
-    5, 0x0,
-    'P', 'h', 'o', 'n', 'e',
+    0x00, 5, 0x0, 'P', 'h', 'o', 'n', 'e',
   };
 
   ANCSAttribute *app_attributes[] = {

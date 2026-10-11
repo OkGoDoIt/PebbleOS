@@ -1,13 +1,12 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/util/circular_cache.h"
-
-#include "pbl/util/size.h"
-
-#include "clar.h"
-
 #include <string.h>
+
+#include <pbl/util/circular_cache.h>
+#include <pbl/util/size.h>
+
+#include <clar.h>
 
 #define NUM_TEST_ITEMS (3)
 
@@ -17,15 +16,14 @@ typedef struct {
 } TestCacheItem;
 // Stubs
 
-
 static bool s_free_flags[NUM_TEST_ITEMS];
 static CircularCache s_test_cache;
 static TestCacheItem s_cache_buffer[NUM_TEST_ITEMS];
 static TestCacheItem s_test_item[NUM_TEST_ITEMS] = {
-    { .id = 1, .freed = &s_free_flags[0] },
-    { .id = 2, .freed = &s_free_flags[1] },
-    { .id = 3, .freed = &s_free_flags[2] },
-  };
+  {.id = 1, .freed = &s_free_flags[0]},
+  {.id = 2, .freed = &s_free_flags[1]},
+  {.id = 3, .freed = &s_free_flags[2]},
+};
 static const TestCacheItem ZERO_ITEM = {};
 
 static void prv_destructor(void *item) {

@@ -1,10 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#pragma once 
+#pragma once
 
-#include "applib/graphics/text.h"
 #include <inttypes.h>
+
+#include <applib/graphics/text.h>
 
 #define FONT_HEIGHT 10
 
@@ -19,4 +20,3 @@ GFont fonts_get_system_font(const char *font_key) {
 FontInfo *fonts_get_system_emoji_font_for_size(unsigned int font_height) {
   return NULL;
 }
-

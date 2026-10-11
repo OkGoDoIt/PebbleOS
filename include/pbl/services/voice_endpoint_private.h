@@ -3,57 +3,90 @@
 
 #pragma once
 
-#include "pbl/services/audio_endpoint.h"
-#include "pbl/services/voice_endpoint.h"
-#include "pbl/util/attributes.h"
-#include "util/generic_attribute.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/audio_endpoint.h>
+#include <pbl/services/voice_endpoint.h>
+#include <pbl/util/generic_attr.h>
 
-// Shared message definitions with unit test
+/**
+ * @addtogroup services_voice_endpoint
+ * @{
+ */
 
+/** @brief Voice endpoint message identifier. */
 typedef enum {
+  /** Session setup request (watch) or result (phone). */
   MsgIdSessionSetup = 0x01,
+  /** Dictation result, from the phone. */
   MsgIdDictationResult = 0x02,
+  /** NLP result, from the phone. */
   MsgIdNLPResult = 0x03,
 } MsgId;
 
-// Attribute ID definitions
+/** @brief Attribute identifier in voice endpoint messages. */
 typedef enum {
+  /** Invalid. */
   VEAttributeIdInvalid = 0x00,
+  /** AudioTransferInfoSpeex. */
   VEAttributeIdAudioTransferInfoSpeex = 0x01,
+  /** Transcription. */
   VEAttributeIdTranscription = 0x02,
+  /** UUID of the app that started the session. */
   VEAttributeIdAppUuid = 0x03,
+  /** Reminder text of an NLP result. */
   VEAttributeIdReminder = 0x04,
+  /** 32-bit timestamp of an NLP result. */
   VEAttributeIdTimestamp = 0x05,
 } VEAttributeId;
 
-// Sent and received by watch. Result is only sent by phone.
-
-typedef union PACKED {
+/** @brief Message flags. */
+typedef union PBL_PACKED {
   struct {
-    uint32_t app_initiated:1;
+    /** The session was started by an app. */
+    uint32_t app_initiated : 1;
   };
+  /** All flags. */
   uint32_t all;
 } VEFlags;
 
-typedef struct PACKED {
-  MsgId msg_id:8;
+/** @brief Session setup request, from the watch. */
+typedef struct PBL_PACKED {
+  /** #MsgIdSessionSetup. */
+  MsgId msg_id : 8;
+  /** Flags. */
   VEFlags flags;
-  VoiceEndpointSessionType session_type:8;
+  /** Kind of session. */
+  VoiceEndpointSessionType session_type : 8;
+  /** Audio endpoint session. */
   AudioEndpointSessionId session_id;
-  GenericAttributeList attr_list;
+  /** Attributes: speex info and, for apps, the app UUID. */
+  struct pbl_generic_attr_list attr_list;
 } SessionSetupMsg;
 
-typedef struct PACKED {
-  MsgId msg_id:8;
+/** @brief Session setup result, from the phone. */
+typedef struct PBL_PACKED {
+  /** #MsgIdSessionSetup. */
+  MsgId msg_id : 8;
+  /** Flags. */
   VEFlags flags;
-  VoiceEndpointSessionType session_type:8;
-  VoiceEndpointResult result:8;
+  /** Kind of session. */
+  VoiceEndpointSessionType session_type : 8;
+  /** Setup result. */
+  VoiceEndpointResult result : 8;
 } SessionSetupResultMsg;
 
-typedef struct PACKED {
-  MsgId msg_id:8;
+/** @brief Dictation or NLP result, from the phone. */
+typedef struct PBL_PACKED {
+  /** #MsgIdDictationResult or #MsgIdNLPResult. */
+  MsgId msg_id : 8;
+  /** Flags. */
   VEFlags flags;
+  /** Audio endpoint session. */
   AudioEndpointSessionId session_id;
-  VoiceEndpointResult result:8;
-  GenericAttributeList attr_list;
+  /** Session result. */
+  VoiceEndpointResult result : 8;
+  /** Result attributes. */
+  struct pbl_generic_attr_list attr_list;
 } VoiceSessionResultMsg;
+
+/** @} */

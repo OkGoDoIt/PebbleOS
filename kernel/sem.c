@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/kernel/sem.h"
-
 #include "kernel.h"
+
+#include <pbl/kernel/sem.h>
 
 void pbl_sem_init(struct pbl_sem *s, uint32_t initial, uint32_t limit) {
   KERNEL_ASSERT(limit > 0 && initial <= limit);
@@ -11,7 +11,9 @@ void pbl_sem_init(struct pbl_sem *s, uint32_t initial, uint32_t limit) {
   s->backend.count = initial;
 }
 
-void pbl_sem_deinit(struct pbl_sem *s) { (void)s; }
+void pbl_sem_deinit(struct pbl_sem *s) {
+  (void)s;
+}
 
 int pbl_sem_take(struct pbl_sem *s, pbl_timeout_t timeout) {
   int rc = 0;
@@ -45,4 +47,6 @@ void pbl_sem_reset(struct pbl_sem *s) {
   pbl_irq_unlock();
 }
 
-uint32_t pbl_sem_count(const struct pbl_sem *s) { return s->backend.count; }
+uint32_t pbl_sem_count(const struct pbl_sem *s) {
+  return s->backend.count;
+}

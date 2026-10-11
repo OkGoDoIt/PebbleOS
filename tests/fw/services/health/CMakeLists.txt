@@ -3,11 +3,11 @@
 
 pbl_clar_test(test_health
   SOURCES
-    src/fw/applib/health_service.c
-    src/fw/process_management/pebble_process_info.c
-    src/fw/util/time/mktime.c
-    src/fw/util/time/time.c
-    src/fw/util/stats.c
+    fw/applib/health_service.c
+    fw/process_management/pebble_process_info.c
+    lib/c/time/mktime.c
+    fw/services/clock/time.c
+    lib/c/time/gmtime.c
     tests/fakes/fake_rtc.c
   DEFINES CAPABILITY_HAS_HEALTH_TRACKING=1
   OVERRIDES dummy_board

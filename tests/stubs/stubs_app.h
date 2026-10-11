@@ -3,9 +3,12 @@
 
 #pragma once
 
-#include "applib/app.h"
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
 
-void WEAK app_request_render(void) {}
+#include <applib/app.h>
 
-void WEAK app_event_loop(void) {}
+void PBL_WEAK app_request_render(void) {
+}
+
+void PBL_WEAK app_event_loop(void) {
+}

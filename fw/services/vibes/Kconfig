@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config SERVICE_VIBES
+    bool "Vibes"
+    help
+      Vibe scores / intensity service.
+
+if SERVICE_VIBES
+
+config SERVICE_VIBES_LOG_LEVEL_RUNTIME
+    default y if !RECOVERY_FW
+
+module = SERVICE_VIBES
+module-str = Vibes
+source "subsys/logging/Kconfig.template.log_level"
+
+endif

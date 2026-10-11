@@ -1,37 +1,35 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <sys/stat.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <stdbool.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-
-#include "clar_asserts.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 #include <pbl/drivers/flash.h>
-#include "flash_region/flash_region.h"
-#include "pbl/services/filesystem/pfs.h"
-#include "pbl/util/math.h"
+#include <pbl/services/filesystem/pfs.h>
+#include <pbl/util/math.h>
 
-#include "stubs_analytics.h"
-#include "stubs_hexdump.h"
-#include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pbl_malloc.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_print.h"
-#include "stubs_prompt.h"
-#include "stubs_serial.h"
-#include "stubs_sleep.h"
-#include "stubs_task_watchdog.h"
-#include "fake_spi_flash.h"
+#include <clar_asserts.h>
+#include <fake_spi_flash.h>
+#include <fcntl.h>
+#include <flash_region/flash_region.h>
+#include <stubs_analytics.h>
+#include <stubs_hexdump.h>
+#include <stubs_logging.h>
+#include <stubs_mutex.h>
+#include <stubs_passert.h>
+#include <stubs_pbl_malloc.h>
+#include <stubs_pebble_tasks.h>
+#include <stubs_print.h>
+#include <stubs_prompt.h>
+#include <stubs_serial.h>
+#include <stubs_sleep.h>
+#include <stubs_task_wdt.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
-void flash_region_erase_optimal_range_no_watchdog(
-    uint32_t min_start, uint32_t max_start,
-    uint32_t min_end, uint32_t max_end) {
+void flash_region_erase_optimal_range_no_watchdog(uint32_t min_start, uint32_t max_start,
+                                                  uint32_t min_end, uint32_t max_end) {
 }
 
 static int prv_prebake_pfs(const char *filename) {
@@ -41,7 +39,7 @@ static int prv_prebake_pfs(const char *filename) {
   }
 
   fake_spi_flash_init(0, st.st_size);
-  fake_spi_flash_populate_from_file((char*)filename, 0);
+  fake_spi_flash_populate_from_file((char *)filename, 0);
   pfs_init(true);
 
   int fd = open(filename, O_RDWR);
@@ -56,10 +54,11 @@ static int prv_prebake_pfs(const char *filename) {
   return 0;
 }
 
-int main(int argc, const char* argv[]) {
+int main(int argc, const char *argv[]) {
   // SPI image file path always passed in as first argument
   if (argc == 1) {
-    printf("No file specified. Pass a path to a QEMU SPI image. "
+    printf(
+        "No file specified. Pass a path to a QEMU SPI image. "
         "(e.g. qemu_spi_cooker <spi_flash_img>)\n");
     return 1;
   }

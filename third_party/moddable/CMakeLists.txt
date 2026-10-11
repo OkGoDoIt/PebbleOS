@@ -77,8 +77,9 @@ set(moddable_generated
 )
 # mcconfig generates the makefile for the host app and runs it; the tools
 # it calls by name come from the bin directory built above.
+# Nix's STRINGS tool variable conflicts with Moddable's resource list.
 pbl_moddable_step(mcconfig host
-  PATH=${tools_bin}:$PATH MODDABLE=${moddable} ${tools_bin}/mcconfig -m -p pebble ${host_manifest})
+  STRINGS= PATH=${tools_bin}:$PATH MODDABLE=${moddable} ${tools_bin}/mcconfig -m -p pebble ${host_manifest})
 add_custom_command(
   OUTPUT ${moddable_generated}
   COMMAND ${mcconfig}
@@ -288,6 +289,4 @@ pbl_library_compile_options(
   -Wno-unused-function
   -Wno-unused-variable
   -Wno-misleading-indentation
-  -Wno-error=maybe-uninitialized
-  -Wno-error=implicit-fallthrough
 )

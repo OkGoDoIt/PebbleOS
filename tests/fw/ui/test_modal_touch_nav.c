@@ -5,63 +5,61 @@
 // transitions) the kernel recognizer manager follows the focus, and the kernel touch dispatcher is
 // gated on a focused modal so app gestures never tick the kernel twin.
 
-#include "applib/ui/app_window_stack.h"
-#include "applib/ui/window.h"
-#include "applib/ui/window_manager.h"
-#include "applib/ui/window_private.h"
-#include "applib/ui/window_stack.h"
-#include "applib/ui/window_stack_private.h"
-#include "applib/ui/recognizer/recognizer_manager.h"
-#include "applib/ui/recognizer/touch_nav.h"
-#include "applib/touch_service_private.h"
-#include "kernel/ui/modals/modal_manager.h"
-#include "pbl/services/touch/touch_event.h"
+#include <pbl/services/touch/touch_event.h>
 
-#include "applib/connection_service_private.h"
-#include "applib/battery_state_service_private.h"
-#include "applib/tick_timer_service_private.h"
-
-#include "clar.h"
+#include <applib/battery_state_service_private.h>
+#include <applib/connection_service_private.h>
+#include <applib/tick_timer_service_private.h>
+#include <applib/touch_service_private.h>
+#include <applib/ui/app_window_stack.h>
+#include <applib/ui/recognizer/recognizer_manager.h>
+#include <applib/ui/recognizer/touch_nav.h>
+#include <applib/ui/window.h>
+#include <applib/ui/window_manager.h>
+#include <applib/ui/window_private.h>
+#include <applib/ui/window_stack.h>
+#include <applib/ui/window_stack_private.h>
+#include <clar.h>
+#include <kernel/ui/modals/modal_manager.h>
 
 // Stubs
 ////////////////////////////////////
 
-#include "stubs_sem.h"
-#include "stubs_accel_service.h"
-#include "stubs_app_state.h"
-#include "stubs_app_timer.h"
-#include "stubs_ble_app_support.h"
-#include "stubs_event_service_client.h"
-#include "stubs_fonts.h"
-#include "stubs_irq.h"
-#include "stubs_gbitmap.h"
-#include "stubs_graphics.h"
-#include "stubs_graphics_context.h"
-#include "stubs_heap.h"
-#include "stubs_logging.h"
-#include "stubs_new_timer.h"
-#include "stubs_passert.h"
-#include "stubs_persist.h"
-#include "stubs_plugin_service.h"
-#include "stubs_print.h"
-#include "stubs_process_manager.h"
-#include "stubs_prompt.h"
-#include "stubs_resources.h"
-#include "stubs_syscalls.h"
-#include "stubs_unobstructed_area.h"
+#include <stubs_accel_service.h>
+#include <stubs_app_state.h>
+#include <stubs_app_timer.h>
+#include <stubs_ble_app_support.h>
+#include <stubs_event_service_client.h>
+#include <stubs_fonts.h>
+#include <stubs_gbitmap.h>
+#include <stubs_graphics.h>
+#include <stubs_graphics_context.h>
+#include <stubs_heap.h>
+#include <stubs_irq.h>
+#include <stubs_logging.h>
+#include <stubs_new_timer.h>
+#include <stubs_passert.h>
+#include <stubs_persist.h>
+#include <stubs_plugin_service.h>
+#include <stubs_print.h>
+#include <stubs_process_manager.h>
+#include <stubs_resources.h>
+#include <stubs_sem.h>
+#include <stubs_syscalls.h>
+#include <stubs_unobstructed_area.h>
 
 // Fakes
 ////////////////////////////////////
 
-#include "fake_events.h"
-#include "fake_pbl_malloc.h"
-#include "fake_pebble_tasks.h"
-#include "fake_animation.h"
-#include "fake_rtc.h"
-
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#include <fake_animation.h>
+#include <fake_events.h>
+#include <fake_pbl_malloc.h>
+#include <fake_pebble_tasks.h>
+#include <fake_rtc.h>
 
 // Static Variables
 ////////////////////////////////////
@@ -81,44 +79,74 @@ static RecognizerManager s_app_recognizer_manager;
 // Overrides
 ////////////////////////////////////
 
-void battery_state_service_state_init(BatteryStateServiceState *state) {}
-void connection_service_state_init(ConnectionServiceState *state) {}
-void tick_timer_service_state_init(TickTimerServiceState *state) {}
-void framebuffer_clear(FrameBuffer *f) {}
+void battery_state_service_state_init(BatteryStateServiceState *state) {
+}
+void connection_service_state_init(ConnectionServiceState *state) {
+}
+void tick_timer_service_state_init(TickTimerServiceState *state) {
+}
+void framebuffer_clear(FrameBuffer *f) {
+}
 
 void launcher_task_add_callback(void (*callback)(void *data), void *data) {
   callback(data);
 }
 
-void app_idle_timeout_pause(void) { s_app_idle = true; }
-void app_idle_timeout_resume(void) { s_app_idle = false; }
-void app_idle_timeout_refresh(void) {}
+void app_idle_timeout_pause(void) {
+  s_app_idle = true;
+}
+void app_idle_timeout_resume(void) {
+  s_app_idle = false;
+}
+void app_idle_timeout_refresh(void) {
+}
 
-bool app_install_id_from_app_db(AppInstallId id) { return false; }
-void framebuffer_dirty_all(FrameBuffer *f) {}
-void framebuffer_mark_dirty_rect(FrameBuffer *f, GRect rect) {}
-bool layer_is_status_bar_layer(Layer *layer) { return false; }
-void status_bar_layer_render(GContext *ctx, const GRect *bounds, void *config) {}
+bool app_install_id_from_app_db(AppInstallId id) {
+  return false;
+}
+void framebuffer_dirty_all(FrameBuffer *f) {
+}
+void framebuffer_mark_dirty_rect(FrameBuffer *f, GRect rect) {
+}
+bool layer_is_status_bar_layer(Layer *layer) {
+  return false;
+}
+void status_bar_layer_render(GContext *ctx, const GRect *bounds, void *config) {
+}
 
 GDrawState graphics_context_get_drawing_state(GContext *ctx) {
   GDrawState state;
   memset(&state, 0, sizeof(GDrawState));
   return state;
 }
-void graphics_context_set_drawing_state(GContext *ctx, GDrawState draw_state) {}
+void graphics_context_set_drawing_state(GContext *ctx, GDrawState draw_state) {
+}
 
-bool compositor_is_animating(void) { return false; }
-void *compositor_modal_transition_to_modal_get(bool dest) { return NULL; }
-void compositor_modal_render_ready(void) {}
-void compositor_transition_cancel(void) {}
-void compositor_transition(const CompositorTransition *type) {}
+bool compositor_is_animating(void) {
+  return false;
+}
+void *compositor_modal_transition_to_modal_get(bool dest) {
+  return NULL;
+}
+void compositor_modal_render_ready(void) {
+}
+void compositor_transition_cancel(void) {
+}
+void compositor_transition(const CompositorTransition *type) {
+}
 
-bool sys_app_is_watchface(void) { return false; }
+bool sys_app_is_watchface(void) {
+  return false;
+}
 
-void click_manager_init(ClickManager *click_manager) {}
-void click_manager_clear(ClickManager *click_manager) {}
-void click_manager_reset(ClickManager *click_manager) {}
-void watchface_reset_click_manager(void) {}
+void click_manager_init(ClickManager *click_manager) {
+}
+void click_manager_clear(ClickManager *click_manager) {
+}
+void click_manager_reset(ClickManager *click_manager) {
+}
+void watchface_reset_click_manager(void) {
+}
 
 Animation *window_transition_default_pop_create_animation(WindowTransitioningContext *context) {
   window_transition_context_disappear(context);
@@ -158,8 +186,12 @@ void app_click_config_setup_with_window(ClickManager *click_manager, struct Wind
 }
 
 // Touch-nav collaborators for the kernel twin.
-bool sys_touch_nav_enabled(void) { return s_nav_enabled; }
-bool sys_touch_app_nav_active(void) { return false; }
+bool sys_touch_nav_enabled(void) {
+  return s_nav_enabled;
+}
+bool sys_touch_app_nav_active(void) {
+  return false;
+}
 
 void touch_service_set_system_handler(TouchServiceHandler handler, void *context) {
   s_kernel_handler = handler;
@@ -179,7 +211,7 @@ static void prv_unload_destroy(Window *window) {
 
 static Window *prv_make_window(void) {
   Window *window = window_create();
-  window_set_window_handlers(window, &(WindowHandlers){ .unload = prv_unload_destroy });
+  window_set_window_handlers(window, &(WindowHandlers){.unload = prv_unload_destroy});
   return window;
 }
 
@@ -245,8 +277,7 @@ void test_modal_touch_nav__app_and_modal_managers_are_separate(void) {
   Window *app_window = prv_make_window();
   stub_pebble_tasks_set_current(PebbleTask_App);
   window_stack_push(app_state_get_window_stack(), app_window, false);
-  cl_assert_equal_p(window_get_recognizer_manager(app_window),
-                    app_state_get_recognizer_manager());
+  cl_assert_equal_p(window_get_recognizer_manager(app_window), app_state_get_recognizer_manager());
 
   stub_pebble_tasks_set_current(PebbleTask_KernelMain);
   Window *modal_window = prv_make_window();
@@ -298,7 +329,8 @@ void test_modal_touch_nav__migrates_over_modal_and_back(void) {
   cl_assert_equal_p(manager->window, low_window);
 }
 
-static void prv_noop_click_config(void *context) {}
+static void prv_noop_click_config(void *context) {
+}
 
 // Same migration, but with a click config provider on both modals so is_click_configured == 1,
 // matching real modals. The loss/gain focus-transition branches key off that flag, so this variant

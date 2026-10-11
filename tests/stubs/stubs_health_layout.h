@@ -3,13 +3,13 @@
 
 #pragma once
 
-#include "pbl/services/timeline/health_layout.h"
-#include "pbl/util/attributes.h"
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/timeline/health_layout.h>
 
-LayoutLayer * WEAK health_layout_create(const LayoutLayerConfig *config) {
+LayoutLayer *PBL_WEAK health_layout_create(const LayoutLayerConfig *config) {
   return NULL;
 }
 
-bool WEAK health_layout_verify(bool existing_attributes[]) {
+bool PBL_WEAK health_layout_verify(bool existing_attributes[]) {
   return false;
 }
