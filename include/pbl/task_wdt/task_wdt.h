@@ -142,4 +142,15 @@ void pbl_task_wdt_suspend(uint32_t timeout_ms);
  */
 void pbl_task_wdt_resume(void);
 
+/**
+ * @brief Get the thread a channel watches.
+ *
+ * Channels are numbered in registration order, which is what the masks a watchdog reset leaves
+ * in the reboot reason are indexed by.
+ *
+ * @param channel_id Channel.
+ * @return The thread, or NULL if the channel is not in use.
+ */
+struct pbl_thread *pbl_task_wdt_get_thread(int channel_id);
+
 /** @} */

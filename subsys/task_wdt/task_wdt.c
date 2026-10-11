@@ -359,6 +359,18 @@ void pbl_task_wdt_resume(void) {
   pbl_irq_unlock();
 }
 
+struct pbl_thread *pbl_task_wdt_get_thread(int channel_id) {
+  struct pbl_thread *thread = NULL;
+
+  pbl_irq_lock();
+  if (prv_valid(channel_id)) {
+    thread = s_channels[channel_id].thread;
+  }
+  pbl_irq_unlock();
+
+  return thread;
+}
+
 #if UNITTEST
 void pbl_task_wdt_reset_for_test(void) {
   memset(s_channels, 0, sizeof(s_channels));

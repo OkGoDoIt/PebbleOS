@@ -32,3 +32,7 @@ void pbl_task_wdt_suspend(uint32_t timeout_ms) {
 
 void pbl_task_wdt_resume(void) {
 }
+
+struct pbl_thread *pbl_task_wdt_get_thread(int channel_id) {
+  return NULL;
+}
