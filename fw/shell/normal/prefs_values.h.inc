@@ -66,10 +66,7 @@
   PREFS_MACRO(PREF_KEY_QUICK_VIEW_APPS_ENABLED, s_quick_view_apps_enabled)
   PREFS_MACRO(PREF_KEY_QUICK_VIEW_BUTTON_MODE, s_quick_view_button_mode)
 #endif
-  PREFS_MACRO(PREF_KEY_COREDUMP_ON_REQUEST, s_coredump_on_request_enabled)
-  PREFS_MACRO(PREF_KEY_ACCEL_SHAKE_LOG_INFO, s_accel_shake_log_info_enabled)
-  PREFS_MACRO(PREF_KEY_VIBE_LOG_INFO, s_vibe_log_info_enabled)
-  PREFS_MACRO(PREF_KEY_SETTINGS_DBS_COMPACTED_V1, s_settings_dbs_compacted_v1)
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_ENABLED, s_audio_companion_enabled)
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_PAUSE_STATIONARY,
               s_audio_companion_pause_stationary_enabled)
@@ -78,6 +75,11 @@
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION,
               s_audio_companion_silence_suppression_enabled)
   PREFS_MACRO(PREF_KEY_AUDIO_COMPANION_SILENCE_MODE, s_audio_companion_silence_mode)
+#endif
+  PREFS_MACRO(PREF_KEY_COREDUMP_ON_REQUEST, s_coredump_on_request_enabled)
+  PREFS_MACRO(PREF_KEY_ACCEL_SHAKE_LOG_INFO, s_accel_shake_log_info_enabled)
+  PREFS_MACRO(PREF_KEY_VIBE_LOG_INFO, s_vibe_log_info_enabled)
+  PREFS_MACRO(PREF_KEY_SETTINGS_DBS_COMPACTED_V1, s_settings_dbs_compacted_v1)
   PREFS_MACRO(PREF_KEY_ALS_THRESHOLD_MIGRATED_V1, s_als_threshold_migrated_v1)
   PREFS_MACRO(PREF_KEY_ALS_THRESHOLD_MIGRATED_V2, s_als_threshold_migrated_v2)
 #ifdef CONFIG_APP_SCALING

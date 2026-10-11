@@ -6,13 +6,15 @@
 #include <pbl/drivers/ambient_light.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/services/accel_manager.h>
-#include <pbl/services/audio_companion.h>
 #include <pbl/services/hrm/hrm_manager.h>
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/services/peek_widgets.h>
 #include <pbl/services/touch/touch.h>
 #include <pbl/services/touch/touch_nav_service.h>
 #include <pbl/util/units.h>
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include <pbl/services/audio_companion.h>
+#endif
 
 #include <applib/graphics/gtypes.h>
 #include <apps/system/timeline/timeline.h>
@@ -335,17 +337,25 @@ static bool s_quick_view_apps_enabled = true;
 static uint8_t s_quick_view_button_mode = QuickViewButtonMode_Press;
 #endif
 
-#define PREF_KEY_COREDUMP_ON_REQUEST                 "coredumpOnRequest"
-#define PREF_KEY_ACCEL_SHAKE_LOG_INFO                "accelShakeLogInfo"
-#define PREF_KEY_VIBE_LOG_INFO                       "vibeLogInfo"
-#define PREF_KEY_SETTINGS_DBS_COMPACTED_V1           "settingsDbsCompactedV1"
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
 #define PREF_KEY_AUDIO_COMPANION_ENABLED             "audioCompanionEnabled"
 #define PREF_KEY_AUDIO_COMPANION_PAUSE_STATIONARY    "audioCompanionPauseStationary"
 #define PREF_KEY_AUDIO_COMPANION_PAUSE_LOW_POWER     "audioCompanionPauseLowPower"
 #define PREF_KEY_AUDIO_COMPANION_SILENCE_SUPPRESSION "audioCompanionSilenceSuppression"
 #define PREF_KEY_AUDIO_COMPANION_SILENCE_MODE        "audioCompanionSilenceMode"
-#define PREF_KEY_ALS_THRESHOLD_MIGRATED_V1           "alsThresholdMigratedV1"
-#define PREF_KEY_ALS_THRESHOLD_MIGRATED_V2           "alsThresholdMigratedV2"
+static bool s_audio_companion_enabled = false;
+static bool s_audio_companion_pause_stationary_enabled = true;
+static bool s_audio_companion_pause_low_power_enabled = true;
+static bool s_audio_companion_silence_suppression_enabled = true;
+static uint8_t s_audio_companion_silence_mode = AudioCompanionSilenceModeLight;
+#endif
+
+#define PREF_KEY_COREDUMP_ON_REQUEST       "coredumpOnRequest"
+#define PREF_KEY_ACCEL_SHAKE_LOG_INFO      "accelShakeLogInfo"
+#define PREF_KEY_VIBE_LOG_INFO             "vibeLogInfo"
+#define PREF_KEY_SETTINGS_DBS_COMPACTED_V1 "settingsDbsCompactedV1"
+#define PREF_KEY_ALS_THRESHOLD_MIGRATED_V1 "alsThresholdMigratedV1"
+#define PREF_KEY_ALS_THRESHOLD_MIGRATED_V2 "alsThresholdMigratedV2"
 #ifdef CONFIG_APP_SCALING
 #define PREF_KEY_LEGACY_APP_RENDER_MODE "legacyAppRenderMode"
 #endif
@@ -353,11 +363,6 @@ static bool s_coredump_on_request_enabled = false;
 static bool s_accel_shake_log_info_enabled = false;
 static bool s_vibe_log_info_enabled = false;
 static bool s_settings_dbs_compacted_v1 = false;
-static bool s_audio_companion_enabled = false;
-static bool s_audio_companion_pause_stationary_enabled = true;
-static bool s_audio_companion_pause_low_power_enabled = true;
-static bool s_audio_companion_silence_suppression_enabled = true;
-static uint8_t s_audio_companion_silence_mode = AudioCompanionSilenceModeLight;
 static bool s_als_threshold_migrated_v1 = false;
 static bool s_als_threshold_migrated_v2 = false;
 #ifdef CONFIG_APP_SCALING
@@ -956,6 +961,7 @@ static bool prv_set_s_settings_dbs_compacted_v1(bool *done) {
   return true;
 }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
 static bool prv_set_s_audio_companion_enabled(bool *enabled) {
   s_audio_companion_enabled = *enabled;
   return true;
@@ -983,6 +989,7 @@ static bool prv_set_s_audio_companion_silence_mode(uint8_t *mode) {
   s_audio_companion_silence_mode = *mode;
   return true;
 }
+#endif
 
 static bool prv_set_s_als_threshold_migrated_v1(bool *done) {
   s_als_threshold_migrated_v1 = *done;
@@ -2405,6 +2412,7 @@ void shell_prefs_set_settings_dbs_compacted_v1(bool done) {
   prv_pref_set(PREF_KEY_SETTINGS_DBS_COMPACTED_V1, &done, sizeof(done));
 }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
 bool shell_prefs_get_audio_companion_enabled(void) {
   return s_audio_companion_enabled;
 }
@@ -2447,6 +2455,7 @@ void shell_prefs_set_audio_companion_silence_mode(uint8_t mode) {
   }
   prv_pref_set(PREF_KEY_AUDIO_COMPANION_SILENCE_MODE, &mode, sizeof(mode));
 }
+#endif
 
 #ifdef CONFIG_APP_SCALING
 LegacyAppRenderMode shell_prefs_get_legacy_app_render_mode(void) {
