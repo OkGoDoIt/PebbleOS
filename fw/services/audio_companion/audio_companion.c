@@ -12,7 +12,10 @@
 #include "board/board.h"
 #include <pbl/drivers/mic.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/drivers/watchdog.h>
+#include <pbl/task_wdt/task_wdt.h>
 #include "kernel/events.h"
+#include "kernel/pebble_tasks.h"
 #include "kernel/pbl_malloc.h"
 #include "pbl/kernel/mutex.h"
 #include "pbl/services/battery/battery_state.h"
@@ -64,10 +67,10 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! schedule point while that ring is full; the HCI transport now sleeps instead of spinning
 //! (hci_sf32lb52.c:prv_ipc_write), so a full ring can no longer starve KernelBG. The burst
 //! cap still matters: sleeping 1 ms per blocked write keeps NimbleHost off the CPU, but a
-//! huge offered load still fills the ring and delays every other HCI packet. KernelBG's
-//! watchdog bit is fed only at the end of each system-task callback (and by the idle
-//! timer, which correctly declines to feed while callbacks are queued), so a callback that
-//! cannot run for >6.5 s is still a watchdog reset recorded against KernelBG.
+//! huge offered load still fills the ring and delays every other HCI packet. KernelBG's task
+//! watchdog channel expires when one system-task callback runs longer than
+//! CONFIG_TASK_WDT_TIMEOUT_MS (waiting for work never counts), so a callback held up that long
+//! is still a watchdog reset recorded against KernelBG.
 //!
 //! Draining a backlog as fast as NimBLE accepts mbufs keeps that ring permanently full.
 //! The HCI path now sleeps rather than spinning, so that no longer watchdog-resets the
@@ -384,9 +387,9 @@ static enum pbl_bt_response_time_state s_response_state_desired = PBL_BT_RESPONS
 static uint16_t s_response_period_desired;
 static bool s_response_dirty;
 //! Guards s_drain_cb_pending alone. The drain timer fires on the NewTimers task, which must never
-//! block on s_lock: that task also runs the regular-timer callback that feeds KernelBG's watchdog
-//! bit while it is idle, so stalling it takes out both watchdogged tasks. This lock is only ever
-//! held for a flag read-modify-write, with nothing nested inside it.
+//! block on s_lock: it is watchdogged itself and runs every other timer in the system, so stalling
+//! it is a watchdog reset with everything timer-driven frozen first. This lock is only ever held
+//! for a flag read-modify-write, with nothing nested inside it.
 static PBL_MUTEX_DEFINE(s_drain_post_lock);
 static bool s_stream_active;
 static bool s_need_stream_start;
@@ -948,9 +951,8 @@ static void prv_update_ble_responsiveness_locked(void) {
 //! pbl_bt_audio_companion_set_response_time() takes bt_lock, a global the BT stack holds across
 //! HCI round trips and bonding flash I/O. Holding s_lock across that is what makes s_lock a
 //! multi-second lock, and s_lock is on the watchdog-critical path: the drain timer callback runs
-//! on the NewTimers task, which also drives the regular-timer seconds callbacks that feed
-//! KernelBG's watchdog bit while it is idle. Stall NewTimers and both watchdogged tasks go
-//! unfed -- which is the reset this feature has been causing.
+//! on the NewTimers task, which is watchdogged itself and runs every other timer. Stall it on
+//! s_lock and the watch resets -- which is the reset this feature has been causing.
 static void prv_apply_ble_responsiveness(void) {
   if (!s_initialized) {
     return;
@@ -2509,6 +2511,38 @@ static void prv_battery_event_handler(PebbleEvent *event, void *context) {
   prv_apply_pending();
 }
 
+// ---- Task watchdog channel map ----
+
+//! Long enough after boot for every task watchdog channel to be registered (KernelMain's is the
+//! last, at the end of main()'s init).
+#define WDT_CHANNEL_MAP_SAVE_DELAY_MS (60 * 1000)
+
+static TimerID s_wdt_channel_map_timer = TIMER_INVALID_ID;
+
+static void prv_save_wdt_channel_map_system_task_cb(void *unused) {
+  uint8_t map[AUDIO_COMPANION_WDT_CHANNELS];
+  for (int ch = 0; ch < AUDIO_COMPANION_WDT_CHANNELS; ch++) {
+    struct pbl_thread *thread = pbl_task_wdt_get_thread(ch);
+    const PebbleTask task = thread ? pebble_task_get_task_for_thread(thread) : PebbleTask_Unknown;
+    map[ch] = (task < NumPebbleTask) ? (uint8_t)task : AUDIO_COMPANION_WDT_CHANNEL_NONE;
+  }
+  audio_companion_wdt_channel_map_save(map);
+}
+
+static void prv_wdt_channel_map_timer_cb(void *unused) {
+  // Flash I/O, so not on NewTimers.
+  system_task_add_callback(prv_save_wdt_channel_map_system_task_cb, NULL);
+}
+
+//! Save this boot's channel map for the next boot to read a watchdog reset through.
+static void prv_schedule_wdt_channel_map_save(void) {
+  if (s_wdt_channel_map_timer == TIMER_INVALID_ID) {
+    s_wdt_channel_map_timer = new_timer_create();
+  }
+  new_timer_start(s_wdt_channel_map_timer, WDT_CHANNEL_MAP_SAVE_DELAY_MS,
+                  prv_wdt_channel_map_timer_cb, NULL, 0);
+}
+
 // ---- Public API ----
 
 //! Record why the previous session ended into the persisted reboot ring, so a user who notices
@@ -2518,16 +2552,28 @@ static void prv_battery_event_handler(PebbleEvent *event, void *context) {
 static void prv_record_boot_reboot_trace(void) {
   RebootReason full;
   reboot_reason_get_last_reboot_reason_full(&full);
-  const uint8_t reason = (uint8_t)reboot_reason_get_last_reboot_reason();
+  uint8_t reason = (uint8_t)reboot_reason_get_last_reboot_reason();
   const bool enabled = shell_prefs_get_audio_companion_enabled();
+
+  // A hang the task watchdog cannot see (interrupts locked, or a spin it cannot preempt) is reset
+  // by the hardware watchdog with no reason recorded. Without this it would read as a benign
+  // "unknown" restart, and the fault-loop stand-down would never count it.
+  if ((reason == RebootReasonCode_Unknown) && watchdog_get_reset_flag().window_watchdog_reset) {
+    reason = AUDIO_COMPANION_REBOOT_REASON_HW_WATCHDOG;
+  }
 
   // Carry the OS's stuck-task evidence into the persisted ring. Without this the trace can only
   // say "watchdog", which is the fault class, not the culprit; with it the watch can name the
   // task that stalled and hand over a PC/LR to symbolize against the firmware ELF.
   AudioCompanionRebootTraceDetail detail = {0};
   if (reason == RebootReasonCode_Watchdog) {
-    detail.watchdog_bits = full.data8[0];
-    detail.watchdog_mask = full.data8[1];
+    // The task watchdog records channel masks (fed, active); read them through the channel map
+    // of the boot that reset, which that boot saved.
+    uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS];
+    audio_companion_wdt_channel_map_load(channel_tasks);
+    audio_companion_reboot_trace_tasks_from_channels(full.data8[0], full.data8[1], channel_tasks,
+                                                     &detail.watchdog_bits,
+                                                     &detail.watchdog_mask);
     detail.fault_pc = full.watchdog.stuck_task_pc;
     detail.fault_lr = full.watchdog.stuck_task_lr;
     detail.fault_extra = full.watchdog.stuck_task_callback;
@@ -2639,9 +2685,11 @@ void audio_companion_handle_prefs_loaded(void) {
   prv_apply_pending();
 
   // Now that the persisted prefs are loaded (so the "enabled" flag is accurate) capture the
-  // previous reboot reason into the flight recorder. Done once per boot, outside the lock.
+  // previous reboot reason into the flight recorder. Done once per boot, outside the lock. It
+  // reads the previous boot's watchdog channel map, so this boot's is saved only afterwards.
   if (record_reboot) {
     prv_record_boot_reboot_trace();
+    prv_schedule_wdt_channel_map_save();
   }
 }
 
@@ -2877,6 +2925,7 @@ void audio_companion_test_reset(void) {
   s_enable_handler = NULL;
   s_consent_timer = TIMER_INVALID_ID;
   s_enable_timer = TIMER_INVALID_ID;
+  s_wdt_channel_map_timer = TIMER_INVALID_ID;
   s_owns_mic = false;
   s_capture_wanted = false;
   s_mic_started = false;

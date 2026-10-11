@@ -29,6 +29,17 @@
 #define AUDIO_COMPANION_REBOOT_TRACE_VERSION_V1 (1)
 #define AUDIO_COMPANION_REBOOT_TRACE_VERSION_V2 (2)
 
+//! Restart code for a reset the hardware watchdog took with no reboot reason recorded. The task
+//! watchdog is a thread, so a hang with interrupts locked, or a spin it cannot preempt, leaves
+//! RebootReasonCode_Unknown behind and only the SoC's reset flags tell. Outside the
+//! RebootReasonCode range and above RebootReasonCode_Watchdog, so it counts as a fault.
+#define AUDIO_COMPANION_REBOOT_REASON_HW_WATCHDOG (0xF0)
+
+//! Task watchdog channels a reboot reason can describe: it records them as 8-bit masks.
+#define AUDIO_COMPANION_WDT_CHANNELS (8)
+//! Channel map value for a channel nobody registered, or one watching a task we cannot name.
+#define AUDIO_COMPANION_WDT_CHANNEL_NONE (0xFF)
+
 typedef enum {
   AudioCompanionRebootTraceFlagEnabled = (1 << 0),  //!< background audio pref was on
 } AudioCompanionRebootTraceFlags;
@@ -37,12 +48,14 @@ typedef struct PBL_PACKED {
   uint32_t boot_wall_time;  //!< rtc_get_time() captured when this entry was recorded
   uint8_t reason_code;      //!< RebootReasonCode of the session that just ended
   uint8_t flags;            //!< AudioCompanionRebootTraceFlags bitfield
-  //! For a watchdog reset, the task bitsets the OS latched: which tasks had checked in
-  //! (@ref watchdog_bits) out of those being watched (@ref watchdog_mask). Tasks in
-  //! `mask & ~bits` are the ones that stopped feeding the watchdog. Zero otherwise.
+  //! For a watchdog reset, PebbleTask bitsets: which tasks had checked in (@ref watchdog_bits)
+  //! out of those being watched (@ref watchdog_mask). Tasks in `mask & ~bits` are the ones that
+  //! stopped feeding the watchdog. Zero otherwise, or when the task watchdog's channel masks
+  //! could not be mapped back to tasks (audio_companion_reboot_trace_tasks_from_channels()).
   uint8_t watchdog_bits;
   uint8_t watchdog_mask;
-  uint32_t fault_pc;     //!< stuck task PC (watchdog) or fault address; 0 if unknown
+  //! Stuck thread PC (watchdog; the highest-priority stuck one) or fault address; 0 if unknown.
+  uint32_t fault_pc;
   uint32_t fault_lr;     //!< stuck task LR; 0 if unknown
   uint32_t fault_extra;  //!< stuck system-task/timer callback (watchdog); 0 if unknown
 } AudioCompanionRebootTraceEntry;
@@ -85,15 +98,17 @@ bool audio_companion_reboot_trace_is_error_reason(uint8_t reason_code);
 const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code);
 
 //! Name of the task that stopped feeding the watchdog, derived from the latched bitsets, or NULL
-//! when the entry carries no usable watchdog detail. Reported in reverse priority order so the
-//! most suspicious task wins, matching the task the OS stored the PC/LR for.
+//! when the entry carries no usable watchdog detail. With several stuck, the lowest-priority one
+//! wins: it is the one starved by the others. The OS stores the PC/LR of the highest-priority
+//! stuck thread instead, so with several stuck the two can differ; see
+//! audio_companion_reboot_trace_stuck_tasks() for the full set.
 const char *audio_companion_reboot_trace_stuck_task_name(
     const AudioCompanionRebootTraceEntry *entry);
 
 //! Writes *every* task that failed to check in, joined with '+', into @p buf (empty string when
 //! the entry carries no watchdog detail). One task alone and several at once mean very different
-//! things -- a stalled NewTimers also stops the regular-timer callback that feeds KernelBG while
-//! it is idle, so "KernelBG" on its own and "KernelBG+Timers" point at different bugs.
+//! things: one is a task stuck in its own work, several point at a shared lock or a
+//! higher-priority task hogging the CPU.
 void audio_companion_reboot_trace_stuck_tasks(const AudioCompanionRebootTraceEntry *entry,
                                               char *buf, size_t buf_size);
 
@@ -128,3 +143,26 @@ void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace);
 
 //! Persist @p trace. Best effort; failures are logged, not fatal.
 void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace);
+
+//! ---- Task watchdog channels ----
+//!
+//! The task watchdog (subsys/task_wdt) records a reset as two 8-bit masks of its channels, fed
+//! and active, and numbers channels in registration order, which follows boot scheduling rather
+//! than task identity. Each boot therefore persists which PebbleTask every channel watched, and
+//! the next boot reads the masks of the reset through the map of the boot that reset.
+
+//! Rebuild PebbleTask bitsets from channel masks using @p channel_tasks (PebbleTask per channel,
+//! AUDIO_COMPANION_WDT_CHANNEL_NONE when unused). Returns false, with both outputs zero, when the
+//! map does not name the task of every active channel. Tasks that do not fit an 8-bit set
+//! (PULSE) are left out.
+bool audio_companion_reboot_trace_tasks_from_channels(
+    uint8_t fed_channels, uint8_t active_channels,
+    const uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS], uint8_t *bits_out,
+    uint8_t *mask_out);
+
+//! Load the persisted channel map. Returns false (map left all NONE) if none was saved.
+bool audio_companion_wdt_channel_map_load(uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]);
+
+//! Persist @p channel_tasks if it differs from what is stored. Best effort.
+void audio_companion_wdt_channel_map_save(
+    const uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]);

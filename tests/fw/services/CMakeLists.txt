@@ -582,6 +582,8 @@ pbl_clar_test(test_audio_companion
     fw/services/audio_companion/protocol.c
     fw/services/audio_companion/reboot_trace.c
     fw/services/audio_companion/spool.c
+  # Real watchdog API declarations, so the test can fake the SoC's reset cause.
+  DEFINES CONFIG_WATCHDOG=1
   OVERRIDES dummy_board
 )
 

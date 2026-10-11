@@ -308,3 +308,55 @@ void test_audio_companion_reboot_trace__a_deliberate_restart_ends_a_fault_run(vo
   audio_companion_reboot_trace_record(&trace, RebootReasonCode_ShutdownMenuItem, true, 10, NULL);
   cl_assert_equal_i(trace.consecutive_fault_boots, 0);
 }
+
+// The task watchdog records channel masks; channels follow registration order, so they are read
+// back through the map of the boot that reset.
+void test_audio_companion_reboot_trace__tasks_from_channels_follow_the_map(void) {
+  uint8_t map[AUDIO_COMPANION_WDT_CHANNELS];
+  memset(map, AUDIO_COMPANION_WDT_CHANNEL_NONE, sizeof(map));
+  map[0] = PebbleTask_NewTimers;
+  map[1] = PebbleTask_KernelBackground;
+  map[2] = PebbleTask_KernelMain;
+
+  uint8_t bits = 0xaa;
+  uint8_t mask = 0xaa;
+  // Channel 1 (KernelBackground) did not feed.
+  cl_assert(audio_companion_reboot_trace_tasks_from_channels(0x05, 0x07, map, &bits, &mask));
+  cl_assert_equal_i(mask, (1 << PebbleTask_NewTimers) | (1 << PebbleTask_KernelBackground) |
+                              (1 << PebbleTask_KernelMain));
+  cl_assert_equal_i(bits, (1 << PebbleTask_NewTimers) | (1 << PebbleTask_KernelMain));
+}
+
+void test_audio_companion_reboot_trace__tasks_from_channels_leaves_out_pulse(void) {
+  uint8_t map[AUDIO_COMPANION_WDT_CHANNELS];
+  memset(map, AUDIO_COMPANION_WDT_CHANNEL_NONE, sizeof(map));
+  map[0] = PebbleTask_PULSE;
+  map[1] = PebbleTask_KernelBackground;
+
+  uint8_t bits;
+  uint8_t mask;
+  cl_assert(audio_companion_reboot_trace_tasks_from_channels(0x01, 0x03, map, &bits, &mask));
+  cl_assert_equal_i(mask, 1 << PebbleTask_KernelBackground);
+  cl_assert_equal_i(bits, 0);
+}
+
+void test_audio_companion_reboot_trace__tasks_from_channels_refuses_to_guess(void) {
+  uint8_t map[AUDIO_COMPANION_WDT_CHANNELS];
+  memset(map, AUDIO_COMPANION_WDT_CHANNEL_NONE, sizeof(map));
+  map[0] = PebbleTask_NewTimers;
+
+  uint8_t bits = 0xaa;
+  uint8_t mask = 0xaa;
+  // Channel 1 is active but the map does not say whose it was.
+  cl_assert(!audio_companion_reboot_trace_tasks_from_channels(0x01, 0x03, map, &bits, &mask));
+  cl_assert_equal_i(bits, 0);
+  cl_assert_equal_i(mask, 0);
+  cl_assert(!audio_companion_reboot_trace_tasks_from_channels(0x01, 0x01, NULL, &bits, &mask));
+}
+
+void test_audio_companion_reboot_trace__hardware_watchdog_is_a_named_fault(void) {
+  cl_assert(audio_companion_reboot_trace_is_error_reason(AUDIO_COMPANION_REBOOT_REASON_HW_WATCHDOG));
+  cl_assert_equal_s(
+      audio_companion_reboot_trace_reason_name(AUDIO_COMPANION_REBOOT_REASON_HW_WATCHDOG),
+      "HW Watchdog");
+}

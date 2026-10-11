@@ -83,14 +83,15 @@ const char *audio_companion_reboot_trace_reason_name(uint8_t reason_code) {
     case RebootReasonCode_CoreDump:
     case RebootReasonCode_CoreDumpEntryFailed:
       return "Coredump";
+    case AUDIO_COMPANION_REBOOT_REASON_HW_WATCHDOG:
+      return "HW Watchdog";
     default:
       return "Other";
   }
 }
 
-//! The tasks task_watchdog.c watches, ordered least-to-most suspicious exactly as it reports them:
-//! a stalled high-priority task starves the lower-priority ones, so the lowest-priority watched
-//! task is the one whose stall actually explains the reset.
+//! The tasks the task watchdog watches, lowest priority first: a stalled high-priority task starves
+//! the lower-priority ones, so the lowest-priority stuck task is the one most likely starved.
 static const struct {
   uint8_t task;
   const char *name;
@@ -146,6 +147,40 @@ const char *audio_companion_reboot_trace_stuck_task_name(
     }
   }
   return "Other Task";
+}
+
+bool audio_companion_reboot_trace_tasks_from_channels(
+    uint8_t fed_channels, uint8_t active_channels,
+    const uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS], uint8_t *bits_out,
+    uint8_t *mask_out) {
+  uint8_t bits = 0;
+  uint8_t mask = 0;
+  bool ok = (channel_tasks != NULL) && (active_channels != 0);
+  for (unsigned int ch = 0; ok && ch < AUDIO_COMPANION_WDT_CHANNELS; ch++) {
+    if (!(active_channels & (1u << ch))) {
+      continue;
+    }
+    const uint8_t task = channel_tasks[ch];
+    if (task == AUDIO_COMPANION_WDT_CHANNEL_NONE) {
+      // The map does not describe the boot that reset; guessing would name the wrong task.
+      ok = false;
+      break;
+    }
+    if (task >= 8) {
+      continue; // PULSE: outside the 8-bit sets, as it always was
+    }
+    mask |= (uint8_t)(1u << task);
+    if (fed_channels & (1u << ch)) {
+      bits |= (uint8_t)(1u << task);
+    }
+  }
+  if (bits_out) {
+    *bits_out = ok ? bits : 0;
+  }
+  if (mask_out) {
+    *mask_out = ok ? mask : 0;
+  }
+  return ok;
 }
 
 void audio_companion_reboot_trace_clear(AudioCompanionRebootTrace *trace) {

@@ -9,9 +9,12 @@
 #include "services/audio_companion/auth.h"
 #include "services/audio_companion/reboot_trace.h"
 #include "services/audio_companion/spool.h"
+#include "kernel/pebble_tasks.h"
 #include "system/reboot_reason.h"
 
 #include <pbl/drivers/mic.h>
+#include <pbl/drivers/watchdog.h>
+#include <pbl/task_wdt/task_wdt.h>
 
 #include "clar.h"
 #include "fake_mutex.h"
@@ -135,8 +138,8 @@ void pbl_bt_audio_companion_set_response_time(enum pbl_bt_response_time_state st
                                                  uint16_t max_period_secs) {
   // This call takes bt_lock, which the BT stack holds across HCI round trips and bonding flash
   // I/O. Holding the service lock across it makes s_lock a multi-second lock, and the drain timer
-  // callback takes s_lock on the NewTimers task -- the same task that feeds KernelBG's watchdog
-  // bit while it is idle. That is a watchdog reset, so pin the ordering here.
+  // callback takes s_lock on the NewTimers task -- watchdogged itself, and the task behind every
+  // timer. That is a watchdog reset, so pin the ordering here.
   prv_assert_service_lock_not_held();
   s_response_time_state = state;
   s_response_time_period_secs = max_period_secs;
@@ -237,6 +240,47 @@ void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace) {
 
 void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace) {
   s_saved_reboot_trace = *trace;
+}
+
+// Task watchdog channel map persisted by the boot that reset, and the SoC's reset cause.
+static uint8_t s_wdt_channel_map[AUDIO_COMPANION_WDT_CHANNELS];
+static bool s_wdt_channel_map_present;
+static int s_wdt_channel_map_saves;
+static McuRebootReason s_mcu_reset_flags;
+
+bool audio_companion_wdt_channel_map_load(uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]) {
+  if (!s_wdt_channel_map_present) {
+    memset(channel_tasks, AUDIO_COMPANION_WDT_CHANNEL_NONE, AUDIO_COMPANION_WDT_CHANNELS);
+    return false;
+  }
+  memcpy(channel_tasks, s_wdt_channel_map, AUDIO_COMPANION_WDT_CHANNELS);
+  return true;
+}
+
+void audio_companion_wdt_channel_map_save(
+    const uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]) {
+  memcpy(s_wdt_channel_map, channel_tasks, AUDIO_COMPANION_WDT_CHANNELS);
+  s_wdt_channel_map_present = true;
+  s_wdt_channel_map_saves++;
+}
+
+McuRebootReason watchdog_get_reset_flag(void) {
+  return s_mcu_reset_flags;
+}
+
+// The threads stand in for themselves: channel i watches the task stored at s_wdt_threads[i].
+static PebbleTask s_wdt_threads[AUDIO_COMPANION_WDT_CHANNELS];
+
+struct pbl_thread *pbl_task_wdt_get_thread(int channel_id) {
+  if (channel_id < 0 || channel_id >= AUDIO_COMPANION_WDT_CHANNELS ||
+      s_wdt_threads[channel_id] == PebbleTask_Unknown) {
+    return NULL;
+  }
+  return (struct pbl_thread *)&s_wdt_threads[channel_id];
+}
+
+PebbleTask pebble_task_get_task_for_thread(const struct pbl_thread *thread) {
+  return *(const PebbleTask *)thread;
 }
 
 void audio_companion_auth_init(void) {
@@ -642,6 +686,18 @@ void test_audio_companion__initialize(void) {
   s_last_reboot_reason = RebootReasonCode_Unknown;
   memset(&s_last_reboot_reason_full, 0, sizeof(s_last_reboot_reason_full));
   memset(&s_saved_reboot_trace, 0, sizeof(s_saved_reboot_trace));
+  // The boot that reset registered NewTimers, KernelBG, PULSE and KernelMain, in that order.
+  memset(s_wdt_channel_map, AUDIO_COMPANION_WDT_CHANNEL_NONE, sizeof(s_wdt_channel_map));
+  s_wdt_channel_map[0] = PebbleTask_NewTimers;
+  s_wdt_channel_map[1] = PebbleTask_KernelBackground;
+  s_wdt_channel_map[2] = PebbleTask_PULSE;
+  s_wdt_channel_map[3] = PebbleTask_KernelMain;
+  s_wdt_channel_map_present = true;
+  s_wdt_channel_map_saves = 0;
+  s_mcu_reset_flags = (McuRebootReason){0};
+  for (size_t i = 0; i < AUDIO_COMPANION_WDT_CHANNELS; i++) {
+    s_wdt_threads[i] = PebbleTask_Unknown;
+  }
   audio_companion_spool_test_set_heap_free_bytes(UINT32_MAX);
   audio_companion_test_reset();
   audio_companion_init();
@@ -1782,7 +1838,9 @@ void test_audio_companion__boot_trace_captures_watchdog_stuck_task(void) {
   s_last_reboot_reason = RebootReasonCode_Watchdog;
   s_last_reboot_reason_full = (RebootReason) {
     .code = RebootReasonCode_Watchdog,
-    .data8 = { 0x01, 0x03 },  // KernelMain fed the watchdog, KernelBackground did not
+    // Task watchdog channel masks: fed NewTimers, PULSE, KernelMain (0, 2, 3) of all four active;
+    // channel 1 is KernelBackground in the map of the boot that reset.
+    .data8 = { 0x0d, 0x0f },
     .watchdog = {
       .stuck_task_pc = 0x0801a2c4,
       .stuck_task_lr = 0x0801a1f0,
@@ -1803,8 +1861,92 @@ void test_audio_companion__boot_trace_captures_watchdog_stuck_task(void) {
   cl_assert_equal_i(last->fault_extra, 0x0800e3a8);
   cl_assert(last->flags & AudioCompanionRebootTraceFlagEnabled);
   cl_assert_equal_s(audio_companion_reboot_trace_stuck_task_name(last), "KernelBG");
+  cl_assert_equal_i(last->watchdog_mask, (1 << PebbleTask_NewTimers) |
+                                             (1 << PebbleTask_KernelBackground) |
+                                             (1 << PebbleTask_KernelMain));
   // Persisted too, so the detail is still there after the next boot.
   cl_assert_equal_i(s_saved_reboot_trace.total_error_reboots, 1);
+}
+
+// Channels follow registration order, not task identity: read through a map that does not
+// describe the boot that reset, the masks would name the wrong task. Without one, name none.
+void test_audio_companion__boot_trace_names_no_task_without_a_channel_map(void) {
+  s_wdt_channel_map_present = false;
+  s_last_reboot_reason = RebootReasonCode_Watchdog;
+  s_last_reboot_reason_full = (RebootReason) {
+    .code = RebootReasonCode_Watchdog,
+    .data8 = { 0x0d, 0x0f },
+    .watchdog = { .stuck_task_pc = 0x0801a2c4 },
+  };
+
+  audio_companion_handle_prefs_loaded();
+
+  AudioCompanionRebootTrace trace;
+  audio_companion_get_reboot_trace(&trace);
+  const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+  cl_assert_equal_i(last->reason_code, RebootReasonCode_Watchdog);
+  cl_assert_equal_i(last->fault_pc, 0x0801a2c4);
+  cl_assert_equal_i(last->watchdog_mask, 0);
+  cl_assert(audio_companion_reboot_trace_stuck_task_name(last) == NULL);
+}
+
+// The next boot reads this boot's masks through this boot's map, saved once every channel is up.
+void test_audio_companion__boot_saves_its_watchdog_channel_map(void) {
+  s_wdt_threads[0] = PebbleTask_NewTimers;
+  s_wdt_threads[1] = PebbleTask_PULSE;
+  s_wdt_threads[2] = PebbleTask_KernelBackground;
+  s_wdt_threads[3] = PebbleTask_KernelMain;
+
+  audio_companion_handle_prefs_loaded();
+  cl_assert_equal_i(s_wdt_channel_map_saves, 0);
+
+  // Saved a minute after boot, through the system task (flash I/O).
+  TimerID save_timer = TIMER_INVALID_ID;
+  for (TimerID id = 1; id < 1024 && save_timer == TIMER_INVALID_ID; id++) {
+    if (stub_new_timer_is_scheduled(id) && stub_new_timer_timeout(id) == 60 * 1000) {
+      save_timer = id;
+    }
+  }
+  cl_assert(save_timer != TIMER_INVALID_ID);
+  cl_assert(stub_new_timer_fire(save_timer));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_wdt_channel_map_saves, 1);
+  cl_assert_equal_i(s_wdt_channel_map[0], PebbleTask_NewTimers);
+  cl_assert_equal_i(s_wdt_channel_map[1], PebbleTask_PULSE);
+  cl_assert_equal_i(s_wdt_channel_map[2], PebbleTask_KernelBackground);
+  cl_assert_equal_i(s_wdt_channel_map[3], PebbleTask_KernelMain);
+  cl_assert_equal_i(s_wdt_channel_map[4], AUDIO_COMPANION_WDT_CHANNEL_NONE);
+}
+
+// A hang the task watchdog cannot see ends in a hardware watchdog reset with no reason recorded.
+// That is a crash, not a benign restart, and the fault-loop stand-down has to count it.
+void test_audio_companion__hardware_watchdog_reset_counts_as_a_fault(void) {
+  s_pref_enabled = true;
+  s_last_reboot_reason = RebootReasonCode_Unknown;
+  s_mcu_reset_flags = (McuRebootReason){ .window_watchdog_reset = true };
+
+  audio_companion_handle_prefs_loaded();
+
+  AudioCompanionRebootTrace trace;
+  audio_companion_get_reboot_trace(&trace);
+  const AudioCompanionRebootTraceEntry *last = audio_companion_reboot_trace_newest(&trace);
+  cl_assert_equal_i(last->reason_code, AUDIO_COMPANION_REBOOT_REASON_HW_WATCHDOG);
+  cl_assert_equal_i(trace.total_error_reboots, 1);
+  cl_assert_equal_i(trace.consecutive_fault_boots, 1);
+}
+
+void test_audio_companion__unknown_restart_without_watchdog_flag_is_not_a_fault(void) {
+  s_pref_enabled = true;
+  s_last_reboot_reason = RebootReasonCode_Unknown;
+  s_mcu_reset_flags = (McuRebootReason){ .power_on_reset = true };
+
+  audio_companion_handle_prefs_loaded();
+
+  AudioCompanionRebootTrace trace;
+  audio_companion_get_reboot_trace(&trace);
+  cl_assert_equal_i(audio_companion_reboot_trace_newest(&trace)->reason_code,
+                    RebootReasonCode_Unknown);
+  cl_assert_equal_i(trace.total_error_reboots, 0);
 }
 
 void test_audio_companion__boot_trace_captures_event_queue_full_detail(void) {

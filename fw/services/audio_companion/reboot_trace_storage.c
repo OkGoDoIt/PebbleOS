@@ -16,6 +16,9 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 #define REBOOT_TRACE_SETTINGS_FILE_NAME "audiocomp"
 #define REBOOT_TRACE_SETTINGS_FILE_SIZE (1024)
 #define REBOOT_TRACE_KEY "reboottrace"
+//! Task watchdog channel -> PebbleTask map of the boot that saved it (reboot_trace.h). Written
+//! only when it changes, which in practice is once per firmware.
+#define WDT_CHANNEL_MAP_KEY "wdtchannels"
 
 //! v1 layout, kept only so an upgrade carries the user's restart tallies forward instead of
 //! silently resetting them. v1 entries have no stuck-task detail, so those fields stay zero.
@@ -138,5 +141,44 @@ void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace) {
   settings_file_close(&file);
   if (status != S_SUCCESS) {
     PBL_LOG_ERR("Failed to persist audio companion reboot trace: %" PRId32, (int32_t)status);
+  }
+}
+
+bool audio_companion_wdt_channel_map_load(uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]) {
+  memset(channel_tasks, AUDIO_COMPANION_WDT_CHANNEL_NONE, AUDIO_COMPANION_WDT_CHANNELS);
+  SettingsFile file;
+  if (settings_file_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME,
+                         REBOOT_TRACE_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+    return false;
+  }
+  const status_t status = settings_file_get(&file, WDT_CHANNEL_MAP_KEY,
+                                            strlen(WDT_CHANNEL_MAP_KEY), channel_tasks,
+                                            AUDIO_COMPANION_WDT_CHANNELS);
+  settings_file_close(&file);
+  if (status != S_SUCCESS) {
+    memset(channel_tasks, AUDIO_COMPANION_WDT_CHANNEL_NONE, AUDIO_COMPANION_WDT_CHANNELS);
+    return false;
+  }
+  return true;
+}
+
+void audio_companion_wdt_channel_map_save(
+    const uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]) {
+  uint8_t stored[AUDIO_COMPANION_WDT_CHANNELS];
+  if (audio_companion_wdt_channel_map_load(stored) &&
+      memcmp(stored, channel_tasks, sizeof(stored)) == 0) {
+    return;
+  }
+  SettingsFile file;
+  if (settings_file_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME,
+                         REBOOT_TRACE_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+    return;
+  }
+  const status_t status = settings_file_set(&file, WDT_CHANNEL_MAP_KEY,
+                                            strlen(WDT_CHANNEL_MAP_KEY), channel_tasks,
+                                            AUDIO_COMPANION_WDT_CHANNELS);
+  settings_file_close(&file);
+  if (status != S_SUCCESS) {
+    PBL_LOG_ERR("Failed to persist the task watchdog channel map: %" PRId32, (int32_t)status);
   }
 }
