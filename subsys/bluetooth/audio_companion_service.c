@@ -136,6 +136,12 @@ static const struct ble_gatt_svc_def s_audio_companion_svcs[] = {
 #define AUDIO_COMPANION_MSYS_FLOOR_DATA (8)
 #define AUDIO_COMPANION_MSYS_FLOOR_CONTROL (3)
 
+// The pool must hold the data floor plus the drain's widest slice (DRAIN_MAX_BATCHES_CATCH_UP,
+// 12, in audio_companion.c), or catching up meets only refusals. A build that loses the Kconfig
+// default of 24 fails here instead of streaming with a third of the pool.
+_Static_assert(MYNEWT_VAL(MSYS_1_BLOCK_COUNT) >= AUDIO_COMPANION_MSYS_FLOOR_DATA + 12,
+               "msys pool too small for the audio companion's notify floor and catch-up burst");
+
 static bool prv_notify(uint16_t attr_handle, bool subscribed, const uint8_t *data,
                        size_t length, int msys_floor) {
   if (s_conn_handle == AUDIO_COMPANION_INVALID_CONN_HANDLE || !subscribed || !data ||
