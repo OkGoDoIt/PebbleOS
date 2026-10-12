@@ -10,6 +10,9 @@
 #include <pbl/cron/cron.h>
 #include <pbl/drivers/touch/touch_sensor.h>
 #include <pbl/services/accel_manager.h>
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include <pbl/services/audio_companion.h>
+#endif
 #include <pbl/services/bluetooth/bluetooth_persistent_storage.h>
 #include <pbl/services/comm_session/app_session_capabilities.h>
 #include <pbl/services/comm_session/default_kernel_sender.h>
@@ -76,6 +79,11 @@ static struct ServiceRunLevelSetting s_runlevel_settings[] = {
   {
     .set_enable_fn = bt_ctl_set_enabled,
     .enable_mask = R_FirmwareUpdate | R_Normal,
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+    // Stationary would drop the link the audio companion streams over; it mutes the microphone
+    // itself while still and quiet instead.
+    .keep_enabled_fn = audio_companion_keeps_bluetooth_enabled,
+#endif
   },
 #if defined(CONFIG_TOUCH) && defined(CONFIG_RECOVERY_FW)
   // Only keep touch enabled on recovery (and so manufacturing as well)
@@ -96,6 +104,6 @@ static struct ServiceRunLevelSetting s_runlevel_settings[] = {
 void services_common_set_runlevel(RunLevel runlevel) {
   for (size_t i = 0; i < ARRAY_LENGTH(s_runlevel_settings); ++i) {
     struct ServiceRunLevelSetting *service = &s_runlevel_settings[i];
-    service->set_enable_fn(((1 << runlevel) & service->enable_mask) != 0);
+    service->set_enable_fn(runlevel_setting_enabled(service, runlevel));
   }
 }

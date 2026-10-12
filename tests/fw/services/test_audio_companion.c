@@ -5,6 +5,7 @@
 #include "applib/event_service_client.h"
 #include "pbl/bluetooth/audio_companion.h"
 #include "pbl/services/audio_companion_private.h"
+#include "pbl/services/runlevel_impl.h"
 #include "pbl/services/battery/battery_state.h"
 #include "services/audio_companion/auth.h"
 #include "services/audio_companion/reboot_trace.h"
@@ -2455,4 +2456,56 @@ void test_audio_companion__reauth_during_a_pause_reannounces_before_any_data(voi
   cl_assert_equal_i(start.flags & AUDIO_COMPANION_STREAM_START_FLAG_RESUME,
                     AUDIO_COMPANION_STREAM_START_FLAG_RESUME);
   cl_assert(!audio_companion_test_stream_reannounce_pending());
+}
+// Stationary turns the radio off in the upstream runlevel table, which ends the stream the
+// companion exists for (every :00 link drop in the 2026-10-12 field log). While capture is
+// enabled and a receiver is bound, Bluetooth stays up in Stationary -- and only there: the
+// low-power runlevels and a disabled or unbound companion keep upstream's behaviour.
+void test_audio_companion__keeps_bluetooth_up_in_stationary_only_while_in_use(void) {
+  audio_companion_set_enabled(true);
+  fake_system_task_callbacks_invoke_pending();
+  s_auth_receiver_exists = true;
+
+  cl_assert(audio_companion_keeps_bluetooth_enabled(RunLevel_Stationary));
+  cl_assert(!audio_companion_keeps_bluetooth_enabled(RunLevel_LowPower));
+  cl_assert(!audio_companion_keeps_bluetooth_enabled(RunLevel_BareMinimum));
+  cl_assert(!audio_companion_keeps_bluetooth_enabled(RunLevel_FirmwareUpdate));
+  cl_assert(!audio_companion_keeps_bluetooth_enabled(RunLevel_Normal));
+
+  s_auth_receiver_exists = false;
+  cl_assert(!audio_companion_keeps_bluetooth_enabled(RunLevel_Stationary));
+
+  s_auth_receiver_exists = true;
+  audio_companion_set_enabled(false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!audio_companion_keeps_bluetooth_enabled(RunLevel_Stationary));
+}
+
+// The table helper: a mask hit enables; an override keeps a service on in a runlevel its mask
+// excludes, and nothing else.
+static bool s_keep_stationary;
+static bool prv_keep_in_stationary(RunLevel runlevel) {
+  return s_keep_stationary && runlevel == RunLevel_Stationary;
+}
+static void prv_noop_enable(bool enable) { (void)enable; }
+
+void test_audio_companion__runlevel_setting_override(void) {
+  const struct ServiceRunLevelSetting fixed = {
+    .set_enable_fn = prv_noop_enable,
+    .enable_mask = R_Normal,
+  };
+  cl_assert(runlevel_setting_enabled(&fixed, RunLevel_Normal));
+  cl_assert(!runlevel_setting_enabled(&fixed, RunLevel_Stationary));
+
+  const struct ServiceRunLevelSetting overridable = {
+    .set_enable_fn = prv_noop_enable,
+    .enable_mask = R_Normal,
+    .keep_enabled_fn = prv_keep_in_stationary,
+  };
+  s_keep_stationary = false;
+  cl_assert(!runlevel_setting_enabled(&overridable, RunLevel_Stationary));
+  s_keep_stationary = true;
+  cl_assert(runlevel_setting_enabled(&overridable, RunLevel_Stationary));
+  cl_assert(!runlevel_setting_enabled(&overridable, RunLevel_LowPower));
+  cl_assert(runlevel_setting_enabled(&overridable, RunLevel_Normal));
 }

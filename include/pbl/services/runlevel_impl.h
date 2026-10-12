@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <pbl/services/runlevel.h>
+
 /**
  * @defgroup services_runlevel_impl Runlevel enable masks
  * @ingroup services_runlevel
@@ -52,6 +54,20 @@ struct ServiceRunLevelSetting {
   void (*set_enable_fn)(bool);
   /** RunLevelBit values of the runlevels the service is enabled in. */
   RunLevelBit enable_mask;
+  /**
+   * Optional runtime override: keeps the service enabled in a runlevel its mask excludes while
+   * this returns true. NULL for the common case of a fixed mask.
+   */
+  bool (*keep_enabled_fn)(RunLevel runlevel);
 };
+
+/** @brief Whether @p setting is enabled in @p runlevel: its mask, or its runtime override. */
+static inline bool runlevel_setting_enabled(const struct ServiceRunLevelSetting *setting,
+                                            RunLevel runlevel) {
+  if ((setting->enable_mask & (1 << runlevel)) != 0) {
+    return true;
+  }
+  return setting->keep_enabled_fn && setting->keep_enabled_fn(runlevel);
+}
 
 /** @} */

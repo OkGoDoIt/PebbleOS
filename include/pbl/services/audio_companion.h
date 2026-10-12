@@ -79,6 +79,12 @@ void audio_companion_apply_enabled(bool enabled);
 //! the user's persisted Background Audio preference.
 void audio_companion_set_runlevel(RunLevel runlevel);
 
+//! Whether Bluetooth must stay up in @p runlevel for the companion's sake: true in Stationary
+//! while capture is enabled and a receiver is bound. The upstream runlevel table turns the radio
+//! off in Stationary, which would end the stream; the service mutes the microphone itself while
+//! the watch is still and quiet (see prv_update_stationary_mute_locked).
+bool audio_companion_keeps_bluetooth_enabled(RunLevel runlevel);
+
 typedef enum {
   AudioCompanionSilenceModeOff = 0,
   AudioCompanionSilenceModeLight = 1,

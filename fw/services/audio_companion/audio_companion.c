@@ -2709,6 +2709,13 @@ bool audio_companion_is_enabled(void) {
   return enabled;
 }
 
+bool audio_companion_keeps_bluetooth_enabled(RunLevel runlevel) {
+  if (runlevel != RunLevel_Stationary) {
+    return false;
+  }
+  return audio_companion_is_enabled() && audio_companion_auth_receiver_exists();
+}
+
 void audio_companion_apply_enabled(bool enabled) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   if (s_enabled != enabled) {
