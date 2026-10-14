@@ -589,8 +589,26 @@ static void prv_pop_timer_callback(void *data) {
   // through a button press or something like that. So, ignore this CALLBACK event posted
   // by our timer if our window is already down (s_in_use false)
   if (s_in_use) {
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+    // An inactivity timeout with no button press or scroll since the newest notification
+    // arrived means it may not have been seen. A final timer follows an action, which was seen.
+    Uuid missed_id = window_data->newest_mobile_id;
+    const bool missed =
+        window_data->is_modal && !window_data->pop_timer_is_final &&
+        !window_data->touched_since_newest &&
+        (notifications_presented_list_get_type(&missed_id) == NotificationMobile);
+#endif
     prv_pop_notification_window(window_data);
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+    if (missed) {
+      peek_widgets_handle_notification_missed(&missed_id);
+    }
+#endif
   }
+}
+
+static void prv_note_touched(NotificationWindowData *data) {
+  data->touched_since_newest = true;
 }
 
 static void prv_refresh_pop_timer_with_timeout(NotificationWindowData *data, uint32_t timeout,
@@ -1011,6 +1029,7 @@ static void prv_action_menu_did_close(ActionMenu *action_menu, const ActionMenuI
 
 static void prv_select_single_click_handler(ClickRecognizerRef recognizer, void *data) {
   NotificationWindowData *window_data = data;
+  prv_note_touched(window_data);
 
   TimelineItem *item = prv_get_current_notification(window_data);
   if (!prv_should_provide_action_menu_for_item(window_data, item)) {
@@ -1041,11 +1060,13 @@ static void prv_select_single_click_handler(ClickRecognizerRef recognizer, void 
 }
 
 static void prv_select_long_click_handler(ClickRecognizerRef recognizer, void *data) {
+  prv_note_touched(data);
   prv_dismiss_all(data, NULL);
 }
 
 static void prv_back_button_single_click_handler(ClickRecognizerRef recognizer, void *data) {
   NotificationWindowData *window_data = data;
+  prv_note_touched(window_data);
   prv_pop_notification_window(window_data);
 }
 
@@ -1232,6 +1253,7 @@ static void prv_update_colors_handler(SwapLayer *swap_layer, GColor bg_color,
 
 static void prv_interaction_handler(SwapLayer *swap_layer, void *context) {
   NotificationWindowData *data = context;
+  prv_note_touched(data);
   prv_refresh_pop_timer(data);
 }
 
@@ -1314,6 +1336,8 @@ static void prv_init_notification_window(bool is_modal, bool allow_dismiss_all) 
 
   s_in_use = true;
   data->pop_timer_is_final = false;
+  data->newest_mobile_id = UUID_INVALID;
+  data->touched_since_newest = false;
   data->is_modal = is_modal;
   data->allow_dismiss_all = allow_dismiss_all;
   data->notification_app_id = UUID_INVALID;
@@ -1650,6 +1674,10 @@ static void prv_handle_notification_added_common(Uuid *id, NotificationType type
   bool in_view = window_is_on_screen(&data->window);
 
   prv_notification_window_add_notification(id, type);
+  if (type == NotificationMobile) {
+    data->newest_mobile_id = *id;
+    data->touched_since_newest = false;
+  }
 
   if (is_new) {
     data->first_notif_loaded = false;

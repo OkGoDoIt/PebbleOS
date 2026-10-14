@@ -18,6 +18,11 @@ typedef struct NotificationWindowData {
   EventedTimerID pop_timer_id; //!< Timer that automatically pops us in case of inactivity.
   bool pop_timer_is_final;     // true, if pop_timer_id cannot be rescheduled anymore
 
+  //! The newest phone notification added to the modal window, and whether the user has pressed
+  //! a button or scrolled since it arrived. A popup that times out untouched was missed.
+  Uuid newest_mobile_id;
+  bool touched_since_newest;
+
   bool is_modal;
   bool allow_dismiss_all;
   bool window_frozen; // Don't pop when performing an action via a hotkey until the action completes
