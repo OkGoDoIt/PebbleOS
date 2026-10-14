@@ -30,15 +30,20 @@ typedef struct {
   EventServiceInfo battery_connection_event_info;
 } SettingsNotificationsData;
 
+// Rows that are hidden when other settings make them irrelevant sit below every row that
+// decides whether they show, so changing a setting never moves the selection.
 enum NotificationsItem {
   NotificationsItemFilter,
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
   NotificationsItemShowAs,
-  NotificationsItemPeekDuration,
+#endif
+  NotificationsItemWindowTimeout,
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  NotificationsItemPeekIfMissed,
   NotificationsItemPeekWhenMuted,
+  NotificationsItemPeekDuration,
 #endif
   NotificationsItemTextSize,
-  NotificationsItemWindowTimeout,
 #if PBL_BW
   NotificationsItemDesignStyle,
 #endif
@@ -108,27 +113,27 @@ static void prv_filter_menu_push(SettingsNotificationsData *data) {
 // Show As
 ////////////////////////
 
-static const char *s_show_as_labels[QuickViewNotifStyleCount] = {
-  [QuickViewNotifStyle_FullScreen] = i18n_noop("Full Screen"),
-  [QuickViewNotifStyle_Peek] = i18n_noop("Quick View Peek"),
+static const char *s_show_as_labels[] = {
+  /// Show As: the full-screen notification popup
+  i18n_noop("Full Screen"),
+  /// Show As: a vibration and the Quick View peek on the watchface, no popup
+  i18n_noop("Quick View Peek"),
 };
 
-static const char *prv_show_as_subtitle(void) {
-  const QuickViewNotifStyle style = quick_view_prefs_get_notif_style();
-  if ((style == QuickViewNotifStyle_Peek) && (quick_view_prefs_get_notif_seconds() == 0)) {
-    /// Show As is set to the Quick View peek, but Peek Duration is Off, so notifications still
-    /// show full screen.
-    return i18n_noop("Full Screen (Peek Off)");
-  }
-  return s_show_as_labels[(style < QuickViewNotifStyleCount) ? style : 0];
+static bool prv_show_as_is_peek(void) {
+  return (settings_quick_view_notif_effective_style() == QuickViewNotifStyle_Peek);
 }
 
 static void prv_show_as_menu_select(OptionMenu *option_menu, int selection, void *context) {
-  if ((selection == QuickViewNotifStyle_Peek) && (quick_view_prefs_get_notif_seconds() == 0)) {
-    // The peek needs a display time; a disabled one would leave notifications as a bare buzz
-    quick_view_prefs_set_notif_seconds(QUICK_VIEW_NOTIF_SECONDS_DEFAULT);
+  const bool peek = (selection == 1);
+  if (peek != prv_show_as_is_peek()) {
+    if (peek && (quick_view_prefs_get_notif_seconds() == 0)) {
+      quick_view_prefs_set_notif_seconds(QUICK_VIEW_NOTIF_SECONDS_DEFAULT);
+    }
+    // Back to full screen restores the default of peeking when a popup is missed
+    quick_view_prefs_set_notif_style(peek ? QuickViewNotifStyle_Peek
+                                          : QuickViewNotifStyle_FullScreenPeekIfMissed);
   }
-  quick_view_prefs_set_notif_style((QuickViewNotifStyle)selection);
   app_window_stack_remove(&option_menu->window, true /* animated */);
 }
 
@@ -136,13 +141,20 @@ static void prv_show_as_menu_push(SettingsNotificationsData *data) {
   const OptionMenuCallbacks callbacks = {
     .select = prv_show_as_menu_select,
   };
-  /// The option in the Settings app for how notifications appear: the full-screen popup, or a
-  /// vibration and the Quick View peek on the watchface.
+  /// The option in the Settings app for how notifications that alert appear
   const char *title = i18n_noop("Show As");
-  settings_option_menu_push(title, OptionMenuContentType_SingleLine,
-                            quick_view_prefs_get_notif_style(), &callbacks,
-                            ARRAY_LENGTH(s_show_as_labels), true /* icons_enabled */,
+  settings_option_menu_push(title, OptionMenuContentType_SingleLine, prv_show_as_is_peek() ? 1 : 0,
+                            &callbacks, ARRAY_LENGTH(s_show_as_labels), true /* icons_enabled */,
                             s_show_as_labels, data);
+}
+
+static const char *prv_peek_when_muted_title(void) {
+  if (!settings_quick_view_notif_show_as_visible()) {
+    /// Alerts mutes notifications: whether they still show as a silent Quick View peek
+    return i18n_noop("Silent Peek");
+  }
+  /// Quiet Time hides notifications: whether they still show as a silent Quick View peek
+  return i18n_noop("Peek During Quiet Time");
 }
 #endif
 
@@ -382,8 +394,42 @@ static void prv_notification_grouping_range_menu_push(SettingsNotificationsData 
 // Menu Layer Callbacks
 ////////////////////////
 
+static bool prv_item_is_visible(enum NotificationsItem item) {
+  switch (item) {
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+    case NotificationsItemShowAs:
+      return settings_quick_view_notif_show_as_visible();
+    case NotificationsItemPeekWhenMuted:
+      return settings_quick_view_notif_muted_visible();
+    case NotificationsItemPeekDuration:
+      return settings_quick_view_notif_seconds_visible();
+    case NotificationsItemPeekIfMissed:
+      return settings_quick_view_notif_missed_visible();
+#endif
+    default:
+      return true;
+  }
+}
+
+static uint16_t prv_get_items(enum NotificationsItem items_out[NotificationsItem_Count]) {
+  uint16_t num_items = 0;
+  for (int item = 0; item < NotificationsItem_Count; item++) {
+    if (prv_item_is_visible(item)) {
+      items_out[num_items++] = item;
+    }
+  }
+  return num_items;
+}
+
+static enum NotificationsItem prv_item_for_row(uint16_t row) {
+  enum NotificationsItem items[NotificationsItem_Count];
+  const uint16_t num_items = prv_get_items(items);
+  return (row < num_items) ? items[row] : NotificationsItem_Count;
+}
+
 static uint16_t prv_num_rows_cb(SettingsCallbacks *context) {
-  return NotificationsItem_Count;
+  enum NotificationsItem items[NotificationsItem_Count];
+  return prv_get_items(items);
 }
 
 static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Layer *cell_layer,
@@ -392,7 +438,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
   const char *subtitle = NULL;
   const char *title = NULL;
 
-  switch (row) {
+  switch (prv_item_for_row(row)) {
     case NotificationsItemFilter:
       title = i18n_noop("Alerts");
       subtitle = prv_alert_mask_to_label(alerts_get_mask());
@@ -400,17 +446,24 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
     case NotificationsItemShowAs:
       title = i18n_noop("Show As");
-      subtitle = prv_show_as_subtitle();
+      subtitle = s_show_as_labels[prv_show_as_is_peek() ? 1 : 0];
+      break;
+    case NotificationsItemPeekIfMissed:
+      /// Whether a full-screen notification popup that times out untouched leaves the
+      /// notification as a Quick View peek
+      title = i18n_noop("Peek If Missed");
+      subtitle = (settings_quick_view_notif_effective_style() ==
+                  QuickViewNotifStyle_FullScreenPeekIfMissed)
+                     ? i18n_noop("On")
+                     : i18n_noop("Off");
       break;
     case NotificationsItemPeekDuration:
-      /// How long the Quick View notification peek stays on the watchface: the peek in place of
-      /// the popup, or the one after a full-screen popup closes.
+      /// How long a Quick View notification peek stays on the watchface
       title = i18n_noop("Peek Duration");
       subtitle = settings_quick_view_notif_seconds_label();
       break;
     case NotificationsItemPeekWhenMuted:
-      /// Whether notifications silenced by Alerts or Quiet Time still show a silent peek.
-      title = i18n_noop("Peek When Muted");
+      title = prv_peek_when_muted_title();
       subtitle = quick_view_prefs_get_notif_muted_enabled() ? i18n_noop("On") : i18n_noop("Off");
       break;
 #endif
@@ -476,7 +529,7 @@ static void prv_deinit_cb(SettingsCallbacks *context) {
 static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
   SettingsNotificationsData *data = (SettingsNotificationsData *)context;
 
-  switch (row) {
+  switch (prv_item_for_row(row)) {
     case NotificationsItemFilter:
       prv_filter_menu_push(data);
       break;
@@ -488,7 +541,10 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       settings_quick_view_notif_seconds_menu_push(i18n_noop("Peek Duration"), data);
       break;
     case NotificationsItemPeekWhenMuted:
-      quick_view_prefs_set_notif_muted_enabled(!quick_view_prefs_get_notif_muted_enabled());
+      settings_quick_view_notif_muted_toggle();
+      break;
+    case NotificationsItemPeekIfMissed:
+      settings_quick_view_notif_missed_toggle();
       break;
 #endif
     case NotificationsItemTextSize:
@@ -519,7 +575,7 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
     default:
       WTF;
   }
-  settings_menu_reload_data(SettingsMenuItemNotifications);
+  settings_menu_reload_rows(SettingsMenuItemNotifications);
 }
 
 static void prv_settings_notifications_event_handler(PebbleEvent *event, void *context) {
@@ -543,6 +599,11 @@ static void prv_expand_cb(SettingsCallbacks *context) {
   event_service_client_subscribe(&data->battery_connection_event_info);
 }
 
+static void prv_appear_cb(SettingsCallbacks *context) {
+  // Option menus and the Quiet Time page change which rows show
+  settings_menu_reload_rows(SettingsMenuItemNotifications);
+}
+
 static void prv_hide_cb(SettingsCallbacks *context) {
   SettingsNotificationsData *data = (SettingsNotificationsData *)context;
 
@@ -560,6 +621,7 @@ static Window *prv_init(void) {
     .num_rows = prv_num_rows_cb,
     .expand = prv_expand_cb,
     .hide = prv_hide_cb,
+    .appear = prv_appear_cb,
   };
 
   return settings_window_create(SettingsMenuItemNotifications, &data->callbacks);

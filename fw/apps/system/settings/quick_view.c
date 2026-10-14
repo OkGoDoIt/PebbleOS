@@ -12,6 +12,9 @@
 #include "kernel/pbl_malloc.h"
 #include "process_state/app_state/app_state.h"
 #include "pbl/services/i18n/i18n.h"
+#include "pbl/services/notifications/alerts_preferences.h"
+#include "pbl/services/notifications/alerts_preferences_private.h"
+#include "pbl/services/notifications/alerts_private.h"
 #include "shell/prefs.h"
 #include "system/passert.h"
 #include "pbl/util/size.h"
@@ -57,8 +60,9 @@ static void prv_music_mode_menu_push(SettingsQuickViewData *data) {
 // Notifications widget option menu
 /////////////////////////////
 
+// No "Disabled": whether a notification peek shows at all is up to Notifications > Show As and
+// the muted-peek toggle, and the duration row is hidden when none can.
 static const char *s_notif_labels[] = {
-    i18n_noop("Disabled"),
     i18n_noop("5 Seconds"),
     i18n_noop("15 Seconds"),
     i18n_noop("1 Minute"),
@@ -66,7 +70,7 @@ static const char *s_notif_labels[] = {
 };
 
 static const uint16_t s_notif_values[] = {
-    0, 5, 15, PBL_SEC_PER_MIN, QUICK_VIEW_NOTIF_SECONDS_PERSISTENT,
+    5, 15, PBL_SEC_PER_MIN, QUICK_VIEW_NOTIF_SECONDS_PERSISTENT,
 };
 
 static int prv_notif_seconds_to_index(uint16_t seconds) {
@@ -75,12 +79,67 @@ static int prv_notif_seconds_to_index(uint16_t seconds) {
       return (int)i;
     }
   }
-  return 2; // 15 Seconds, the default
+  return 1; // 15 Seconds, the default
 }
 
 static void prv_notif_menu_select(OptionMenu *option_menu, int selection, void *context) {
   quick_view_prefs_set_notif_seconds(s_notif_values[selection]);
   app_window_stack_remove(&option_menu->window, true /* animated */);
+}
+
+bool settings_quick_view_notif_show_as_visible(void) {
+  return (alerts_get_mask() & AlertMobile);
+}
+
+QuickViewNotifStyle settings_quick_view_notif_effective_style(void) {
+  if (quick_view_prefs_get_notif_seconds() == 0) {
+    return QuickViewNotifStyle_FullScreen;
+  }
+  const QuickViewNotifStyle style = quick_view_prefs_get_notif_style();
+  return (style < QuickViewNotifStyleCount) ? style : QuickViewNotifStyle_FullScreenPeekIfMissed;
+}
+
+bool settings_quick_view_notif_missed_visible(void) {
+  return settings_quick_view_notif_show_as_visible() &&
+         (settings_quick_view_notif_effective_style() != QuickViewNotifStyle_Peek) &&
+         (alerts_get_notification_window_timeout_ms() != NOTIF_WINDOW_TIMEOUT_INFINITE);
+}
+
+void settings_quick_view_notif_missed_toggle(void) {
+  const bool enable =
+      (settings_quick_view_notif_effective_style() != QuickViewNotifStyle_FullScreenPeekIfMissed);
+  if (enable && (quick_view_prefs_get_notif_seconds() == 0)) {
+    quick_view_prefs_set_notif_seconds(QUICK_VIEW_NOTIF_SECONDS_DEFAULT);
+  }
+  quick_view_prefs_set_notif_style(enable ? QuickViewNotifStyle_FullScreenPeekIfMissed
+                                          : QuickViewNotifStyle_FullScreen);
+}
+
+bool settings_quick_view_notif_muted_visible(void) {
+  return !settings_quick_view_notif_show_as_visible() ||
+         (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide);
+}
+
+bool settings_quick_view_notif_seconds_visible(void) {
+  if (quick_view_prefs_get_notif_seconds() == 0) {
+    return false; // Off in a stored pref from before the duration lost its Disabled option
+  }
+  const QuickViewNotifStyle style = settings_quick_view_notif_effective_style();
+  const bool peek_instead = settings_quick_view_notif_show_as_visible() &&
+                            (style == QuickViewNotifStyle_Peek);
+  const bool peek_if_missed = settings_quick_view_notif_missed_visible() &&
+                              (style == QuickViewNotifStyle_FullScreenPeekIfMissed);
+  const bool muted_peek = settings_quick_view_notif_muted_visible() &&
+                          quick_view_prefs_get_notif_muted_enabled();
+  return peek_instead || peek_if_missed || muted_peek;
+}
+
+void settings_quick_view_notif_muted_toggle(void) {
+  const bool enable = !quick_view_prefs_get_notif_muted_enabled();
+  if (enable && (quick_view_prefs_get_notif_seconds() == 0)) {
+    quick_view_prefs_set_notif_seconds(QUICK_VIEW_NOTIF_SECONDS_DEFAULT);
+  }
+  quick_view_prefs_set_notif_muted_enabled(enable);
 }
 
 const char *settings_quick_view_notif_seconds_label(void) {
@@ -126,6 +185,24 @@ static void prv_button_mode_menu_push(SettingsQuickViewData *data) {
 // Menu Callbacks
 /////////////////////////////
 
+//! The rows on screen: the notification duration only when a notification peek can show.
+static uint16_t prv_get_items(enum SettingsQuickViewItem items_out[NumSettingsQuickViewItems]) {
+  uint16_t num_items = 0;
+  for (int item = 0; item < NumSettingsQuickViewItems; item++) {
+    if ((item == SettingsQuickViewNotifications) && !settings_quick_view_notif_seconds_visible()) {
+      continue;
+    }
+    items_out[num_items++] = item;
+  }
+  return num_items;
+}
+
+static enum SettingsQuickViewItem prv_item_for_row(uint16_t row) {
+  enum SettingsQuickViewItem items[NumSettingsQuickViewItems];
+  const uint16_t num_items = prv_get_items(items);
+  return (row < num_items) ? items[row] : NumSettingsQuickViewItems;
+}
+
 static void prv_deinit_cb(SettingsCallbacks *context) {
   SettingsQuickViewData *data = (SettingsQuickViewData *)context;
 
@@ -140,7 +217,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
   const char *title = NULL;
   const char *subtitle = NULL;
 
-  switch (row) {
+  switch (prv_item_for_row(row)) {
     case SettingsQuickViewMusic: {
       title = i18n_noop("Music");
       const QuickViewMusicMode mode = quick_view_prefs_get_music_mode();
@@ -174,7 +251,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
 static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
   SettingsQuickViewData *data = (SettingsQuickViewData *)context;
 
-  switch (row) {
+  switch (prv_item_for_row(row)) {
     case SettingsQuickViewMusic:
       prv_music_mode_menu_push(data);
       break;
@@ -195,7 +272,13 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
 }
 
 static uint16_t prv_num_rows_cb(SettingsCallbacks *context) {
-  return NumSettingsQuickViewItems;
+  enum SettingsQuickViewItem items[NumSettingsQuickViewItems];
+  return prv_get_items(items);
+}
+
+static void prv_appear_cb(SettingsCallbacks *context) {
+  // Settings on other pages decide which rows show
+  settings_menu_reload_rows(SettingsMenuItemQuickView);
 }
 
 static Window *prv_init(void) {
@@ -207,6 +290,7 @@ static Window *prv_init(void) {
     .draw_row = prv_draw_row_cb,
     .select_click = prv_select_click_cb,
     .num_rows = prv_num_rows_cb,
+    .appear = prv_appear_cb,
   };
 
   return settings_window_create(SettingsMenuItemQuickView, &data->callbacks);

@@ -314,6 +314,17 @@ void settings_menu_reload_data(SettingsMenuItem category) {
   }
 }
 
+void settings_menu_reload_rows(SettingsMenuItem category) {
+  SettingsData *data = app_state_get_user_data();
+  if (data->current_category == category) {
+    menu_layer_reload_data(&data->menu_layer);
+    // Clamps the selection to the new row count
+    menu_layer_set_selected_index(&data->menu_layer,
+                                  menu_layer_get_selected_index(&data->menu_layer),
+                                  MenuRowAlignNone, false /* animated */);
+  }
+}
+
 int16_t settings_menu_get_selected_row(SettingsMenuItem category) {
   SettingsData *data = app_state_get_user_data();
   if (data->current_category == category) {
