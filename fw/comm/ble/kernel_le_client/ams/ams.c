@@ -37,6 +37,8 @@ static void prv_perform_on_kernel_main_task(void (*callback)(void *), void *data
 
 typedef struct {
   bool connected;
+  //! Whether the playback info replayed upon registering has been logged for this connection.
+  bool logged_initial_playback_info;
   pbl_bt_characteristic_t characteristics[NumAMSCharacteristic];
   AMSEntityID next_entity_to_register;
 } AMSClient;
@@ -267,6 +269,7 @@ static bool prv_set_connected(bool connected) {
     return true;
   }
   s_ams_client->connected = connected;
+  s_ams_client->logged_initial_playback_info = false;
   const bool has_error = !music_set_connected_server(&s_ams_music_implementation, connected);
   if (has_error) {
     s_ams_client->connected = false;
@@ -304,6 +307,11 @@ static MusicPlayState prv_music_playstate_for_ams_playback_state(int32_t ams_pla
   }
 }
 
+typedef struct {
+  MusicPlayerStateUpdate state;
+  bool has_rate;
+} AMSPlaybackInfo;
+
 static bool prv_handle_player_playback_info_value(const char *value, uint32_t value_length,
                                                   uint32_t idx, void *context) {
   // Non-Apple AMS servers can format the floats with a comma decimal separator
@@ -335,19 +343,20 @@ static bool prv_handle_player_playback_info_value(const char *value, uint32_t va
 
   PBL_LOG_DBG("Playback info value update %" PRId32 "=%" PRId32, idx, value_out);
 
-  MusicPlayerStateUpdate *state = (MusicPlayerStateUpdate *)context;
+  AMSPlaybackInfo *info = (AMSPlaybackInfo *)context;
   switch (idx) {
     case AMSPlaybackInfoIdxState: {
-      state->playback_state = prv_music_playstate_for_ams_playback_state(value_out);
+      info->state.playback_state = prv_music_playstate_for_ams_playback_state(value_out);
       break;
     }
 
     case AMSPlaybackInfoIdxRate:
-      state->playback_rate_percent = value_out;
+      info->state.playback_rate_percent = value_out;
+      info->has_rate = (value_length != 0);
       break;
 
     case AMSPlaybackInfoIdxElapsedTime:
-      state->elapsed_time_ms = value_out;
+      info->state.elapsed_time_ms = value_out;
       break;
 
     default:
@@ -358,12 +367,25 @@ static bool prv_handle_player_playback_info_value(const char *value, uint32_t va
 
 static void prv_handle_player_playback_info_update(const AMSEntityUpdateNotification *update,
                                                    const uint16_t value_length) {
-  MusicPlayerStateUpdate state = {};
-  const uint8_t num_results = ams_util_csv_parse(update->value_str, value_length, &state,
+  AMSPlaybackInfo info = {};
+  const uint8_t num_results = ams_util_csv_parse(update->value_str, value_length, &info,
                                                  prv_handle_player_playback_info_value);
   const bool success = (num_results == 3);
   if (success) {
-    music_update_player_playback_state(&state);
+    // iOS itself presents a zero rate as paused, so a player that leaves its state at playing
+    // when it pauses must not read as playing here.
+    const MusicPlayState reported_state = info.state.playback_state;
+    if ((reported_state == MusicPlayStatePlaying) && info.has_rate &&
+        (info.state.playback_rate_percent == 0)) {
+      info.state.playback_state = MusicPlayStatePaused;
+    }
+    if (!s_ams_client->logged_initial_playback_info) {
+      s_ams_client->logged_initial_playback_info = true;
+      PBL_LOG_INFO("AMS playback on connect: state=%d rate=%" PRId32 " pos=%" PRIu32 "s",
+                   reported_state, info.state.playback_rate_percent,
+                   info.state.elapsed_time_ms / PBL_MSEC_PER_SEC);
+    }
+    music_update_player_playback_state(&info.state);
   } else {
     PBL_LOG_ERR("Expected CSV with 3 values:");
     PBL_HEXDUMP(LOG_LEVEL_ERROR, (const uint8_t *)update->value_str, value_length);

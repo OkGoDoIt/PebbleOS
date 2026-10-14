@@ -507,6 +507,33 @@ void test_ams__receive_player_playback_info_update_nulls(void) {
   cl_assert_equal_i(music_get_playback_rate_percent(), 0);
 }
 
+void test_ams__receive_playing_at_zero_rate_reads_as_paused(void) {
+  prv_connect_ams();
+
+  // Receive: playing, 0.0 playback rate, elapsed time 4000.5s
+  // 0000  00 01 00 31 2c 30 2e 30  2c 34 30 30 30 2e 35      ...1,0.0 ,4000.5
+  uint8_t playback_info_update[] = {
+    0x00, 0x01, 0x00, 0x31, 0x2c, 0x30, 0x2e, 0x30, 0x2c, 0x34, 0x30, 0x30, 0x30, 0x2e, 0x35,
+  };
+  prv_receive_entity_update(playback_info_update, sizeof(playback_info_update));
+
+  cl_assert_equal_i(music_get_playback_state(), MusicPlayStatePaused);
+  cl_assert_equal_i(music_get_playback_rate_percent(), 0);
+}
+
+void test_ams__receive_playing_without_rate_stays_playing(void) {
+  prv_connect_ams();
+
+  // Receive: playing, empty rate, empty elapsed time
+  // 0000  00 01 00 31 2c 2c                                  ...1,,
+  uint8_t playback_info_update[] = {
+    0x00, 0x01, 0x00, 0x31, 0x2c, 0x2c,
+  };
+  prv_receive_entity_update(playback_info_update, sizeof(playback_info_update));
+
+  cl_assert_equal_i(music_get_playback_state(), MusicPlayStatePlaying);
+}
+
 void test_ams__receive_player_volume_update(void) {
   prv_connect_ams();
 
