@@ -12,6 +12,8 @@ _Static_assert(sizeof(AudioCompanionPauseRequestMsg) == 3, "pause request size")
 _Static_assert(sizeof(AudioCompanionResumeRequestMsg) == 2, "resume request size");
 _Static_assert(sizeof(AudioCompanionEnableRequestMsg) == 2, "enable request size");
 _Static_assert(sizeof(AudioCompanionReceiverHealthMsg) == 8, "receiver health size");
+_Static_assert(sizeof(AudioCompanionPhoneMediaStateMsg) == 3, "phone media state size");
+_Static_assert(sizeof(AudioCompanionPhoneMediaQueryMsg) == 1, "phone media query size");
 _Static_assert(sizeof(AudioCompanionAuthResultMsg) == 4, "auth result size");
 _Static_assert(sizeof(AudioCompanionRevokedMsg) == 2, "revoked size");
 _Static_assert(sizeof(AudioCompanionAckMsg) == 3, "ack size");
@@ -86,6 +88,12 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
       }
       memcpy(&msg_out->receiver_health, data, sizeof(msg_out->receiver_health));
       break;
+    case AudioCompanionCtrlMsgIdPhoneMediaState:
+      if (length < sizeof(AudioCompanionPhoneMediaStateMsg)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->phone_media_state, data, sizeof(msg_out->phone_media_state));
+      break;
     default:
       return AudioCompanionParseResultUnknown;
   }
@@ -129,6 +137,17 @@ size_t audio_companion_protocol_build_revoked(uint8_t *buf, size_t buf_size, uin
   const AudioCompanionRevokedMsg msg = {
     .msg_id = AudioCompanionCtrlMsgIdRevoked,
     .reason = reason,
+  };
+  memcpy(buf, &msg, sizeof(msg));
+  return sizeof(msg);
+}
+
+size_t audio_companion_protocol_build_phone_media_query(uint8_t *buf, size_t buf_size) {
+  if (!buf || buf_size < sizeof(AudioCompanionPhoneMediaQueryMsg)) {
+    return 0;
+  }
+  const AudioCompanionPhoneMediaQueryMsg msg = {
+    .msg_id = AudioCompanionCtrlMsgIdPhoneMediaQuery,
   };
   memcpy(buf, &msg, sizeof(msg));
   return sizeof(msg);

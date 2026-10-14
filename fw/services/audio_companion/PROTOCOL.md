@@ -82,6 +82,7 @@ flight; the watch answers every request with a response notification carrying th
 | `0x05` | `RESUME_REQUEST` | 2 |
 | `0x06` | `RECEIVER_HEALTH` | 8 |
 | `0x07` | `ENABLE_REQUEST` | 2 |
+| `0x08` | `PHONE_MEDIA_STATE` | 3 |
 
 `AUTH_REQUEST` (`0x01`):
 
@@ -140,6 +141,7 @@ already on, the watch may return `ACK(ok)` immediately.
 | `0x43` | `ACK` | 3 |
 | `0x44` | `STATE_CHANGED` | 2 |
 | `0x45` | `ERROR` | 6 |
+| `0x46` | `PHONE_MEDIA_QUERY` | 1 |
 
 `AUTH_RESULT` (`0x41`): `u8 msg_id`, `u8 request_token`, `u8 status`, `u8 granted_proto_version`.
 Status: 0 ok, 1 pending-user-consent, 2 denied-mismatch, 3 denied-disabled, 4 invalid.
@@ -154,14 +156,27 @@ the final status (0 on accept; 4 on decline or timeout).
 Unsolicited (no request token).
 
 `ACK` (`0x43`): `u8 msg_id`, `u8 request_token`, `u8 status` (0 ok, 1 rejected, 2 bad-state).
-Response to `CHECKPOINT`, `PAUSE_REQUEST`, `RESUME_REQUEST`, `RECEIVER_HEALTH`, and
-`ENABLE_REQUEST`.
+Response to `CHECKPOINT`, `PAUSE_REQUEST`, `RESUME_REQUEST`, `RECEIVER_HEALTH`,
+`ENABLE_REQUEST`, and `PHONE_MEDIA_STATE`.
 
 `STATE_CHANGED` (`0x44`): `u8 msg_id`, `u8 service_state` (Section 7). Pushed on every service
 state transition while a control subscription exists.
 
 `ERROR` (`0x45`): `u8 msg_id`, `u8 error_code`, `u32 detail`. Error codes: 1 malformed message,
 2 unauthorized, 3 internal, 4 unsupported version.
+
+`PHONE_MEDIA_QUERY` (`0x46`): `u8 msg_id`. Unsolicited. Asks the receiver whether the phone is
+actually playing audio. The phone's media service (AMS on iOS) reports what a player publishes, and
+a player can publish "playing" while paused, so the watch asks the phone's audio system before
+showing music as playing. The receiver answers with `PHONE_MEDIA_STATE`; a receiver that does not
+know this id ignores it and the watch falls back to the media service alone.
+
+`PHONE_MEDIA_STATE` (`0x08`): `u8 msg_id`, `u8 request_token`, `u8 flags`. Bit0 `CHECKED`: the
+phone could check (when clear, the other bits mean nothing); bit1 `OTHER_AUDIO`: another app is
+playing audio (iOS `AVAudioSession.isOtherAudioPlaying`); bit2 `PRIMARY_AUDIO`: that audio is
+non-mixable primary audio (iOS `secondaryAudioShouldBeSilencedHint`). Sent in answer to
+`PHONE_MEDIA_QUERY`, or unprompted when the receiver notices a change. The watch replies with
+`ACK`.
 
 ## 5. Data Channel
 

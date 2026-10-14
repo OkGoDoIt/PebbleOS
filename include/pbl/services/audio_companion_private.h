@@ -35,6 +35,7 @@ typedef enum {
   AudioCompanionCtrlMsgIdResumeRequest = 0x05,
   AudioCompanionCtrlMsgIdReceiverHealth = 0x06,
   AudioCompanionCtrlMsgIdEnableRequest = 0x07,
+  AudioCompanionCtrlMsgIdPhoneMediaState = 0x08,
 } AudioCompanionCtrlMsgId;
 
 //! Watch -> phone control message ids (notifications on the Control characteristic).
@@ -44,6 +45,7 @@ typedef enum {
   AudioCompanionCtrlMsgIdAck = 0x43,
   AudioCompanionCtrlMsgIdStateChanged = 0x44,
   AudioCompanionCtrlMsgIdError = 0x45,
+  AudioCompanionCtrlMsgIdPhoneMediaQuery = 0x46,
 } AudioCompanionCtrlOutMsgId;
 
 //! Watch -> phone data message ids (notifications on the Data characteristic).
@@ -222,6 +224,22 @@ typedef struct PBL_PACKED {
   uint32_t queue_depth_frames;
 } AudioCompanionReceiverHealthMsg;
 
+//! PHONE_MEDIA_STATE flags: what the phone's own audio system says, as opposed to what its media
+//! service (AMS) says. The two disagree when a player publishes "playing" while paused.
+#define AUDIO_COMPANION_PHONE_MEDIA_CHECKED (1 << 0)       //!< the phone could check
+#define AUDIO_COMPANION_PHONE_MEDIA_OTHER_AUDIO (1 << 1)   //!< another app is playing audio
+#define AUDIO_COMPANION_PHONE_MEDIA_PRIMARY_AUDIO (1 << 2) //!< ... and it is non-mixable audio
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
+  uint8_t flags;
+} AudioCompanionPhoneMediaStateMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+} AudioCompanionPhoneMediaQueryMsg;
+
 typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
@@ -321,6 +339,7 @@ typedef struct {
     AudioCompanionResumeRequestMsg resume_request;
     AudioCompanionReceiverHealthMsg receiver_health;
     AudioCompanionEnableRequestMsg enable_request;
+    AudioCompanionPhoneMediaStateMsg phone_media_state;
   };
 } AudioCompanionControlMsg;
 
@@ -338,6 +357,7 @@ size_t audio_companion_protocol_build_auth_result(uint8_t *buf, size_t buf_size,
                                                   uint8_t request_token, uint8_t status,
                                                   uint8_t granted_proto_version);
 size_t audio_companion_protocol_build_revoked(uint8_t *buf, size_t buf_size, uint8_t reason);
+size_t audio_companion_protocol_build_phone_media_query(uint8_t *buf, size_t buf_size);
 size_t audio_companion_protocol_build_ack(uint8_t *buf, size_t buf_size, uint8_t request_token,
                                           uint8_t status);
 size_t audio_companion_protocol_build_state_changed(uint8_t *buf, size_t buf_size,

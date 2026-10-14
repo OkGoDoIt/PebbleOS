@@ -277,6 +277,22 @@ void test_audio_companion_protocol__build_control_out(void) {
   len = audio_companion_protocol_build_error(buf, sizeof(buf),
                                              AudioCompanionErrorCodeMalformed, 0);
   prv_assert_builder_matches("error_malformed", buf, len);
+
+  len = audio_companion_protocol_build_phone_media_query(buf, sizeof(buf));
+  prv_assert_builder_matches("phone_media_query", buf, len);
+}
+
+void test_audio_companion_protocol__parse_phone_media_state(void) {
+  const ProtocolFixture *fixture = prv_find_fixture("phone_media_state_playing");
+  cl_assert(fixture);
+  AudioCompanionControlMsg msg;
+  cl_assert_equal_i(audio_companion_protocol_parse_control(fixture->data, fixture->length, &msg),
+                    AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdPhoneMediaState);
+  cl_assert_equal_i(msg.phone_media_state.request_token, 0x2E);
+  cl_assert_equal_i(msg.phone_media_state.flags, AUDIO_COMPANION_PHONE_MEDIA_CHECKED |
+                                                     AUDIO_COMPANION_PHONE_MEDIA_OTHER_AUDIO |
+                                                     AUDIO_COMPANION_PHONE_MEDIA_PRIMARY_AUDIO);
 }
 
 void test_audio_companion_protocol__build_stream_start(void) {

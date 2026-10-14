@@ -181,6 +181,26 @@ static const uint8_t s_fx_pause_request[] = {
   0x04, 0x2a, 0x01,
 };
 
+// Watch asks the receiver whether the phone is actually playing audio
+static const uint8_t s_fx_phone_media_query[] = {
+  0x46,
+};
+
+// Receiver checked: nothing else on the phone is playing audio
+static const uint8_t s_fx_phone_media_state_idle[] = {
+  0x08, 0x2f, 0x01,
+};
+
+// Receiver reports another app on the phone is playing non-mixable audio
+static const uint8_t s_fx_phone_media_state_playing[] = {
+  0x08, 0x2e, 0x07,
+};
+
+// PHONE_MEDIA_STATE without its flags byte
+static const uint8_t s_fx_phone_media_state_short[] = {
+  0x08, 0x30,
+};
+
 // Health report from a backgrounded receiver
 static const uint8_t s_fx_receiver_health[] = {
   0x06, 0x2c, 0x4c, 0x02, 0x82, 0x00, 0x00, 0x00,
@@ -434,6 +454,10 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "info_truncated", FixtureChannelInfo, FixtureExpectReject, s_fx_info_truncated, 12 },
   { "info_v2_after_fault", FixtureChannelInfo, FixtureExpectParse, s_fx_info_v2_after_fault, 32 },
   { "pause_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_pause_request, 3 },
+  { "phone_media_query", FixtureChannelControlOut, FixtureExpectParse, s_fx_phone_media_query, 1 },
+  { "phone_media_state_idle", FixtureChannelControlIn, FixtureExpectParse, s_fx_phone_media_state_idle, 3 },
+  { "phone_media_state_playing", FixtureChannelControlIn, FixtureExpectParse, s_fx_phone_media_state_playing, 3 },
+  { "phone_media_state_short", FixtureChannelControlIn, FixtureExpectReject, s_fx_phone_media_state_short, 2 },
   { "receiver_health", FixtureChannelControlIn, FixtureExpectParse, s_fx_receiver_health, 8 },
   { "resume_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_resume_request, 2 },
   { "revoked_user", FixtureChannelControlOut, FixtureExpectParse, s_fx_revoked_user, 2 },
