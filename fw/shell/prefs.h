@@ -245,6 +245,16 @@ typedef enum QuickViewButtonMode {
   QuickViewButtonModeCount,
 } QuickViewButtonMode;
 
+//! How phone notifications are presented when the alerts filter lets them through. Calls,
+//! reminders and alarms keep their full-screen UI either way.
+typedef enum QuickViewNotifStyle {
+  //! The full-screen notification popup.
+  QuickViewNotifStyle_FullScreen = 0,
+  //! A vibration and the Quick View notification widget, with no popup.
+  QuickViewNotifStyle_Peek = 1,
+  QuickViewNotifStyleCount,
+} QuickViewNotifStyle;
+
 //! Sentinel notif-seconds value: the notification widget stays until dismissed.
 #define QUICK_VIEW_NOTIF_SECONDS_PERSISTENT ((uint16_t)0xFFFF)
 #define QUICK_VIEW_NOTIF_SECONDS_DEFAULT    ((uint16_t)15)
@@ -259,6 +269,9 @@ void quick_view_prefs_set_notif_seconds(uint16_t seconds);
 //! Quiet Time muted: a silent residue for users who keep notification popups off.
 bool quick_view_prefs_get_notif_muted_enabled(void);
 void quick_view_prefs_set_notif_muted_enabled(bool enabled);
+//! The stored choice. peek_widgets_notifications_replace_popup() says whether it is in effect.
+QuickViewNotifStyle quick_view_prefs_get_notif_style(void);
+void quick_view_prefs_set_notif_style(QuickViewNotifStyle style);
 bool quick_view_prefs_get_apps_enabled(void);
 void quick_view_prefs_set_apps_enabled(bool enabled);
 QuickViewButtonMode quick_view_prefs_get_button_mode(void);
