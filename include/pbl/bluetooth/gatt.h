@@ -115,7 +115,7 @@ struct pbl_bt_gatt_server_read_subscription_event {
   uint32_t transaction_id;
 };
 
-/** @brief A peer (un)subscribed to Service Changed indications. Not reported by NimBLE. */
+/** @brief A peer (un)subscribed to Service Changed indications. */
 struct pbl_bt_gatt_server_subscribe_event {
   /** Address of the peer. */
   struct pbl_bt_addr dev_address;
@@ -291,7 +291,9 @@ extern void pbl_bt_cb_gatt_service_changed_server_confirmation(
     const struct pbl_bt_gatt_server_changed_confirmation_event *event);
 
 /**
- * @brief Called when a peer (un)subscribed to Service Changed indications. Not invoked by NimBLE.
+ * @brief Called when a peer (un)subscribed to Service Changed indications.
+ *
+ * NimBLE also reports a bonded peer's subscription restored on reconnect.
  *
  * @param event The subscription change.
  */

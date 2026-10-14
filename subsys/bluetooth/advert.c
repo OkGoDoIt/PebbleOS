@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include "gatt_priv.h"
 #include "nimble_gattc_op_queue.h"
 #include "nimble_type_conversions.h"
 #include "pairability_priv.h"
@@ -298,6 +299,7 @@ static void prv_handle_subscription_event(struct ble_gap_event *event) {
               event->subscribe.conn_handle, event->subscribe.attr_handle,
               event->subscribe.prev_notify, event->subscribe.cur_notify,
               event->subscribe.prev_indicate, event->subscribe.cur_indicate);
+  nimble_gatt_handle_subscribe_event(event);
 }
 
 static void prv_handle_notification_rx_event(struct ble_gap_event *event) {
