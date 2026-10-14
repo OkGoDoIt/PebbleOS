@@ -18,6 +18,7 @@
 #include <applib/ui/option_menu_window.h>
 #include <applib/ui/ui.h>
 #include <kernel/pbl_malloc.h>
+#include <shell/prefs.h>
 #include <system/passert.h>
 
 // Offset between vibe intensity menu item index and vibe intensity enum values
@@ -30,6 +31,9 @@ typedef struct {
 
 enum NotificationsItem {
   NotificationsItemFilter,
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  NotificationsItemShowAs,
+#endif
   NotificationsItemTextSize,
   NotificationsItemWindowTimeout,
 #if PBL_BW
@@ -90,11 +94,54 @@ static void prv_filter_menu_push(SettingsNotificationsData *data) {
   const OptionMenuCallbacks callbacks = {
     .select = prv_filter_menu_select,
   };
-  /// The option in the Settings app for filtering notifications by type.
-  const char *title = i18n_noop("Filter");
+  /// The option in the Settings app for which notifications alert. The phone app calls this
+  /// "Notification Filter"; it is not the per-app list.
+  const char *title = i18n_noop("Alerts");
   settings_option_menu_push(title, OptionMenuContentType_DoubleLine, index, &callbacks, cycle_len,
                             true /* icons_enabled */, s_alert_mode_labels, data);
 }
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+// Show As
+////////////////////////
+
+static const char *s_show_as_labels[QuickViewNotifStyleCount] = {
+  [QuickViewNotifStyle_FullScreen] = i18n_noop("Full Screen"),
+  [QuickViewNotifStyle_Peek] = i18n_noop("Quick View Peek"),
+};
+
+static const char *prv_show_as_subtitle(void) {
+  const QuickViewNotifStyle style = quick_view_prefs_get_notif_style();
+  if ((style == QuickViewNotifStyle_Peek) && (quick_view_prefs_get_notif_seconds() == 0)) {
+    /// Show As is set to the Quick View peek, but Quick View notifications are disabled, so
+    /// notifications still show full screen.
+    return i18n_noop("Full Screen (Quick View Off)");
+  }
+  return s_show_as_labels[(style < QuickViewNotifStyleCount) ? style : 0];
+}
+
+static void prv_show_as_menu_select(OptionMenu *option_menu, int selection, void *context) {
+  if ((selection == QuickViewNotifStyle_Peek) && (quick_view_prefs_get_notif_seconds() == 0)) {
+    // The peek needs a display time; a disabled one would leave notifications as a bare buzz
+    quick_view_prefs_set_notif_seconds(QUICK_VIEW_NOTIF_SECONDS_DEFAULT);
+  }
+  quick_view_prefs_set_notif_style((QuickViewNotifStyle)selection);
+  app_window_stack_remove(&option_menu->window, true /* animated */);
+}
+
+static void prv_show_as_menu_push(SettingsNotificationsData *data) {
+  const OptionMenuCallbacks callbacks = {
+    .select = prv_show_as_menu_select,
+  };
+  /// The option in the Settings app for how notifications appear: the full-screen popup, or a
+  /// vibration and the Quick View peek on the watchface.
+  const char *title = i18n_noop("Show As");
+  settings_option_menu_push(title, OptionMenuContentType_SingleLine,
+                            quick_view_prefs_get_notif_style(), &callbacks,
+                            ARRAY_LENGTH(s_show_as_labels), true /* icons_enabled */,
+                            s_show_as_labels, data);
+}
+#endif
 
 // Text Size
 ////////////////////////
@@ -344,9 +391,15 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
 
   switch (row) {
     case NotificationsItemFilter:
-      title = i18n_noop("Filter");
+      title = i18n_noop("Alerts");
       subtitle = prv_alert_mask_to_label(alerts_get_mask());
       break;
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+    case NotificationsItemShowAs:
+      title = i18n_noop("Show As");
+      subtitle = prv_show_as_subtitle();
+      break;
+#endif
     case NotificationsItemTextSize:
       /// String within Settings->Notifications that describes the text font size
       title = i18n_noop("Text Size");
@@ -412,6 +465,11 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
     case NotificationsItemFilter:
       prv_filter_menu_push(data);
       break;
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+    case NotificationsItemShowAs:
+      prv_show_as_menu_push(data);
+      break;
+#endif
     case NotificationsItemTextSize:
       prv_text_size_menu_push(data);
       break;
