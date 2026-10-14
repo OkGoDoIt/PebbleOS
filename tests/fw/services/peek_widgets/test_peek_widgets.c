@@ -73,6 +73,12 @@ typedef struct PeekWidgetsTestState {
   char music_title[64];
   char music_artist[64];
   uint8_t music_generation;
+  // Companion app on the phone
+  bool companion_listening;
+  unsigned int phone_queries;
+  bool phone_reported;
+  bool phone_playing;
+  time_t phone_reported_at;
   bool track_end_known;
   int64_t ms_until_track_end;     //!< As of the fake RTC time track_end_set_at
   time_t track_end_set_at;
@@ -243,6 +249,23 @@ void music_get_now_playing(char *title, char *artist, char *album) {
 
 uint8_t music_get_now_playing_generation(void) {
   return s_test.music_generation;
+}
+
+bool audio_companion_query_phone_media(void) {
+  if (s_test.companion_listening) {
+    s_test.phone_queries++;
+  }
+  return s_test.companion_listening;
+}
+
+bool music_get_phone_audio_report(bool *playing_out, uint32_t *age_ms_out) {
+  if (playing_out) {
+    *playing_out = s_test.phone_playing;
+  }
+  if (age_ms_out) {
+    *age_ms_out = (rtc_get_time() - s_test.phone_reported_at) * 1000;
+  }
+  return s_test.phone_reported;
 }
 
 bool music_get_ms_until_track_end(int64_t *ms_out) {
@@ -494,6 +517,14 @@ static void prv_reconnect_and_replay_track(void) {
 }
 
 //! Playback starting live, as when the user presses play.
+//! The companion app answers the watch's question about the phone's own audio.
+static void prv_phone_answers(bool playing) {
+  s_test.phone_reported = true;
+  s_test.phone_playing = playing;
+  s_test.phone_reported_at = rtc_get_time();
+  prv_send_media_event(PebbleMediaEventTypePhoneAudioReported);
+}
+
 static void prv_start_playing(void) {
   s_test.has_now_playing = true;
   prv_change_track("Track A", "Artist A");
@@ -713,6 +744,67 @@ void test_peek_widgets__music_pause_then_play_shows_again(void) {
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
   s_test.play_state = MusicPlayStatePlaying;
   prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_paused_player_that_says_playing_hides_on_phone_answer(void) {
+  // BookPlayer: playing, then paused - but it republishes "playing at 1x", so the media service
+  // only sends another playing update. The watch asks the phone, which says nothing plays.
+  s_test.companion_listening = true;
+  prv_start_playing();
+  cl_assert_equal_i(s_test.phone_queries, 1);
+  prv_phone_answers(true);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+
+  fake_rtc_increment_time(5);
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);  // the paused republish
+  cl_assert_equal_i(s_test.phone_queries, 2);
+  prv_phone_answers(false);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__music_phone_answer_trusts_a_replay_that_really_plays(void) {
+  // Genuinely playing across a reconnect: the replay alone is not trusted, the phone's answer is.
+  s_test.companion_listening = true;
+  prv_send_media_event(PebbleMediaEventTypeServerConnected);
+  s_test.play_state = MusicPlayStatePlaying;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  s_test.has_now_playing = true;
+  prv_change_track("Chapter 42", "Narrator");
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  prv_phone_answers(true);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_requeries_the_phone_while_playing(void) {
+  s_test.companion_listening = true;
+  prv_start_playing();
+  prv_phone_answers(true);
+  cl_assert_equal_i(s_test.phone_queries, 1);
+
+  // A pause the media service never reports at all is caught by the next periodic question.
+  fake_rtc_increment_time(31);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  cl_assert_equal_i(s_test.phone_queries, 2);
+  prv_phone_answers(false);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // After "not playing" it asks rarely, and stops once the media service stops saying playing.
+  fake_rtc_increment_time(31);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  cl_assert_equal_i(s_test.phone_queries, 2);
+  s_test.play_state = MusicPlayStatePaused;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  fake_rtc_increment_time(10 * 60);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  cl_assert_equal_i(s_test.phone_queries, 2);
+}
+
+void test_peek_widgets__music_without_companion_falls_back(void) {
+  // No companion listening: no questions, and the media service's live changes decide.
+  prv_start_playing();
+  cl_assert_equal_i(s_test.phone_queries, 0);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
 }
 

@@ -10,6 +10,6 @@ pbl_clar_test(test_peek_widgets
     fw/services/timeline/item.c
     fw/services/clock/time.c
     tests/fakes/fake_rtc.c
-  DEFINES CONFIG_SERVICE_PEEK_WIDGETS=1
+  DEFINES CONFIG_SERVICE_PEEK_WIDGETS=1 CONFIG_SERVICE_AUDIO_COMPANION=1
   OVERRIDES dummy_board
 )

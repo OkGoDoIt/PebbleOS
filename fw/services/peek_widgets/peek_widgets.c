@@ -14,6 +14,9 @@
 #include "resource/timeline_resource_ids.auto.h"
 #include "pbl/kernel/mutex.h"
 #include "pbl/services/music.h"
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include "pbl/services/audio_companion.h"
+#endif
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/notifications/alerts.h"
 #include "pbl/services/notifications/alerts_preferences.h"
@@ -46,6 +49,14 @@ PBL_LOG_MODULE_DEFINE(service_peek_widgets, CONFIG_SERVICE_PEEK_WIDGETS_LOG_LEVE
 //! How long after a music server connects its updates count as the replay of its stored state.
 //! AMS sends that while registering, within a second or two of connecting.
 #define PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S (15)
+
+//! How often to re-ask the phone whether its audio is playing while the media service says so:
+//! soon after a "playing" answer, to catch a pause the media service never reports, and rarely
+//! after "not playing" or no answer at all (an app that predates the question).
+#define PEEK_WIDGET_PHONE_REQUERY_PLAYING_S (30)
+#define PEEK_WIDGET_PHONE_REQUERY_IDLE_S (5 * 60)
+//! An answer older than this no longer counts, whatever happened since.
+#define PEEK_WIDGET_PHONE_REPORT_MAX_AGE_MS (10 * 60 * PBL_MSEC_PER_SEC)
 
 #define PEEK_WIDGET_MAX_APP_WIDGETS (8)
 
@@ -99,6 +110,11 @@ typedef struct PeekWidgetsState {
   //! change while playing. The state a phone replays on connect is not enough: iOS replays a
   //! stale "playing" for a paused player (Audible) on every reconnect, hours after it stopped.
   bool music_playing_seen_live;
+  //! Whether the phone has answered "is your audio playing" since the media service's last
+  //! playback update. While it has, its answer decides; until it does, the rules above do.
+  bool phone_report_valid;
+  //! When to ask the phone again, 0 for never (the media service does not say playing).
+  time_t phone_next_query_at;
 
   // Notification.
   Uuid notif_id;
@@ -155,8 +171,20 @@ static bool prv_music_is_active(void) {
   if (!music_has_now_playing()) {
     return false;
   }
-  if (!prv_play_state_is_playing(music_get_playback_state()) ||
-      !s_state.music_playing_seen_live) {
+  if (!prv_play_state_is_playing(music_get_playback_state())) {
+    return false;
+  }
+  // The media service can say playing while nothing plays: a player that publishes a playing
+  // rate while paused (BookPlayer) never sends it a pause. The phone's own audio system knows.
+  bool phone_playing;
+  uint32_t phone_report_age_ms;
+  if (s_state.phone_report_valid && music_get_phone_audio_report(&phone_playing,
+                                                                 &phone_report_age_ms) &&
+      (phone_report_age_ms < PEEK_WIDGET_PHONE_REPORT_MAX_AGE_MS)) {
+    if (!phone_playing) {
+      return false;
+    }
+  } else if (!s_state.music_playing_seen_live) {
     return false;
   }
   // The phone sends no updates while a track plays, so a lost or never-sent pause would leave a
@@ -251,6 +279,27 @@ static uint32_t prv_music_track_id(void) {
   return track_id ?: 1;
 }
 
+//! Asks the companion app whether the phone's audio is playing, if one is listening.
+static void prv_query_phone(void) {
+  s_state.phone_next_query_at = 0;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  if (audio_companion_query_phone_media()) {
+    // Ask again later even if no answer comes (an app that predates the question)
+    s_state.phone_next_query_at = rtc_get_time() + PEEK_WIDGET_PHONE_REQUERY_IDLE_S;
+  }
+#endif
+}
+
+static void prv_maybe_query_phone(void) {
+  if (!prv_play_state_is_playing(music_get_playback_state())) {
+    s_state.phone_next_query_at = 0;
+    return;
+  }
+  if (s_state.phone_next_query_at && (rtc_get_time() >= s_state.phone_next_query_at)) {
+    prv_query_phone();
+  }
+}
+
 void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
   switch (event->type) {
     case PebbleMediaEventTypeNowPlayingChanged: {
@@ -276,6 +325,13 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
     case PebbleMediaEventTypePlaybackStateChanged: {
       s_state.music_past_end_logged = false;
       const bool playing = prv_play_state_is_playing(event->playback_state);
+      // Any playback update can be a player's paused-but-"playing" republish: ask again.
+      s_state.phone_report_valid = false;
+      if (playing) {
+        prv_query_phone();
+      } else {
+        s_state.phone_next_query_at = 0;
+      }
       if (!playing) {
         s_state.music_playing_seen_live = false;
       } else if (!s_state.music_last_playing && !prv_music_in_replay_window()) {
@@ -291,6 +347,17 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
     case PebbleMediaEventTypeServerDisconnected:
       s_state.music_playing_seen_live = false;
       break;
+    case PebbleMediaEventTypePhoneAudioReported: {
+      bool phone_playing = false;
+      music_get_phone_audio_report(&phone_playing, NULL);
+      s_state.phone_report_valid = true;
+      if (prv_play_state_is_playing(music_get_playback_state())) {
+        s_state.phone_next_query_at =
+            rtc_get_time() + (phone_playing ? PEEK_WIDGET_PHONE_REQUERY_PLAYING_S
+                                            : PEEK_WIDGET_PHONE_REQUERY_IDLE_S);
+      }
+      break;
+    }
     default:
       // Volume/track position/album art changes don't affect the widget's layout.
       return;
@@ -699,6 +766,10 @@ static void prv_update_timer(void) {
   if (s_state.notif_active && s_state.notif_expires_at) {
     deadline = s_state.notif_expires_at;
   }
+  if (s_state.phone_next_query_at &&
+      (!deadline || (s_state.phone_next_query_at < deadline))) {
+    deadline = s_state.phone_next_query_at;
+  }
   if (s_state.shown == PeekWidgetSource_Music) {
     if (quick_view_prefs_get_music_mode() == QuickViewMusicMode_TrackStart) {
       const time_t track_deadline = s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S;
@@ -728,6 +799,8 @@ static void prv_refresh(bool animated) {
     return;
   }
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
+
+  prv_maybe_query_phone();
 
   PeekWidgetSource winner;
   for (;;) {
