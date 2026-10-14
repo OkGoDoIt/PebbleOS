@@ -112,6 +112,11 @@ struct AudioCompanionRebootTrace;
 void audio_companion_get_reboot_trace(struct AudioCompanionRebootTrace *out);
 
 bool audio_companion_get_receiver_name(char *buf, size_t buf_size);
+
+//! Asks the connected receiver app whether the phone is actually playing audio
+//! (PHONE_MEDIA_QUERY). Its answer arrives later through music_set_phone_audio_report().
+//! @return False when no authorized receiver is listening, so no answer will come.
+bool audio_companion_query_phone_media(void);
 //! User revoke from watch Settings: wipes identity, notifies the app, stops.
 void audio_companion_forget_receiver(void);
 

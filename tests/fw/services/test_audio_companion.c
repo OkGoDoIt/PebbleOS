@@ -131,6 +131,15 @@ bool pbl_bt_audio_companion_notify_control(const uint8_t *data, size_t length) {
   return true;
 }
 
+// The music service records what the phone's audio system says; capture it here.
+static int s_phone_audio_reports;
+static bool s_phone_audio_last;
+
+void music_set_phone_audio_report(bool playing) {
+  s_phone_audio_reports++;
+  s_phone_audio_last = playing;
+}
+
 uint16_t pbl_bt_audio_companion_get_effective_mtu(void) {
   return s_effective_mtu;
 }
@@ -711,6 +720,66 @@ void test_audio_companion__cleanup(void) {
   fake_mutex_reset(false);
   fake_pbl_malloc_check_net_allocs();
   fake_pbl_malloc_clear_tracking();
+}
+
+static void prv_send_phone_media_state(uint8_t token, uint8_t flags) {
+  const AudioCompanionPhoneMediaStateMsg msg = {
+    .msg_id = AudioCompanionCtrlMsgIdPhoneMediaState,
+    .request_token = token,
+    .flags = flags,
+  };
+  prv_send_control((const uint8_t *)&msg, sizeof(msg));
+}
+
+void test_audio_companion__phone_media_state_reaches_the_music_service(void) {
+  s_phone_audio_reports = 0;
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+
+  prv_send_phone_media_state(0x61, AUDIO_COMPANION_PHONE_MEDIA_CHECKED);
+  cl_assert_equal_i(s_phone_audio_reports, 1);
+  cl_assert(!s_phone_audio_last);
+  const CapturedNotification *ack = prv_last_control_msg(AudioCompanionCtrlMsgIdAck);
+  cl_assert(ack);
+  AudioCompanionAckMsg ack_msg;
+  memcpy(&ack_msg, ack->data, sizeof(ack_msg));
+  cl_assert_equal_i(ack_msg.request_token, 0x61);
+  cl_assert_equal_i(ack_msg.status, AudioCompanionAckStatusOk);
+
+  prv_send_phone_media_state(0x62, AUDIO_COMPANION_PHONE_MEDIA_CHECKED |
+                                       AUDIO_COMPANION_PHONE_MEDIA_OTHER_AUDIO |
+                                       AUDIO_COMPANION_PHONE_MEDIA_PRIMARY_AUDIO);
+  cl_assert_equal_i(s_phone_audio_reports, 2);
+  cl_assert(s_phone_audio_last);
+
+  // A phone that could not check says nothing about playback.
+  prv_send_phone_media_state(0x63, 0);
+  cl_assert_equal_i(s_phone_audio_reports, 2);
+}
+
+void test_audio_companion__phone_media_state_requires_authorization(void) {
+  s_phone_audio_reports = 0;
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_send_phone_media_state(0x64, AUDIO_COMPANION_PHONE_MEDIA_CHECKED);
+  cl_assert_equal_i(s_phone_audio_reports, 0);
+  cl_assert(prv_last_control_msg(AudioCompanionCtrlMsgIdError));
+}
+
+void test_audio_companion__phone_media_query_only_reaches_a_listening_receiver(void) {
+  audio_companion_set_enabled(true);
+  cl_assert(!audio_companion_query_phone_media());
+  prv_subscribe(true, true);
+  cl_assert(!audio_companion_query_phone_media());
+
+  prv_authenticate();
+  const int before = s_control_count;
+  cl_assert(audio_companion_query_phone_media());
+  cl_assert_equal_i(s_control_count, before + 1);
+  const CapturedNotification *query = prv_last_control_msg(AudioCompanionCtrlMsgIdPhoneMediaQuery);
+  cl_assert(query);
+  cl_assert_equal_i(query->length, 1);
 }
 
 void test_audio_companion__denies_auth_while_disabled(void) {

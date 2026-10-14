@@ -19,6 +19,7 @@
 #include "kernel/pbl_malloc.h"
 #include "pbl/kernel/mutex.h"
 #include "pbl/services/battery/battery_state.h"
+#include "pbl/services/music.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/runlevel.h"
 #include "pbl/services/system_task.h"
@@ -2286,6 +2287,19 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
     case AudioCompanionCtrlMsgIdEnableRequest:
       prv_handle_enable_request_locked(&msg->enable_request);
       break;
+    case AudioCompanionCtrlMsgIdPhoneMediaState: {
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      const uint8_t flags = msg->phone_media_state.flags;
+      PBL_LOG_DBG("Phone media state: flags 0x%x", flags);
+      prv_send_ack_locked(msg->phone_media_state.request_token, AudioCompanionAckStatusOk);
+      if (flags & AUDIO_COMPANION_PHONE_MEDIA_CHECKED) {
+        music_set_phone_audio_report(flags & AUDIO_COMPANION_PHONE_MEDIA_OTHER_AUDIO);
+      }
+      break;
+    }
     default:
       break;
   }
@@ -2874,6 +2888,20 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
     .runlevel = s_runlevel,
   };
   pbl_mutex_unlock(&s_lock);
+}
+
+bool audio_companion_query_phone_media(void) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  // A receiver presumed gone is often just a suspended iOS app, and a control notification is
+  // what wakes one; if it really is gone, no answer comes and the caller falls back.
+  const bool reachable = s_session.authorized && s_session.control_subscribed;
+  if (reachable) {
+    uint8_t buf[sizeof(AudioCompanionPhoneMediaQueryMsg)];
+    const size_t len = audio_companion_protocol_build_phone_media_query(buf, sizeof(buf));
+    prv_notify_control_locked(buf, len);
+  }
+  pbl_mutex_unlock(&s_lock);
+  return reachable;
 }
 
 bool audio_companion_get_receiver_name(char *buf, size_t buf_size) {
