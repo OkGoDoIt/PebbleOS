@@ -72,6 +72,9 @@ typedef struct PeekWidgetsTestState {
   char music_title[64];
   char music_artist[64];
   uint8_t music_generation;
+  bool track_end_known;
+  int64_t ms_until_track_end;     //!< As of the fake RTC time track_end_set_at
+  time_t track_end_set_at;
   // Environment
   bool watchface_running;
   bool alerts_allow;
@@ -205,6 +208,15 @@ void music_get_now_playing(char *title, char *artist, char *album) {
 
 uint8_t music_get_now_playing_generation(void) {
   return s_test.music_generation;
+}
+
+bool music_get_ms_until_track_end(int64_t *ms_out) {
+  if (!s_test.track_end_known) {
+    return false;
+  }
+  const time_t elapsed_s = rtc_get_time() - s_test.track_end_set_at;
+  *ms_out = s_test.ms_until_track_end - ((int64_t)elapsed_s * 1000);
+  return true;
 }
 
 bool app_manager_is_watchface_running(void) {
@@ -406,6 +418,41 @@ static void prv_publish_app_widget(const Uuid *owner, const char *title, uint32_
   cl_assert(peek_widgets_publish_app_widget(&publish));
 }
 
+static void prv_set_track_end_in(int64_t ms) {
+  s_test.track_end_known = true;
+  s_test.ms_until_track_end = ms;
+  s_test.track_end_set_at = rtc_get_time();
+}
+
+//! What a reconnect looks like from here: the metadata is cleared, then the phone replays it.
+static void prv_reconnect_and_replay_track(void) {
+  char title[sizeof(s_test.music_title)];
+  char artist[sizeof(s_test.music_artist)];
+  strcpy(title, s_test.music_title);
+  strcpy(artist, s_test.music_artist);
+  const MusicPlayState play_state = s_test.play_state;
+
+  s_test.has_now_playing = false;
+  s_test.play_state = MusicPlayStateUnknown;
+  s_test.music_title[0] = '\0';
+  s_test.music_artist[0] = '\0';
+  s_test.music_generation++;
+  prv_send_media_event(PebbleMediaEventTypeNowPlayingChanged);
+  prv_send_media_event(PebbleMediaEventTypeServerDisconnected);
+  prv_send_media_event(PebbleMediaEventTypeServerConnected);
+
+  s_test.play_state = play_state;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  // AMS sends artist before title
+  s_test.has_now_playing = true;
+  strcpy(s_test.music_artist, artist);
+  s_test.music_generation++;
+  prv_send_media_event(PebbleMediaEventTypeNowPlayingChanged);
+  strcpy(s_test.music_title, title);
+  s_test.music_generation++;
+  prv_send_media_event(PebbleMediaEventTypeNowPlayingChanged);
+}
+
 static void prv_start_playing(void) {
   s_test.has_now_playing = true;
   s_test.play_state = MusicPlayStatePlaying;
@@ -505,6 +552,64 @@ void test_peek_widgets__music_dismiss_latches_until_track_change(void) {
 
   // A new track clears the latch.
   prv_change_track("Track B", "Artist B");
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_dismiss_survives_reconnect(void) {
+  prv_start_playing();
+  cl_assert(peek_widgets_handle_dismiss());
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // The phone replaying the same track after a reconnect is not a new track.
+  prv_reconnect_and_replay_track();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  prv_change_track("Track B", "Artist B");
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_track_start_ignores_reconnect_replay(void) {
+  s_test.music_mode = QuickViewMusicMode_TrackStart;
+  prv_start_playing();
+  fake_rtc_increment_time(11);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  prv_reconnect_and_replay_track();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__music_hides_when_playing_runs_past_track_end(void) {
+  prv_start_playing();
+  prv_set_track_end_in(60 * 1000);
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+
+  // Within the grace period after the end, it stays up for the next track's metadata.
+  fake_rtc_increment_time(60 + 20);
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+
+  // No pause, no new track: the wake timer armed for the end of the grace period hides it.
+  fake_rtc_increment_time(11);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__music_stale_playing_replay_stays_hidden(void) {
+  // A reconnect replays "playing" with a position already well past the end of the track.
+  s_test.has_now_playing = true;
+  s_test.play_state = MusicPlayStatePlaying;
+  prv_set_track_end_in(-2 * 60 * 60 * 1000);
+  prv_change_track("Chapter 12", "Narrator");
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__music_unknown_track_end_does_not_hide(void) {
+  // A stream with no track length gives no end to run past.
+  prv_start_playing();
+  fake_rtc_increment_time(6 * 60 * 60);
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
 }
 

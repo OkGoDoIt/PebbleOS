@@ -28,6 +28,7 @@
 #include "shell/prefs.h"
 #include <pbl/logging/logging.h>
 #include "system/passert.h"
+#include "pbl/util/hash.h"
 #include "pbl/util/math.h"
 #include <pbl/util/units.h>
 
@@ -37,6 +38,10 @@ PBL_LOG_MODULE_DEFINE(service_peek_widgets, CONFIG_SERVICE_PEEK_WIDGETS_LOG_LEVE
 
 //! How long the music widget stays up after a track change in Start of Track mode.
 #define PEEK_WIDGET_TRACK_START_SHOW_S (10)
+
+//! How far past the end of the track a still-"playing" position may run before the playing
+//! report is treated as stale. Covers the gap before the next track's metadata arrives.
+#define PEEK_WIDGET_TRACK_END_GRACE_MS (30 * PBL_MSEC_PER_SEC)
 
 #define PEEK_WIDGET_MAX_APP_WIDGETS (8)
 
@@ -75,10 +80,13 @@ typedef struct PeekWidgetsState {
 
   // Music.
   bool music_dismissed;
-  uint8_t music_dismissed_generation;
   bool music_generation_seen;
   uint8_t music_generation;
+  //! Identity of the current track, 0 until one is known. Unlike the generation it survives a
+  //! reconnect, which clears the now playing metadata and replays the same track.
+  uint32_t music_track_id;
   time_t track_changed_at;
+  bool music_past_end_logged;
 
   // Notification.
   Uuid notif_id;
@@ -131,6 +139,18 @@ static bool prv_music_is_active(void) {
                        (play_state == MusicPlayStateForwarding) ||
                        (play_state == MusicPlayStateRewinding);
   if (!playing) {
+    return false;
+  }
+  // The phone sends no updates while a track plays, so a lost or never-sent pause would leave a
+  // stale "playing" behind. A position that has run past the end of the track gives that away.
+  int64_t ms_until_track_end;
+  if (music_get_ms_until_track_end(&ms_until_track_end) &&
+      (ms_until_track_end < -PEEK_WIDGET_TRACK_END_GRACE_MS)) {
+    if (!s_state.music_past_end_logged) {
+      s_state.music_past_end_logged = true;
+      PBL_LOG_INFO("Music reported playing %" PRId32 " s past the track end; hiding",
+                   (int32_t)(-ms_until_track_end / PBL_MSEC_PER_SEC));
+    }
     return false;
   }
   if (mode == QuickViewMusicMode_TrackStart) {
@@ -197,6 +217,22 @@ static void prv_show_music(bool animated) {
   timeline_item_destroy(item);
 }
 
+//! @return An identity for the now playing track, or 0 while its title is unknown (AMS sends
+//! the title last, so a half-replayed track is not mistaken for a new one).
+static uint32_t prv_music_track_id(void) {
+  struct {
+    char title[MUSIC_BUFFER_LENGTH];
+    char artist[MUSIC_BUFFER_LENGTH];
+    char album[MUSIC_BUFFER_LENGTH];
+  } now_playing = {};
+  music_get_now_playing(now_playing.title, now_playing.artist, now_playing.album);
+  if (now_playing.title[0] == '\0') {
+    return 0;
+  }
+  const uint32_t track_id = hash((const uint8_t *)&now_playing, sizeof(now_playing));
+  return track_id ?: 1;
+}
+
 void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
   switch (event->type) {
     case PebbleMediaEventTypeNowPlayingChanged: {
@@ -204,15 +240,20 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
       if (!s_state.music_generation_seen || (generation != s_state.music_generation)) {
         s_state.music_generation_seen = true;
         s_state.music_generation = generation;
-        s_state.track_changed_at = rtc_get_time();
-        if (s_state.music_dismissed && (generation != s_state.music_dismissed_generation)) {
-          s_state.music_dismissed = false;
-        }
         s_state.content_dirty = true;
+      }
+      const uint32_t track_id = prv_music_track_id();
+      if (track_id && (track_id != s_state.music_track_id)) {
+        s_state.music_track_id = track_id;
+        s_state.track_changed_at = rtc_get_time();
+        s_state.music_dismissed = false;
+        s_state.music_past_end_logged = false;
       }
       break;
     }
     case PebbleMediaEventTypePlaybackStateChanged:
+      s_state.music_past_end_logged = false;
+      break;
     case PebbleMediaEventTypeServerConnected:
     case PebbleMediaEventTypeServerDisconnected:
       break;
@@ -603,11 +644,20 @@ static void prv_update_timer(void) {
   if (s_state.notif_active && s_state.notif_expires_at) {
     deadline = s_state.notif_expires_at;
   }
-  if ((s_state.shown == PeekWidgetSource_Music) &&
-      (quick_view_prefs_get_music_mode() == QuickViewMusicMode_TrackStart)) {
-    const time_t track_deadline = s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S;
-    if (!deadline || (track_deadline < deadline)) {
-      deadline = track_deadline;
+  if (s_state.shown == PeekWidgetSource_Music) {
+    if (quick_view_prefs_get_music_mode() == QuickViewMusicMode_TrackStart) {
+      const time_t track_deadline = s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S;
+      if (!deadline || (track_deadline < deadline)) {
+        deadline = track_deadline;
+      }
+    }
+    int64_t ms_until_track_end;
+    if (music_get_ms_until_track_end(&ms_until_track_end)) {
+      const time_t track_end_deadline =
+          now + ((ms_until_track_end + PEEK_WIDGET_TRACK_END_GRACE_MS) / PBL_MSEC_PER_SEC) + 1;
+      if (!deadline || (track_end_deadline < deadline)) {
+        deadline = track_end_deadline;
+      }
     }
   }
   if (deadline) {
@@ -682,7 +732,6 @@ bool peek_widgets_handle_dismiss(void) {
       break;
     case PeekWidgetSource_Music:
       s_state.music_dismissed = true;
-      s_state.music_dismissed_generation = s_state.music_generation;
       break;
     case PeekWidgetSource_App: {
       pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
