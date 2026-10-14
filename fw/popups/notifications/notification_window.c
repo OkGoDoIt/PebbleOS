@@ -31,6 +31,9 @@
 #include <pbl/services/notifications/notification_storage.h>
 #include <pbl/services/notifications/notification_types.h>
 #include <pbl/services/notifications/notifications.h>
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+#include <pbl/services/peek_widgets.h>
+#endif
 #include <pbl/services/regular_timer.h>
 #include <pbl/services/timeline/actions_endpoint.h>
 #include <pbl/services/timeline/attribute.h>
@@ -88,6 +91,7 @@ static void prv_handle_notification_removed_common(Uuid *, NotificationType);
 static bool prv_should_pop_due_to_inactivity(void);
 
 static void prv_do_notification_vibe(NotificationWindowData *data, Uuid *id);
+static void prv_vibe_for_item(const TimelineItem *item);
 
 /////////////////////
 // Helpers
@@ -1545,6 +1549,12 @@ static void prv_do_notification_vibe(NotificationWindowData *data, Uuid *id) {
   if (!uuid_equal(&item->header.id, id)) {
     prv_log_notification_vibe("current item differs from requested", &item->header.id);
   }
+  prv_vibe_for_item(item);
+}
+
+//! Plays the notification's own vibration pattern, or the user's notification vibe score.
+static void prv_vibe_for_item(const TimelineItem *item) {
+  const Uuid *id = &item->header.id;
   bool did_vibrate = false;
   Uint32List *vibeDurations =
       attribute_get_uint32_list(&item->attr_list, AttributeIdVibrationPattern);
@@ -1578,6 +1588,32 @@ static void prv_do_notification_vibe(NotificationWindowData *data, Uuid *id) {
   }
 }
 
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+//! Alerts for a notification shown by the Quick View notification widget instead of this
+//! window: the vibration and backlight the popup would have given, with no popup. The widget
+//! arms itself from the same notification event.
+static void prv_alert_as_quick_view(Uuid *id, NotificationType type) {
+  if (s_in_use && !s_notification_window_data.is_modal) {
+    // The Notifications app is open, and it gets no alert in full-screen mode either
+    prv_log_notification_vibe("skipped: history window", id);
+    return;
+  }
+  const AlertType alert_type = prv_alert_type_for_notification_type(type);
+  if (alerts_should_vibrate_for_type(alert_type)) {
+    TimelineItem item;
+    if (notification_storage_get(id, &item)) {
+      prv_vibe_for_item(&item);
+      timeline_item_free_allocated_buffer(&item);
+    } else {
+      prv_log_notification_vibe("skipped: not in storage", id);
+    }
+  }
+  if (alerts_should_enable_backlight_for_type(alert_type)) {
+    light_enable_interaction();
+  }
+}
+#endif
+
 static void prv_handle_notification_added_common(Uuid *id, NotificationType type) {
   NotificationWindowData *data = &s_notification_window_data;
   prv_log_notification_vibe("received", id);
@@ -1593,6 +1629,13 @@ static void prv_handle_notification_added_common(Uuid *id, NotificationType type
     prv_log_notification_vibe("skipped: hidden by DND", id);
     return;
   }
+
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  if ((type == NotificationMobile) && peek_widgets_notifications_replace_popup()) {
+    prv_alert_as_quick_view(id, type);
+    return;
+  }
+#endif
 
   // will fail and return early if already init'ed.
   prv_init_notification_window(true /*is_modal*/, true /*allow_dismiss_all*/);
