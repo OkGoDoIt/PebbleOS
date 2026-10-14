@@ -79,8 +79,9 @@ typedef const SettingsModuleMetadata *(*SettingsModuleGetMetadata)(void);
 
 void settings_menu_mark_dirty(SettingsMenuItem category);
 void settings_menu_reload_data(SettingsMenuItem category);
-//! Reloads a category whose rows come and go, keeping the selection on a row that exists.
-void settings_menu_reload_rows(SettingsMenuItem category);
+//! Reloads a category whose rows come and go. Selects select_row if it is not negative,
+//! otherwise keeps the current selection; either way clamped to a row that exists.
+void settings_menu_reload_rows(SettingsMenuItem category, int16_t select_row);
 int16_t settings_menu_get_selected_row(SettingsMenuItem category);
 
 const SettingsModuleMetadata *settings_menu_get_submodule_info(SettingsMenuItem category);

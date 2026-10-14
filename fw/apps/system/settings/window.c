@@ -314,14 +314,17 @@ void settings_menu_reload_data(SettingsMenuItem category) {
   }
 }
 
-void settings_menu_reload_rows(SettingsMenuItem category) {
+void settings_menu_reload_rows(SettingsMenuItem category, int16_t select_row) {
   SettingsData *data = app_state_get_user_data();
   if (data->current_category == category) {
     menu_layer_reload_data(&data->menu_layer);
+    MenuIndex index = menu_layer_get_selected_index(&data->menu_layer);
+    if (select_row >= 0) {
+      index.row = select_row;
+    }
     // Clamps the selection to the new row count
-    menu_layer_set_selected_index(&data->menu_layer,
-                                  menu_layer_get_selected_index(&data->menu_layer),
-                                  MenuRowAlignNone, false /* animated */);
+    menu_layer_set_selected_index(&data->menu_layer, index, MenuRowAlignNone,
+                                  false /* animated */);
   }
 }
 

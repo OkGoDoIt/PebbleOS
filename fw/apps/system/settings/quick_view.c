@@ -278,7 +278,7 @@ static uint16_t prv_num_rows_cb(SettingsCallbacks *context) {
 
 static void prv_appear_cb(SettingsCallbacks *context) {
   // Settings on other pages decide which rows show
-  settings_menu_reload_rows(SettingsMenuItemQuickView);
+  settings_menu_reload_rows(SettingsMenuItemQuickView, -1 /* keep the selection */);
 }
 
 static Window *prv_init(void) {

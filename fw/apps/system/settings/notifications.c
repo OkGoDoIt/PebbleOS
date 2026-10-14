@@ -25,13 +25,8 @@
 // Offset between vibe intensity menu item index and vibe intensity enum values
 #define INTENSITY_ROW_OFFSET 1
 
-typedef struct {
-  SettingsCallbacks callbacks;
-  EventServiceInfo battery_connection_event_info;
-} SettingsNotificationsData;
-
-// Rows that are hidden when other settings make them irrelevant sit below every row that
-// decides whether they show, so changing a setting never moves the selection.
+// The settings this page can show. Which ones show, and in what order, depends on other
+// settings: see prv_get_items().
 enum NotificationsItem {
   NotificationsItemFilter,
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
@@ -53,6 +48,13 @@ enum NotificationsItem {
   NotificationsItemStatusBarStyle,
   NotificationsItem_Count,
 };
+
+typedef struct {
+  SettingsCallbacks callbacks;
+  EventServiceInfo battery_connection_event_info;
+  //! The setting last selected, so the selection follows it when rows come and go.
+  enum NotificationsItem selected_item;
+} SettingsNotificationsData;
 
 // Filter Alerts
 //////////////////////////
@@ -246,13 +248,15 @@ static void prv_window_timeout_menu_select(OptionMenu *option_menu, int selectio
   app_window_stack_remove(&option_menu->window, true /* animated */);
 }
 
+static const char *prv_window_timeout_title(void);
+
 static void prv_window_timeout_menu_push(SettingsNotificationsData *data) {
   const int index = prv_window_timeout_get_selection_index();
   const OptionMenuCallbacks callbacks = {
     .select = prv_window_timeout_menu_select,
   };
   /// Status bar title for the Notification Window Timeout settings screen
-  const char *title = i18n_noop("Popup Timeout");
+  const char *title = prv_window_timeout_title();
   settings_option_menu_push(title, OptionMenuContentType_SingleLine, index, &callbacks,
                             ARRAY_LENGTH(s_window_timeouts_labels), true /* icons_enabled */,
                             s_window_timeouts_labels, data);
@@ -310,13 +314,14 @@ static void prv_vibe_delay_menu_select(OptionMenu *option_menu, int selection, v
   app_window_stack_remove(&option_menu->window, true /* animated */);
 }
 
+static const char *prv_vibe_delay_title(void);
+
 static void prv_vibe_delay_menu_push(SettingsNotificationsData *data) {
   const int index = prv_vibe_delay_get_selection_index();
   const OptionMenuCallbacks callbacks = {
     .select = prv_vibe_delay_menu_select,
   };
-  /// Status bar title for the Notification Vibe Timing settings screen
-  const char *title = i18n_noop("Vibe Timing");
+  const char *title = prv_vibe_delay_title();
   settings_option_menu_push(title, OptionMenuContentType_SingleLine, index, &callbacks,
                             ARRAY_LENGTH(s_vibe_delay_labels), true /* icons_enabled */,
                             s_vibe_delay_labels, data);
@@ -394,37 +399,102 @@ static void prv_notification_grouping_range_menu_push(SettingsNotificationsData 
 // Menu Layer Callbacks
 ////////////////////////
 
-static bool prv_item_is_visible(enum NotificationsItem item) {
-  switch (item) {
+//! Whether phone notifications can show as the full-screen popup. When they cannot, the
+//! popup settings only affect calendar reminders, and are named and placed as such.
+static bool prv_notifications_can_pop_up(void) {
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
-    case NotificationsItemShowAs:
-      return settings_quick_view_notif_show_as_visible();
-    case NotificationsItemPeekWhenMuted:
-      return settings_quick_view_notif_muted_visible();
-    case NotificationsItemPeekDuration:
-      return settings_quick_view_notif_seconds_visible();
-    case NotificationsItemPeekIfMissed:
-      return settings_quick_view_notif_missed_visible();
+  return settings_quick_view_notif_show_as_visible() &&
+         (settings_quick_view_notif_effective_style() != QuickViewNotifStyle_Peek);
+#else
+  return true;
 #endif
-    default:
-      return true;
-  }
 }
 
-static uint16_t prv_get_items(enum NotificationsItem items_out[NotificationsItem_Count]) {
-  uint16_t num_items = 0;
-  for (int item = 0; item < NotificationsItem_Count; item++) {
-    if (prv_item_is_visible(item)) {
-      items_out[num_items++] = item;
-    }
+static const char *prv_window_timeout_title(void) {
+  if (!prv_notifications_can_pop_up()) {
+    /// How long a calendar reminder popup stays up, when notifications never pop up
+    return i18n_noop("Reminder Timeout");
   }
-  return num_items;
+  /// How long the full-screen notification popup stays up
+  return i18n_noop("Popup Timeout");
+}
+
+static const char *prv_vibe_delay_title(void) {
+  if (!prv_notifications_can_pop_up()) {
+    /// When a calendar reminder popup vibrates, when notifications never pop up
+    return i18n_noop("Reminder Vibe Timing");
+  }
+  /// When the notification popup vibrates: as it starts appearing, or once it has
+  return i18n_noop("Vibe Timing");
+}
+
+//! The rows on screen, in order: what alerts; how it appears, with that mode's own settings;
+//! what muted notifications do; how notifications look; then, when notifications cannot pop
+//! up, the popup settings that are left over for reminders.
+static uint16_t prv_get_items(enum NotificationsItem items_out[NotificationsItem_Count]) {
+  uint16_t n = 0;
+  items_out[n++] = NotificationsItemFilter;
+  const bool pop_ups = prv_notifications_can_pop_up();
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  if (settings_quick_view_notif_show_as_visible()) {
+    items_out[n++] = NotificationsItemShowAs;
+  }
+#endif
+  if (pop_ups) {
+    items_out[n++] = NotificationsItemWindowTimeout;
+    items_out[n++] = NotificationsItemVibeDelay;
+  }
+#ifdef CONFIG_SERVICE_PEEK_WIDGETS
+  if (settings_quick_view_notif_missed_visible()) {
+    items_out[n++] = NotificationsItemPeekIfMissed;
+  }
+  // The duration goes with the mode when the mode peeks, otherwise after the muted toggle
+  const QuickViewNotifStyle style = settings_quick_view_notif_effective_style();
+  const bool mode_peeks =
+      settings_quick_view_notif_show_as_visible() &&
+      ((style == QuickViewNotifStyle_Peek) ||
+       (settings_quick_view_notif_missed_visible() &&
+        (style == QuickViewNotifStyle_FullScreenPeekIfMissed)));
+  const bool duration = settings_quick_view_notif_seconds_visible();
+  if (duration && mode_peeks) {
+    items_out[n++] = NotificationsItemPeekDuration;
+  }
+  if (settings_quick_view_notif_muted_visible()) {
+    items_out[n++] = NotificationsItemPeekWhenMuted;
+  }
+  if (duration && !mode_peeks) {
+    items_out[n++] = NotificationsItemPeekDuration;
+  }
+#endif
+  items_out[n++] = NotificationsItemBacklight;
+  items_out[n++] = NotificationsItemTextSize;
+#if PBL_BW
+  items_out[n++] = NotificationsItemDesignStyle;
+#endif
+  items_out[n++] = NotificationsItemGroupBySender;
+  items_out[n++] = NotificationsItemStatusBarStyle;
+  if (!pop_ups) {
+    items_out[n++] = NotificationsItemWindowTimeout;
+    items_out[n++] = NotificationsItemVibeDelay;
+  }
+  return n;
 }
 
 static enum NotificationsItem prv_item_for_row(uint16_t row) {
   enum NotificationsItem items[NotificationsItem_Count];
   const uint16_t num_items = prv_get_items(items);
   return (row < num_items) ? items[row] : NotificationsItem_Count;
+}
+
+static int16_t prv_row_for_item(enum NotificationsItem item) {
+  enum NotificationsItem items[NotificationsItem_Count];
+  const uint16_t num_items = prv_get_items(items);
+  for (uint16_t row = 0; row < num_items; row++) {
+    if (items[row] == item) {
+      return row;
+    }
+  }
+  return -1; // Hidden now: keep the selection where it is
 }
 
 static uint16_t prv_num_rows_cb(SettingsCallbacks *context) {
@@ -473,9 +543,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
       subtitle = s_text_size_names[prv_text_size_get_selection_index()];
       break;
     case NotificationsItemWindowTimeout: {
-      /// String within Settings->Notifications that describes how long the full-screen
-      /// notification popup stays up
-      title = i18n_noop("Popup Timeout");
+      title = prv_window_timeout_title();
       subtitle = s_window_timeouts_labels[prv_window_timeout_get_selection_index()];
       break;
     }
@@ -488,8 +556,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
     }
 #endif /* PBL_BW */
     case NotificationsItemVibeDelay: {
-      /// String within Settings->Notifications that describes when vibration happens
-      title = i18n_noop("Vibe Timing");
+      title = prv_vibe_delay_title();
       subtitle = s_vibe_delay_labels[prv_vibe_delay_get_selection_index()];
       break;
     }
@@ -526,10 +593,16 @@ static void prv_deinit_cb(SettingsCallbacks *context) {
   app_free(data);
 }
 
+//! Reloads the rows and selects the setting that was selected, wherever it is now.
+static void prv_reload_rows(SettingsNotificationsData *data) {
+  settings_menu_reload_rows(SettingsMenuItemNotifications, prv_row_for_item(data->selected_item));
+}
+
 static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
   SettingsNotificationsData *data = (SettingsNotificationsData *)context;
 
-  switch (prv_item_for_row(row)) {
+  data->selected_item = prv_item_for_row(row);
+  switch (data->selected_item) {
     case NotificationsItemFilter:
       prv_filter_menu_push(data);
       break;
@@ -575,7 +648,7 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
     default:
       WTF;
   }
-  settings_menu_reload_rows(SettingsMenuItemNotifications);
+  prv_reload_rows(data);
 }
 
 static void prv_settings_notifications_event_handler(PebbleEvent *event, void *context) {
@@ -600,8 +673,8 @@ static void prv_expand_cb(SettingsCallbacks *context) {
 }
 
 static void prv_appear_cb(SettingsCallbacks *context) {
-  // Option menus and the Quiet Time page change which rows show
-  settings_menu_reload_rows(SettingsMenuItemNotifications);
+  // Option menus and the Quiet Time page change which rows show, and where
+  prv_reload_rows((SettingsNotificationsData *)context);
 }
 
 static void prv_hide_cb(SettingsCallbacks *context) {
