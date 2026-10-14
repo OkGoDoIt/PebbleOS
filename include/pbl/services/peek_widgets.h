@@ -76,6 +76,13 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event);
 //! notification is removed or acted upon.
 void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event);
 
+//! Whether phone notifications alert as a vibration plus the notification widget instead of
+//! the full-screen popup. True when the Show As pref asks for it and the widget can show; with
+//! the notification widget disabled the popup stays, so a notification is never just a buzz.
+//! The alerts filter, Quiet Time and per-app muting still decide whether a notification alerts
+//! at all.
+bool peek_widgets_notifications_replace_popup(void);
+
 //! Starts the armed notification widget's display window when focus returns to the watchface.
 void peek_widgets_handle_app_focus_event(PebbleAppFocusEvent *event);
 

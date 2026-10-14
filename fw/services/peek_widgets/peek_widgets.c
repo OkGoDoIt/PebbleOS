@@ -401,6 +401,12 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
   prv_refresh(true /* animated */);
 }
 
+bool peek_widgets_notifications_replace_popup(void) {
+  return s_state.initialized &&
+         (quick_view_prefs_get_notif_style() == QuickViewNotifStyle_Peek) &&
+         (quick_view_prefs_get_notif_seconds() != 0);
+}
+
 void peek_widgets_handle_app_focus_event(PebbleAppFocusEvent *event) {
   if (event->in_focus) {
     prv_maybe_activate_armed_notification();

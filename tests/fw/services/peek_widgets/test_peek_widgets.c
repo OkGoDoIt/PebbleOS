@@ -64,6 +64,7 @@ typedef struct PeekWidgetsTestState {
   QuickViewMusicMode music_mode;
   uint16_t notif_seconds;
   bool notif_muted;
+  QuickViewNotifStyle notif_style;
   bool apps_enabled;
   QuickViewButtonMode button_mode;
   // Music service
@@ -184,6 +185,10 @@ uint16_t quick_view_prefs_get_notif_seconds(void) {
 
 bool quick_view_prefs_get_notif_muted_enabled(void) {
   return s_test.notif_muted;
+}
+
+QuickViewNotifStyle quick_view_prefs_get_notif_style(void) {
+  return s_test.notif_style;
 }
 
 bool quick_view_prefs_get_apps_enabled(void) {
@@ -779,6 +784,59 @@ void test_peek_widgets__notification_after_dismissing_the_previous_one(void) {
   s_test.modal_focused = false;
   PebbleAppFocusEvent focus_event = { .in_focus = true };
   peek_widgets_handle_app_focus_event(&focus_event);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+}
+
+void test_peek_widgets__notification_style_full_screen_keeps_the_popup(void) {
+  s_test.notif_style = QuickViewNotifStyle_FullScreen;
+  cl_assert(!peek_widgets_notifications_replace_popup());
+}
+
+void test_peek_widgets__notification_style_peek_replaces_the_popup(void) {
+  s_test.notif_style = QuickViewNotifStyle_Peek;
+  cl_assert(peek_widgets_notifications_replace_popup());
+  s_test.notif_seconds = QUICK_VIEW_NOTIF_SECONDS_PERSISTENT;
+  cl_assert(peek_widgets_notifications_replace_popup());
+}
+
+void test_peek_widgets__notification_style_peek_without_widget_keeps_the_popup(void) {
+  // With the notification widget disabled there would be nothing to see: keep the popup.
+  s_test.notif_style = QuickViewNotifStyle_Peek;
+  s_test.notif_seconds = 0;
+  cl_assert(!peek_widgets_notifications_replace_popup());
+}
+
+void test_peek_widgets__notification_style_peek_shows_at_once(void) {
+  // Peek style pushes no popup, so the watchface keeps focus and the widget starts right away.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_Peek;
+  s_test.notif_exists = true;
+
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+
+  fake_rtc_increment_time(16);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_style_peek_still_follows_the_alerts_filter(void) {
+  // Phone Calls Only (set on the watch or from the phone app) still silences notifications;
+  // the widget only shows for them with Show When Muted.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_Peek;
+  s_test.alerts_allow = false;
+  s_test.notif_exists = true;
+
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  s_test.notif_muted = true;
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
 }
 
