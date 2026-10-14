@@ -163,6 +163,19 @@ void test_ams_util__float_string_parse_overflow_negative(void) {
   assert_float_parse("2147483648", -1, true, -2147483648);
 }
 
+void test_ams_util__float_string_parse_long_fraction(void) {
+  // Ten or more fractional digits used to overflow the decimal divisor and corrupt the result
+  assert_float_parse("183.4567000000", 1000, true, 183457);
+  assert_float_parse("36000.123000000000", 1000, true, 36000123);
+  assert_float_parse("9999.500000000000", 1000, true, 9999500);
+  assert_float_parse("183.45670000000001", 1000, true, 183457);
+}
+
+void test_ams_util__float_string_parse_overflow_many_digits(void) {
+  // Overflows the 64-bit accumulator: fails instead of wrapping around
+  assert_float_parse("99999999999999999999", 1000, false, 0);
+}
+
 // ams_util_csv_parse() tests
 ///////////////////////////////////////////////////////////
 

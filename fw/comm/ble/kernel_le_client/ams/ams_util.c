@@ -19,6 +19,7 @@ bool ams_util_float_string_parse(const char *number_str, uint32_t number_str_len
   bool is_negative = false;
   bool number_started = false;
   uint32_t decimal_divisor = 0;
+  const uint32_t max_decimal_divisor = 1000000000; // 9 fractional digits
   int64_t result = 0;
   const char *const number_str_end = number_str + number_str_length;
   do {
@@ -30,6 +31,12 @@ bool ams_util_float_string_parse(const char *number_str, uint32_t number_str_len
 
       case '0' ... '9': {
         number_started = true;
+        if (decimal_divisor >= max_decimal_divisor) {
+          break; // Beyond any precision we keep; the divisor would overflow
+        }
+        if (ABS(result) > ((INT64_MAX - ABS(9 * (int64_t)multiplier)) / base)) {
+          return false; // overflow
+        }
         result *= base;
         result += (c - '0') * multiplier;
         if (decimal_divisor) {
