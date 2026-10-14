@@ -398,6 +398,9 @@ static const Uuid s_app_uuid = {
 
 static void prv_send_media_event(PebbleMediaEventType type) {
   PebbleMediaEvent event = { .type = type };
+  if (type == PebbleMediaEventTypePlaybackStateChanged) {
+    event.playback_state = s_test.play_state;
+  }
   peek_widgets_handle_media_event(&event);
 }
 
@@ -486,12 +489,16 @@ static void prv_reconnect_and_replay_track(void) {
   strcpy(s_test.music_title, title);
   s_test.music_generation++;
   prv_send_media_event(PebbleMediaEventTypeNowPlayingChanged);
+  // Anything after this is live, not part of the replay
+  fake_rtc_increment_time(20);
 }
 
+//! Playback starting live, as when the user presses play.
 static void prv_start_playing(void) {
   s_test.has_now_playing = true;
-  s_test.play_state = MusicPlayStatePlaying;
   prv_change_track("Track A", "Artist A");
+  s_test.play_state = MusicPlayStatePlaying;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
 }
 
 // Setup
@@ -647,6 +654,64 @@ void test_peek_widgets__music_unknown_track_end_does_not_hide(void) {
   // A stream with no track length gives no end to run past.
   prv_start_playing();
   fake_rtc_increment_time(6 * 60 * 60);
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_replayed_playing_on_connect_is_not_trusted(void) {
+  // What iOS did with a paused Audible book: on (re)connect it replayed "playing" with a stale
+  // position, and never sent a pause because nothing changed.
+  prv_send_media_event(PebbleMediaEventTypeServerConnected);
+  s_test.play_state = MusicPlayStatePlaying;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  s_test.has_now_playing = true;
+  strcpy(s_test.music_title, "Chapter 42");
+  strcpy(s_test.music_artist, "The Eye of the Bedlam Bride");
+  s_test.music_generation++;
+  prv_send_media_event(PebbleMediaEventTypeNowPlayingChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // Hours later, still nothing has changed: still hidden.
+  fake_rtc_increment_time(3 * 60 * 60);
+  prv_send_media_event(PebbleMediaEventTypeTrackPosChanged);
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__music_live_play_after_replay_shows(void) {
+  prv_send_media_event(PebbleMediaEventTypeServerConnected);
+  s_test.play_state = MusicPlayStatePaused;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  s_test.has_now_playing = true;
+  prv_change_track("Chapter 42", "Narrator");
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // The user presses play.
+  fake_rtc_increment_time(60);
+  s_test.play_state = MusicPlayStatePlaying;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_playing_across_reconnect_waits_for_a_change(void) {
+  // Genuinely playing when the link drops: after the reconnect the replay is not trusted, so the
+  // peek waits for the next sign of life, here the next track.
+  prv_start_playing();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+
+  prv_reconnect_and_replay_track();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  prv_change_track("Track B", "Artist B");
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
+}
+
+void test_peek_widgets__music_pause_then_play_shows_again(void) {
+  prv_start_playing();
+  s_test.play_state = MusicPlayStatePaused;
+  prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+  s_test.play_state = MusicPlayStatePlaying;
   prv_send_media_event(PebbleMediaEventTypePlaybackStateChanged);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Music);
 }

@@ -43,6 +43,10 @@ PBL_LOG_MODULE_DEFINE(service_peek_widgets, CONFIG_SERVICE_PEEK_WIDGETS_LOG_LEVE
 //! report is treated as stale. Covers the gap before the next track's metadata arrives.
 #define PEEK_WIDGET_TRACK_END_GRACE_MS (30 * PBL_MSEC_PER_SEC)
 
+//! How long after a music server connects its updates count as the replay of its stored state.
+//! AMS sends that while registering, within a second or two of connecting.
+#define PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S (15)
+
 #define PEEK_WIDGET_MAX_APP_WIDGETS (8)
 
 //! Item id for the music widget's synthetic content. App widgets use their owner UUID and the
@@ -87,6 +91,14 @@ typedef struct PeekWidgetsState {
   uint32_t music_track_id;
   time_t track_changed_at;
   bool music_past_end_logged;
+  //! When the music server last connected, to tell its replayed state from live changes.
+  time_t music_connected_at;
+  //! Whether the last playback state update said playing.
+  bool music_last_playing;
+  //! Whether playback has been seen to start while connected: a change to playing, or a track
+  //! change while playing. The state a phone replays on connect is not enough: iOS replays a
+  //! stale "playing" for a paused player (Audible) on every reconnect, hours after it stopped.
+  bool music_playing_seen_live;
 
   // Notification.
   Uuid notif_id;
@@ -123,6 +135,15 @@ static void prv_timer_cb(void *data) {
 // Music source
 ////////////////////////////////////////////////////////////////
 
+static bool prv_play_state_is_playing(MusicPlayState play_state) {
+  return (play_state == MusicPlayStatePlaying) || (play_state == MusicPlayStateForwarding) ||
+         (play_state == MusicPlayStateRewinding);
+}
+
+static bool prv_music_in_replay_window(void) {
+  return (rtc_get_time() < (s_state.music_connected_at + PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S));
+}
+
 static bool prv_music_is_active(void) {
   const QuickViewMusicMode mode = quick_view_prefs_get_music_mode();
   if (mode == QuickViewMusicMode_Disabled) {
@@ -134,11 +155,8 @@ static bool prv_music_is_active(void) {
   if (!music_has_now_playing()) {
     return false;
   }
-  const MusicPlayState play_state = music_get_playback_state();
-  const bool playing = (play_state == MusicPlayStatePlaying) ||
-                       (play_state == MusicPlayStateForwarding) ||
-                       (play_state == MusicPlayStateRewinding);
-  if (!playing) {
+  if (!prv_play_state_is_playing(music_get_playback_state()) ||
+      !s_state.music_playing_seen_live) {
     return false;
   }
   // The phone sends no updates while a track plays, so a lost or never-sent pause would leave a
@@ -248,14 +266,30 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
         s_state.track_changed_at = rtc_get_time();
         s_state.music_dismissed = false;
         s_state.music_past_end_logged = false;
+        // Tracks only move on while something plays
+        if (s_state.music_last_playing && !prv_music_in_replay_window()) {
+          s_state.music_playing_seen_live = true;
+        }
       }
       break;
     }
-    case PebbleMediaEventTypePlaybackStateChanged:
+    case PebbleMediaEventTypePlaybackStateChanged: {
       s_state.music_past_end_logged = false;
+      const bool playing = prv_play_state_is_playing(event->playback_state);
+      if (!playing) {
+        s_state.music_playing_seen_live = false;
+      } else if (!s_state.music_last_playing && !prv_music_in_replay_window()) {
+        s_state.music_playing_seen_live = true;
+      }
+      s_state.music_last_playing = playing;
       break;
+    }
     case PebbleMediaEventTypeServerConnected:
+      s_state.music_connected_at = rtc_get_time();
+      s_state.music_playing_seen_live = false;
+      break;
     case PebbleMediaEventTypeServerDisconnected:
+      s_state.music_playing_seen_live = false;
       break;
     default:
       // Volume/track position/album art changes don't affect the widget's layout.
