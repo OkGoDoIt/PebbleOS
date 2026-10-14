@@ -209,6 +209,8 @@ typedef enum {
   PebbleMediaEventTypeServerDisconnected,
   PebbleMediaEventTypeTrackPosChanged,
   PebbleMediaEventTypeAlbumArtUpdated,
+  //! The phone answered whether its audio is actually playing (music_get_phone_audio_report).
+  PebbleMediaEventTypePhoneAudioReported,
 } PebbleMediaEventType;
 
 typedef struct PBL_PACKED { // 2 bytes

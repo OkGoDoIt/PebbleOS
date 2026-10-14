@@ -139,6 +139,27 @@ void music_get_pos(uint32_t *track_pos_ms, uint32_t *track_length_ms);
 bool music_get_ms_until_track_end(int64_t *ms_out);
 
 /**
+ * @brief Record what the phone's own audio system says about playback.
+ *
+ * The media service (AMS on iOS) reports what a player publishes, and a player can publish
+ * "playing" while paused. A companion app on the phone can ask the phone's audio system directly
+ * whether another app is playing audio; this records its answer and puts a
+ * PebbleMediaEventTypePhoneAudioReported event. Safe from any task.
+ *
+ * @param playing Whether another app on the phone is playing audio.
+ */
+void music_set_phone_audio_report(bool playing);
+
+/**
+ * @brief The phone's last answer about whether its audio is actually playing.
+ *
+ * @param[out] playing_out The answer, or NULL.
+ * @param[out] age_ms_out Milliseconds since it arrived, or NULL.
+ * @return False if the phone has not answered since boot.
+ */
+bool music_get_phone_audio_report(bool *playing_out, uint32_t *age_ms_out);
+
+/**
  * @brief Get the playback rate.
  *
  * @return Rate in percent: 100 is normal speed, 0 paused, negative values play backwards.

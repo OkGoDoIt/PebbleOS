@@ -161,6 +161,7 @@ static void prv_music_event_handler(PebbleEvent *event, void *context) {
     case PebbleMediaEventTypeVolumeChanged:
     case PebbleMediaEventTypeTrackPosChanged:
     case PebbleMediaEventTypeAlbumArtUpdated:
+    case PebbleMediaEventTypePhoneAudioReported:
       return;
   }
   WTF;

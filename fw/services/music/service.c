@@ -66,6 +66,11 @@ struct MusicServiceContext {
   //! @see music_skip_seeks_within_track
   bool skip_seeks_within_track;
 
+  //! @see music_set_phone_audio_report
+  bool phone_audio_reported;
+  bool phone_audio_playing;
+  RtcTicks phone_audio_reported_at;
+
   //! Album art for the current track, or NULL if none. Owned by the service; freed with
   //! kernel_free. Deliberately kept (up to ~34 KB of kernel heap on the largest displays) even
   //! while the Music app is closed, so reopening it shows the cover instantly; a track change,
@@ -438,6 +443,35 @@ bool music_get_ms_until_track_end(int64_t *ms_out) {
               time_elapsed_ms;
   }
   return true;
+}
+
+void music_set_phone_audio_report(bool playing) {
+  pbl_mutex_lock(&s_music_ctx.mutex, PBL_FOREVER);
+  s_music_ctx.phone_audio_reported = true;
+  s_music_ctx.phone_audio_playing = playing;
+  s_music_ctx.phone_audio_reported_at = rtc_get_ticks();
+  pbl_mutex_unlock(&s_music_ctx.mutex);
+
+  PebbleEvent event = {
+    .type = PEBBLE_MEDIA_EVENT,
+    .media = {
+      .type = PebbleMediaEventTypePhoneAudioReported,
+    },
+  };
+  event_put(&event);
+}
+
+bool music_get_phone_audio_report(bool *playing_out, uint32_t *age_ms_out) {
+  pbl_mutex_lock(&s_music_ctx.mutex, PBL_FOREVER);
+  const bool reported = s_music_ctx.phone_audio_reported;
+  if (playing_out) {
+    *playing_out = s_music_ctx.phone_audio_playing;
+  }
+  if (age_ms_out) {
+    *age_ms_out = pbl_ticks_to_ms(rtc_get_ticks() - s_music_ctx.phone_audio_reported_at);
+  }
+  pbl_mutex_unlock(&s_music_ctx.mutex);
+  return reported;
 }
 
 int32_t music_get_playback_rate_percent(void) {
