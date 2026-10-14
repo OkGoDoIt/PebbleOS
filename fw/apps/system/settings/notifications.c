@@ -4,6 +4,7 @@
 #include "menu.h"
 #include "notifications_private.h"
 #include "option_menu.h"
+#include "quick_view.h"
 #include "window.h"
 
 #include <pbl/services/i18n/i18n.h>
@@ -33,6 +34,8 @@ enum NotificationsItem {
   NotificationsItemFilter,
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
   NotificationsItemShowAs,
+  NotificationsItemPeekDuration,
+  NotificationsItemPeekWhenMuted,
 #endif
   NotificationsItemTextSize,
   NotificationsItemWindowTimeout,
@@ -113,9 +116,9 @@ static const char *s_show_as_labels[QuickViewNotifStyleCount] = {
 static const char *prv_show_as_subtitle(void) {
   const QuickViewNotifStyle style = quick_view_prefs_get_notif_style();
   if ((style == QuickViewNotifStyle_Peek) && (quick_view_prefs_get_notif_seconds() == 0)) {
-    /// Show As is set to the Quick View peek, but Quick View notifications are disabled, so
-    /// notifications still show full screen.
-    return i18n_noop("Full Screen (Quick View Off)");
+    /// Show As is set to the Quick View peek, but Peek Duration is Off, so notifications still
+    /// show full screen.
+    return i18n_noop("Full Screen (Peek Off)");
   }
   return s_show_as_labels[(style < QuickViewNotifStyleCount) ? style : 0];
 }
@@ -237,7 +240,7 @@ static void prv_window_timeout_menu_push(SettingsNotificationsData *data) {
     .select = prv_window_timeout_menu_select,
   };
   /// Status bar title for the Notification Window Timeout settings screen
-  const char *title = i18n_noop("Timeout");
+  const char *title = i18n_noop("Popup Timeout");
   settings_option_menu_push(title, OptionMenuContentType_SingleLine, index, &callbacks,
                             ARRAY_LENGTH(s_window_timeouts_labels), true /* icons_enabled */,
                             s_window_timeouts_labels, data);
@@ -399,6 +402,17 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
       title = i18n_noop("Show As");
       subtitle = prv_show_as_subtitle();
       break;
+    case NotificationsItemPeekDuration:
+      /// How long the Quick View notification peek stays on the watchface: the peek in place of
+      /// the popup, or the one after a full-screen popup closes.
+      title = i18n_noop("Peek Duration");
+      subtitle = settings_quick_view_notif_seconds_label();
+      break;
+    case NotificationsItemPeekWhenMuted:
+      /// Whether notifications silenced by Alerts or Quiet Time still show a silent peek.
+      title = i18n_noop("Peek When Muted");
+      subtitle = quick_view_prefs_get_notif_muted_enabled() ? i18n_noop("On") : i18n_noop("Off");
+      break;
 #endif
     case NotificationsItemTextSize:
       /// String within Settings->Notifications that describes the text font size
@@ -406,8 +420,9 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
       subtitle = s_text_size_names[prv_text_size_get_selection_index()];
       break;
     case NotificationsItemWindowTimeout: {
-      /// String within Settings->Notifications that describes the window timeout setting
-      title = i18n_noop("Timeout");
+      /// String within Settings->Notifications that describes how long the full-screen
+      /// notification popup stays up
+      title = i18n_noop("Popup Timeout");
       subtitle = s_window_timeouts_labels[prv_window_timeout_get_selection_index()];
       break;
     }
@@ -468,6 +483,12 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
     case NotificationsItemShowAs:
       prv_show_as_menu_push(data);
+      break;
+    case NotificationsItemPeekDuration:
+      settings_quick_view_notif_seconds_menu_push(i18n_noop("Peek Duration"), data);
+      break;
+    case NotificationsItemPeekWhenMuted:
+      quick_view_prefs_set_notif_muted_enabled(!quick_view_prefs_get_notif_muted_enabled());
       break;
 #endif
     case NotificationsItemTextSize:

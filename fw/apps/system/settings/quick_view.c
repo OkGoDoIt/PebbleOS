@@ -24,7 +24,6 @@ typedef struct SettingsQuickViewData {
 enum SettingsQuickViewItem {
   SettingsQuickViewMusic,
   SettingsQuickViewNotifications,
-  SettingsQuickViewNotifMuted,
   SettingsQuickViewAppWidgets,
   SettingsQuickViewButton,
   NumSettingsQuickViewItems
@@ -84,15 +83,18 @@ static void prv_notif_menu_select(OptionMenu *option_menu, int selection, void *
   app_window_stack_remove(&option_menu->window, true /* animated */);
 }
 
-static void prv_notif_menu_push(SettingsQuickViewData *data) {
+const char *settings_quick_view_notif_seconds_label(void) {
+  return s_notif_labels[prv_notif_seconds_to_index(quick_view_prefs_get_notif_seconds())];
+}
+
+void settings_quick_view_notif_seconds_menu_push(const char *i18n_title_key, void *i18n_owner) {
   const int index = prv_notif_seconds_to_index(quick_view_prefs_get_notif_seconds());
   const OptionMenuCallbacks callbacks = {
       .select = prv_notif_menu_select,
   };
-  const char *title = i18n_noop("Notifications");
   settings_option_menu_push(
-      title, OptionMenuContentType_SingleLine, index, &callbacks,
-      ARRAY_LENGTH(s_notif_labels), true /* icons_enabled */, s_notif_labels, data);
+      i18n_title_key, OptionMenuContentType_SingleLine, index, &callbacks,
+      ARRAY_LENGTH(s_notif_labels), true /* icons_enabled */, s_notif_labels, i18n_owner);
 }
 
 // Button shortcut option menu
@@ -148,12 +150,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
     }
     case SettingsQuickViewNotifications: {
       title = i18n_noop("Notifications");
-      subtitle = s_notif_labels[prv_notif_seconds_to_index(quick_view_prefs_get_notif_seconds())];
-      break;
-    }
-    case SettingsQuickViewNotifMuted: {
-      title = i18n_noop("Show When Muted");
-      subtitle = quick_view_prefs_get_notif_muted_enabled() ? i18n_noop("On") : i18n_noop("Off");
+      subtitle = settings_quick_view_notif_seconds_label();
       break;
     }
     case SettingsQuickViewAppWidgets: {
@@ -182,10 +179,7 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       prv_music_mode_menu_push(data);
       break;
     case SettingsQuickViewNotifications:
-      prv_notif_menu_push(data);
-      break;
-    case SettingsQuickViewNotifMuted:
-      quick_view_prefs_set_notif_muted_enabled(!quick_view_prefs_get_notif_muted_enabled());
+      settings_quick_view_notif_seconds_menu_push(i18n_noop("Notifications"), data);
       break;
     case SettingsQuickViewAppWidgets:
       quick_view_prefs_set_apps_enabled(!quick_view_prefs_get_apps_enabled());
