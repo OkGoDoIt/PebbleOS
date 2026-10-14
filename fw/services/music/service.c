@@ -406,16 +406,38 @@ uint32_t music_get_ms_since_pos_last_updated(void) {
 void music_get_pos(uint32_t *track_pos_ms, uint32_t *track_length_ms) {
   pbl_mutex_lock(&s_music_ctx.mutex, PBL_FOREVER);
 
-  const int32_t time_elapsed_ms = music_get_ms_since_pos_last_updated();
-  const int32_t track_time_elapsed =
+  // 64-bit: the product overflows 32 bits after about six hours without a position update.
+  const int64_t time_elapsed_ms = music_get_ms_since_pos_last_updated();
+  const int64_t track_time_elapsed =
       (time_elapsed_ms * s_music_ctx.playback_rate_percent) / MUSIC_NORMAL_PLAYBACK_RATE_PERCENT;
-  const int32_t pos_ms = s_music_ctx.track_pos_ms + track_time_elapsed;
-  const int32_t length_ms = s_music_ctx.track_length_ms;
+  const int64_t pos_ms = (int64_t)s_music_ctx.track_pos_ms + track_time_elapsed;
+  const int64_t length_ms = s_music_ctx.track_length_ms;
 
   *track_pos_ms = CLIP(pos_ms, 0, length_ms);
   *track_length_ms = length_ms;
 
   pbl_mutex_unlock(&s_music_ctx.mutex);
+}
+
+bool music_get_ms_until_track_end(int64_t *ms_out) {
+  if (!music_is_progress_reporting_supported()) {
+    return false;
+  }
+  pbl_mutex_lock(&s_music_ctx.mutex, PBL_FOREVER);
+  const int32_t rate_percent = s_music_ctx.playback_rate_percent;
+  const int64_t time_elapsed_ms = music_get_ms_since_pos_last_updated();
+  const int64_t remaining_track_ms = (int64_t)s_music_ctx.track_length_ms -
+                                     s_music_ctx.track_pos_ms;
+  pbl_mutex_unlock(&s_music_ctx.mutex);
+
+  if (rate_percent <= 0) {
+    return false; // Not advancing towards the end
+  }
+  if (ms_out) {
+    *ms_out = ((remaining_track_ms * MUSIC_NORMAL_PLAYBACK_RATE_PERCENT) / rate_percent) -
+              time_elapsed_ms;
+  }
+  return true;
 }
 
 int32_t music_get_playback_rate_percent(void) {

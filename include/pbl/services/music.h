@@ -127,6 +127,18 @@ uint32_t music_get_ms_since_pos_last_updated(void);
 void music_get_pos(uint32_t *track_pos_ms, uint32_t *track_length_ms);
 
 /**
+ * @brief Get how long until the extrapolated position reaches the end of the track.
+ *
+ * Unlike music_get_pos(), the result is not clamped: a negative value means the position the
+ * backend last reported, advanced at its playback rate, has run past the end of the track
+ * without a newer report.
+ *
+ * @param[out] ms_out Wall-clock milliseconds until the end of the track, or NULL.
+ * @return False when unknown: no track length, or the position is not advancing.
+ */
+bool music_get_ms_until_track_end(int64_t *ms_out);
+
+/**
  * @brief Get the playback rate.
  *
  * @return Rate in percent: 100 is normal speed, 0 paused, negative values play backwards.
