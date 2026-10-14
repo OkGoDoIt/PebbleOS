@@ -245,13 +245,18 @@ typedef enum QuickViewButtonMode {
   QuickViewButtonModeCount,
 } QuickViewButtonMode;
 
-//! How phone notifications are presented when the alerts filter lets them through. Calls,
-//! reminders and alarms keep their full-screen UI either way.
+//! How phone notifications that alert (pass the Alerts filter and Quiet Time) are presented.
+//! Calls, reminders and alarms keep their full-screen UI either way. Notifications those filters
+//! mute are covered by quick_view_prefs_get_notif_muted_enabled() instead.
 typedef enum QuickViewNotifStyle {
-  //! The full-screen notification popup.
-  QuickViewNotifStyle_FullScreen = 0,
+  //! The full-screen popup; if it times out untouched, the newest notification in it stays as
+  //! the Quick View notification widget. A popup the user closed, scrolled or acted on was
+  //! seen, so it leaves nothing behind. Value 0 is also upstream's stored default.
+  QuickViewNotifStyle_FullScreenPeekIfMissed = 0,
   //! A vibration and the Quick View notification widget, with no popup.
   QuickViewNotifStyle_Peek = 1,
+  //! The full-screen popup only.
+  QuickViewNotifStyle_FullScreen = 2,
   QuickViewNotifStyleCount,
 } QuickViewNotifStyle;
 
@@ -265,8 +270,9 @@ void quick_view_prefs_set_music_mode(QuickViewMusicMode mode);
 //! dismissed; otherwise the widget shows for this many seconds once the watchface is visible.
 uint16_t quick_view_prefs_get_notif_seconds(void);
 void quick_view_prefs_set_notif_seconds(uint16_t seconds);
-//! When enabled, the notification widget also shows for notifications the alerts filter or
-//! Quiet Time muted: a silent residue for users who keep notification popups off.
+//! When enabled, the notification widget also shows, silently, for notifications the Alerts
+//! filter, Quiet Time ("Hide") or low power muted. Independent of the style, which only covers
+//! notifications that alert.
 bool quick_view_prefs_get_notif_muted_enabled(void);
 void quick_view_prefs_set_notif_muted_enabled(bool enabled);
 //! The stored choice. peek_widgets_notifications_replace_popup() says whether it is in effect.

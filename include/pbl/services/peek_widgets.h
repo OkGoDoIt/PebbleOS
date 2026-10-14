@@ -83,6 +83,11 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event);
 //! at all.
 bool peek_widgets_notifications_replace_popup(void);
 
+//! A full-screen notification popup timed out without the user touching it, so this
+//! notification (the newest in it) may not have been seen. Shows it as the notification widget
+//! when the style asks for a peek if missed.
+void peek_widgets_handle_notification_missed(const Uuid *notification_id);
+
 //! Starts the armed notification widget's display window when focus returns to the watchface.
 void peek_widgets_handle_app_focus_event(PebbleAppFocusEvent *event);
 

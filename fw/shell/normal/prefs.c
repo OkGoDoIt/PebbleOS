@@ -334,7 +334,7 @@ static uint8_t s_timeline_peek_unsupported_face_mode = TimelinePeekUnsupportedFa
 static uint8_t s_quick_view_music_mode = QuickViewMusicMode_WhilePlaying;
 static uint16_t s_quick_view_notif_seconds = QUICK_VIEW_NOTIF_SECONDS_DEFAULT;
 static bool s_quick_view_notif_muted = false;
-static uint8_t s_quick_view_notif_style = QuickViewNotifStyle_FullScreen;
+static uint8_t s_quick_view_notif_style = QuickViewNotifStyle_FullScreenPeekIfMissed;
 static bool s_quick_view_apps_enabled = true;
 static uint8_t s_quick_view_button_mode = QuickViewButtonMode_Press;
 #endif

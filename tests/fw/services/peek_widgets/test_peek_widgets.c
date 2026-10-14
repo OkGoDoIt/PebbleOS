@@ -504,6 +504,9 @@ void test_peek_widgets__initialize(void) {
     .timeline_enabled = true,
     .music_mode = QuickViewMusicMode_WhilePlaying,
     .notif_seconds = QUICK_VIEW_NOTIF_SECONDS_DEFAULT,
+    // Most tests exercise the widget itself, so default to the style that arms it on arrival.
+    // The popup styles are tested explicitly below.
+    .notif_style = QuickViewNotifStyle_Peek,
     .apps_enabled = true,
     .button_mode = QuickViewButtonMode_Press,
     .play_state = MusicPlayStateUnknown,
@@ -724,22 +727,22 @@ void test_peek_widgets__notification_armed_until_watchface_focus(void) {
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
 }
 
-void test_peek_widgets__notification_waits_for_its_popup_to_close(void) {
+void test_peek_widgets__notification_waits_for_another_full_screen_alert(void) {
+  // Peek style, but a call or reminder is on screen: the display window waits for it to close.
   s_test.defer_callbacks = true;
   s_test.notif_exists = true;
 
-  // The popup is pushed while the notification event is handled, but the modal manager only
-  // accounts for it once the event is done: during the event the watchface still looks focused.
+  // The modal manager only accounts for a modal pushed in the same event once the event is
+  // done: during the event the watchface still looks focused.
   prv_send_notification_added(&s_notif_uuid);
   s_test.modal_focused = true;
   prv_run_queued_callbacks();
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
 
-  // Reading the popup for longer than the display window must not use the window up.
+  // A long call must not use the display window up.
   fake_rtc_increment_time(60);
   stub_new_timer_invoke(1 /* num_to_invoke */);
 
-  // The popup closes and focus returns to the watchface: the display window starts now.
   s_test.modal_focused = false;
   PebbleAppFocusEvent focus_event = { .in_focus = true };
   peek_widgets_handle_app_focus_event(&focus_event);
@@ -747,6 +750,83 @@ void test_peek_widgets__notification_waits_for_its_popup_to_close(void) {
 
   fake_rtc_increment_time(16);
   stub_new_timer_invoke(1 /* num_to_invoke */);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+//! A notification arrives with its full-screen popup on screen.
+static void prv_notification_with_popup(void) {
+  prv_send_notification_added(&s_notif_uuid);
+  s_test.modal_focused = true;
+  prv_run_queued_callbacks();
+}
+
+//! The popup goes away; missed says whether it timed out untouched.
+static void prv_popup_closes(bool missed) {
+  s_test.modal_focused = false;
+  if (missed) {
+    peek_widgets_handle_notification_missed(&s_notif_uuid);
+  }
+  PebbleAppFocusEvent focus_event = { .in_focus = true };
+  peek_widgets_handle_app_focus_event(&focus_event);
+  prv_run_queued_callbacks();
+}
+
+void test_peek_widgets__notification_peek_if_missed_after_popup_timeout(void) {
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_FullScreenPeekIfMissed;
+  s_test.notif_exists = true;
+
+  prv_notification_with_popup();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+  fake_rtc_increment_time(3 * 60);
+  prv_popup_closes(true /* missed */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+
+  // The display window starts once the popup is gone.
+  fake_rtc_increment_time(16);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_no_peek_after_popup_closed_by_user(void) {
+  // Closed, scrolled or acted on means seen: never show it twice.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_FullScreenPeekIfMissed;
+  s_test.notif_exists = true;
+
+  prv_notification_with_popup();
+  prv_popup_closes(false /* missed */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_missed_ignored_by_other_styles(void) {
+  s_test.defer_callbacks = true;
+  s_test.notif_exists = true;
+
+  s_test.notif_style = QuickViewNotifStyle_FullScreen;
+  prv_notification_with_popup();
+  prv_popup_closes(true /* missed */);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_peek_if_missed_until_dismissed(void) {
+  // A short popup timeout with a peek that waits: the peek stays until dismissed.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_FullScreenPeekIfMissed;
+  s_test.notif_seconds = QUICK_VIEW_NOTIF_SECONDS_PERSISTENT;
+  s_test.notif_exists = true;
+
+  prv_notification_with_popup();
+  fake_rtc_increment_time(15);
+  prv_popup_closes(true /* missed */);
+  fake_rtc_increment_time(6 * 60 * 60);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+
+  cl_assert(peek_widgets_handle_dismiss());
   prv_run_queued_callbacks();
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
 }
@@ -773,23 +853,82 @@ void test_peek_widgets__notification_after_dismissing_the_previous_one(void) {
   prv_run_queued_callbacks();
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
 
-  // The next notification arrives with a popup, which the user reads for a while.
+  // The next notification shows again: dismissal covers one notification, not the widget.
   prv_send_notification_added(&s_notif_uuid);
-  s_test.modal_focused = true;
   prv_run_queued_callbacks();
-  fake_rtc_increment_time(30);
-  stub_new_timer_invoke(1 /* num_to_invoke */);
-  prv_run_queued_callbacks();
-
-  s_test.modal_focused = false;
-  PebbleAppFocusEvent focus_event = { .in_focus = true };
-  peek_widgets_handle_app_focus_event(&focus_event);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
 }
 
 void test_peek_widgets__notification_style_full_screen_keeps_the_popup(void) {
   s_test.notif_style = QuickViewNotifStyle_FullScreen;
   cl_assert(!peek_widgets_notifications_replace_popup());
+  s_test.notif_style = QuickViewNotifStyle_FullScreenPeekIfMissed;
+  cl_assert(!peek_widgets_notifications_replace_popup());
+}
+
+void test_peek_widgets__notification_style_full_screen_has_no_peek(void) {
+  // Full Screen means the popup alone: nothing once it closes.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_FullScreen;
+  s_test.notif_exists = true;
+
+  prv_send_notification_added(&s_notif_uuid);
+  s_test.modal_focused = true;
+  prv_run_queued_callbacks();
+  s_test.modal_focused = false;
+  PebbleAppFocusEvent focus_event = { .in_focus = true };
+  peek_widgets_handle_app_focus_event(&focus_event);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_style_full_screen_with_muted_peek(void) {
+  // Full Screen plus the muted peek: popups as usual, and a silent peek only for what Alerts
+  // or Quiet Time muted.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_FullScreen;
+  s_test.notif_muted = true;
+  s_test.notif_exists = true;
+
+  // Alerting: the popup, and no peek after it.
+  prv_send_notification_added(&s_notif_uuid);
+  s_test.modal_focused = true;
+  prv_run_queued_callbacks();
+  s_test.modal_focused = false;
+  PebbleAppFocusEvent focus_event = { .in_focus = true };
+  peek_widgets_handle_app_focus_event(&focus_event);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // Quiet Time hiding notifications: no popup, a silent peek.
+  s_test.dnd_active = true;
+  s_test.dnd_mode = DndNotificationModeHide;
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+}
+
+void test_peek_widgets__notification_quiet_time_showing_follows_the_style(void) {
+  // Quiet Time set to show notifications mutes nothing: the style still decides.
+  s_test.defer_callbacks = true;
+  s_test.dnd_active = true;
+  s_test.dnd_mode = DndNotificationModeShow;
+  s_test.notif_style = QuickViewNotifStyle_Peek;
+  s_test.notif_exists = true;
+
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+}
+
+void test_peek_widgets__notification_muted_without_muted_peek_shows_nothing(void) {
+  // Muted by Alerts, the muted peek off: nothing, whatever the style.
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_Peek;
+  s_test.alerts_allow = false;
+  s_test.notif_exists = true;
+
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
 }
 
 void test_peek_widgets__notification_style_peek_replaces_the_popup(void) {

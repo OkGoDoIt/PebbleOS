@@ -366,17 +366,17 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
       if (quick_view_prefs_get_notif_seconds() == 0) {
         return;
       }
-      // By default the widget follows the popup's gating; the Show When Muted pref keeps it
-      // arming even when the alerts filter or Quiet Time suppressed the popup, as a silent
-      // residue for users who keep notification popups off entirely.
-      if (!quick_view_prefs_get_notif_muted_enabled()) {
-        if (do_not_disturb_is_active() &&
-            (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide)) {
-          return;
-        }
-        if (!alerts_should_notify_for_type(AlertMobile)) {
-          return;
-        }
+      // A notification the Alerts filter, Quiet Time or low power muted gets no popup or
+      // vibration; it shows here only as the silent peek the muted pref asks for. One that
+      // alerts shows here at once only in place of the popup; with a popup it comes here only
+      // if the popup is missed (peek_widgets_handle_notification_missed).
+      const bool muted =
+          (do_not_disturb_is_active() &&
+           (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide)) ||
+          !alerts_should_notify_for_type(AlertMobile);
+      if (muted ? !quick_view_prefs_get_notif_muted_enabled()
+                : (quick_view_prefs_get_notif_style() != QuickViewNotifStyle_Peek)) {
+        return;
       }
       s_state.notif_id = *event->notification_id;
       s_state.notif_active = false;
@@ -398,6 +398,20 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
     default:
       return;
   }
+  prv_refresh(true /* animated */);
+}
+
+void peek_widgets_handle_notification_missed(const Uuid *notification_id) {
+  if (!s_state.initialized || (quick_view_prefs_get_notif_seconds() == 0) ||
+      (quick_view_prefs_get_notif_style() != QuickViewNotifStyle_FullScreenPeekIfMissed)) {
+    return;
+  }
+  s_state.notif_id = *notification_id;
+  s_state.notif_active = false;
+  s_state.notif_armed = true;
+  s_state.content_dirty = true;
+  // Called while the popup is being removed; check focus once the modal manager has caught up
+  launcher_task_add_callback(prv_maybe_activate_main_cb, NULL);
   prv_refresh(true /* animated */);
 }
 
