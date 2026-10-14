@@ -349,6 +349,17 @@ static bool prv_show_notification(bool animated) {
   return shown;
 }
 
+static void prv_maybe_activate_armed_notification(void) {
+  if (s_state.notif_armed && !s_state.notif_active && prv_watchface_has_focus()) {
+    prv_notif_activate();
+    prv_refresh(true /* animated */);
+  }
+}
+
+static void prv_maybe_activate_main_cb(void *data) {
+  prv_maybe_activate_armed_notification();
+}
+
 void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
   switch (event->type) {
     case NotificationAdded: {
@@ -371,9 +382,10 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
       s_state.notif_active = false;
       s_state.notif_armed = true;
       s_state.content_dirty = true;
-      if (prv_watchface_has_focus()) {
-        prv_notif_activate();
-      }
+      // The notification popup is pushed while this same event is handled, but the modal
+      // manager only accounts for it between events. Checking focus now would find the
+      // watchface "focused" and start the display window underneath the popup.
+      launcher_task_add_callback(prv_maybe_activate_main_cb, NULL);
       break;
     }
     case NotificationActedUpon:
@@ -389,26 +401,15 @@ void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
   prv_refresh(true /* animated */);
 }
 
-static void prv_maybe_activate_armed_notification(void) {
-  if (s_state.notif_armed && !s_state.notif_active && prv_watchface_has_focus()) {
-    prv_notif_activate();
-    prv_refresh(true /* animated */);
-  }
-}
-
 void peek_widgets_handle_app_focus_event(PebbleAppFocusEvent *event) {
   if (event->in_focus) {
     prv_maybe_activate_armed_notification();
   }
 }
 
-static void prv_watchface_started_main_cb(void *data) {
-  prv_maybe_activate_armed_notification();
-}
-
 void peek_widgets_handle_watchface_started(void) {
   // Called synchronously during the app switch; defer to a KernelMain callback.
-  launcher_task_add_callback(prv_watchface_started_main_cb, NULL);
+  launcher_task_add_callback(prv_maybe_activate_main_cb, NULL);
 }
 
 // Timeline source

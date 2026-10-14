@@ -4,7 +4,9 @@
 #include "pbl/services/peek_widgets.h"
 
 #include "apps/system_app_ids.h"
+#include "kernel/event_loop.h"
 #include "kernel/events.h"
+#include "kernel/ui/modals/modal_manager.h"
 #include "popups/timeline/peek.h"
 #include "resource/resource_ids.auto.h"
 #include "resource/timeline_resource_ids.auto.h"
@@ -29,10 +31,8 @@
 ////////////////////////////////////////////////////////////////
 // Note: the music/alerts/DND/app-install/pin-db/notification-storage functions the arbiter
 // consumes are implemented below as controllable fakes instead of including their stub headers.
-#include "stubs_event_loop.h"
 #include "stubs_hexdump.h"
 #include "stubs_logging.h"
-#include "stubs_modal_manager.h"
 #include "stubs_mutex.h"
 #include "stubs_passert.h"
 #include "stubs_pebble_tasks.h"
@@ -91,6 +91,11 @@ typedef struct PeekWidgetsTestState {
   Uuid stored_notif_id;
   // Watchface hook
   unsigned int num_button_state_calls;
+  // Kernel event loop
+  bool modal_focused;             //!< As last accounted by the modal manager's upkeep
+  bool defer_callbacks;           //!< Queue KernelMain callbacks instead of running them inline
+  CallbackEventCallback callbacks[8];
+  unsigned int num_callbacks;
 } PeekWidgetsTestState;
 
 // The Music app's identity and icon, as the real app registry would report them
@@ -189,8 +194,33 @@ QuickViewButtonMode quick_view_prefs_get_button_mode(void) {
   return s_test.button_mode;
 }
 
+// Kernel event loop fakes
+////////////////////////////////////////////////////////////////
+
+void launcher_task_add_callback(CallbackEventCallback callback, void *data) {
+  if (!s_test.defer_callbacks) {
+    callback(data);
+    return;
+  }
+  cl_assert(s_test.num_callbacks < ARRAY_LENGTH(s_test.callbacks));
+  s_test.callbacks[s_test.num_callbacks++] = callback;
+}
+
+//! Runs the KernelMain callbacks queued while the current event was handled.
+static void prv_run_queued_callbacks(void) {
+  for (unsigned int i = 0; i < s_test.num_callbacks; i++) {
+    s_test.callbacks[i](NULL);
+  }
+  s_test.num_callbacks = 0;
+}
+
 // WEAK stub overrides
 ////////////////////////////////////////////////////////////////
+
+ModalProperty modal_manager_get_properties(void) {
+  return s_test.modal_focused ? (ModalPropertyDefault & ~ModalProperty_Unfocused)
+                              : ModalPropertyDefault;
+}
 
 bool music_has_now_playing(void) {
   return s_test.has_now_playing;
@@ -684,6 +714,69 @@ void test_peek_widgets__notification_armed_until_watchface_focus(void) {
 
   // Focus returns to the watchface: the display window starts now.
   s_test.watchface_running = true;
+  PebbleAppFocusEvent focus_event = { .in_focus = true };
+  peek_widgets_handle_app_focus_event(&focus_event);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+}
+
+void test_peek_widgets__notification_waits_for_its_popup_to_close(void) {
+  s_test.defer_callbacks = true;
+  s_test.notif_exists = true;
+
+  // The popup is pushed while the notification event is handled, but the modal manager only
+  // accounts for it once the event is done: during the event the watchface still looks focused.
+  prv_send_notification_added(&s_notif_uuid);
+  s_test.modal_focused = true;
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // Reading the popup for longer than the display window must not use the window up.
+  fake_rtc_increment_time(60);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+
+  // The popup closes and focus returns to the watchface: the display window starts now.
+  s_test.modal_focused = false;
+  PebbleAppFocusEvent focus_event = { .in_focus = true };
+  peek_widgets_handle_app_focus_event(&focus_event);
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+
+  fake_rtc_increment_time(16);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+}
+
+void test_peek_widgets__notification_without_popup_shows_after_the_event(void) {
+  // Show When Muted with popups filtered out: no popup is pushed, so the watchface keeps focus.
+  s_test.defer_callbacks = true;
+  s_test.notif_muted = true;
+  s_test.alerts_allow = false;
+  s_test.notif_exists = true;
+
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+}
+
+void test_peek_widgets__notification_after_dismissing_the_previous_one(void) {
+  s_test.defer_callbacks = true;
+  s_test.notif_exists = true;
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+  cl_assert(peek_widgets_handle_dismiss());
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // The next notification arrives with a popup, which the user reads for a while.
+  prv_send_notification_added(&s_notif_uuid);
+  s_test.modal_focused = true;
+  prv_run_queued_callbacks();
+  fake_rtc_increment_time(30);
+  stub_new_timer_invoke(1 /* num_to_invoke */);
+  prv_run_queued_callbacks();
+
+  s_test.modal_focused = false;
   PebbleAppFocusEvent focus_event = { .in_focus = true };
   peek_widgets_handle_app_focus_event(&focus_event);
   cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
