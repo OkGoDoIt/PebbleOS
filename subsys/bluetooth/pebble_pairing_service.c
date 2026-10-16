@@ -89,6 +89,12 @@ static int prv_access_trigger_pairing(uint16_t conn_handle, uint16_t attr_handle
   int rc;
   struct ble_gap_conn_desc desc;
 
+  // A private link (the Muse setup window's) is the bonded iPhone over again: never start
+  // security on it, or the phone link's bond could be replaced.
+  if (nimble_conn_is_private_link(conn_handle)) {
+    return BLE_ATT_ERR_UNLIKELY;
+  }
+
   rc = ble_gap_conn_find(conn_handle, &desc);
   if (rc != 0) {
     return rc;

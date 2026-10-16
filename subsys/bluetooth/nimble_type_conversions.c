@@ -9,6 +9,7 @@
 #include <pbl/logging/logging.h>
 
 #include <host/ble_gap.h>
+#include <host/ble_hs.h>
 #include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(bt, CONFIG_BT_LOG_LEVEL);
@@ -30,6 +31,36 @@ void nimble_addr_to_pebble_device(const ble_addr_t *stack_addr,
   host_addr->is_classic = false;
 }
 
+//! The phone's link, as the connection layer knows it (advert.c tracks it). PebbleOS accepts one
+//! phone at a time, so one slot is enough.
+static uint16_t s_phone_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
+//! A link PebbleOS itself must never use: the Muse setup window's connection, which the same
+//! iPhone opens alongside its phone link.
+static uint16_t s_private_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
+void nimble_conn_set_phone_link(uint16_t conn_handle) {
+  s_phone_conn_handle = conn_handle;
+}
+
+void nimble_conn_clear_phone_link(uint16_t conn_handle) {
+  if (s_phone_conn_handle == conn_handle) {
+    s_phone_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+  }
+}
+
+uint16_t nimble_conn_phone_link(void) {
+  return s_phone_conn_handle;
+}
+
+void nimble_conn_set_private_link(uint16_t conn_handle) {
+  s_private_conn_handle = conn_handle;
+}
+
+bool nimble_conn_is_private_link(uint16_t conn_handle) {
+  return conn_handle != BLE_HS_CONN_HANDLE_NONE && conn_handle == s_private_conn_handle;
+}
+
 bool pebble_device_to_nimble_conn_handle(const struct pbl_bt_device_internal *device,
                                          uint16_t *handle) {
   ble_addr_t addr;
@@ -38,6 +69,18 @@ bool pebble_device_to_nimble_conn_handle(const struct pbl_bt_device_internal *de
   pebble_device_to_nimble_addr(device, &addr);
 
   int rc = ble_gap_conn_find_by_addr(&addr, &desc);
+  if (rc == 0 && nimble_conn_is_private_link(desc.conn_handle)) {
+    // NimBLE returns the newest link to an address. The same iPhone's private link must never
+    // capture its phone link's traffic, so fall back to the phone link when it is that peer.
+    struct ble_gap_conn_desc phone;
+    if (s_phone_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+        ble_gap_conn_find(s_phone_conn_handle, &phone) == 0 &&
+        ble_addr_cmp(&phone.peer_id_addr, &desc.peer_id_addr) == 0) {
+      desc = phone;
+    } else {
+      rc = BLE_HS_ENOTCONN;
+    }
+  }
   if (rc != 0) {
     PBL_LOG_ERR("failed to find connection handle for addr" PBL_BT_ADDR_FMT,
                 PBL_BT_ADDR_XPLODE(device->address));

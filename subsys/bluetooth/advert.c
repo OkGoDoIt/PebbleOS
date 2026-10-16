@@ -150,6 +150,7 @@ static void prv_handle_connection_event(struct ble_gap_event *event) {
   nimble_addr_to_pebble_device(&desc.peer_id_addr, &complete_event.peer_address);
 
   s_pairing_in_progress = false;
+  nimble_conn_set_phone_link(event->connect.conn_handle);
 
   pbl_bt_handle_le_connection_complete_event(&complete_event);
 }
@@ -168,6 +169,7 @@ static void prv_end_pairing(uint16_t conn_handle, bool success) {
 static void prv_handle_disconnection_event(struct ble_gap_event *event) {
   // A link dropped mid-pairing raises no pairing complete event.
   prv_end_pairing(event->disconnect.conn.conn_handle, false);
+  nimble_conn_clear_phone_link(event->disconnect.conn.conn_handle);
 
   struct pbl_bt_gatt_device_disconnection_event gatt_event;
   nimble_addr_to_pebble_addr(&event->disconnect.conn.peer_id_addr, &gatt_event.dev_address);
@@ -463,7 +465,14 @@ bool pbl_bt_advert_advertising_enable(uint32_t min_interval_ms, uint32_t max_int
     .itvl_max = BLE_GAP_ADV_ITVL_MS(max_interval_ms),
   };
 
-  rc = ble_hs_id_infer_auto(0, &own_addr_type);
+  // One phone at a time. A single connection slot used to enforce this (advertising connectably
+  // needs a free one); with a second slot for the Muse setup window it must be explicit.
+  if (nimble_conn_phone_link() != BLE_HS_CONN_HANDLE_NONE) {
+    PBL_LOG_DBG("Not advertising: a phone is connected");
+    return false;
+  }
+
+  rc = nimble_identity_addr_type(&own_addr_type);
   if (rc != 0) {
     PBL_LOG_ERR("Failed to infer own address type (%d)", rc);
     return false;

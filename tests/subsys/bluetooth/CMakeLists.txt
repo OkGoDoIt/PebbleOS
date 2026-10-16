@@ -17,3 +17,16 @@ pbl_clar_test(test_nimble_gatt
     ${nimble}/porting/nimble/include
   DEFINES CONFIG_BT_LOG_LEVEL=0 CONFIG_NIMBLE_LOG_LEVEL=0
 )
+
+pbl_clar_test(test_nimble_conn_lookup
+  SOURCES
+    subsys/bluetooth/nimble_type_conversions.c
+  INCLUDES
+    subsys/bluetooth
+    third_party/nimble/port/include
+    ${nimble}/nimble/include
+    ${nimble}/nimble/host/include
+    ${nimble}/nimble/transport/include
+    ${nimble}/porting/nimble/include
+  DEFINES CONFIG_BT_LOG_LEVEL=0 CONFIG_NIMBLE_LOG_LEVEL=0
+)

@@ -12,16 +12,11 @@ PBL_LOG_MODULE_DECLARE(bt, CONFIG_BT_LOG_LEVEL);
 
 bool pbl_bt_le_connection_parameter_update(const struct pbl_bt_device_internal *addr,
                                            const struct pbl_bt_conn_params_update_req *req) {
-  ble_addr_t nimble_addr;
-  struct ble_gap_conn_desc desc;
+  uint16_t conn_handle;
   struct ble_gap_upd_params params;
   int rc;
 
-  pebble_device_to_nimble_addr(addr, &nimble_addr);
-
-  rc = ble_gap_conn_find_by_addr(&nimble_addr, &desc);
-  if (rc != 0) {
-    PBL_LOG_ERR("ble_gap_conn_find_by_addr failed: %d", rc);
+  if (!pebble_device_to_nimble_conn_handle(addr, &conn_handle)) {
     return false;
   }
 
@@ -33,7 +28,7 @@ bool pbl_bt_le_connection_parameter_update(const struct pbl_bt_device_internal *
       params.itvl_min * BLE_HCI_CONN_ITVL / 1000, params.itvl_max * BLE_HCI_CONN_ITVL / 1000,
       params.latency, params.supervision_timeout * BLE_HCI_CONN_SPVN_TMO_UNITS);
 
-  rc = ble_gap_update_params(desc.conn_handle, &params);
+  rc = ble_gap_update_params(conn_handle, &params);
   if (rc != 0) {
     PBL_LOG_ERR("ble_gap_update_params failed: 0x%04x", (uint16_t)rc);
     return false;
