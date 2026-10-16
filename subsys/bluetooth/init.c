@@ -7,6 +7,7 @@
 #include <pbl/bluetooth/audio_companion.h>
 #include <pbl/bluetooth/id_addr.h>
 #include <pbl/bluetooth/init.h>
+#include <pbl/bluetooth/muse_setup.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/kernel/thread.h>
 #include <pbl/kernel/types.h>
@@ -183,6 +184,11 @@ bool pbl_bt_start(struct pbl_bt_config *config) {
 
 #ifdef CONFIG_BT_AUDIO_COMPANION_SERVICE
   pbl_bt_audio_companion_service_init();
+#endif
+
+#ifdef CONFIG_BT_MUSE_SETUP_SERVICE
+  // Last, so adding it moves no existing attribute handle.
+  pbl_bt_muse_setup_service_init();
 #endif
 
   ble_hs_sched_start();

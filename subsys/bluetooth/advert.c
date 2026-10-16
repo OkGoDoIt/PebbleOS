@@ -11,6 +11,7 @@
 #include <pbl/bluetooth/advert.h>
 #include <pbl/bluetooth/bonding_sync.h>
 #include <pbl/bluetooth/gatt.h>
+#include <pbl/bluetooth/muse_setup.h>
 #include <pbl/bluetooth/pairing_confirm.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/math.h>
@@ -170,6 +171,11 @@ static void prv_handle_disconnection_event(struct ble_gap_event *event) {
   // A link dropped mid-pairing raises no pairing complete event.
   prv_end_pairing(event->disconnect.conn.conn_handle, false);
   nimble_conn_clear_phone_link(event->disconnect.conn.conn_handle);
+#ifdef CONFIG_BT_MUSE_SETUP_SERVICE
+  // The window only exists alongside a phone link, and its borrowed advertiser must be back before
+  // reconnect advertising starts.
+  pbl_bt_muse_setup_close();
+#endif
 
   struct pbl_bt_gatt_device_disconnection_event gatt_event;
   nimble_addr_to_pebble_addr(&event->disconnect.conn.peer_id_addr, &gatt_event.dev_address);

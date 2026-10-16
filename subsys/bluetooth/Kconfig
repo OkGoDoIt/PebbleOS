@@ -112,6 +112,16 @@ config BT_AUDIO_COMPANION_SERVICE
       custom firmware to stream background microphone audio to a separate
       third-party mobile app.
 
+config BT_MUSE_SETUP_SERVICE
+    bool "Muse gadget setup service"
+    depends on BT_AUDIO_COMPANION_SERVICE
+    help
+      Host Meta's Muse gadget BLE setup service for a short pairing window,
+      on a second, private connection from a random static address, so the
+      Muse app on the phone the watch is already connected to can pair the
+      companion app as a Muse gadget. Allows two connections. Needs a public
+      identity address. Off by default.
+
 endif
 
 endmenu
