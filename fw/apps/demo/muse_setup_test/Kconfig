@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config DEMO_APP_MUSE_SETUP_TEST
+    bool "Muse Setup Test"
+    depends on BT_MUSE_SETUP_SERVICE
+    help
+      Opens the Muse gadget setup window from the watch and shows what the
+      second, private link does (discovery, connection, identity, MTU,
+      writes echoed back), for checking it with a generic BLE app before the
+      companion app relays the setup.

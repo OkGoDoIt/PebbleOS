@@ -377,6 +377,14 @@
       ]
     },
     {
+      "id": -60,
+      "enum": "MUSE_SETUP_TEST",
+      "md_fn": "muse_setup_test_get_app_info",
+      "ifdefs": [
+        "CONFIG_DEMO_APP_MUSE_SETUP_TEST"
+      ]
+    },
+    {
       "id": -58,
       "enum": "AMB_LIGHT_READ",
       "md_fn": "ambient_light_reading_get_info",
