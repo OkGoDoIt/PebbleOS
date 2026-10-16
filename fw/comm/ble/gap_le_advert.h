@@ -127,6 +127,14 @@ void gap_le_advert_deinit(void);
 //! non-connectable advertisements after the connection is established.
 void gap_le_advert_handle_connect_as_slave(void);
 
+//! Hands the controller's (single, legacy) advertiser to another owner: stops whatever job is on
+//! air and keeps jobs off the controller until gap_le_advert_return(). Returns false if it is
+//! already lent or the scheduler isn't running.
+bool gap_le_advert_lend(void);
+
+//! Takes the advertiser back and re-airs the current job if there is one.
+void gap_le_advert_return(void);
+
 //! This should be called so that gap_le_advert can update its internal state
 //! and start advertising connectable advertisements.
 void gap_le_advert_handle_disconnect_as_slave(void);

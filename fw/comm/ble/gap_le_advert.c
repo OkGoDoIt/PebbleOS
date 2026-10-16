@@ -101,6 +101,10 @@ static bool s_is_advertising;
 
 static bool s_is_connected;
 
+//! Another owner (the Muse setup window) is using the controller's advertiser: jobs keep their
+//! bookkeeping but nothing is sent to the controller until it is returned.
+static bool s_is_lent;
+
 //! Cache of the last advertising transmission power in dBm. A cache is kept in
 //! case the API call fails, for example because Bluetooth is disabled.
 //! 12 dBm is what the PAN1315 Bluetooth module reports.
@@ -346,6 +350,12 @@ static void prv_perform_next_job(bool force_refresh) {
       prv_timer_start();
     }
 
+    if (s_is_lent) {
+      // The borrower owns the controller's advertiser; gap_le_advert_return() re-airs this job.
+      s_current = next;
+      return;
+    }
+
     if (s_current_ad_data != &next->payload) {
       // Give the advertisement data to the BT controller:
       bool result = pbl_bt_advert_set_advertising_data(&next->payload);
@@ -546,6 +556,7 @@ void gap_le_advert_init(void) {
     s_jobs = NULL;
     s_current = NULL;
     s_current_ad_data = NULL;
+    s_is_lent = false;
     s_cycle_regular_timer = (const RegularTimerInfo){
       .cb = prv_cycle_timer_callback,
     };
@@ -613,6 +624,45 @@ void gap_le_advert_handle_disconnect_as_slave(void) {
     // Call prv_perform_next_job() to trigger refreshing the configuration of
     // the controller: it can advertise connectable packets again.
     prv_perform_next_job(true /* force refresh, connectability mode changed */);
+  }
+unlock:
+  bt_unlock();
+}
+
+// -----------------------------------------------------------------------------
+bool gap_le_advert_lend(void) {
+  bool lent = false;
+  bt_lock();
+  {
+    if (!s_gap_le_advert_is_initialized || s_is_lent) {
+      goto unlock;
+    }
+    if (s_is_advertising) {
+      pbl_bt_advert_advertising_disable();
+      prv_analytics_stop_timers();
+      s_is_advertising = false;
+    }
+    s_is_lent = true;
+    lent = true;
+  }
+unlock:
+  bt_unlock();
+  return lent;
+}
+
+// -----------------------------------------------------------------------------
+void gap_le_advert_return(void) {
+  bt_lock();
+  {
+    if (!s_is_lent) {
+      goto unlock;
+    }
+    s_is_lent = false;
+    // The borrower wrote its own advertising data into the controller.
+    s_current_ad_data = NULL;
+    if (s_gap_le_advert_is_initialized && s_current && !s_is_connected) {
+      prv_perform_next_job(true /* force refresh */);
+    }
   }
 unlock:
   bt_unlock();
