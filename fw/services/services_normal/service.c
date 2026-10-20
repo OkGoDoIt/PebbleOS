@@ -44,6 +44,7 @@
 #include <pbl/services/audio_companion.h>
 
 #include <popups/audio_companion_consent_ui.h>
+#include <popups/audio_companion_muse_ui.h>
 #endif
 
 // Minimum valid time: January 1, 2020 00:00:00 UTC (timestamp: 1577836800)
@@ -131,6 +132,7 @@ void services_normal_init(void) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
   audio_companion_init();
   audio_companion_consent_ui_init();
+  audio_companion_muse_ui_init();
 #endif
 
   app_glance_service_init();

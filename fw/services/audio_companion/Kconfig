@@ -47,6 +47,17 @@ config NIMBLE_MSYS_1_BLOCK_COUNT
 
 if SERVICE_AUDIO_COMPANION
 
+config SERVICE_AUDIO_COMPANION_MUSE
+    bool "Muse gadget pairing through the watch"
+    default y
+    depends on BT
+    select BT_MUSE_SETUP_SERVICE
+    help
+      Lets the companion app pair itself with Meta's Muse as a gadget by
+      having the watch host Muse's setup service for a short window and
+      relay it (MUSE_SETUP_* control messages). The user confirms on the
+      watch first. Allows a second BLE connection for the window.
+
 module = SERVICE_AUDIO_COMPANION
 module-str = Audio companion
 source "subsys/logging/Kconfig.template.log_level"

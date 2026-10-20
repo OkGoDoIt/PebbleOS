@@ -587,6 +587,12 @@ pbl_clar_test(test_audio_companion
   OVERRIDES dummy_board
 )
 
+pbl_clar_test(test_audio_companion_muse
+  SOURCES
+    fw/services/audio_companion/muse_setup_relay.c
+    fw/services/audio_companion/protocol.c
+)
+
 pbl_clar_test(test_audio_companion_reboot_trace
   SOURCES
     fw/services/audio_companion/reboot_trace.c

@@ -2,6 +2,10 @@
 
 #include "pbl/services/audio_companion.h"
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+#include "muse_setup_relay.h"
+#endif
+
 #include "auth.h"
 #include "reboot_trace.h"
 #include "spool.h"
@@ -2240,6 +2244,9 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         prv_end_stream_locked(AudioCompanionStopReasonPolicy);
         s_session.authorized = false;
         prv_send_revoked_locked(AudioCompanionRevokedReasonAppRequested);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+        audio_companion_muse_receiver_gone();
+#endif
         prv_reevaluate_locked();
       } else {
         prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
@@ -2300,6 +2307,42 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
       }
       break;
     }
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+    case AudioCompanionCtrlMsgIdMuseSetupOpen:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      prv_send_ack_locked(msg->muse_setup_open.request_token,
+                          audio_companion_muse_handle_open(&msg->muse_setup_open));
+      break;
+    case AudioCompanionCtrlMsgIdMuseSetupClose:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      prv_send_ack_locked(msg->muse_setup_close.request_token,
+                          audio_companion_muse_handle_close(msg->muse_setup_close.reason));
+      break;
+    case AudioCompanionCtrlMsgIdMuseSetupTx:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      prv_send_ack_locked(msg->muse_setup_tx.request_token,
+                          audio_companion_muse_handle_tx(msg->muse_setup_tx.data,
+                                                         msg->muse_setup_tx.length));
+      break;
+    case AudioCompanionCtrlMsgIdMuseSetupDisconnect:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      prv_send_ack_locked(
+          msg->muse_setup_disconnect.request_token,
+          audio_companion_muse_handle_disconnect(msg->muse_setup_disconnect.delay_ms));
+      break;
+#endif
     default:
       break;
   }
@@ -2344,7 +2387,7 @@ static void prv_control_write_system_task_cb(void *data) {
 }
 
 void audio_companion_handle_control_write(const uint8_t *data, size_t length) {
-  if (!s_initialized || !data || length == 0 || length > 128) {
+  if (!s_initialized || !data || length == 0 || length > AUDIO_COMPANION_MAX_CONTROL_WRITE_BYTES) {
     return;
   }
   ControlWriteWork *work = kernel_malloc(sizeof(ControlWriteWork) + length);
@@ -2415,6 +2458,9 @@ void audio_companion_handle_disconnect(void) {
   if (!s_initialized) {
     return;
   }
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+  audio_companion_muse_receiver_gone();
+#endif
   system_task_add_callback(prv_disconnect_system_task_cb, NULL);
 }
 
@@ -2448,8 +2494,13 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   }
   const AudioCompanionRebootTraceEntry *newest =
       audio_companion_reboot_trace_newest(&s_reboot_trace);
+  uint32_t capabilities = 0;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+  capabilities |= AUDIO_COMPANION_CAPABILITY_MUSE_SETUP;
+#endif
   const AudioCompanionInfo info = {
     .info_version = 2,
+    .watch_capabilities = capabilities,
     .protocol_min = AUDIO_COMPANION_PROTOCOL_VERSION,
     .protocol_max = AUDIO_COMPANION_PROTOCOL_VERSION,
     .service_state = (uint8_t)s_state,
@@ -2657,6 +2708,9 @@ void audio_companion_init(void) {
 
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   audio_companion_reboot_trace_clear(&s_reboot_trace);
+  #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+  audio_companion_muse_init();
+#endif
   s_initialized = true;
   s_enabled = shell_prefs_get_audio_companion_enabled();
   s_pause_stationary_enabled =
@@ -2890,6 +2944,16 @@ void audio_companion_get_diagnostics(AudioCompanionDiagnostics *diag_out) {
   pbl_mutex_unlock(&s_lock);
 }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+bool audio_companion_relay_notify_control(const uint8_t *data, size_t length) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool sent = s_session.authorized && s_session.control_subscribed &&
+                    pbl_bt_audio_companion_notify_control(data, length);
+  pbl_mutex_unlock(&s_lock);
+  return sent;
+}
+#endif
+
 bool audio_companion_query_phone_media(void) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   // A receiver presumed gone is often just a suspended iOS app, and a control notification is
@@ -2918,6 +2982,9 @@ void audio_companion_forget_receiver(void) {
   if (s_session.authorized) {
     s_session.authorized = false;
     prv_send_revoked_locked(AudioCompanionRevokedReasonUserOnWatch);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+    audio_companion_muse_receiver_gone();
+#endif
   }
   memset(s_session.receiver_id, 0, sizeof(s_session.receiver_id));
   prv_reevaluate_locked();
