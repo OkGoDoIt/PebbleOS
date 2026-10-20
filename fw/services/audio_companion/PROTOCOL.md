@@ -51,7 +51,7 @@ A fixed 20-byte snapshot:
 | 4 | 1 | `codec_bitmap` | bit0 = Speex wideband |
 | 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending, bit3 = `send_backpressure_events` is meaningful |
 | 6 | 2 | `reserved0` | 0 |
-| 8 | 4 | `watch_capabilities` | reserved bitfield, 0 |
+| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5); other bits 0 |
 | 12 | 4 | `fw_version_packed` | `(major << 24) \| (minor << 16) \| patch`, diagnostics only |
 | 16 | 4 | `send_backpressure_events` | notifications the transport refused since service init; 0 unless `flags` bit3 is set |
 
@@ -87,6 +87,8 @@ flight; the watch answers every request with a response notification carrying th
 | `0x0A` | `MUSE_SETUP_CLOSE` | 3 |
 | `0x0B` | `MUSE_SETUP_TX` | 3 + length |
 | `0x0C` | `MUSE_SETUP_DISCONNECT` | 4 |
+| `0x0D` | `ASSISTANT_UPDATE` | 6 + text |
+| `0x0E` | `WATCH_ACTION` | 5 + payload |
 
 `AUTH_REQUEST` (`0x01`):
 
@@ -148,6 +150,8 @@ already on, the watch may return `ACK(ok)` immediately.
 | `0x46` | `PHONE_MEDIA_QUERY` | 1 |
 | `0x47` | `MUSE_SETUP_RX` | 4 + length |
 | `0x48` | `MUSE_SETUP_EVENT` | 7 |
+| `0x49` | `PTT_EVENT` | 8 |
+| `0x4A` | `WATCH_ACTION_RESULT` | 4 |
 
 `AUTH_RESULT` (`0x41`): `u8 msg_id`, `u8 request_token`, `u8 status`, `u8 granted_proto_version`.
 Status: 0 ok, 1 pending-user-consent, 2 denied-mismatch, 3 denied-disabled, 4 invalid.
@@ -236,6 +240,73 @@ start, 9 receiver gone); 6 `RxOverflow` (detail = values dropped since the last 
 Order of events on a typical pairing: `Opened` → `ClientConnected` → `Mtu` → `Subscribed(1)` →
 `RX`/`TX` exchange → the receiver sends `CLOSE(paired)` → `Closed(1)`.
 
+### 4.4 Push-to-talk
+
+The wearer holds a button, asks the receiver's assistant a question, and reads the answer on the
+watch. The watch sends exactly the question's audio, as it is captured, apart from the recording
+stream: it never goes to the spool, is never silence-skipped, and needs no stream to be running.
+When the recording stream is also running, the same mic frames go into it too. Advertised by
+`watch_capabilities` bit1 (`PUSH_TO_TALK`); needs an authorized receiver subscribed to Control
+and Data.
+
+The mic is on for a question only while the button is held. The watch may start it at the
+press, before the hold is confirmed, so the first words aren't clipped; if the button is released
+before the hold is confirmed, that audio is discarded on the watch and nothing is sent.
+
+`PTT_EVENT` (`0x49`, watch → phone): `u8 msg_id`, `u8 turn` (1–255, new for each question, never
+0), `u8 event`, `u8 detail`, `u16 frame_count`, `u16 max_seconds`.
+- `1 Start`: the hold is confirmed. `detail` is the trigger (1 Quick Launch hold, 2 hold inside
+  the watch's assistant screen, 3 a follow-up); `max_seconds` is the longest question the watch
+  records (15). Frames from the press onward follow as `PTT_AUDIO`.
+- `2 End`: the question is complete. `detail` 1 released, 2 reached `max_seconds`;
+  `frame_count` is the number of frames sent (`0 .. frame_count-1`).
+- `3 Cancel`: no question. `detail` 1 too short (under 0.3 s), 2 cancelled, 3 receiver
+  unavailable, 4 mic unavailable. Discard any frames of this turn.
+
+`PTT_AUDIO` (`0x84`, Data, watch → phone): `u8 msg_id`, `u8 turn`, `u16 first_frame`,
+`u8 frame_count` (1–32), then `frame_count` entries of `u16 length`, `u8 payload[length]`, as in
+`STREAM_DATA` (Speex wideband frames, 20 ms each, the codec of `STREAM_START`). Frames are numbered from 0 at the
+press; a missing range is lost audio. Sent as the frames are encoded, at most one mic buffer
+(about 40 ms) behind.
+
+`ASSISTANT_UPDATE` (`0x0D`, phone → watch): `u8 msg_id`, `u8 request_token`, `u8 turn`,
+`u8 kind`, `u8 detail`, `u8 length` (0–180), `u8 text[length]` (UTF-8, cut on a character
+boundary). The watch shows it for that turn and ACKs; an update for a turn the watch no longer
+shows is ACKed and ignored.
+- `1 Heard`: what the assistant understood the question to be; replaces any earlier one.
+- `2 Status`: what the assistant is doing ("Searching the web"); replaces any earlier one.
+- `3 Answer`: more of the answer, appended. Plain text; line breaks allowed.
+- `4 Done`: the answer is complete.
+- `5 Error`: the turn failed; `detail` 1 assistant not set up, 2 assistant unreachable, 3 no
+  answer, 4 didn't catch that, 5 busy with another question; text optional.
+
+Typical order: `PTT_EVENT Start` → `PTT_AUDIO`… → `PTT_EVENT End` → `Status`… → `Heard` →
+`Answer`… → `Done`.
+
+### 4.5 Watch actions
+
+During a question the receiver's assistant may ask the watch to do something. Advertised by
+`watch_capabilities` bit2 (`WATCH_ACTIONS`); needs an authorized receiver.
+
+`WATCH_ACTION` (`0x0E`, phone → watch): `u8 msg_id`, `u8 request_token`, `u8 action_id`
+(nonzero, chosen by the phone), `u8 flags` (bit0 `MORE`), `u8 length` (1–180),
+`u8 payload[length]`. A payload longer than one write is split across writes that share
+`action_id`, `MORE` set on all but the last; the joined payload is at most 512 bytes. Each
+write is ACKed: `ok` when taken, `rejected` when malformed or unknown, `busy` when a choice is
+already showing.
+
+Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
+- `1 Timer`: `u32 seconds` (1–86400), `str label` (≤ 48). A countdown on the watch; when it
+  ends the watch vibrates and shows the label.
+- `2 Alarm`: `u8 hour` (0–23), `u8 minute` (0–59), `str label` (≤ 48). A one-off alarm in the
+  watch's alarms, at the next such time.
+- `3 Choose`: `u16 timeout_s` (10–300), `str question` (≤ 120), `u8 count` (2–6), then
+  `count` × `str option` (≤ 48). The watch vibrates and asks; the wearer picks one or backs out.
+
+`WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,
+`u8 value`. `status` 1 done (timer started, alarm set, option chosen: `value` is its index from
+0), 2 declined (the wearer backed out), 3 timed out, 4 failed, 5 unsupported kind.
+
 ## 5. Data Channel
 
 One-byte `msg_id` (`0x80–0x9F`) plus packed struct per notification.
@@ -246,6 +317,7 @@ One-byte `msg_id` (`0x80–0x9F`) plus packed struct per notification.
 | `0x81` | `STREAM_DATA` | 20 + frames |
 | `0x82` | `STREAM_GAP` | 26 |
 | `0x83` | `STREAM_STOP` | 22 |
+| `0x84` | `PTT_AUDIO` | 5 + frames (Section 4.4) |
 
 `STREAM_START` (`0x80`):
 

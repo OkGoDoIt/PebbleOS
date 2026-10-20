@@ -43,6 +43,8 @@ typedef enum {
   AudioCompanionCtrlMsgIdMuseSetupClose = 0x0A,
   AudioCompanionCtrlMsgIdMuseSetupTx = 0x0B,
   AudioCompanionCtrlMsgIdMuseSetupDisconnect = 0x0C,
+  AudioCompanionCtrlMsgIdAssistantUpdate = 0x0D,
+  AudioCompanionCtrlMsgIdWatchAction = 0x0E,
 } AudioCompanionCtrlMsgId;
 
 //! Watch -> phone control message ids (notifications on the Control characteristic).
@@ -55,6 +57,8 @@ typedef enum {
   AudioCompanionCtrlMsgIdPhoneMediaQuery = 0x46,
   AudioCompanionCtrlMsgIdMuseSetupRx = 0x47,
   AudioCompanionCtrlMsgIdMuseSetupEvent = 0x48,
+  AudioCompanionCtrlMsgIdPttEvent = 0x49,
+  AudioCompanionCtrlMsgIdWatchActionResult = 0x4A,
 } AudioCompanionCtrlOutMsgId;
 
 //! Watch -> phone data message ids (notifications on the Data characteristic).
@@ -63,6 +67,7 @@ typedef enum {
   AudioCompanionDataMsgIdStreamData = 0x81,
   AudioCompanionDataMsgIdStreamGap = 0x82,
   AudioCompanionDataMsgIdStreamStop = 0x83,
+  AudioCompanionDataMsgIdPttAudio = 0x84,
 } AudioCompanionDataMsgId;
 
 //! Service states surfaced in the Info snapshot and STATE_CHANGED.
@@ -152,6 +157,94 @@ typedef enum {
 //! The watch can host Meta's Muse gadget setup service for a pairing window and relay it to the
 //! phone (MUSE_SETUP_* control messages).
 #define AUDIO_COMPANION_CAPABILITY_MUSE_SETUP (1u << 0)
+//! Push-to-talk: PTT_EVENT/PTT_AUDIO from the watch, ASSISTANT_UPDATE from the phone.
+#define AUDIO_COMPANION_CAPABILITY_PUSH_TO_TALK (1u << 1)
+//! Watch actions the assistant can ask for: WATCH_ACTION / WATCH_ACTION_RESULT.
+#define AUDIO_COMPANION_CAPABILITY_WATCH_ACTIONS (1u << 2)
+
+// ---- Push-to-talk (Section 4.4) ----
+
+//! The longest question the watch records; Muse takes voice notes of at most 15 s.
+#define AUDIO_COMPANION_PTT_MAX_SECONDS (15)
+//! Largest ASSISTANT_UPDATE text per write; fits an ATT MTU of 185 with room to spare.
+#define AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES (180)
+
+typedef enum {
+  AudioCompanionPttEventStart = 1,
+  AudioCompanionPttEventEnd = 2,
+  AudioCompanionPttEventCancel = 3,
+} AudioCompanionPttEvent;
+
+//! PTT_EVENT Start `detail`: what began the question.
+typedef enum {
+  AudioCompanionPttTriggerQuickLaunch = 1,
+  AudioCompanionPttTriggerInApp = 2,
+  AudioCompanionPttTriggerFollowUp = 3,
+} AudioCompanionPttTrigger;
+
+//! PTT_EVENT End `detail`.
+typedef enum {
+  AudioCompanionPttEndReleased = 1,
+  AudioCompanionPttEndMaxLength = 2,
+} AudioCompanionPttEndReason;
+
+//! PTT_EVENT Cancel `detail`.
+typedef enum {
+  AudioCompanionPttCancelTooShort = 1,
+  AudioCompanionPttCancelCancelled = 2,
+  AudioCompanionPttCancelPhoneUnavailable = 3,
+  AudioCompanionPttCancelMicUnavailable = 4,
+} AudioCompanionPttCancelReason;
+
+typedef enum {
+  //! What the assistant heard; replaces any earlier one.
+  AudioCompanionAssistantUpdateHeard = 1,
+  //! What the assistant is doing ("Searching the web"); replaces any earlier one.
+  AudioCompanionAssistantUpdateStatus = 2,
+  //! More of the answer, appended to what came before.
+  AudioCompanionAssistantUpdateAnswer = 3,
+  //! The answer is complete.
+  AudioCompanionAssistantUpdateDone = 4,
+  //! The turn failed; `detail` is an AudioCompanionAssistantError, text optional.
+  AudioCompanionAssistantUpdateError = 5,
+} AudioCompanionAssistantUpdateKind;
+
+typedef enum {
+  AudioCompanionAssistantErrorNotSetUp = 1,
+  AudioCompanionAssistantErrorUnreachable = 2,
+  AudioCompanionAssistantErrorNoAnswer = 3,
+  AudioCompanionAssistantErrorDidNotCatch = 4,
+  AudioCompanionAssistantErrorBusy = 5,
+} AudioCompanionAssistantError;
+
+// ---- Watch actions (Section 4.5) ----
+
+//! Largest WATCH_ACTION fragment, and the largest joined payload.
+#define AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES (180)
+#define AUDIO_COMPANION_WATCH_ACTION_PAYLOAD_MAX_BYTES (512)
+#define AUDIO_COMPANION_WATCH_ACTION_FLAG_MORE (1u << 0)
+#define AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES (48)
+#define AUDIO_COMPANION_WATCH_ACTION_QUESTION_MAX_BYTES (120)
+#define AUDIO_COMPANION_WATCH_ACTION_OPTION_MAX_BYTES (48)
+#define AUDIO_COMPANION_WATCH_ACTION_MIN_OPTIONS (2)
+#define AUDIO_COMPANION_WATCH_ACTION_MAX_OPTIONS (6)
+
+typedef enum {
+  //! u32 seconds, str label: a countdown on the watch.
+  AudioCompanionWatchActionTimer = 1,
+  //! u8 hour, u8 minute, str label: a one-off alarm at the next such time.
+  AudioCompanionWatchActionAlarm = 2,
+  //! u16 timeout_s, str question, u8 count, str option x count: the wearer picks one.
+  AudioCompanionWatchActionChoose = 3,
+} AudioCompanionWatchActionKind;
+
+typedef enum {
+  AudioCompanionWatchActionStatusDone = 1,
+  AudioCompanionWatchActionStatusDeclined = 2,
+  AudioCompanionWatchActionStatusTimedOut = 3,
+  AudioCompanionWatchActionStatusFailed = 4,
+  AudioCompanionWatchActionStatusUnsupported = 5,
+} AudioCompanionWatchActionStatus;
 
 // ---- Muse gadget setup relay (Section 4.3) ----
 
@@ -353,6 +446,56 @@ typedef struct PBL_PACKED {
 
 typedef struct PBL_PACKED {
   uint8_t msg_id;
+  //! 1-255, new for each press; never 0.
+  uint8_t turn;
+  uint8_t event;   // AudioCompanionPttEvent
+  uint8_t detail;  // trigger (Start), AudioCompanionPttEndReason (End), cancel reason (Cancel)
+  //! End/Cancel: frames captured in the turn (PTT_AUDIO frames 0 .. frame_count-1).
+  uint16_t frame_count;
+  //! Start: the longest question the watch records, in seconds.
+  uint16_t max_seconds;
+} AudioCompanionPttEventMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t turn;
+  //! Index of the first frame in this message, from 0 at the press.
+  uint16_t first_frame;
+  uint8_t frame_count;
+  //! Followed by frame_count x { uint16_t length; uint8_t payload[length]; } (Speex frames), the
+  //! STREAM_DATA frame entry.
+} AudioCompanionPttAudioHeader;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
+  uint8_t turn;
+  uint8_t kind;    // AudioCompanionAssistantUpdateKind
+  uint8_t detail;  // Error: AudioCompanionAssistantError
+  uint8_t length;
+  //! Followed by length bytes of UTF-8 text.
+} AudioCompanionAssistantUpdateHeader;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
+  //! Chosen by the phone, nonzero; the fragments of one action share it.
+  uint8_t action_id;
+  uint8_t flags;  // AUDIO_COMPANION_WATCH_ACTION_FLAG_MORE
+  uint8_t length;
+  //! Followed by length bytes of the action's payload (see Section 4.5).
+} AudioCompanionWatchActionHeader;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t action_id;
+  uint8_t status;  // AudioCompanionWatchActionStatus
+  //! Choose: the chosen option, from 0.
+  uint8_t value;
+} AudioCompanionWatchActionResultMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
   uint8_t request_token;
   uint8_t status;
   uint8_t granted_proto_version;
@@ -447,8 +590,27 @@ typedef struct {
 } AudioCompanionMuseSetupTx;
 
 typedef struct {
+  uint8_t request_token;
+  uint8_t turn;
+  uint8_t kind;
+  uint8_t detail;
+  uint8_t length;
+  char text[AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES];
+} AudioCompanionAssistantUpdate;
+
+typedef struct {
+  uint8_t request_token;
+  uint8_t action_id;
+  uint8_t flags;
+  uint8_t length;
+  uint8_t data[AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES];
+} AudioCompanionWatchActionFragment;
+
+typedef struct {
   uint8_t msg_id;  // AudioCompanionCtrlMsgId
   union {
+    AudioCompanionAssistantUpdate assistant_update;
+    AudioCompanionWatchActionFragment watch_action;
     AudioCompanionMuseSetupOpenMsg muse_setup_open;
     AudioCompanionMuseSetupCloseMsg muse_setup_close;
     AudioCompanionMuseSetupTx muse_setup_tx;
@@ -486,6 +648,16 @@ size_t audio_companion_protocol_build_muse_setup_rx(uint8_t *buf, size_t buf_siz
 size_t audio_companion_protocol_build_muse_setup_event(uint8_t *buf, size_t buf_size,
                                                        uint8_t event, uint8_t detail,
                                                        uint16_t mtu, uint16_t seconds_left);
+size_t audio_companion_protocol_build_ptt_event(uint8_t *buf, size_t buf_size, uint8_t turn,
+                                                uint8_t event, uint8_t detail,
+                                                uint16_t frame_count, uint16_t max_seconds);
+//! Writes only the 5-byte PTT_AUDIO header; the caller appends frame entries.
+size_t audio_companion_protocol_build_ptt_audio_header(uint8_t *buf, size_t buf_size,
+                                                       uint8_t turn, uint16_t first_frame,
+                                                       uint8_t frame_count);
+size_t audio_companion_protocol_build_watch_action_result(uint8_t *buf, size_t buf_size,
+                                                          uint8_t action_id, uint8_t status,
+                                                          uint8_t value);
 size_t audio_companion_protocol_build_ack(uint8_t *buf, size_t buf_size, uint8_t request_token,
                                           uint8_t status);
 size_t audio_companion_protocol_build_state_changed(uint8_t *buf, size_t buf_size,

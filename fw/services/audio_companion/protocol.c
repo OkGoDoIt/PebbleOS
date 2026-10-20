@@ -20,6 +20,11 @@ _Static_assert(sizeof(AudioCompanionMuseSetupTxHeader) == 3, "muse setup tx head
 _Static_assert(sizeof(AudioCompanionMuseSetupDisconnectMsg) == 4, "muse setup disconnect size");
 _Static_assert(sizeof(AudioCompanionMuseSetupRxHeader) == 4, "muse setup rx header size");
 _Static_assert(sizeof(AudioCompanionMuseSetupEventMsg) == 7, "muse setup event size");
+_Static_assert(sizeof(AudioCompanionPttEventMsg) == 8, "ptt event size");
+_Static_assert(sizeof(AudioCompanionPttAudioHeader) == 5, "ptt audio header size");
+_Static_assert(sizeof(AudioCompanionAssistantUpdateHeader) == 6, "assistant update header size");
+_Static_assert(sizeof(AudioCompanionWatchActionHeader) == 5, "watch action header size");
+_Static_assert(sizeof(AudioCompanionWatchActionResultMsg) == 4, "watch action result size");
 _Static_assert(sizeof(AudioCompanionAuthResultMsg) == 4, "auth result size");
 _Static_assert(sizeof(AudioCompanionRevokedMsg) == 2, "revoked size");
 _Static_assert(sizeof(AudioCompanionAckMsg) == 3, "ack size");
@@ -133,6 +138,44 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
       }
       memcpy(&msg_out->muse_setup_disconnect, data, sizeof(msg_out->muse_setup_disconnect));
       break;
+    case AudioCompanionCtrlMsgIdAssistantUpdate: {
+      AudioCompanionAssistantUpdateHeader header;
+      if (length < sizeof(header)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&header, data, sizeof(header));
+      if (header.turn == 0 || header.kind < AudioCompanionAssistantUpdateHeard ||
+          header.kind > AudioCompanionAssistantUpdateError ||
+          header.length > AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES ||
+          length < sizeof(header) + header.length) {
+        return AudioCompanionParseResultMalformed;
+      }
+      msg_out->assistant_update.request_token = header.request_token;
+      msg_out->assistant_update.turn = header.turn;
+      msg_out->assistant_update.kind = header.kind;
+      msg_out->assistant_update.detail = header.detail;
+      msg_out->assistant_update.length = header.length;
+      memcpy(msg_out->assistant_update.text, data + sizeof(header), header.length);
+      break;
+    }
+    case AudioCompanionCtrlMsgIdWatchAction: {
+      AudioCompanionWatchActionHeader header;
+      if (length < sizeof(header)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&header, data, sizeof(header));
+      if (header.action_id == 0 || header.length == 0 ||
+          header.length > AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES ||
+          length < sizeof(header) + header.length) {
+        return AudioCompanionParseResultMalformed;
+      }
+      msg_out->watch_action.request_token = header.request_token;
+      msg_out->watch_action.action_id = header.action_id;
+      msg_out->watch_action.flags = header.flags;
+      msg_out->watch_action.length = header.length;
+      memcpy(msg_out->watch_action.data, data + sizeof(header), header.length);
+      break;
+    }
     default:
       return AudioCompanionParseResultUnknown;
   }
@@ -222,6 +265,56 @@ size_t audio_companion_protocol_build_muse_setup_event(uint8_t *buf, size_t buf_
     .detail = detail,
     .mtu = mtu,
     .seconds_left = seconds_left,
+  };
+  memcpy(buf, &msg, sizeof(msg));
+  return sizeof(msg);
+}
+
+size_t audio_companion_protocol_build_ptt_event(uint8_t *buf, size_t buf_size, uint8_t turn,
+                                                uint8_t event, uint8_t detail,
+                                                uint16_t frame_count, uint16_t max_seconds) {
+  if (!buf || buf_size < sizeof(AudioCompanionPttEventMsg)) {
+    return 0;
+  }
+  const AudioCompanionPttEventMsg msg = {
+    .msg_id = AudioCompanionCtrlMsgIdPttEvent,
+    .turn = turn,
+    .event = event,
+    .detail = detail,
+    .frame_count = frame_count,
+    .max_seconds = max_seconds,
+  };
+  memcpy(buf, &msg, sizeof(msg));
+  return sizeof(msg);
+}
+
+size_t audio_companion_protocol_build_ptt_audio_header(uint8_t *buf, size_t buf_size,
+                                                       uint8_t turn, uint16_t first_frame,
+                                                       uint8_t frame_count) {
+  if (!buf || buf_size < sizeof(AudioCompanionPttAudioHeader)) {
+    return 0;
+  }
+  const AudioCompanionPttAudioHeader header = {
+    .msg_id = AudioCompanionDataMsgIdPttAudio,
+    .turn = turn,
+    .first_frame = first_frame,
+    .frame_count = frame_count,
+  };
+  memcpy(buf, &header, sizeof(header));
+  return sizeof(header);
+}
+
+size_t audio_companion_protocol_build_watch_action_result(uint8_t *buf, size_t buf_size,
+                                                          uint8_t action_id, uint8_t status,
+                                                          uint8_t value) {
+  if (!buf || buf_size < sizeof(AudioCompanionWatchActionResultMsg)) {
+    return 0;
+  }
+  const AudioCompanionWatchActionResultMsg msg = {
+    .msg_id = AudioCompanionCtrlMsgIdWatchActionResult,
+    .action_id = action_id,
+    .status = status,
+    .value = value,
   };
   memcpy(buf, &msg, sizeof(msg));
   return sizeof(msg);

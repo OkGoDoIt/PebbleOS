@@ -518,3 +518,78 @@ void test_audio_companion_protocol__build_muse_setup_out(void) {
   // A buffer too small for the value builds nothing.
   cl_assert_equal_i(audio_companion_protocol_build_muse_setup_rx(buf, 10, 0, 0, value, 20), 0);
 }
+
+// ---- Push-to-talk and watch actions ----
+
+void test_audio_companion_protocol__parse_assistant_update(void) {
+  AudioCompanionControlMsg msg;
+  cl_assert_equal_i(prv_parse_fixture("assistant_update_answer", &msg),
+                    AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdAssistantUpdate);
+  cl_assert_equal_i(msg.assistant_update.request_token, 0x42);
+  cl_assert_equal_i(msg.assistant_update.turn, 7);
+  cl_assert_equal_i(msg.assistant_update.kind, AudioCompanionAssistantUpdateAnswer);
+  const ProtocolFixture *fx = prv_find_fixture("assistant_update_answer");
+  cl_assert_equal_i(msg.assistant_update.length, fx->length - 6);
+  cl_assert(memcmp(msg.assistant_update.text, fx->data + 6, fx->length - 6) == 0);
+
+  cl_assert_equal_i(prv_parse_fixture("assistant_update_error", &msg), AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.assistant_update.kind, AudioCompanionAssistantUpdateError);
+  cl_assert_equal_i(msg.assistant_update.detail, AudioCompanionAssistantErrorNotSetUp);
+  cl_assert_equal_i(msg.assistant_update.length, 0);
+}
+
+void test_audio_companion_protocol__parse_watch_action_fragments(void) {
+  AudioCompanionControlMsg msg;
+  cl_assert_equal_i(prv_parse_fixture("watch_action_choose_first", &msg),
+                    AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdWatchAction);
+  cl_assert_equal_i(msg.watch_action.action_id, 5);
+  cl_assert_equal_i(msg.watch_action.flags, AUDIO_COMPANION_WATCH_ACTION_FLAG_MORE);
+  cl_assert_equal_i(msg.watch_action.length, AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES);
+  cl_assert_equal_i(msg.watch_action.data[0], AudioCompanionWatchActionChoose);
+
+  cl_assert_equal_i(prv_parse_fixture("watch_action_timer", &msg), AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.watch_action.action_id, 3);
+  cl_assert_equal_i(msg.watch_action.flags, 0);
+  cl_assert_equal_i(msg.watch_action.data[0], AudioCompanionWatchActionTimer);
+}
+
+void test_audio_companion_protocol__build_push_to_talk_out(void) {
+  uint8_t buf[64];
+  size_t len;
+
+  len = audio_companion_protocol_build_ptt_event(buf, sizeof(buf), 7, AudioCompanionPttEventStart,
+                                                 AudioCompanionPttTriggerQuickLaunch, 0,
+                                                 AUDIO_COMPANION_PTT_MAX_SECONDS);
+  prv_assert_builder_matches("ptt_event_start", buf, len);
+  len = audio_companion_protocol_build_ptt_event(buf, sizeof(buf), 7, AudioCompanionPttEventEnd,
+                                                 AudioCompanionPttEndReleased, 212, 0);
+  prv_assert_builder_matches("ptt_event_end", buf, len);
+  len = audio_companion_protocol_build_ptt_event(buf, sizeof(buf), 9, AudioCompanionPttEventCancel,
+                                                 AudioCompanionPttCancelTooShort, 9, 0);
+  prv_assert_builder_matches("ptt_event_cancel_too_short", buf, len);
+
+  len = audio_companion_protocol_build_watch_action_result(
+      buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDone, 1);
+  prv_assert_builder_matches("watch_action_result_chosen", buf, len);
+  len = audio_companion_protocol_build_watch_action_result(
+      buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDeclined, 0);
+  prv_assert_builder_matches("watch_action_result_declined", buf, len);
+
+  // PTT_AUDIO: the header, then STREAM_DATA-style frame entries.
+  uint8_t audio[128];
+  len = audio_companion_protocol_build_ptt_audio_header(audio, sizeof(audio), 7, 0, 2);
+  cl_assert_equal_i(len, sizeof(AudioCompanionPttAudioHeader));
+  const uint8_t lengths[2] = {25, 27};
+  for (uint32_t i = 0; i < 2; i++) {
+    const uint16_t frame_len = lengths[i];
+    memcpy(audio + len, &frame_len, sizeof(frame_len));
+    len += sizeof(frame_len);
+    uint8_t payload[AUDIO_COMPANION_MAX_ENCODED_FRAME_BYTES];
+    prv_fill_frame_payload(i, frame_len, payload);
+    memcpy(audio + len, payload, frame_len);
+    len += frame_len;
+  }
+  prv_assert_builder_matches("ptt_audio_2frames", audio, len);
+}
