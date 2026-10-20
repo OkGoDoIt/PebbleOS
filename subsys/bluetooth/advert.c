@@ -174,7 +174,7 @@ static void prv_handle_disconnection_event(struct ble_gap_event *event) {
 #ifdef CONFIG_BT_MUSE_SETUP_SERVICE
   // The window only exists alongside a phone link, and its borrowed advertiser must be back before
   // reconnect advertising starts.
-  pbl_bt_muse_setup_close();
+  pbl_bt_muse_setup_phone_link_lost();
 #endif
 
   struct pbl_bt_gatt_device_disconnection_event gatt_event;

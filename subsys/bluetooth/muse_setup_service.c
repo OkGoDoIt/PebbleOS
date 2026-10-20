@@ -331,14 +331,25 @@ unlock:
   return ok;
 }
 
-void pbl_bt_muse_setup_close(void) {
+static void prv_close(const char *why) {
   bt_lock();
   const uint16_t conn_handle = s_state.conn_handle;
-  prv_end_window_locked("closed");
+  prv_end_window_locked(why);
   bt_unlock();
   if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
     ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
   }
+}
+
+void pbl_bt_muse_setup_close(void) {
+  prv_close("closed");
+}
+
+void pbl_bt_muse_setup_phone_link_lost(void) {
+  if (!s_state.open) {
+    return;
+  }
+  prv_close("phone link lost");
 }
 
 void pbl_bt_muse_setup_get_status(PblBtMuseSetupStatus *status) {

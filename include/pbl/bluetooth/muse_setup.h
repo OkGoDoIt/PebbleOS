@@ -61,6 +61,10 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
 //! Closes the window: stops advertising, ends the Muse link, returns the advertiser.
 void pbl_bt_muse_setup_close(void);
 
+//! The phone link dropped: the window closes (it only exists alongside a phone link), recording
+//! that as the reason.
+void pbl_bt_muse_setup_phone_link_lost(void);
+
 void pbl_bt_muse_setup_get_status(PblBtMuseSetupStatus *status);
 
 void pbl_bt_muse_setup_set_rx_handler(PblBtMuseSetupRxHandler handler);
