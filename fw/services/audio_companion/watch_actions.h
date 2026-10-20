@@ -51,6 +51,9 @@ typedef struct {
       uint8_t metric;  // AudioCompanionWatchHealthMetric
       uint8_t days;
     } health;
+    struct {
+      char text[AUDIO_COMPANION_WATCH_ACTION_NOTICE_MAX_BYTES + 1];
+    } notice;
   };
 } WatchActionRequest;
 
@@ -69,6 +72,11 @@ typedef void (*WatchActionsChooseDismissHandler)(void);
 void watch_actions_set_ui_handlers(WatchActionsChooseHandler choose,
                                    WatchActionsTimerDoneHandler timer_done,
                                    WatchActionsChooseDismissHandler dismiss);
+
+//! Shows a short message from the receiver. Called on KernelMain; `text` lasts only the call.
+typedef void (*WatchActionsNoticeHandler)(const char *text);
+
+void watch_actions_set_notice_handler(WatchActionsNoticeHandler notice);
 
 void watch_actions_init(void);
 

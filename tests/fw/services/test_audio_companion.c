@@ -3131,6 +3131,13 @@ static void prv_test_dismiss_handler(void) {
   s_dismiss_calls++;
 }
 
+static char s_notice_text[128];
+
+static void prv_test_notice_handler(const char *text) {
+  strncpy(s_notice_text, text, sizeof(s_notice_text) - 1);
+  s_notice_text[sizeof(s_notice_text) - 1] = '\0';
+}
+
 static void prv_watch_actions_ready(void) {
   prv_ptt_receiver_ready(false);
   s_choose_calls = 0;
@@ -3139,6 +3146,8 @@ static void prv_watch_actions_ready(void) {
   s_timer_done_label[0] = '\0';
   watch_actions_set_ui_handlers(prv_test_choose_handler, prv_test_timer_done_handler,
                                 prv_test_dismiss_handler);
+  watch_actions_set_notice_handler(prv_test_notice_handler);
+  s_notice_text[0] = '\0';
 }
 
 static size_t prv_wa_string(uint8_t *out, const char *text) {
@@ -3439,6 +3448,19 @@ void test_audio_companion__watch_action_opens_an_app_by_name(void) {
   cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
 }
 
+void test_audio_companion__watch_action_notice_is_shown(void) {
+  prv_watch_actions_ready();
+  uint8_t payload[128];
+  payload[0] = AudioCompanionWatchActionNotice;
+  const size_t length =
+      1 + prv_wa_string(payload + 1, "Open Pebble Audio on your iPhone to give it access.");
+  prv_send_simple_watch_action(0x6A, payload, length);
+  cl_assert_equal_s(s_notice_text, "Open Pebble Audio on your iPhone to give it access.");
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
+}
+
 void test_audio_companion__watch_action_find_and_health(void) {
   prv_watch_actions_ready();
   const uint8_t find[] = {AudioCompanionWatchActionFindWatch, 200};
@@ -3466,6 +3488,7 @@ PTT_ONLY(watch_action_music_says_what_is_playing)
 PTT_ONLY(watch_action_quiet_time_turns_itself_off)
 PTT_ONLY(watch_action_opens_an_app_by_name)
 PTT_ONLY(watch_action_find_and_health)
+PTT_ONLY(watch_action_notice_is_shown)
 PTT_ONLY(ptt_a_short_press_sends_nothing_and_stops_the_mic)
 PTT_ONLY(ptt_a_question_goes_out_whole_and_never_into_the_recording)
 PTT_ONLY(ptt_with_recording_on_both_hear_and_the_mic_stays_on)

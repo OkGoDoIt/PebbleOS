@@ -315,6 +315,8 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
   seconds, 6 heart rate — and `u8 days` (1–7). Result text: the daily values comma-separated,
   today first, `-1` for a day without data; for heart rate, `bpm,age_seconds` of the latest
   reading. Failed: no activity data.
+- `9 Notice`: `str text` (≤ 120). A short message from the receiver itself (not the assistant),
+  shown on the watch until dismissed or for 15 s.
 
 `WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,
 `u8 value`, then optionally `u8 text_length` (1–160) and that much UTF-8. `status` 1 done (timer

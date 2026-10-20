@@ -35,6 +35,7 @@ static TimerID s_quiet_time_timer = TIMER_INVALID_ID;
 static WatchActionsChooseHandler s_choose_handler;
 static WatchActionsTimerDoneHandler s_timer_done_handler;
 static WatchActionsChooseDismissHandler s_dismiss_handler;
+static WatchActionsNoticeHandler s_notice_handler;
 
 // ---- parsing ----
 
@@ -141,6 +142,9 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       }
       return r.ok && out->health.metric >= AudioCompanionWatchHealthSteps &&
              out->health.metric <= AudioCompanionWatchHealthHeartRate;
+    case AudioCompanionWatchActionNotice:
+      prv_string(&r, out->notice.text, AUDIO_COMPANION_WATCH_ACTION_NOTICE_MAX_BYTES);
+      return r.ok && out->notice.text[0] != '\0';
     default:
       if (status_out) {
         *status_out = AudioCompanionWatchActionStatusUnsupported;
@@ -211,6 +215,19 @@ uint32_t watch_actions_active_timer_count(void) {
   }
   pbl_mutex_unlock(&s_lock);
   return count;
+}
+
+// ---- A notice ----
+
+static void prv_notice_kernel_main_cb(void *data) {
+  char *text = data;
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const WatchActionsNoticeHandler handler = s_notice_handler;
+  pbl_mutex_unlock(&s_lock);
+  if (handler) {
+    handler(text);
+  }
+  kernel_free(text);
 }
 
 // ---- Quiet Time for a while ----
@@ -321,6 +338,20 @@ static void prv_run_system_task_cb(void *data) {
                                                AudioCompanionWatchActionStatusDone, 0, NULL);
       kernel_free(pending);
       return;
+    case AudioCompanionWatchActionNotice: {
+      const size_t length = strlen(request->notice.text) + 1;
+      char *text = kernel_malloc(length);
+      if (text) {
+        memcpy(text, request->notice.text, length);
+        launcher_task_add_callback(prv_notice_kernel_main_cb, text);
+      }
+      audio_companion_send_watch_action_result(
+          pending->action_id,
+          text ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          NULL);
+      kernel_free(pending);
+      return;
+    }
     case AudioCompanionWatchActionHealth: {
       char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
       const bool ok =
@@ -443,6 +474,12 @@ void watch_actions_set_ui_handlers(WatchActionsChooseHandler choose,
   pbl_mutex_unlock(&s_lock);
 }
 
+void watch_actions_set_notice_handler(WatchActionsNoticeHandler notice) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_notice_handler = notice;
+  pbl_mutex_unlock(&s_lock);
+}
+
 void watch_actions_init(void) {
   for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
     s_timers[i].timer = TIMER_INVALID_ID;
@@ -458,6 +495,7 @@ void watch_actions_test_reset(void) {
   s_choose_handler = NULL;
   s_timer_done_handler = NULL;
   s_dismiss_handler = NULL;
+  s_notice_handler = NULL;
   memset(s_timers, 0, sizeof(s_timers));
   watch_actions_init();
 }

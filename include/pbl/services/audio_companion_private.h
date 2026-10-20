@@ -233,6 +233,7 @@ typedef enum {
 #define AUDIO_COMPANION_WATCH_ACTION_APP_NAME_MAX_BYTES (48)
 #define AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS (7)
 #define AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECONDS (30)
+#define AUDIO_COMPANION_WATCH_ACTION_NOTICE_MAX_BYTES (120)
 
 typedef enum {
   //! u32 seconds, str label: a countdown on the watch.
@@ -251,6 +252,8 @@ typedef enum {
   AudioCompanionWatchActionFindWatch = 7,
   //! u8 metric (AudioCompanionWatchHealthMetric), u8 days (1-7): the watch's activity data.
   AudioCompanionWatchActionHealth = 8,
+  //! str text (<= 120): a short message from the receiver, shown until dismissed or 15 s.
+  AudioCompanionWatchActionNotice = 9,
 } AudioCompanionWatchActionKind;
 
 typedef enum {

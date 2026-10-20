@@ -84,6 +84,38 @@ static void prv_timer_done_handler(const char *label) {
   card->buzz_timer = evented_timer_register(TIMER_BUZZ_INTERVAL_MS, true, prv_timer_buzz_cb, card);
 }
 
+// ---- a notice ----
+
+//! How long a notice stays up if nobody dismisses it.
+#define NOTICE_TIMEOUT_MS (15 * 1000)
+
+typedef struct {
+  SimpleDialog *dialog;
+  char text[AUDIO_COMPANION_WATCH_ACTION_NOTICE_MAX_BYTES + 1];
+} NoticeCard;
+
+static void prv_notice_unload(void *context) {
+  task_free(context);
+}
+
+static void prv_notice_handler(const char *text) {
+  PBL_ASSERT_TASK(PebbleTask_KernelMain);
+  NoticeCard *card = task_zalloc_check(sizeof(*card));
+  strncpy(card->text, text, sizeof(card->text) - 1);
+  card->dialog = simple_dialog_create("Muse Notice");
+  Dialog *dialog = simple_dialog_get_dialog(card->dialog);
+  dialog_set_text(dialog, card->text);
+  dialog_set_background_color(dialog, ACTIONS_ACCENT);
+  dialog_set_text_color(dialog, GColorWhite);
+  dialog_set_icon(dialog, RESOURCE_ID_GENERIC_WARNING_LARGE);
+  dialog_set_timeout(dialog, NOTICE_TIMEOUT_MS);
+  const DialogCallbacks callbacks = {.unload = prv_notice_unload};
+  dialog_set_callbacks(dialog, &callbacks, card);
+  simple_dialog_push(card->dialog, modal_manager_get_window_stack(ModalPriorityGeneric));
+  light_enable_interaction();
+  vibes_short_pulse();
+}
+
 // ---- a choice ----
 
 typedef struct {
@@ -245,6 +277,7 @@ static void prv_dismiss_handler(void) {
 
 void audio_companion_actions_ui_init(void) {
   watch_actions_set_ui_handlers(prv_choose_handler, prv_timer_done_handler, prv_dismiss_handler);
+  watch_actions_set_notice_handler(prv_notice_handler);
 }
 
 #else
