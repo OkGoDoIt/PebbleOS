@@ -25,6 +25,9 @@
 //! A version-1 snapshot is the first 20 bytes; the builder emits only those for info_version 1.
 #define AUDIO_COMPANION_INFO_V1_SIZE (20)
 #define AUDIO_COMPANION_INFO_SIZE (32)
+//! Largest control write the watch accepts: a MUSE_SETUP_TX carrying a 240-byte value, or any
+//! other request with room to spare. An ATT MTU of 256 carries 253.
+#define AUDIO_COMPANION_MAX_CONTROL_WRITE_BYTES (253)
 
 //! Phone -> watch control message ids (writes to the Control characteristic).
 typedef enum {
@@ -36,6 +39,10 @@ typedef enum {
   AudioCompanionCtrlMsgIdReceiverHealth = 0x06,
   AudioCompanionCtrlMsgIdEnableRequest = 0x07,
   AudioCompanionCtrlMsgIdPhoneMediaState = 0x08,
+  AudioCompanionCtrlMsgIdMuseSetupOpen = 0x09,
+  AudioCompanionCtrlMsgIdMuseSetupClose = 0x0A,
+  AudioCompanionCtrlMsgIdMuseSetupTx = 0x0B,
+  AudioCompanionCtrlMsgIdMuseSetupDisconnect = 0x0C,
 } AudioCompanionCtrlMsgId;
 
 //! Watch -> phone control message ids (notifications on the Control characteristic).
@@ -46,6 +53,8 @@ typedef enum {
   AudioCompanionCtrlMsgIdStateChanged = 0x44,
   AudioCompanionCtrlMsgIdError = 0x45,
   AudioCompanionCtrlMsgIdPhoneMediaQuery = 0x46,
+  AudioCompanionCtrlMsgIdMuseSetupRx = 0x47,
+  AudioCompanionCtrlMsgIdMuseSetupEvent = 0x48,
 } AudioCompanionCtrlOutMsgId;
 
 //! Watch -> phone data message ids (notifications on the Data characteristic).
@@ -118,6 +127,8 @@ typedef enum {
   AudioCompanionAckStatusOk = 0,
   AudioCompanionAckStatusRejected = 1,
   AudioCompanionAckStatusBadState = 2,
+  //! Try again shortly: the watch could not send right now (out of transport buffers).
+  AudioCompanionAckStatusBusy = 3,
 } AudioCompanionAckStatus;
 
 typedef enum {
@@ -136,6 +147,61 @@ typedef enum {
 //! send_backpressure_events carries a real count. Firmware that predates the field leaves those
 //! bytes zero, which is indistinguishable from "no backpressure" without this bit.
 #define AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER (1u << 3)
+
+//! Info watch_capabilities bits.
+//! The watch can host Meta's Muse gadget setup service for a pairing window and relay it to the
+//! phone (MUSE_SETUP_* control messages).
+#define AUDIO_COMPANION_CAPABILITY_MUSE_SETUP (1u << 0)
+
+// ---- Muse gadget setup relay (Section 4.3) ----
+
+#define AUDIO_COMPANION_MUSE_SUFFIX_LEN (6)
+//! Largest MUSE_SETUP_TX payload: one notification to the Muse app, which chunks at 160 bytes.
+#define AUDIO_COMPANION_MUSE_TX_MAX_BYTES (240)
+//! Largest MUSE_SETUP_RX payload per notification; a longer characteristic value is split across
+//! notifications with the MORE flag set on all but the last.
+#define AUDIO_COMPANION_MUSE_RX_MAX_BYTES (249)
+#define AUDIO_COMPANION_MUSE_RX_FLAG_MORE (1u << 0)
+#define AUDIO_COMPANION_MUSE_WINDOW_MIN_SECS (30)
+#define AUDIO_COMPANION_MUSE_WINDOW_MAX_SECS (600)
+
+//! MUSE_SETUP_CLOSE reasons (phone -> watch): why the app ended the window.
+typedef enum {
+  AudioCompanionMuseAppCloseReasonPaired = 1,
+  AudioCompanionMuseAppCloseReasonCancelled = 2,
+  AudioCompanionMuseAppCloseReasonFailed = 3,
+} AudioCompanionMuseAppCloseReason;
+
+//! MUSE_SETUP_EVENT event codes (watch -> phone).
+typedef enum {
+  //! The window is open and the watch is advertising as MuseGadgetXXXXXX; `seconds_left` set.
+  AudioCompanionMuseEventOpened = 1,
+  //! The Muse app connected to the window; `mtu` set.
+  AudioCompanionMuseEventClientConnected = 2,
+  //! The Muse app subscribed to (detail 1) or unsubscribed from (detail 0) the setup channel.
+  AudioCompanionMuseEventSubscribed = 3,
+  //! The Muse app's link ended; `detail` is the HCI reason. The window stays open if time remains.
+  AudioCompanionMuseEventClientDisconnected = 4,
+  //! The window ended; `detail` is an AudioCompanionMuseCloseReason.
+  AudioCompanionMuseEventClosed = 5,
+  //! Writes from the Muse app were dropped; `detail` counts them.
+  AudioCompanionMuseEventRxOverflow = 6,
+  //! The Muse app's ATT MTU changed; `mtu` set.
+  AudioCompanionMuseEventMtu = 7,
+} AudioCompanionMuseEvent;
+
+//! Why a window closed (MUSE_SETUP_EVENT Closed `detail`).
+typedef enum {
+  AudioCompanionMuseCloseReasonAppPaired = 1,
+  AudioCompanionMuseCloseReasonAppCancelled = 2,
+  AudioCompanionMuseCloseReasonAppFailed = 3,
+  AudioCompanionMuseCloseReasonTimeout = 4,
+  AudioCompanionMuseCloseReasonCancelledOnWatch = 5,
+  AudioCompanionMuseCloseReasonDeclinedOnWatch = 6,
+  AudioCompanionMuseCloseReasonPhoneLinkLost = 7,
+  AudioCompanionMuseCloseReasonCouldNotStart = 8,
+  AudioCompanionMuseCloseReasonReceiverGone = 9,
+} AudioCompanionMuseCloseReason;
 
 //! STREAM_START flags. RESUME marks a re-announcement of an already-running stream to a freshly
 //! (re)attached receiver: the receiver must take the first STREAM_DATA/STREAM_GAP sequence as the
@@ -243,6 +309,51 @@ typedef struct PBL_PACKED {
 typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t request_token;
+  uint16_t window_secs;
+  //! The six uppercase hex digits after "MuseGadget": the gadget identity's suffix.
+  char suffix[AUDIO_COMPANION_MUSE_SUFFIX_LEN];
+  uint8_t flags;
+} AudioCompanionMuseSetupOpenMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
+  uint8_t reason;  // AudioCompanionMuseAppCloseReason
+} AudioCompanionMuseSetupCloseMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
+  uint8_t length;
+  //! Followed by length bytes: one value to notify on the setup TX characteristic, verbatim.
+} AudioCompanionMuseSetupTxHeader;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
+  uint16_t delay_ms;
+} AudioCompanionMuseSetupDisconnectMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  //! Increments per characteristic value; the fragments of one value share it.
+  uint8_t seq;
+  uint8_t flags;  // AUDIO_COMPANION_MUSE_RX_FLAG_MORE
+  uint8_t length;
+  //! Followed by length bytes of the value the Muse app wrote.
+} AudioCompanionMuseSetupRxHeader;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t event;  // AudioCompanionMuseEvent
+  uint8_t detail;
+  uint16_t mtu;
+  uint16_t seconds_left;
+} AudioCompanionMuseSetupEventMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  uint8_t request_token;
   uint8_t status;
   uint8_t granted_proto_version;
 } AudioCompanionAuthResultMsg;
@@ -330,8 +441,18 @@ typedef struct {
 } AudioCompanionAuthRequest;
 
 typedef struct {
+  uint8_t request_token;
+  uint8_t length;
+  uint8_t data[AUDIO_COMPANION_MUSE_TX_MAX_BYTES];
+} AudioCompanionMuseSetupTx;
+
+typedef struct {
   uint8_t msg_id;  // AudioCompanionCtrlMsgId
   union {
+    AudioCompanionMuseSetupOpenMsg muse_setup_open;
+    AudioCompanionMuseSetupCloseMsg muse_setup_close;
+    AudioCompanionMuseSetupTx muse_setup_tx;
+    AudioCompanionMuseSetupDisconnectMsg muse_setup_disconnect;
     AudioCompanionAuthRequest auth_request;
     AudioCompanionAuthRevokeMsg auth_revoke;
     AudioCompanionCheckpointMsg checkpoint;
@@ -358,6 +479,13 @@ size_t audio_companion_protocol_build_auth_result(uint8_t *buf, size_t buf_size,
                                                   uint8_t granted_proto_version);
 size_t audio_companion_protocol_build_revoked(uint8_t *buf, size_t buf_size, uint8_t reason);
 size_t audio_companion_protocol_build_phone_media_query(uint8_t *buf, size_t buf_size);
+//! One MUSE_SETUP_RX notification: header plus `length` bytes of `data`.
+size_t audio_companion_protocol_build_muse_setup_rx(uint8_t *buf, size_t buf_size, uint8_t seq,
+                                                    uint8_t flags, const uint8_t *data,
+                                                    uint8_t length);
+size_t audio_companion_protocol_build_muse_setup_event(uint8_t *buf, size_t buf_size,
+                                                       uint8_t event, uint8_t detail,
+                                                       uint16_t mtu, uint16_t seconds_left);
 size_t audio_companion_protocol_build_ack(uint8_t *buf, size_t buf_size, uint8_t request_token,
                                           uint8_t status);
 size_t audio_companion_protocol_build_state_changed(uint8_t *buf, size_t buf_size,

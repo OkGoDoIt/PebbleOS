@@ -83,6 +83,10 @@ flight; the watch answers every request with a response notification carrying th
 | `0x06` | `RECEIVER_HEALTH` | 8 |
 | `0x07` | `ENABLE_REQUEST` | 2 |
 | `0x08` | `PHONE_MEDIA_STATE` | 3 |
+| `0x09` | `MUSE_SETUP_OPEN` | 11 |
+| `0x0A` | `MUSE_SETUP_CLOSE` | 3 |
+| `0x0B` | `MUSE_SETUP_TX` | 3 + length |
+| `0x0C` | `MUSE_SETUP_DISCONNECT` | 4 |
 
 `AUTH_REQUEST` (`0x01`):
 
@@ -142,6 +146,8 @@ already on, the watch may return `ACK(ok)` immediately.
 | `0x44` | `STATE_CHANGED` | 2 |
 | `0x45` | `ERROR` | 6 |
 | `0x46` | `PHONE_MEDIA_QUERY` | 1 |
+| `0x47` | `MUSE_SETUP_RX` | 4 + length |
+| `0x48` | `MUSE_SETUP_EVENT` | 7 |
 
 `AUTH_RESULT` (`0x41`): `u8 msg_id`, `u8 request_token`, `u8 status`, `u8 granted_proto_version`.
 Status: 0 ok, 1 pending-user-consent, 2 denied-mismatch, 3 denied-disabled, 4 invalid.
@@ -155,9 +161,10 @@ the final status (0 on accept; 4 on decline or timeout).
 `REVOKED` (`0x42`): `u8 msg_id`, `u8 reason` (1 user-on-watch, 2 app-requested, 3 replaced).
 Unsolicited (no request token).
 
-`ACK` (`0x43`): `u8 msg_id`, `u8 request_token`, `u8 status` (0 ok, 1 rejected, 2 bad-state).
-Response to `CHECKPOINT`, `PAUSE_REQUEST`, `RESUME_REQUEST`, `RECEIVER_HEALTH`,
-`ENABLE_REQUEST`, and `PHONE_MEDIA_STATE`.
+`ACK` (`0x43`): `u8 msg_id`, `u8 request_token`, `u8 status` (0 ok, 1 rejected, 2 bad-state,
+3 busy — the watch could not send right now, try again shortly). Response to `CHECKPOINT`,
+`PAUSE_REQUEST`, `RESUME_REQUEST`, `RECEIVER_HEALTH`, `ENABLE_REQUEST`, `PHONE_MEDIA_STATE`, and
+the `MUSE_SETUP_*` requests.
 
 `STATE_CHANGED` (`0x44`): `u8 msg_id`, `u8 service_state` (Section 7). Pushed on every service
 state transition while a control subscription exists.
@@ -177,6 +184,57 @@ playing audio (iOS `AVAudioSession.isOtherAudioPlaying`); bit2 `PRIMARY_AUDIO`: 
 non-mixable primary audio (iOS `secondaryAudioShouldBeSilencedHint`). Sent in answer to
 `PHONE_MEDIA_QUERY`, or unprompted when the receiver notices a change. The watch replies with
 `ACK`.
+
+### 4.3 Muse gadget setup relay
+
+Meta's Muse app pairs a "gadget" over BLE (Muse Gadget SDK): the gadget advertises as
+`MuseGadgetXXXXXX` with setup service `7fdd3d1c-38ea-46cf-8b46-314ecf5f240c`, the app writes
+JSON records to its RX characteristic (`4d593029-…`) and reads replies as notifications on its
+TX characteristic (`d75dc4ca-…`). These messages let the receiver app be that gadget: for a short
+**window** the watch hosts the setup service on a second, private connection and relays every
+characteristic value between the Muse app and the receiver, which runs the setup protocol and
+holds every key. The watch never parses the setup records. The watch advertises the window
+`watch_capabilities` bit0 (`MUSE_SETUP`); a watch without it ignores these ids.
+
+The window needs the phone link up, and the user confirms it on the watch first. All of these
+need an authorized receiver (else `ERROR(unauthorized)`).
+
+`MUSE_SETUP_OPEN` (`0x09`): `u8 msg_id`, `u8 request_token`, `u16 window_secs` (clamped to
+30–600), `char suffix[6]` (the six uppercase hex digits after `MuseGadget`, the gadget identity's
+suffix), `u8 flags` (0). `ACK(ok)` means the watch is asking the user; the outcome follows as
+`MUSE_SETUP_EVENT` Opened or Closed. `ACK(bad-state)`: a window is already pending or open.
+`ACK(rejected)`: bad suffix, or the watch cannot ask the user.
+
+`MUSE_SETUP_CLOSE` (`0x0A`): `u8 msg_id`, `u8 request_token`, `u8 reason` (1 paired, 2 cancelled,
+3 failed). Ends the window; the watch shows the matching ending. `ACK(bad-state)` if none is open.
+
+`MUSE_SETUP_TX` (`0x0B`): `u8 msg_id`, `u8 request_token`, `u8 length` (1–240), `u8 data[length]`.
+One value to notify on the setup TX characteristic, verbatim; the receiver does the Muse app's
+`0xFE` chunk framing itself. `ACK(ok)` once handed to the transport; `ACK(rejected)` when the Muse
+app is not connected and subscribed; `ACK(busy)` when the transport refused it (retry);
+`ACK(bad-state)` when no window is open.
+
+`MUSE_SETUP_DISCONNECT` (`0x0C`): `u8 msg_id`, `u8 request_token`, `u16 delay_ms` (advisory).
+Ends the Muse app's link; the window stays open so it can connect again. `ACK(bad-state)` if no
+link.
+
+`MUSE_SETUP_RX` (`0x47`): `u8 msg_id`, `u8 seq`, `u8 flags`, `u8 length`, `u8 data[length]`.
+Unsolicited: one value the Muse app wrote to the setup RX characteristic. A value longer than
+one notification carries is split across notifications that share `seq`, with `flags` bit0
+`MORE` set on all but the last; the receiver concatenates them in order. `seq` increments per
+value, so a gap means a value was lost (see `RxOverflow`).
+
+`MUSE_SETUP_EVENT` (`0x48`): `u8 msg_id`, `u8 event`, `u8 detail`, `u16 mtu`, `u16 seconds_left`.
+Unsolicited. `mtu` is the Muse link's ATT MTU (0 when none) and `seconds_left` the window's
+remaining time. Events: 1 `Opened` (advertising); 2 `ClientConnected`; 3 `Subscribed` (detail 1
+subscribed to TX, 0 unsubscribed); 4 `ClientDisconnected` (detail = HCI reason; the window stays
+open while time remains); 5 `Closed` (detail: 1 app-paired, 2 app-cancelled, 3 app-failed,
+4 timeout, 5 cancelled on the watch, 6 declined on the watch, 7 phone link lost, 8 could not
+start, 9 receiver gone); 6 `RxOverflow` (detail = values dropped since the last report);
+7 `Mtu` (the link's MTU changed).
+
+Order of events on a typical pairing: `Opened` → `ClientConnected` → `Mtu` → `Subscribed(1)` →
+`RX`/`TX` exchange → the receiver sends `CLOSE(paired)` → `Closed(1)`.
 
 ## 5. Data Channel
 

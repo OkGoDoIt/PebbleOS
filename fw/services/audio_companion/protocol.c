@@ -14,6 +14,12 @@ _Static_assert(sizeof(AudioCompanionEnableRequestMsg) == 2, "enable request size
 _Static_assert(sizeof(AudioCompanionReceiverHealthMsg) == 8, "receiver health size");
 _Static_assert(sizeof(AudioCompanionPhoneMediaStateMsg) == 3, "phone media state size");
 _Static_assert(sizeof(AudioCompanionPhoneMediaQueryMsg) == 1, "phone media query size");
+_Static_assert(sizeof(AudioCompanionMuseSetupOpenMsg) == 11, "muse setup open size");
+_Static_assert(sizeof(AudioCompanionMuseSetupCloseMsg) == 3, "muse setup close size");
+_Static_assert(sizeof(AudioCompanionMuseSetupTxHeader) == 3, "muse setup tx header size");
+_Static_assert(sizeof(AudioCompanionMuseSetupDisconnectMsg) == 4, "muse setup disconnect size");
+_Static_assert(sizeof(AudioCompanionMuseSetupRxHeader) == 4, "muse setup rx header size");
+_Static_assert(sizeof(AudioCompanionMuseSetupEventMsg) == 7, "muse setup event size");
 _Static_assert(sizeof(AudioCompanionAuthResultMsg) == 4, "auth result size");
 _Static_assert(sizeof(AudioCompanionRevokedMsg) == 2, "revoked size");
 _Static_assert(sizeof(AudioCompanionAckMsg) == 3, "ack size");
@@ -94,6 +100,39 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
       }
       memcpy(&msg_out->phone_media_state, data, sizeof(msg_out->phone_media_state));
       break;
+    case AudioCompanionCtrlMsgIdMuseSetupOpen:
+      if (length < sizeof(AudioCompanionMuseSetupOpenMsg)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->muse_setup_open, data, sizeof(msg_out->muse_setup_open));
+      break;
+    case AudioCompanionCtrlMsgIdMuseSetupClose:
+      if (length < sizeof(AudioCompanionMuseSetupCloseMsg)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->muse_setup_close, data, sizeof(msg_out->muse_setup_close));
+      break;
+    case AudioCompanionCtrlMsgIdMuseSetupTx: {
+      AudioCompanionMuseSetupTxHeader header;
+      if (length < sizeof(header)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&header, data, sizeof(header));
+      if (header.length == 0 || header.length > AUDIO_COMPANION_MUSE_TX_MAX_BYTES ||
+          length < sizeof(header) + header.length) {
+        return AudioCompanionParseResultMalformed;
+      }
+      msg_out->muse_setup_tx.request_token = header.request_token;
+      msg_out->muse_setup_tx.length = header.length;
+      memcpy(msg_out->muse_setup_tx.data, data + sizeof(header), header.length);
+      break;
+    }
+    case AudioCompanionCtrlMsgIdMuseSetupDisconnect:
+      if (length < sizeof(AudioCompanionMuseSetupDisconnectMsg)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->muse_setup_disconnect, data, sizeof(msg_out->muse_setup_disconnect));
+      break;
     default:
       return AudioCompanionParseResultUnknown;
   }
@@ -148,6 +187,41 @@ size_t audio_companion_protocol_build_phone_media_query(uint8_t *buf, size_t buf
   }
   const AudioCompanionPhoneMediaQueryMsg msg = {
     .msg_id = AudioCompanionCtrlMsgIdPhoneMediaQuery,
+  };
+  memcpy(buf, &msg, sizeof(msg));
+  return sizeof(msg);
+}
+
+size_t audio_companion_protocol_build_muse_setup_rx(uint8_t *buf, size_t buf_size, uint8_t seq,
+                                                    uint8_t flags, const uint8_t *data,
+                                                    uint8_t length) {
+  const size_t total = sizeof(AudioCompanionMuseSetupRxHeader) + length;
+  if (!buf || !data || buf_size < total) {
+    return 0;
+  }
+  const AudioCompanionMuseSetupRxHeader header = {
+    .msg_id = AudioCompanionCtrlMsgIdMuseSetupRx,
+    .seq = seq,
+    .flags = flags,
+    .length = length,
+  };
+  memcpy(buf, &header, sizeof(header));
+  memcpy(buf + sizeof(header), data, length);
+  return total;
+}
+
+size_t audio_companion_protocol_build_muse_setup_event(uint8_t *buf, size_t buf_size,
+                                                       uint8_t event, uint8_t detail,
+                                                       uint16_t mtu, uint16_t seconds_left) {
+  if (!buf || buf_size < sizeof(AudioCompanionMuseSetupEventMsg)) {
+    return 0;
+  }
+  const AudioCompanionMuseSetupEventMsg msg = {
+    .msg_id = AudioCompanionCtrlMsgIdMuseSetupEvent,
+    .event = event,
+    .detail = detail,
+    .mtu = mtu,
+    .seconds_left = seconds_left,
   };
   memcpy(buf, &msg, sizeof(msg));
   return sizeof(msg);

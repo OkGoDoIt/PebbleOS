@@ -440,3 +440,81 @@ void test_audio_companion_protocol__builders_reject_small_buffers(void) {
   const AudioCompanionStreamStartMsg start = { .stream_id = 1 };
   cl_assert_equal_i(audio_companion_protocol_build_stream_start(buf, 4, &start), 0);
 }
+
+// ---- Muse gadget setup relay ----
+
+void test_audio_companion_protocol__parse_muse_setup_requests(void) {
+  AudioCompanionControlMsg msg;
+  cl_assert_equal_i(prv_parse_fixture("muse_setup_open", &msg), AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdMuseSetupOpen);
+  cl_assert_equal_i(msg.muse_setup_open.request_token, 0x31);
+  cl_assert_equal_i(msg.muse_setup_open.window_secs, 300);
+  cl_assert(memcmp(msg.muse_setup_open.suffix, "F1A69C", AUDIO_COMPANION_MUSE_SUFFIX_LEN) == 0);
+  cl_assert_equal_i(msg.muse_setup_open.flags, 0);
+
+  cl_assert_equal_i(prv_parse_fixture("muse_setup_close_paired", &msg),
+                    AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdMuseSetupClose);
+  cl_assert_equal_i(msg.muse_setup_close.request_token, 0x33);
+  cl_assert_equal_i(msg.muse_setup_close.reason, AudioCompanionMuseAppCloseReasonPaired);
+
+  cl_assert_equal_i(prv_parse_fixture("muse_setup_tx_device_info", &msg),
+                    AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdMuseSetupTx);
+  cl_assert_equal_i(msg.muse_setup_tx.request_token, 0x35);
+  const ProtocolFixture *fx = prv_find_fixture("muse_setup_tx_device_info");
+  cl_assert_equal_i(msg.muse_setup_tx.length, fx->length - 3);
+  cl_assert(memcmp(msg.muse_setup_tx.data, fx->data + 3, fx->length - 3) == 0);
+
+  cl_assert_equal_i(prv_parse_fixture("muse_setup_tx_max", &msg), AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.muse_setup_tx.length, AUDIO_COMPANION_MUSE_TX_MAX_BYTES);
+  cl_assert_equal_i(msg.muse_setup_tx.data[AUDIO_COMPANION_MUSE_TX_MAX_BYTES - 1],
+                    AUDIO_COMPANION_MUSE_TX_MAX_BYTES - 1);
+
+  cl_assert_equal_i(prv_parse_fixture("muse_setup_disconnect", &msg),
+                    AudioCompanionParseResultOk);
+  cl_assert_equal_i(msg.msg_id, AudioCompanionCtrlMsgIdMuseSetupDisconnect);
+  cl_assert_equal_i(msg.muse_setup_disconnect.request_token, 0x3A);
+  cl_assert_equal_i(msg.muse_setup_disconnect.delay_ms, 250);
+}
+
+void test_audio_companion_protocol__build_muse_setup_out(void) {
+  uint8_t buf[AUDIO_COMPANION_MAX_CONTROL_WRITE_BYTES + 8];
+  size_t len;
+
+  static const char get_device_info[] = "{\"action\":\"get_device_info\"}";
+  len = audio_companion_protocol_build_muse_setup_rx(buf, sizeof(buf), 0, 0,
+                                                     (const uint8_t *)get_device_info,
+                                                     sizeof(get_device_info) - 1);
+  prv_assert_builder_matches("muse_setup_rx_get_device_info", buf, len);
+
+  // The 300-byte value of the fragment fixtures, split at the 249-byte limit.
+  uint8_t value[300];
+  for (size_t i = 0; i < sizeof(value); i++) {
+    value[i] = (uint8_t)((i * 7) & 0xFF);
+  }
+  len = audio_companion_protocol_build_muse_setup_rx(buf, sizeof(buf), 1,
+                                                     AUDIO_COMPANION_MUSE_RX_FLAG_MORE, value,
+                                                     AUDIO_COMPANION_MUSE_RX_MAX_BYTES);
+  prv_assert_builder_matches("muse_setup_rx_fragment_more", buf, len);
+  len = audio_companion_protocol_build_muse_setup_rx(
+      buf, sizeof(buf), 1, 0, value + AUDIO_COMPANION_MUSE_RX_MAX_BYTES,
+      sizeof(value) - AUDIO_COMPANION_MUSE_RX_MAX_BYTES);
+  prv_assert_builder_matches("muse_setup_rx_fragment_last", buf, len);
+
+  len = audio_companion_protocol_build_muse_setup_event(buf, sizeof(buf),
+                                                        AudioCompanionMuseEventOpened, 0, 0, 300);
+  prv_assert_builder_matches("muse_setup_event_opened", buf, len);
+  len = audio_companion_protocol_build_muse_setup_event(
+      buf, sizeof(buf), AudioCompanionMuseEventClientConnected, 0, 256, 287);
+  prv_assert_builder_matches("muse_setup_event_connected", buf, len);
+  len = audio_companion_protocol_build_muse_setup_event(
+      buf, sizeof(buf), AudioCompanionMuseEventClosed, AudioCompanionMuseCloseReasonTimeout, 0, 0);
+  prv_assert_builder_matches("muse_setup_event_closed_timeout", buf, len);
+  len = audio_companion_protocol_build_muse_setup_event(
+      buf, sizeof(buf), AudioCompanionMuseEventRxOverflow, 2, 256, 120);
+  prv_assert_builder_matches("muse_setup_event_rx_overflow", buf, len);
+
+  // A buffer too small for the value builds nothing.
+  cl_assert_equal_i(audio_companion_protocol_build_muse_setup_rx(buf, 10, 0, 0, value, 20), 0);
+}
