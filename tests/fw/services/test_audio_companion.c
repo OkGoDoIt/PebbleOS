@@ -28,6 +28,49 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+#include "kernel/event_loop.h"
+#include "services/audio_companion/watch_actions.h"
+
+TimerID audio_companion_test_get_ptt_quiet_timer(void);
+
+// KernelMain stands in for itself: callbacks queue here and run when a test says so.
+#define MAX_LAUNCHER_CALLBACKS (16)
+static struct {
+  CallbackEventCallback callback;
+  void *data;
+} s_launcher_callbacks[MAX_LAUNCHER_CALLBACKS];
+static int s_launcher_callback_count;
+
+void launcher_task_add_callback(CallbackEventCallback callback, void *data) {
+  cl_assert(s_launcher_callback_count < MAX_LAUNCHER_CALLBACKS);
+  s_launcher_callbacks[s_launcher_callback_count].callback = callback;
+  s_launcher_callbacks[s_launcher_callback_count].data = data;
+  s_launcher_callback_count++;
+}
+
+static void prv_run_launcher_callbacks(void) {
+  while (s_launcher_callback_count > 0) {
+    const CallbackEventCallback callback = s_launcher_callbacks[0].callback;
+    void *data = s_launcher_callbacks[0].data;
+    memmove(&s_launcher_callbacks[0], &s_launcher_callbacks[1],
+            sizeof(s_launcher_callbacks[0]) * (size_t)(s_launcher_callback_count - 1));
+    s_launcher_callback_count--;
+    callback(data);
+  }
+}
+
+static bool s_alarm_succeeds;
+static int s_alarm_hour;
+static int s_alarm_minute;
+
+bool watch_actions_create_alarm(uint8_t hour, uint8_t minute) {
+  s_alarm_hour = hour;
+  s_alarm_minute = minute;
+  return s_alarm_succeeds;
+}
+#endif
+
 void audio_companion_test_reset(void);
 struct pbl_mutex *audio_companion_test_get_lock(void);
 TimerID audio_companion_test_get_silence_probe_timer(void);
@@ -158,7 +201,12 @@ void pbl_bt_audio_companion_set_response_time(enum pbl_bt_response_time_state st
 void pbl_bt_audio_companion_service_init(void) {
 }
 
+static EventServiceInfo *s_battery_event_subscription;
+
 void event_service_client_subscribe(EventServiceInfo *service_info) {
+  if (service_info->type == PEBBLE_BATTERY_STATE_CHANGE_EVENT) {
+    s_battery_event_subscription = service_info;
+  }
 }
 
 void event_service_client_unsubscribe(EventServiceInfo *service_info) {
@@ -709,12 +757,22 @@ void test_audio_companion__initialize(void) {
     s_wdt_threads[i] = PebbleTask_Unknown;
   }
   audio_companion_spool_test_set_heap_free_bytes(UINT32_MAX);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  s_launcher_callback_count = 0;
+  s_alarm_succeeds = true;
+  s_alarm_hour = -1;
+  s_alarm_minute = -1;
+#endif
   audio_companion_test_reset();
   audio_companion_init();
 }
 
 void test_audio_companion__cleanup(void) {
   audio_companion_test_reset();
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  fake_system_task_callbacks_invoke_pending();
+  prv_run_launcher_callbacks();  // frees what queued work owns
+#endif
   fake_system_task_callbacks_cleanup();
   stub_new_timer_cleanup();
   fake_mutex_reset(false);
@@ -2578,3 +2636,704 @@ void test_audio_companion__runlevel_setting_override(void) {
   cl_assert(!runlevel_setting_enabled(&overridable, RunLevel_LowPower));
   cl_assert(runlevel_setting_enabled(&overridable, RunLevel_Normal));
 }
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+// ---- Push-to-talk (PROTOCOL.md 4.4) ----
+//
+// The facts the product's privacy promise rests on are pinned here: the mic runs for a question
+// only while the button is held, a short press sends nothing at all, and a question never lands
+// in the recording -- with recording paused, not one frame of it reaches the spool.
+
+//! Mirrored from audio_companion.c.
+#define TEST_PTT_PRE_ROLL_MAX_FRAMES (75)
+#define TEST_PTT_TAIL_FRAMES (6)
+#define TEST_PTT_TOO_SHORT_FRAMES (15)
+#define TEST_PTT_MAX_FRAMES (AUDIO_COMPANION_PTT_MAX_SECONDS * 1000 / 20)
+
+static uint16_t s_ptt_next_frame;
+
+static void prv_ptt_receiver_ready(bool recording) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  if (!recording) {
+    uint8_t buf[sizeof(AudioCompanionPauseRequestMsg)];
+    size_t length = 0;
+    prv_build_pause(buf, &length, 0x40, AudioCompanionPauseReasonUser);
+    prv_send_control(buf, length);
+    cl_assert(!s_mic_running);
+  }
+  s_control_count = 0;
+  s_data_count = 0;
+  s_ptt_next_frame = 0;
+}
+
+typedef struct {
+  int starts;
+  int ends;
+  int cancels;
+  AudioCompanionPttEventMsg start;
+  AudioCompanionPttEventMsg last;
+} PttEvents;
+
+static PttEvents prv_ptt_events(void) {
+  PttEvents events = {0};
+  for (uint32_t i = 0; i < s_control_count; i++) {
+    const CapturedNotification *n = &s_control_notifications[i];
+    if (n->length != sizeof(AudioCompanionPttEventMsg) ||
+        n->data[0] != AudioCompanionCtrlMsgIdPttEvent) {
+      continue;
+    }
+    AudioCompanionPttEventMsg msg;
+    memcpy(&msg, n->data, sizeof(msg));
+    switch (msg.event) {
+      case AudioCompanionPttEventStart: events.starts++; events.start = msg; break;
+      case AudioCompanionPttEventEnd: events.ends++; break;
+      case AudioCompanionPttEventCancel: events.cancels++; break;
+    }
+    events.last = msg;
+  }
+  return events;
+}
+
+//! Takes the PTT_AUDIO messages sent so far, checking the frame numbers run on with no hole and
+//! every entry is a whole Speex frame. Returns the frames taken.
+static uint32_t prv_take_ptt_audio(uint8_t turn) {
+  uint32_t frames = 0;
+  for (uint32_t i = 0; i < s_data_count; i++) {
+    const CapturedNotification *n = &s_data_notifications[i];
+    if (n->length == 0 || n->data[0] != AudioCompanionDataMsgIdPttAudio) {
+      continue;
+    }
+    AudioCompanionPttAudioHeader header;
+    cl_assert(n->length >= sizeof(header));
+    memcpy(&header, n->data, sizeof(header));
+    cl_assert_equal_i(header.turn, turn);
+    cl_assert_equal_i(header.first_frame, s_ptt_next_frame);
+    size_t offset = sizeof(header);
+    for (uint8_t f = 0; f < header.frame_count; f++) {
+      cl_assert(offset + 2 <= n->length);
+      const uint16_t length = (uint16_t)(n->data[offset] | (n->data[offset + 1] << 8));
+      cl_assert_equal_i(length, 4);
+      cl_assert_equal_i(n->data[offset + 2], 0x53);  // the fake encoder's frame marker
+      offset += 2 + length;
+    }
+    cl_assert_equal_i(offset, n->length);
+    s_ptt_next_frame += header.frame_count;
+    frames += header.frame_count;
+  }
+  return frames;
+}
+
+static bool prv_any_data_msg(uint8_t msg_id) {
+  return prv_find_data_msg(msg_id) != NULL;
+}
+
+//! Feeds frames in slices small enough for the capture buffer, taking the question's audio as it
+//! goes. Returns the PTT frames sent.
+static uint32_t prv_feed_question_frames(uint32_t count, uint8_t turn) {
+  uint32_t sent = 0;
+  while (count > 0) {
+    const uint32_t slice = MIN(count, 16);
+    prv_feed_frames(slice);
+    sent += prv_take_ptt_audio(turn);
+    s_data_count = 0;
+    count -= slice;
+  }
+  return sent;
+}
+
+static AudioCompanionAssistantView prv_view(void) {
+  AudioCompanionAssistantView view;
+  audio_companion_assistant_get_view(&view);
+  return view;
+}
+
+static void prv_send_assistant_update(uint8_t token, uint8_t turn, uint8_t kind, uint8_t detail,
+                                      const char *text) {
+  uint8_t buf[sizeof(AudioCompanionAssistantUpdateHeader) +
+              AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES];
+  const size_t length = text ? strlen(text) : 0;
+  cl_assert(length <= AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES);
+  const AudioCompanionAssistantUpdateHeader header = {
+    .msg_id = AudioCompanionCtrlMsgIdAssistantUpdate,
+    .request_token = token,
+    .turn = turn,
+    .kind = kind,
+    .detail = detail,
+    .length = (uint8_t)length,
+  };
+  memcpy(buf, &header, sizeof(header));
+  if (length) {
+    memcpy(buf + sizeof(header), text, length);
+  }
+  prv_send_control(buf, sizeof(header) + length);
+}
+
+static uint8_t prv_last_ack_status(uint8_t token) {
+  const CapturedNotification *ack = prv_last_control_msg(AudioCompanionCtrlMsgIdAck);
+  cl_assert(ack);
+  AudioCompanionAckMsg msg;
+  memcpy(&msg, ack->data, sizeof(msg));
+  cl_assert_equal_i(msg.request_token, token);
+  return msg.status;
+}
+
+//! Asks a whole question: press, hold past the commit, speak `frames`, release, tail. Returns
+//! the question's turn.
+static uint8_t prv_ask_question(uint32_t frames) {
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(20);  // the 400 ms hold
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  const uint8_t turn = prv_view().turn;
+  prv_feed_question_frames(frames, turn);
+  audio_companion_ptt_handle_button(BUTTON_ID_SELECT, false);
+  prv_feed_question_frames(TEST_PTT_TAIL_FRAMES, turn);
+  return turn;
+}
+
+void test_audio_companion__ptt_a_short_press_sends_nothing_and_stops_the_mic(void) {
+  prv_ptt_receiver_ready(false);
+  cl_assert(audio_companion_ptt_available());
+
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerQuickLaunch));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);  // listening from the press, so the first words are kept
+  prv_feed_frames(10);
+
+  // Released before the hold counts: a press that opened the launcher, not a question.
+  audio_companion_ptt_handle_button(BUTTON_ID_SELECT, false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(prv_ptt_events().starts, 0);
+  cl_assert_equal_i(prv_ptt_events().cancels, 0);
+  cl_assert(!prv_any_data_msg(AudioCompanionDataMsgIdPttAudio));
+  cl_assert(!prv_any_data_msg(AudioCompanionDataMsgIdStreamData));
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
+}
+
+void test_audio_companion__ptt_a_question_goes_out_whole_and_never_into_the_recording(void) {
+  prv_ptt_receiver_ready(false);
+
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(20);
+  // Held but not yet confirmed: the pre-roll stays on the watch.
+  cl_assert_equal_i(prv_ptt_events().starts, 0);
+  cl_assert(!prv_any_data_msg(AudioCompanionDataMsgIdPttAudio));
+
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  const PttEvents started = prv_ptt_events();
+  cl_assert_equal_i(started.starts, 1);
+  cl_assert_equal_i(started.start.detail, AudioCompanionPttTriggerInApp);
+  cl_assert_equal_i(started.start.max_seconds, AUDIO_COMPANION_PTT_MAX_SECONDS);
+  const uint8_t turn = started.start.turn;
+  cl_assert(turn != 0);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseListening);
+  cl_assert_equal_i(prv_view().turn, turn);
+  // The link is quick for the question.
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIN);
+
+  // The pre-roll leads, from frame 0.
+  uint32_t sent = prv_take_ptt_audio(turn);
+  s_data_count = 0;
+  sent += prv_feed_question_frames(100, turn);
+  cl_assert(s_mic_running);
+
+  audio_companion_ptt_handle_button(BUTTON_ID_SELECT, false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseSending);
+  cl_assert(s_mic_running);  // the tail: the last syllable is still in the mic's buffer
+  sent += prv_feed_question_frames(TEST_PTT_TAIL_FRAMES, turn);
+
+  const PttEvents ended = prv_ptt_events();
+  cl_assert_equal_i(ended.ends, 1);
+  cl_assert_equal_i(ended.last.detail, AudioCompanionPttEndReleased);
+  cl_assert_equal_i(ended.last.frame_count, 20 + 100 + TEST_PTT_TAIL_FRAMES);
+  cl_assert_equal_i(sent, ended.last.frame_count);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseWaiting);
+
+  // The mic is off again, and recording, paused throughout, got none of it.
+  cl_assert(!s_mic_running);
+  cl_assert(!prv_any_data_msg(AudioCompanionDataMsgIdStreamData));
+  cl_assert_equal_i(audio_companion_spool_frames_pending_send(), 0);
+}
+
+void test_audio_companion__ptt_with_recording_on_both_hear_and_the_mic_stays_on(void) {
+  prv_ptt_receiver_ready(true);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+  cl_assert(prv_any_data_msg(AudioCompanionDataMsgIdStreamData));
+  s_data_count = 0;
+
+  const uint8_t turn = prv_ask_question(50);
+  cl_assert_equal_i(prv_ptt_events().ends, 1);
+  cl_assert_equal_i(prv_ptt_events().last.frame_count, 20 + 50 + TEST_PTT_TAIL_FRAMES);
+  cl_assert(turn != 0);
+  // The recording kept the room while the question was asked, and keeps the mic after it.
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+  cl_assert(prv_any_data_msg(AudioCompanionDataMsgIdStreamData));
+}
+
+void test_audio_companion__ptt_releasing_right_after_the_commit_cancels(void) {
+  prv_ptt_receiver_ready(false);
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerQuickLaunch));
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(20);
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(TEST_PTT_TOO_SHORT_FRAMES - 5);
+
+  audio_companion_ptt_handle_button(BUTTON_ID_SELECT, false);
+  fake_system_task_callbacks_invoke_pending();
+  const PttEvents events = prv_ptt_events();
+  cl_assert_equal_i(events.cancels, 1);
+  cl_assert_equal_i(events.ends, 0);
+  cl_assert_equal_i(events.last.detail, AudioCompanionPttCancelTooShort);
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+}
+
+void test_audio_companion__ptt_a_hold_that_is_never_confirmed_lets_the_mic_go(void) {
+  prv_ptt_receiver_ready(false);
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_UP, AudioCompanionPttTriggerQuickLaunch));
+  fake_system_task_callbacks_invoke_pending();
+  // A combo or a scroll took the hold: nothing commits and nothing releases it.
+  prv_feed_frames(TEST_PTT_PRE_ROLL_MAX_FRAMES + 1);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(prv_ptt_events().starts, 0);
+  cl_assert(!prv_any_data_msg(AudioCompanionDataMsgIdPttAudio));
+  // And a later release of that button is nothing.
+  audio_companion_ptt_handle_button(BUTTON_ID_UP, false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_control_count, 0);
+}
+
+void test_audio_companion__ptt_the_question_ends_itself_at_the_limit(void) {
+  prv_ptt_receiver_ready(false);
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  const uint8_t turn = prv_view().turn;
+  const uint32_t sent = prv_feed_question_frames(TEST_PTT_MAX_FRAMES + 40, turn);
+
+  const PttEvents events = prv_ptt_events();
+  cl_assert_equal_i(events.ends, 1);
+  cl_assert_equal_i(events.last.detail, AudioCompanionPttEndMaxLength);
+  cl_assert_equal_i(events.last.frame_count, TEST_PTT_MAX_FRAMES);
+  cl_assert_equal_i(sent, TEST_PTT_MAX_FRAMES);
+  cl_assert(prv_view().reached_max);
+  cl_assert(!s_mic_running);
+  // Letting go afterwards changes nothing.
+  audio_companion_ptt_handle_button(BUTTON_ID_SELECT, false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_ptt_events().ends, 1);
+}
+
+void test_audio_companion__ptt_needs_a_receiver(void) {
+  audio_companion_set_enabled(true);
+  cl_assert(!audio_companion_ptt_available());
+  cl_assert(!audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerQuickLaunch));
+  cl_assert(!s_mic_running);
+  // The Quick Launch hold still opens the screen, which says why.
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseError);
+  cl_assert_equal_i(view.error, AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(s_control_count, 0);
+}
+
+void test_audio_companion__ptt_losing_the_phone_mid_question_says_so(void) {
+  prv_ptt_receiver_ready(false);
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(10);
+
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseError);
+  cl_assert_equal_i(view.error, AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+}
+
+void test_audio_companion__ptt_the_critical_runlevels_still_win(void) {
+  prv_ptt_receiver_ready(false);
+  audio_companion_set_runlevel(RunLevel_LowPower);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  cl_assert(!s_mic_running);
+
+  audio_companion_set_runlevel(RunLevel_Normal);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  audio_companion_set_runlevel(RunLevel_FirmwareUpdate);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseError);
+  cl_assert_equal_i(prv_view().error, AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE);
+}
+
+void test_audio_companion__ptt_a_low_battery_pause_does_not_stop_a_question(void) {
+  prv_ptt_receiver_ready(true);
+  s_battery_state = (BatteryChargeState){ .charge_percent = 5 };
+  cl_assert(s_battery_event_subscription);
+  PebbleEvent event = {.type = PEBBLE_BATTERY_STATE_CHANGE_EVENT};
+  s_battery_event_subscription->handler(&event, s_battery_event_subscription->context);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);  // the recording paused for the battery
+
+  const uint8_t turn = prv_ask_question(40);
+  cl_assert(turn != 0);
+  cl_assert_equal_i(prv_ptt_events().ends, 1);
+  cl_assert(!s_mic_running);
+}
+
+void test_audio_companion__ptt_the_answer_reaches_the_screen(void) {
+  prv_ptt_receiver_ready(false);
+  const uint8_t turn = prv_ask_question(40);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseWaiting);
+
+  prv_send_assistant_update(0x70, turn, AudioCompanionAssistantUpdateHeard, 0,
+                            "what's on my calendar");
+  cl_assert_equal_i(prv_last_ack_status(0x70), AudioCompanionAckStatusOk);
+  prv_send_assistant_update(0x71, turn, AudioCompanionAssistantUpdateAnswer, 0, "Lunch with Sam ");
+  prv_send_assistant_update(0x72, turn, AudioCompanionAssistantUpdateAnswer, 0, "at noon.");
+  // Words for an older question are not shown.
+  prv_send_assistant_update(0x73, (uint8_t)(turn + 1), AudioCompanionAssistantUpdateAnswer, 0,
+                            " Stale.");
+  cl_assert_equal_i(prv_last_ack_status(0x73), AudioCompanionAckStatusOk);
+  AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_s(view.heard, "what's on my calendar");
+  cl_assert_equal_s(view.answer, "Lunch with Sam at noon.");
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseAnswering);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIN);
+
+  prv_send_assistant_update(0x74, turn, AudioCompanionAssistantUpdateDone, 0, NULL);
+  view = prv_view();
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseDone);
+  // Answered: the link goes back to its idle pace.
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+
+  // Closing the screen clears it; a late word about that question isn't shown next time.
+  audio_companion_assistant_dismiss();
+  prv_send_assistant_update(0x75, turn, AudioCompanionAssistantUpdateAnswer, 0, " Late.");
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
+}
+
+void test_audio_companion__ptt_no_word_from_the_phone_ends_as_no_answer(void) {
+  prv_ptt_receiver_ready(false);
+  prv_ask_question(40);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseWaiting);
+  const TimerID quiet = audio_companion_test_get_ptt_quiet_timer();
+  cl_assert(quiet != TIMER_INVALID_ID && stub_new_timer_is_scheduled(quiet));
+
+  cl_assert(stub_new_timer_fire(quiet));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseError);
+  cl_assert_equal_i(prv_view().error, AudioCompanionAssistantErrorNoAnswer);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+}
+
+void test_audio_companion__ptt_assistant_updates_need_authorization(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_send_assistant_update(0x70, 1, AudioCompanionAssistantUpdateAnswer, 0, "hi");
+  cl_assert(prv_last_control_msg(AudioCompanionCtrlMsgIdError));
+  cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdAck));
+}
+
+// ---- Watch actions (PROTOCOL.md 4.5) ----
+
+static uint8_t s_chosen_action_id;
+static WatchActionRequest s_chosen_request;
+static int s_choose_calls;
+static char s_timer_done_label[64];
+static int s_timer_done_calls;
+static int s_dismiss_calls;
+
+static void prv_test_choose_handler(uint8_t action_id, const WatchActionRequest *request) {
+  s_choose_calls++;
+  s_chosen_action_id = action_id;
+  s_chosen_request = *request;
+}
+
+static void prv_test_timer_done_handler(const char *label) {
+  s_timer_done_calls++;
+  strncpy(s_timer_done_label, label, sizeof(s_timer_done_label) - 1);
+  s_timer_done_label[sizeof(s_timer_done_label) - 1] = '\0';
+}
+
+static void prv_test_dismiss_handler(void) {
+  s_dismiss_calls++;
+}
+
+static void prv_watch_actions_ready(void) {
+  prv_ptt_receiver_ready(false);
+  s_choose_calls = 0;
+  s_timer_done_calls = 0;
+  s_dismiss_calls = 0;
+  s_timer_done_label[0] = '\0';
+  watch_actions_set_ui_handlers(prv_test_choose_handler, prv_test_timer_done_handler,
+                                prv_test_dismiss_handler);
+}
+
+static size_t prv_wa_string(uint8_t *out, const char *text) {
+  const size_t length = strlen(text);
+  out[0] = (uint8_t)length;
+  memcpy(out + 1, text, length);
+  return 1 + length;
+}
+
+static size_t prv_wa_timer(uint8_t *out, uint32_t seconds, const char *label) {
+  out[0] = AudioCompanionWatchActionTimer;
+  memcpy(out + 1, &seconds, sizeof(seconds));
+  return 5 + prv_wa_string(out + 5, label);
+}
+
+static void prv_send_watch_action_fragment(uint8_t token, uint8_t action_id, uint8_t flags,
+                                           const uint8_t *data, size_t length) {
+  uint8_t buf[sizeof(AudioCompanionWatchActionHeader) +
+              AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES];
+  cl_assert(length <= AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES);
+  const AudioCompanionWatchActionHeader header = {
+    .msg_id = AudioCompanionCtrlMsgIdWatchAction,
+    .request_token = token,
+    .action_id = action_id,
+    .flags = flags,
+    .length = (uint8_t)length,
+  };
+  memcpy(buf, &header, sizeof(header));
+  memcpy(buf + sizeof(header), data, length);
+  prv_send_control(buf, sizeof(header) + length);
+}
+
+//! Sends a whole action in fragments, the way the receiver does.
+static void prv_send_watch_action(uint8_t action_id, const uint8_t *payload, size_t length) {
+  uint8_t token = 0x90;
+  size_t offset = 0;
+  do {
+    const size_t chunk =
+        MIN(length - offset, (size_t)AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES);
+    const bool more = offset + chunk < length;
+    prv_send_watch_action_fragment(token, action_id,
+                                   more ? AUDIO_COMPANION_WATCH_ACTION_FLAG_MORE : 0,
+                                   payload + offset, chunk);
+    cl_assert_equal_i(prv_last_ack_status(token), AudioCompanionAckStatusOk);
+    token++;
+    offset += chunk;
+  } while (offset < length);
+}
+
+static bool prv_last_watch_action_result(AudioCompanionWatchActionResultMsg *out) {
+  const CapturedNotification *n = prv_last_control_msg(AudioCompanionCtrlMsgIdWatchActionResult);
+  if (!n) {
+    return false;
+  }
+  cl_assert_equal_i(n->length, sizeof(*out));
+  memcpy(out, n->data, sizeof(*out));
+  return true;
+}
+
+void test_audio_companion__watch_action_timer_is_set_and_rings(void) {
+  prv_watch_actions_ready();
+  uint8_t payload[64];
+  const size_t length = prv_wa_timer(payload, 90, "Pasta");
+  prv_send_watch_action(0x11, payload, length);
+  fake_system_task_callbacks_invoke_pending();
+
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.action_id, 0x11);
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
+  cl_assert_equal_i(watch_actions_active_timer_count(), 1);
+
+  // Ninety seconds later the watch says so, under the name it was given.
+  stub_new_timer_invoke(1);
+  prv_run_launcher_callbacks();
+  cl_assert_equal_i(s_timer_done_calls, 1);
+  cl_assert_equal_s(s_timer_done_label, "Pasta");
+  cl_assert_equal_i(watch_actions_active_timer_count(), 0);
+}
+
+void test_audio_companion__watch_action_alarm_goes_to_the_alarm_service(void) {
+  prv_watch_actions_ready();
+  uint8_t payload[64];
+  payload[0] = AudioCompanionWatchActionAlarm;
+  payload[1] = 6;
+  payload[2] = 45;
+  const size_t length = 3 + prv_wa_string(payload + 3, "Flight");
+  prv_send_watch_action(0x12, payload, length);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_alarm_hour, 6);
+  cl_assert_equal_i(s_alarm_minute, 45);
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
+
+  s_alarm_succeeds = false;
+  prv_send_watch_action(0x13, payload, length);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.action_id, 0x13);
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+}
+
+void test_audio_companion__watch_action_choice_is_assembled_and_answered(void) {
+  prv_watch_actions_ready();
+  // A question and options long enough to need three fragments.
+  uint8_t payload[AUDIO_COMPANION_WATCH_ACTION_PAYLOAD_MAX_BYTES];
+  size_t length = 0;
+  payload[length++] = AudioCompanionWatchActionChoose;
+  const uint16_t timeout = 45;
+  memcpy(payload + length, &timeout, sizeof(timeout));
+  length += 2;
+  length += prv_wa_string(payload + length,
+                          "Which of these restaurants near the office should I book a table at "
+                          "for Friday evening, for four people?");
+  const char *options[] = {
+    "The Italian place on Fourth Street, patio seat",
+    "The new ramen bar beside the old train station",
+    "Sushi again, the one with the long counter seats",
+    "The taqueria two blocks north of the office now",
+    "The noodle house by the river with the big view",
+    "Somewhere else entirely, and I'll pick it later",
+  };
+  payload[length++] = 6;
+  for (int i = 0; i < 6; i++) {
+    cl_assert(strlen(options[i]) <= AUDIO_COMPANION_WATCH_ACTION_OPTION_MAX_BYTES);
+    length += prv_wa_string(payload + length, options[i]);
+  }
+  cl_assert(length > 2 * AUDIO_COMPANION_WATCH_ACTION_FRAGMENT_MAX_BYTES);
+  prv_send_watch_action(0x21, payload, length);
+  fake_system_task_callbacks_invoke_pending();
+  prv_run_launcher_callbacks();
+
+  cl_assert_equal_i(s_choose_calls, 1);
+  cl_assert_equal_i(s_chosen_action_id, 0x21);
+  cl_assert_equal_i(s_chosen_request.choose.count, 6);
+  cl_assert_equal_i(s_chosen_request.choose.timeout_s, 45);
+  cl_assert_equal_s(s_chosen_request.choose.options[1], options[1]);
+  cl_assert(!prv_last_watch_action_result(&(AudioCompanionWatchActionResultMsg){0}));
+
+  // A second choice while one is showing is turned away, not stacked.
+  uint8_t small[32];
+  size_t small_length = 0;
+  small[small_length++] = AudioCompanionWatchActionChoose;
+  memcpy(small + small_length, &timeout, sizeof(timeout));
+  small_length += 2;
+  small_length += prv_wa_string(small + small_length, "Tea?");
+  small[small_length++] = 2;
+  small_length += prv_wa_string(small + small_length, "Yes");
+  small_length += prv_wa_string(small + small_length, "No");
+  prv_send_watch_action_fragment(0x99, 0x22, 0, small, small_length);
+  cl_assert_equal_i(prv_last_ack_status(0x99), AudioCompanionAckStatusBusy);
+
+  watch_actions_choice_result(0x21, AudioCompanionWatchActionStatusDone, 3);
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.action_id, 0x21);
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
+  cl_assert_equal_i(result.value, 3);
+  // Answered once: a second answer for it goes nowhere.
+  const uint32_t before = s_control_count;
+  watch_actions_choice_result(0x21, AudioCompanionWatchActionStatusDeclined, 0);
+  cl_assert_equal_i(s_control_count, before);
+}
+
+void test_audio_companion__watch_action_unknown_kind_is_reported_unsupported(void) {
+  prv_watch_actions_ready();
+  const uint8_t payload[] = {0x7F, 1, 2, 3};
+  prv_send_watch_action(0x31, payload, sizeof(payload));
+  fake_system_task_callbacks_invoke_pending();
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.action_id, 0x31);
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusUnsupported);
+
+  const uint8_t malformed[] = {AudioCompanionWatchActionTimer, 0, 0};
+  prv_send_watch_action(0x32, malformed, sizeof(malformed));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.action_id, 0x32);
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+}
+
+void test_audio_companion__watch_action_choice_leaves_with_its_receiver(void) {
+  prv_watch_actions_ready();
+  uint8_t small[32];
+  size_t length = 0;
+  const uint16_t timeout = 30;
+  small[length++] = AudioCompanionWatchActionChoose;
+  memcpy(small + length, &timeout, sizeof(timeout));
+  length += 2;
+  length += prv_wa_string(small + length, "Tea?");
+  small[length++] = 2;
+  length += prv_wa_string(small + length, "Yes");
+  length += prv_wa_string(small + length, "No");
+  prv_send_watch_action(0x41, small, length);
+  fake_system_task_callbacks_invoke_pending();
+  prv_run_launcher_callbacks();
+  cl_assert_equal_i(s_choose_calls, 1);
+
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  prv_run_launcher_callbacks();
+  cl_assert_equal_i(s_dismiss_calls, 1);
+  // Nobody is left to tell.
+  const uint32_t before = s_control_count;
+  watch_actions_choice_result(0x41, AudioCompanionWatchActionStatusDone, 0);
+  cl_assert_equal_i(s_control_count, before);
+}
+
+void test_audio_companion__watch_actions_need_authorization(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  uint8_t payload[64];
+  const size_t length = prv_wa_timer(payload, 60, "");
+  prv_send_watch_action_fragment(0x50, 0x51, 0, payload, length);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(prv_last_control_msg(AudioCompanionCtrlMsgIdError));
+  cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdAck));
+  cl_assert_equal_i(watch_actions_active_timer_count(), 0);
+}
+#else
+// Push-to-talk is compiled out of this build; test_audio_companion_ptt runs these for real.
+#define PTT_ONLY(name) \
+  void test_audio_companion__##name(void) {}
+PTT_ONLY(ptt_a_short_press_sends_nothing_and_stops_the_mic)
+PTT_ONLY(ptt_a_question_goes_out_whole_and_never_into_the_recording)
+PTT_ONLY(ptt_with_recording_on_both_hear_and_the_mic_stays_on)
+PTT_ONLY(ptt_releasing_right_after_the_commit_cancels)
+PTT_ONLY(ptt_a_hold_that_is_never_confirmed_lets_the_mic_go)
+PTT_ONLY(ptt_the_question_ends_itself_at_the_limit)
+PTT_ONLY(ptt_needs_a_receiver)
+PTT_ONLY(ptt_losing_the_phone_mid_question_says_so)
+PTT_ONLY(ptt_the_critical_runlevels_still_win)
+PTT_ONLY(ptt_a_low_battery_pause_does_not_stop_a_question)
+PTT_ONLY(ptt_the_answer_reaches_the_screen)
+PTT_ONLY(ptt_no_word_from_the_phone_ends_as_no_answer)
+PTT_ONLY(ptt_assistant_updates_need_authorization)
+PTT_ONLY(watch_action_timer_is_set_and_rings)
+PTT_ONLY(watch_action_alarm_goes_to_the_alarm_service)
+PTT_ONLY(watch_action_choice_is_assembled_and_answered)
+PTT_ONLY(watch_action_unknown_kind_is_reported_unsupported)
+PTT_ONLY(watch_action_choice_leaves_with_its_receiver)
+PTT_ONLY(watch_actions_need_authorization)
+#endif  // CONFIG_SERVICE_AUDIO_COMPANION_PTT

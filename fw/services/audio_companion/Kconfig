@@ -62,6 +62,14 @@ module = SERVICE_AUDIO_COMPANION
 module-str = Audio companion
 source "subsys/logging/Kconfig.template.log_level"
 
+config SERVICE_AUDIO_COMPANION_PTT
+    bool "Push-to-talk and watch actions for the receiver's assistant"
+    default y
+    help
+      Hold a button, ask the receiver's assistant out loud, read the answer on the watch
+      (PROTOCOL.md 4.4), and let the assistant set a timer, a one-off alarm or put a choice to
+      the wearer (4.5). Adds the Muse app to the launcher and Quick Launch.
+
 config AUDIO_COMPANION_SPOOL_MIN_BYTES
     int "Audio companion spool floor (bytes)"
     default 8192

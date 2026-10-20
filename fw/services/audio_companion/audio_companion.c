@@ -9,6 +9,10 @@
 #include "auth.h"
 #include "reboot_trace.h"
 #include "spool.h"
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+#include "assistant_view.h"
+#include "watch_actions.h"
+#endif
 
 #include "applib/event_service_client.h"
 #include <pbl/bluetooth/audio_companion.h>
@@ -380,6 +384,9 @@ static TimerID s_enable_timer = TIMER_INVALID_ID;
 //! of stopping, and the failure would surface as a watchdog reset with no obvious cause.
 static bool s_owns_mic;                //!< service intends to hold the mic (guarded by s_lock)
 static bool s_capture_wanted;          //!< intent handed to prv_apply_capture() (guarded by s_lock)
+//! Whether recording itself wants the mic, as opposed to a held push-to-talk button. The mic
+//! handler only adds frames to the recording when this is set (guarded by s_lock).
+static bool s_record_capture;
 static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()
 //! Microphone duty accounting, for the diagnostics screen: total milliseconds the driver has been
 //! running, plus the uptime at which the current run began (0 while stopped). Owned by
@@ -418,6 +425,68 @@ static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control me
 static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while a receiver is ready
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+// ---- Push-to-talk state (PROTOCOL.md 4.4), all guarded by s_lock ----
+
+typedef enum {
+  PttPhaseIdle = 0,
+  //! Button down, hold not yet confirmed: frames are kept on the watch.
+  PttPhaseArmed,
+  //! The question is live: frames go out as they are encoded.
+  PttPhaseLive,
+  //! Released: a short tail is still captured before the question ends.
+  PttPhaseEnding,
+} PttPhase;
+
+//! Room for the pre-roll and anything the transport is slow to take (~1.6 s of Speex frames).
+#define PTT_QUEUE_BYTES (2048)
+//! Armed this long (1.5 s) without a commit: the hold went somewhere else.
+#define PTT_PRE_ROLL_MAX_FRAMES (75)
+//! Keep listening 120 ms past the release: the mic hands frames over a buffer late, and the last
+//! syllable is usually in it.
+#define PTT_TAIL_FRAMES (6)
+//! Under 0.3 s between the commit and the release is a change of mind, not a question.
+#define PTT_TOO_SHORT_FRAMES (15)
+#define PTT_MAX_FRAMES \
+  (AUDIO_COMPANION_PTT_MAX_SECONDS * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
+//! Retry pause after the transport refused a push-to-talk notification.
+#define PTT_RETRY_MS (30)
+//! How long the link stays quick after a question while no answer has finished.
+#define PTT_QUIET_LIMIT_MS (90 * 1000)
+
+typedef struct {
+  PttPhase phase;
+  uint8_t turn;
+  uint8_t trigger;
+  ButtonId button;
+  //! Frames captured since the press; the next frame's number.
+  uint16_t frames;
+  uint16_t commit_frame;
+  uint16_t end_frame;
+  bool start_pending;
+  bool finish_pending;
+  uint8_t finish_event;
+  uint8_t finish_detail;
+  uint16_t finish_frames;
+  bool send_posted;
+  bool fast_link;
+} PttState;
+
+static PttState s_ptt;
+static uint8_t s_ptt_turn_counter;
+static uint8_t s_ptt_queue[PTT_QUEUE_BYTES];
+static uint16_t s_ptt_queue_head;
+static uint16_t s_ptt_queue_used;
+static uint16_t s_ptt_queue_frames;
+static TimerID s_ptt_retry_timer = TIMER_INVALID_ID;
+static TimerID s_ptt_fast_link_timer = TIMER_INVALID_ID;
+//! What the watch shows for the current or last question.
+static AudioCompanionAssistantView s_assistant;
+
+static bool prv_ptt_capturing_locked(void);
+static void prv_ptt_abandon_locked(uint8_t error);
+#endif
 static bool s_stationary_muted;        //!< stationary AND quiet: the mic is off to save the PDM rails
 static uint32_t s_stationary_since_ms; //!< uptime the Stationary runlevel was entered; 0 outside it
 static TimerID s_power_save_listen_timer = TIMER_INVALID_ID;
@@ -936,6 +1005,14 @@ static void prv_cancel_catch_up_burst_locked(void) {
 static void prv_update_ble_responsiveness_locked(void) {
   enum pbl_bt_response_time_state state = PBL_BT_RESPONSE_TIME_MAX;
   uint16_t period = 0;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  if (s_ptt.fast_link) {
+    // A question is out: its audio should leave at once and its answer arrive without waiting
+    // out slave latency (up to ~1.35 s per write on an idle link).
+    state = PBL_BT_RESPONSE_TIME_MIN;
+    period = MAX_PERIOD_RUN_FOREVER;
+  } else
+#endif
   if (s_state == AudioCompanionServiceStateStreaming && s_catch_up_burst) {
     state = PBL_BT_RESPONSE_TIME_MIN;
     period = PBL_BT_MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS;
@@ -1218,6 +1295,12 @@ static void prv_apply_capture(void) {
     // moment capture starts.
     PBL_LOG_WRN("Audio companion: mic unavailable; treating as conflict");
     pbl_mutex_lock(&s_lock, PBL_FOREVER);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+    if (prv_ptt_capturing_locked()) {
+      // A held question can't be heard: say so now rather than listen to nothing.
+      prv_ptt_abandon_locked(AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE);
+    }
+#endif
     s_capture_wanted = false;
     s_owns_mic = false;
     prv_stop_drain_timer_locked();
@@ -1323,9 +1406,540 @@ static bool prv_note_offline_frame_locked(void) {
   return (prv_uptime_ms() - s_offline_since_ms) >= OFFLINE_CAPTURE_PARK_MS;
 }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+// ---- Push-to-talk (PROTOCOL.md 4.4) ----
+//
+// A question is captured by the same mic and encoder as the recording, but leaves on its own
+// path: queued here (never in the spool), never silence-skipped, sent as it is encoded. The mic
+// handler and the state machine only record what to do under s_lock; notifications go out from
+// the system task (prv_ptt_send_system_task_cb), like the drain.
+
+static void prv_ptt_send_system_task_cb(void *data);
+
+static bool prv_ptt_capturing_locked(void) {
+  return s_ptt.phase != PttPhaseIdle;
+}
+
+static bool prv_ptt_sending_locked(void) {
+  return s_ptt.start_pending || s_ptt.finish_pending || s_ptt_queue_frames > 0;
+}
+
+static bool prv_ptt_receiver_ready_locked(void) {
+  return prv_session_ready_locked() && s_session.control_subscribed;
+}
+
+static void prv_ptt_queue_reset_locked(void) {
+  s_ptt_queue_head = 0;
+  s_ptt_queue_used = 0;
+  s_ptt_queue_frames = 0;
+}
+
+static void prv_ptt_queue_copy_in(uint16_t at, const uint8_t *data, uint16_t length) {
+  for (uint16_t i = 0; i < length; i++) {
+    s_ptt_queue[(at + i) % PTT_QUEUE_BYTES] = data[i];
+  }
+}
+
+static void prv_ptt_queue_copy_out(uint16_t at, uint8_t *out, uint16_t length) {
+  for (uint16_t i = 0; i < length; i++) {
+    out[i] = s_ptt_queue[(at + i) % PTT_QUEUE_BYTES];
+  }
+}
+
+static uint16_t prv_ptt_queue_frame_length(uint16_t at) {
+  uint8_t header[2];
+  prv_ptt_queue_copy_out(at, header, sizeof(header));
+  return (uint16_t)(header[0] | (header[1] << 8));
+}
+
+static void prv_ptt_queue_pop_locked(void) {
+  const uint16_t total = 2 + prv_ptt_queue_frame_length(s_ptt_queue_head);
+  s_ptt_queue_head = (s_ptt_queue_head + total) % PTT_QUEUE_BYTES;
+  s_ptt_queue_used -= total;
+  s_ptt_queue_frames--;
+}
+
+//! Queues one encoded frame; the oldest go first when the queue is full (the receiver sees the
+//! missing frame numbers as lost audio).
+static void prv_ptt_queue_push_locked(const uint8_t *encoded, uint16_t length) {
+  if (2 + length > PTT_QUEUE_BYTES) {
+    return;
+  }
+  while (s_ptt_queue_used + 2 + length > PTT_QUEUE_BYTES && s_ptt_queue_frames > 0) {
+    prv_ptt_queue_pop_locked();
+  }
+  const uint8_t header[2] = {(uint8_t)(length & 0xFF), (uint8_t)(length >> 8)};
+  const uint16_t at = (s_ptt_queue_head + s_ptt_queue_used) % PTT_QUEUE_BYTES;
+  prv_ptt_queue_copy_in(at, header, sizeof(header));
+  prv_ptt_queue_copy_in((at + 2) % PTT_QUEUE_BYTES, encoded, length);
+  s_ptt_queue_used += 2 + length;
+  s_ptt_queue_frames++;
+}
+
+static void prv_ptt_post_send_locked(void) {
+  if (s_ptt.send_posted) {
+    return;
+  }
+  s_ptt.send_posted = true;
+  system_task_add_callback(prv_ptt_send_system_task_cb, NULL);
+}
+
+//! NewTimers task: must never block on s_lock, so it only queues the send.
+static void prv_ptt_retry_timer_cb(void *data) {
+  system_task_add_callback(prv_ptt_send_system_task_cb, NULL);
+}
+
+static void prv_ptt_arm_retry_locked(void) {
+  if (s_ptt_retry_timer == TIMER_INVALID_ID) {
+    s_ptt_retry_timer = new_timer_create();
+  }
+  new_timer_start(s_ptt_retry_timer, PTT_RETRY_MS, prv_ptt_retry_timer_cb, NULL, 0);
+}
+
+static void prv_ptt_set_fast_link_locked(bool on) {
+  if (s_ptt.fast_link == on) {
+    return;
+  }
+  s_ptt.fast_link = on;
+  prv_update_ble_responsiveness_locked();
+}
+
+//! PTT_QUIET_LIMIT_MS passed with no word from the receiver about the question on screen.
+static void prv_ptt_fast_link_expired_system_task_cb(void *data) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  prv_ptt_set_fast_link_locked(false);
+  if (!prv_ptt_capturing_locked() && !prv_ptt_sending_locked()) {
+    switch (s_assistant.phase) {
+      case AudioCompanionAssistantPhaseSending:
+      case AudioCompanionAssistantPhaseWaiting:
+        assistant_view_set_error(&s_assistant, AudioCompanionAssistantErrorNoAnswer);
+        break;
+      case AudioCompanionAssistantPhaseAnswering:
+        // Part of an answer and then silence: show what came as the whole of it.
+        assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseDone);
+        break;
+      default:
+        break;
+    }
+  }
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+static void prv_ptt_fast_link_timer_cb(void *data) {
+  system_task_add_callback(prv_ptt_fast_link_expired_system_task_cb, NULL);
+}
+
+static void prv_ptt_start_fast_link_locked(void) {
+  prv_ptt_set_fast_link_locked(true);
+  if (s_ptt_fast_link_timer == TIMER_INVALID_ID) {
+    s_ptt_fast_link_timer = new_timer_create();
+  }
+  new_timer_start(s_ptt_fast_link_timer, PTT_QUIET_LIMIT_MS, prv_ptt_fast_link_timer_cb, NULL, 0);
+}
+
+static void prv_ptt_apply_system_task_cb(void *data) {
+  prv_apply_pending();
+}
+
+//! The question's capture is over: END or CANCEL goes out after whatever audio is queued (or,
+//! for a cancel, instead of it). Stops the mic unless recording wants it.
+static void prv_ptt_finish_locked(uint8_t event, uint8_t detail) {
+  const bool cancel = event == AudioCompanionPttEventCancel;
+  s_ptt.phase = PttPhaseIdle;
+  if (cancel) {
+    prv_ptt_queue_reset_locked();
+  }
+  if (cancel && s_ptt.start_pending) {
+    // The receiver never heard of this question: say nothing at all.
+    s_ptt.start_pending = false;
+  } else {
+    s_ptt.finish_pending = true;
+    s_ptt.finish_event = event;
+    s_ptt.finish_detail = detail;
+    s_ptt.finish_frames = s_ptt.frames;
+  }
+  if (s_assistant.turn == s_ptt.turn) {
+    if (cancel) {
+      assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseIdle);
+      prv_ptt_set_fast_link_locked(false);
+    } else {
+      assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseSending);
+    }
+  }
+  prv_reevaluate_locked();
+  prv_ptt_post_send_locked();
+}
+
+//! Nothing more can go out for this question (the receiver left): drop it and say so.
+static void prv_ptt_abandon_locked(uint8_t error) {
+  const bool shown = s_assistant.turn == s_ptt.turn &&
+                     s_assistant.phase != AudioCompanionAssistantPhaseIdle &&
+                     s_assistant.phase != AudioCompanionAssistantPhaseDone &&
+                     s_assistant.phase != AudioCompanionAssistantPhaseError;
+  const bool was_capturing = prv_ptt_capturing_locked();
+  s_ptt.phase = PttPhaseIdle;
+  s_ptt.start_pending = false;
+  s_ptt.finish_pending = false;
+  prv_ptt_queue_reset_locked();
+  if (shown && error) {
+    assistant_view_set_error(&s_assistant, error);
+  }
+  prv_ptt_set_fast_link_locked(false);
+  if (was_capturing) {
+    prv_reevaluate_locked();
+  }
+}
+
+//! One PTT_AUDIO notification with as many queued frames as fit. False on backpressure.
+static bool prv_ptt_send_audio_batch_locked(void) {
+  const uint16_t mtu = pbl_bt_audio_companion_get_effective_mtu();
+  uint8_t message[256];
+  const size_t budget = (mtu > 3 && (size_t)mtu - 3 < sizeof(message)) ? (size_t)mtu - 3
+                                                                          : sizeof(message);
+  const size_t header = sizeof(AudioCompanionPttAudioHeader);
+  size_t offset = header;
+  uint8_t count = 0;
+  uint16_t at = s_ptt_queue_head;
+  while (count < s_ptt_queue_frames && count < AUDIO_COMPANION_MAX_FRAMES_PER_DATA_MSG) {
+    const uint16_t length = prv_ptt_queue_frame_length(at);
+    if (offset + 2 + length > budget) {
+      break;
+    }
+    prv_ptt_queue_copy_out(at, message + offset, (uint16_t)(2 + length));
+    offset += 2 + length;
+    at = (at + 2 + length) % PTT_QUEUE_BYTES;
+    count++;
+  }
+  if (count == 0) {
+    // A frame that can't fit this link's MTU can never go; drop it rather than stall the turn.
+    prv_ptt_queue_pop_locked();
+    return true;
+  }
+  const uint16_t first_frame = (uint16_t)(s_ptt.frames - s_ptt_queue_frames);
+  audio_companion_protocol_build_ptt_audio_header(message, header, s_ptt.turn, first_frame, count);
+  if (!pbl_bt_audio_companion_notify_data(message, offset)) {
+    s_send_backpressure_events++;
+    return false;
+  }
+  for (uint8_t i = 0; i < count; i++) {
+    prv_ptt_queue_pop_locked();
+  }
+  return true;
+}
+
+static void prv_ptt_send_locked(void) {
+  if (!prv_ptt_sending_locked() || s_ptt.phase == PttPhaseArmed) {
+    return;
+  }
+  if (!prv_ptt_receiver_ready_locked()) {
+    prv_ptt_abandon_locked(AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
+    return;
+  }
+  uint8_t event[sizeof(AudioCompanionPttEventMsg)];
+  if (s_ptt.start_pending) {
+    const size_t length = audio_companion_protocol_build_ptt_event(
+        event, sizeof(event), s_ptt.turn, AudioCompanionPttEventStart, s_ptt.trigger, 0,
+        AUDIO_COMPANION_PTT_MAX_SECONDS);
+    if (!pbl_bt_audio_companion_notify_control(event, length)) {
+      prv_ptt_arm_retry_locked();
+      return;
+    }
+    s_ptt.start_pending = false;
+  }
+  while (s_ptt_queue_frames > 0) {
+    if (!prv_ptt_send_audio_batch_locked()) {
+      prv_ptt_arm_retry_locked();
+      return;
+    }
+  }
+  if (s_ptt.finish_pending) {
+    const size_t length = audio_companion_protocol_build_ptt_event(
+        event, sizeof(event), s_ptt.turn, s_ptt.finish_event, s_ptt.finish_detail,
+        s_ptt.finish_frames, 0);
+    if (!pbl_bt_audio_companion_notify_control(event, length)) {
+      prv_ptt_arm_retry_locked();
+      return;
+    }
+    s_ptt.finish_pending = false;
+    PBL_LOG_INFO("Push-to-talk %u: %s, %u frames", s_ptt.turn,
+                 s_ptt.finish_event == AudioCompanionPttEventEnd ? "sent" : "cancelled",
+                 s_ptt.finish_frames);
+    if (s_ptt.finish_event == AudioCompanionPttEventEnd && s_assistant.turn == s_ptt.turn &&
+        s_assistant.phase == AudioCompanionAssistantPhaseSending) {
+      assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseWaiting);
+    }
+  }
+}
+
+static void prv_ptt_send_system_task_cb(void *data) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_ptt.send_posted = false;
+  prv_ptt_send_locked();
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+//! One encoded frame from the mic handler (mic driver mutex and s_lock held). True when a send
+//! should be posted; never touches the driver.
+static bool prv_ptt_capture_frame_locked(const uint8_t *encoded, uint16_t length) {
+  if (!prv_ptt_capturing_locked()) {
+    return false;
+  }
+  s_ptt.frames++;
+  prv_ptt_queue_push_locked(encoded, length);
+  switch (s_ptt.phase) {
+    case PttPhaseArmed:
+      if (s_ptt.frames > PTT_PRE_ROLL_MAX_FRAMES) {
+        // Armed for 1.5 s and never confirmed: the hold went somewhere else.
+        s_ptt.phase = PttPhaseIdle;
+        prv_ptt_queue_reset_locked();
+        prv_reevaluate_locked();
+        system_task_add_callback(prv_ptt_apply_system_task_cb, NULL);
+      }
+      return false;
+    case PttPhaseLive: {
+      const uint16_t recorded_ds =
+          (uint16_t)(s_ptt.frames * AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS / 100);
+      if (s_assistant.turn == s_ptt.turn && recorded_ds != s_assistant.recorded_ds) {
+        s_assistant.recorded_ds = recorded_ds;
+        s_assistant.generation++;
+      }
+      if (s_ptt.frames >= PTT_MAX_FRAMES) {
+        if (s_assistant.turn == s_ptt.turn) {
+          s_assistant.reached_max = true;
+        }
+        prv_ptt_finish_locked(AudioCompanionPttEventEnd, AudioCompanionPttEndMaxLength);
+      }
+      return true;
+    }
+    case PttPhaseEnding:
+      if (s_ptt.frames >= s_ptt.end_frame) {
+        prv_ptt_finish_locked(AudioCompanionPttEventEnd, AudioCompanionPttEndReleased);
+      }
+      return true;
+    case PttPhaseIdle:
+      break;
+  }
+  return false;
+}
+
+//! The receiver is gone (disconnect, revoke, forget): any question in flight is over.
+static void prv_ptt_receiver_gone_locked(void) {
+  if (prv_ptt_capturing_locked() || prv_ptt_sending_locked() || s_ptt.fast_link) {
+    prv_ptt_abandon_locked(AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
+  } else if (s_assistant.phase == AudioCompanionAssistantPhaseWaiting ||
+             s_assistant.phase == AudioCompanionAssistantPhaseAnswering) {
+    assistant_view_set_error(&s_assistant, AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
+  }
+}
+
+
+//! The runlevels a question can't override: panic/reset, firmware update, critical battery. A
+//! low battery or a still wrist only pauses the recording, never a held button.
+static bool prv_ptt_runlevel_allows_locked(void) {
+  switch (s_runlevel) {
+    case RunLevel_BareMinimum:
+    case RunLevel_FirmwareUpdate:
+    case RunLevel_LowPower:
+      return false;
+    default:
+      return true;
+  }
+}
+
+//! s_lock held. Why a question can't start now, or 0 when it can.
+static uint8_t prv_ptt_unavailable_error_locked(void) {
+  if (prv_ptt_capturing_locked() || prv_ptt_sending_locked()) {
+    return AudioCompanionAssistantErrorBusy;
+  }
+  if (!prv_ptt_receiver_ready_locked()) {
+    return AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE;
+  }
+  if (s_mic_conflict_active || s_error || !prv_ptt_runlevel_allows_locked()) {
+    return AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE;
+  }
+  return 0;
+}
+
+//! s_lock held. Starts a question's capture; false when it can't.
+static bool prv_ptt_arm_locked(ButtonId button, uint8_t trigger) {
+  if (prv_ptt_unavailable_error_locked()) {
+    return false;
+  }
+  s_ptt_turn_counter = (uint8_t)(s_ptt_turn_counter + 1);
+  if (s_ptt_turn_counter == 0) {
+    s_ptt_turn_counter = 1;
+  }
+  const bool fast_link = s_ptt.fast_link;
+  s_ptt = (PttState){
+    .phase = PttPhaseArmed,
+    .turn = s_ptt_turn_counter,
+    .trigger = trigger,
+    .button = button,
+    .fast_link = fast_link,
+  };
+  prv_ptt_queue_reset_locked();
+  prv_reevaluate_locked();
+  return true;
+}
+
+bool audio_companion_ptt_available(void) {
+  if (!s_initialized) {
+    return false;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const uint8_t error = prv_ptt_unavailable_error_locked();
+  pbl_mutex_unlock(&s_lock);
+  return error == 0 || error == AudioCompanionAssistantErrorBusy;
+}
+
+bool audio_companion_ptt_arm(ButtonId button, AudioCompanionPttTrigger trigger) {
+  if (!s_initialized) {
+    return false;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool armed = prv_ptt_arm_locked(button, trigger);
+  pbl_mutex_unlock(&s_lock);
+  if (armed) {
+    PBL_LOG_DBG("Push-to-talk armed (button %u)", button);
+    prv_apply_pending();
+  }
+  return armed;
+}
+
+void audio_companion_ptt_commit(void) {
+  if (!s_initialized) {
+    return;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (s_ptt.phase == PttPhaseIdle) {
+    // The press found nothing to listen with (no phone, mic busy): say why on the screen that is
+    // about to open. A question still going out keeps the screen it has.
+    const uint8_t error = prv_ptt_unavailable_error_locked();
+    if (error && error != AudioCompanionAssistantErrorBusy) {
+      s_ptt_turn_counter = (uint8_t)(s_ptt_turn_counter + 1) ? (uint8_t)(s_ptt_turn_counter + 1)
+                                                             : 1;
+      assistant_view_begin(&s_assistant, s_ptt_turn_counter, AUDIO_COMPANION_PTT_MAX_SECONDS);
+      assistant_view_set_error(&s_assistant, error);
+    }
+    pbl_mutex_unlock(&s_lock);
+    return;
+  }
+  if (s_ptt.phase != PttPhaseArmed) {
+    pbl_mutex_unlock(&s_lock);
+    return;
+  }
+  s_ptt.phase = PttPhaseLive;
+  s_ptt.commit_frame = s_ptt.frames;
+  s_ptt.start_pending = true;
+  assistant_view_begin(&s_assistant, s_ptt.turn, AUDIO_COMPANION_PTT_MAX_SECONDS);
+  prv_ptt_start_fast_link_locked();
+  prv_ptt_post_send_locked();
+  PBL_LOG_INFO("Push-to-talk %u: listening", s_ptt.turn);
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+void audio_companion_ptt_cancel(void) {
+  if (!s_initialized) {
+    return;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (s_ptt.phase == PttPhaseArmed) {
+    s_ptt.phase = PttPhaseIdle;
+    prv_ptt_queue_reset_locked();
+    prv_reevaluate_locked();
+  } else if (s_ptt.phase == PttPhaseLive || s_ptt.phase == PttPhaseEnding) {
+    prv_ptt_finish_locked(AudioCompanionPttEventCancel, AudioCompanionPttCancelCancelled);
+  }
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+void audio_companion_ptt_handle_button(ButtonId button, bool pressed) {
+  if (!s_initialized || pressed) {
+    return;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (button != s_ptt.button) {
+    pbl_mutex_unlock(&s_lock);
+    return;
+  }
+  bool apply = false;
+  if (s_ptt.phase == PttPhaseArmed) {
+    // Released before the hold was confirmed: a short press. Nothing was sent; drop the audio.
+    s_ptt.phase = PttPhaseIdle;
+    prv_ptt_queue_reset_locked();
+    prv_reevaluate_locked();
+    apply = true;
+  } else if (s_ptt.phase == PttPhaseLive) {
+    if ((uint16_t)(s_ptt.frames - s_ptt.commit_frame) < PTT_TOO_SHORT_FRAMES) {
+      prv_ptt_finish_locked(AudioCompanionPttEventCancel, AudioCompanionPttCancelTooShort);
+    } else {
+      s_ptt.phase = PttPhaseEnding;
+      s_ptt.end_frame = (uint16_t)(s_ptt.frames + PTT_TAIL_FRAMES);
+      if (s_assistant.turn == s_ptt.turn) {
+        assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseSending);
+      }
+    }
+    apply = true;
+  }
+  pbl_mutex_unlock(&s_lock);
+  if (apply) {
+    prv_apply_pending();
+  }
+}
+
+uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (out) {
+    *out = s_assistant;
+  }
+  const uint32_t generation = s_assistant.generation;
+  pbl_mutex_unlock(&s_lock);
+  return generation;
+}
+
+void audio_companion_assistant_dismiss(void) {
+  if (!s_initialized) {
+    return;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (!prv_ptt_capturing_locked() && !prv_ptt_sending_locked()) {
+    // Late words about the closed question are not shown the next time the screen opens.
+    assistant_view_clear(&s_assistant);
+    prv_ptt_set_fast_link_locked(false);
+  }
+  pbl_mutex_unlock(&s_lock);
+  prv_apply_pending();
+}
+
+bool audio_companion_send_watch_action_result(uint8_t action_id, uint8_t status, uint8_t value) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  uint8_t buf[sizeof(AudioCompanionWatchActionResultMsg)];
+  const size_t length =
+      audio_companion_protocol_build_watch_action_result(buf, sizeof(buf), action_id, status,
+                                                         value);
+  const bool sent = s_session.authorized && s_session.control_subscribed &&
+                    pbl_bt_audio_companion_notify_control(buf, length);
+  pbl_mutex_unlock(&s_lock);
+  return sent;
+}
+#endif  // CONFIG_SERVICE_AUDIO_COMPANION_PTT
+
 static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  if (!s_owns_mic || !s_stream_active) {
+  // Two consumers share the mic: the recording (only while it wants capture and a stream is
+  // open) and a held push-to-talk button. A frame goes only to the ones that want it, so with
+  // recording paused or off a question never lands in the recording.
+  const bool recording = s_owns_mic && s_record_capture && s_stream_active;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  const bool ptt = s_owns_mic && prv_ptt_capturing_locked();
+#else
+  const bool ptt = false;
+#endif
+  if (!recording && !ptt) {
     pbl_mutex_unlock(&s_lock);
     return;
   }
@@ -1336,7 +1950,11 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   }
 
   bool schedule_drain = false;
-  if (prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain)) {
+  bool suppressed = false;
+  if (recording) {
+    suppressed = prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain);
+  }
+  if (recording && suppressed && !ptt) {
     const bool park_suppressed = prv_note_offline_frame_locked();
     pbl_mutex_unlock(&s_lock);
     if (schedule_drain) {
@@ -1348,6 +1966,7 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
     return;
   }
 
+  // A question is never silence-skipped: it is encoded even when the recording skips the frame.
   uint8_t encoded[AUDIO_COMPANION_MAX_ENCODED_FRAME_BYTES];
   const int encoded_bytes = voice_speex_encode_frame(samples, encoded, sizeof(encoded));
   if (encoded_bytes <= 0) {
@@ -1355,24 +1974,35 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
     return;
   }
 
-  const uint32_t sequence = s_next_sequence++;
-  const uint64_t sample_index = s_next_sample_index;
-  s_next_sample_index += expected_samples;
-  s_captured_frames++;
-  audio_companion_spool_push(sequence, sample_index, encoded, (uint16_t)encoded_bytes);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  const bool post_ptt_send =
+      ptt && prv_ptt_capture_frame_locked(encoded, (uint16_t)encoded_bytes);
+#endif
 
-  if (prv_session_ready_locked()) {
-    // Keep any drain already requested by silence suppression: exiting suppression must flush the
-    // recorded gap (and the resuming frame) promptly. The drain timer is stopped while suppressing,
-    // so overwriting this would strand the gap until enough frames re-accumulate.
-    schedule_drain = schedule_drain ||
-        (audio_companion_spool_frames_pending_send() >= DRAIN_PUSH_THRESHOLD_FRAMES);
+  bool schedule_park = false;
+  bool post_loss_alert = false;
+  if (recording && suppressed) {
+    schedule_park = prv_note_offline_frame_locked();
+  } else if (recording) {
+    const uint32_t sequence = s_next_sequence++;
+    const uint64_t sample_index = s_next_sample_index;
+    s_next_sample_index += expected_samples;
+    s_captured_frames++;
+    audio_companion_spool_push(sequence, sample_index, encoded, (uint16_t)encoded_bytes);
+
+    if (prv_session_ready_locked()) {
+      // Keep any drain already requested by silence suppression: exiting suppression must flush
+      // the recorded gap (and the resuming frame) promptly. The drain timer is stopped while
+      // suppressing, so overwriting this would strand the gap until enough frames re-accumulate.
+      schedule_drain = schedule_drain ||
+          (audio_companion_spool_frames_pending_send() >= DRAIN_PUSH_THRESHOLD_FRAMES);
+    }
+    schedule_park = prv_note_offline_frame_locked();
+    if (schedule_drain && prv_session_ready_locked()) {
+      prv_start_drain_timer_locked();
+    }
+    post_loss_alert = prv_maybe_alert_loss_locked();
   }
-  const bool schedule_park = prv_note_offline_frame_locked();
-  if (schedule_drain && prv_session_ready_locked()) {
-    prv_start_drain_timer_locked();
-  }
-  const bool post_loss_alert = prv_maybe_alert_loss_locked();
   pbl_mutex_unlock(&s_lock);
 
   if (schedule_drain) {
@@ -1384,6 +2014,13 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   if (post_loss_alert) {
     system_task_add_callback(prv_loss_alert_system_task_cb, NULL);
   }
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  if (post_ptt_send) {
+    pbl_mutex_lock(&s_lock, PBL_FOREVER);
+    prv_ptt_post_send_locked();
+    pbl_mutex_unlock(&s_lock);
+  }
+#endif
 }
 
 // ---- Stream / drain ----
@@ -1899,9 +2536,9 @@ static void prv_end_stream_locked(uint8_t stop_reason) {
   audio_companion_spool_reset();
 }
 
-//! Single decision point: derives the externally visible state and the
-//! capture/stream activity from the current inputs.
-static void prv_reevaluate_locked(void) {
+//! Single decision point for the recording: derives the externally visible state and the
+//! capture/stream activity from the current inputs. prv_reevaluate_locked() adds push-to-talk.
+static void prv_reevaluate_recording_locked(void) {
   if (!s_initialized) {
     return;
   }
@@ -2017,6 +2654,28 @@ static void prv_reevaluate_locked(void) {
   prv_stop_capture_locked();
   prv_set_state_locked(s_session.authorized ? AudioCompanionServiceStateAuthorizedIdle
                                             : AudioCompanionServiceStateIdle);
+}
+
+//! The recording's decision, then a held push-to-talk button: the mic stays on for a question
+//! whatever the recording decided, unless the mic is taken (dictation) or the service is in
+//! error. The mic handler routes frames by s_record_capture, so a question never adds to a
+//! recording that is paused or off.
+static void prv_reevaluate_locked(void) {
+  prv_reevaluate_recording_locked();
+  s_record_capture = s_capture_wanted;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  if (!s_initialized) {
+    return;
+  }
+  if (prv_ptt_capturing_locked()) {
+    if (s_mic_conflict_active || s_error || !prv_ptt_runlevel_allows_locked()) {
+      prv_ptt_abandon_locked(AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE);
+      return;
+    }
+    s_capture_wanted = true;
+    s_owns_mic = true;
+  }
+#endif
 }
 
 // ---- Consent flow ----
@@ -2247,6 +2906,10 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
         audio_companion_muse_receiver_gone();
 #endif
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+        prv_ptt_receiver_gone_locked();
+        watch_actions_receiver_gone();
+#endif
         prv_reevaluate_locked();
       } else {
         prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
@@ -2341,6 +3004,39 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
       prv_send_ack_locked(
           msg->muse_setup_disconnect.request_token,
           audio_companion_muse_handle_disconnect(msg->muse_setup_disconnect.delay_ms));
+      break;
+#endif
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+    case AudioCompanionCtrlMsgIdAssistantUpdate: {
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      const AudioCompanionAssistantUpdate *update = &msg->assistant_update;
+      assistant_view_apply(&s_assistant, update->turn, update->kind, update->detail,
+                           update->text, update->length);
+      if (update->turn == s_assistant.turn) {
+        if (update->kind == AudioCompanionAssistantUpdateDone ||
+            update->kind == AudioCompanionAssistantUpdateError) {
+          prv_ptt_set_fast_link_locked(false);
+        } else {
+          // Still talking about it: the link stays quick, and the quiet limit starts over.
+          prv_ptt_start_fast_link_locked();
+        }
+      }
+      prv_send_ack_locked(update->request_token, AudioCompanionAckStatusOk);
+      break;
+    }
+    case AudioCompanionCtrlMsgIdWatchAction:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      prv_send_ack_locked(msg->watch_action.request_token,
+                          watch_actions_handle_fragment(msg->watch_action.action_id,
+                                                        msg->watch_action.flags,
+                                                        msg->watch_action.data,
+                                                        msg->watch_action.length));
       break;
 #endif
     default:
@@ -2449,9 +3145,15 @@ static void prv_disconnect_system_task_cb(void *data) {
     memset(&s_consent, 0, sizeof(s_consent));
   }
   prv_note_receiver_gone_locked();
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  prv_ptt_receiver_gone_locked();
+#endif
   prv_reevaluate_locked();
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  watch_actions_receiver_gone();
+#endif
 }
 
 void audio_companion_handle_disconnect(void) {
@@ -2497,6 +3199,10 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   uint32_t capabilities = 0;
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
   capabilities |= AUDIO_COMPANION_CAPABILITY_MUSE_SETUP;
+#endif
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  capabilities |=
+      AUDIO_COMPANION_CAPABILITY_PUSH_TO_TALK | AUDIO_COMPANION_CAPABILITY_WATCH_ACTIONS;
 #endif
   const AudioCompanionInfo info = {
     .info_version = 2,
@@ -2708,8 +3414,11 @@ void audio_companion_init(void) {
 
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   audio_companion_reboot_trace_clear(&s_reboot_trace);
-  #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
   audio_companion_muse_init();
+#endif
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  watch_actions_init();
 #endif
   s_initialized = true;
   s_enabled = shell_prefs_get_audio_companion_enabled();
@@ -2985,6 +3694,10 @@ void audio_companion_forget_receiver(void) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
     audio_companion_muse_receiver_gone();
 #endif
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+    prv_ptt_receiver_gone_locked();
+    watch_actions_receiver_gone();
+#endif
   }
   memset(s_session.receiver_id, 0, sizeof(s_session.receiver_id));
   prv_reevaluate_locked();
@@ -3012,6 +3725,11 @@ TimerID audio_companion_test_get_power_save_listen_timer(void) { return s_power_
 
 TimerID audio_companion_test_get_capture_retry_timer(void) { return s_capture_retry_timer; }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+//! The quiet limit on an asked question (and the fast link it holds), so a test can run it out.
+TimerID audio_companion_test_get_ptt_quiet_timer(void) { return s_ptt_fast_link_timer; }
+#endif
+
 void audio_companion_test_reset(void) {
   audio_companion_spool_reset();
   pbl_mutex_init(&s_lock);
@@ -3030,8 +3748,18 @@ void audio_companion_test_reset(void) {
   s_wdt_channel_map_timer = TIMER_INVALID_ID;
   s_owns_mic = false;
   s_capture_wanted = false;
+  s_record_capture = false;
   s_mic_started = false;
   s_mic_on_ms_total = 0;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  memset(&s_ptt, 0, sizeof(s_ptt));
+  s_ptt_turn_counter = 0;
+  prv_ptt_queue_reset_locked();
+  s_ptt_retry_timer = TIMER_INVALID_ID;
+  s_ptt_fast_link_timer = TIMER_INVALID_ID;
+  memset(&s_assistant, 0, sizeof(s_assistant));
+  watch_actions_test_reset();
+#endif
   s_mic_on_since_ms = 0;
   s_response_state_desired = PBL_BT_RESPONSE_TIME_MAX;
   s_response_period_desired = 0;

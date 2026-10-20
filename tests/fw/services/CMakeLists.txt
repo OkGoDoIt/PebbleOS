@@ -587,6 +587,28 @@ pbl_clar_test(test_audio_companion
   OVERRIDES dummy_board
 )
 
+# The same suite with push-to-talk and watch actions built in: every recording test must hold
+# unchanged with the second mic consumer present, and the push-to-talk tests run only here.
+pbl_clar_test(test_audio_companion_ptt
+  SOURCE test_audio_companion.c
+  SOURCES
+    fw/services/audio_companion/audio_companion.c
+    fw/services/audio_companion/assistant_view.c
+    fw/services/audio_companion/protocol.c
+    fw/services/audio_companion/reboot_trace.c
+    fw/services/audio_companion/spool.c
+    fw/services/audio_companion/watch_actions.c
+  DEFINES
+    CONFIG_WATCHDOG=1
+    CONFIG_SERVICE_AUDIO_COMPANION_PTT=1
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_audio_companion_assistant_view
+  SOURCES
+    fw/services/audio_companion/assistant_view.c
+)
+
 pbl_clar_test(test_audio_companion_muse
   SOURCES
     fw/services/audio_companion/muse_setup_relay.c

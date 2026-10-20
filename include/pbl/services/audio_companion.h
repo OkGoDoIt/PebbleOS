@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "pbl/drivers/button_id.h"
 #include "pbl/services/audio_companion_private.h"
 #include "pbl/services/runlevel.h"
 
@@ -137,3 +138,76 @@ void audio_companion_set_consent_handler(AudioCompanionConsentHandler handler);
 void audio_companion_handle_consent_response(bool granted);
 void audio_companion_set_enable_handler(AudioCompanionEnableHandler handler);
 void audio_companion_handle_enable_response(bool granted);
+
+// ---- Push-to-talk (PROTOCOL.md 4.4) ----
+//
+// The wearer holds a button, asks the receiver's assistant, and reads the answer here. The mic is
+// on for a question only while the button is held: armed at the press so the first words are
+// kept, and dropped on the watch if the hold is never confirmed. The service owns the mic either
+// way; push-to-talk works whatever recording is doing, and never adds to the recording what
+// recording would not have captured.
+
+//! What the watch shows for the current (or last) question.
+typedef enum {
+  AudioCompanionAssistantPhaseIdle = 0,
+  //! The mic is live for a question.
+  AudioCompanionAssistantPhaseListening,
+  //! Released; the last of the audio is going out.
+  AudioCompanionAssistantPhaseSending,
+  //! Sent; the assistant is working on it.
+  AudioCompanionAssistantPhaseWaiting,
+  //! The answer is arriving.
+  AudioCompanionAssistantPhaseAnswering,
+  AudioCompanionAssistantPhaseDone,
+  AudioCompanionAssistantPhaseError,
+} AudioCompanionAssistantPhase;
+
+//! Errors the watch decides itself, beside the receiver's AudioCompanionAssistantError codes.
+#define AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE (0x81)
+#define AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE (0x82)
+
+#define AUDIO_COMPANION_ASSISTANT_HEARD_BYTES (AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES + 1)
+#define AUDIO_COMPANION_ASSISTANT_STATUS_BYTES (64)
+#define AUDIO_COMPANION_ASSISTANT_ANSWER_BYTES (1536)
+
+typedef struct {
+  //! Bumped on every change, so a screen can redraw only when something moved.
+  uint32_t generation;
+  uint8_t turn;
+  AudioCompanionAssistantPhase phase;
+  //! Phase Error: an AudioCompanionAssistantError or AUDIO_COMPANION_ASSISTANT_ERROR_*.
+  uint8_t error;
+  //! Listening: how long the question has run, and the limit.
+  uint16_t recorded_ds;
+  uint16_t max_seconds;
+  bool reached_max;
+  char heard[AUDIO_COMPANION_ASSISTANT_HEARD_BYTES];
+  char status[AUDIO_COMPANION_ASSISTANT_STATUS_BYTES];
+  char answer[AUDIO_COMPANION_ASSISTANT_ANSWER_BYTES];
+  //! The answer was longer than the watch keeps; it ends in an ellipsis.
+  bool answer_truncated;
+} AudioCompanionAssistantView;
+
+//! Whether a receiver that can take a question is attached right now.
+bool audio_companion_ptt_available(void);
+
+//! The button is down and its hold belongs to the assistant: start the mic and keep what it hears
+//! on the watch. False when no receiver can take a question or the mic is unavailable. Any task.
+bool audio_companion_ptt_arm(ButtonId button, AudioCompanionPttTrigger trigger);
+
+//! The hold is confirmed: the question begins, with everything heard since the press. Any task.
+void audio_companion_ptt_commit(void);
+
+//! Abandon the current question: before the commit nothing is sent; after it the receiver is told
+//! the question was cancelled. Any task.
+void audio_companion_ptt_cancel(void);
+
+//! Every button press and release, from the kernel's button dispatch (KernelMain), whatever is on
+//! screen: the release that ends a question is never lost to an animation.
+void audio_companion_ptt_handle_button(ButtonId button, bool pressed);
+
+//! Copies what the watch should show. Returns the view's generation. Any task.
+uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out);
+
+//! The screen showing the answer closed: the view returns to idle once nothing is in flight.
+void audio_companion_assistant_dismiss(void);
