@@ -15,6 +15,28 @@
 //! Length of the gadget suffix: the six uppercase hex digits after "MuseGadget".
 #define PBL_BT_MUSE_SETUP_SUFFIX_LEN (6)
 
+//! Why a window closed.
+typedef enum {
+  PblBtMuseSetupCloseReasonClosed = 1,         //!< pbl_bt_muse_setup_close()
+  PblBtMuseSetupCloseReasonTimeout = 2,        //!< the window's duration passed
+  PblBtMuseSetupCloseReasonPhoneLinkLost = 3,  //!< the phone link dropped
+  PblBtMuseSetupCloseReasonError = 4,          //!< advertising could not (re)start
+} PblBtMuseSetupCloseReason;
+
+//! What happens on the window, reported on the Bluetooth host task with the Bluetooth lock held:
+//! handlers must only record and post work elsewhere.
+typedef enum {
+  PblBtMuseSetupEventClientConnected,     //!< detail: the link's ATT MTU
+  PblBtMuseSetupEventSubscribed,          //!< detail: 1 subscribed to TX, 0 unsubscribed
+  PblBtMuseSetupEventMtu,                 //!< detail: the new ATT MTU
+  PblBtMuseSetupEventClientDisconnected,  //!< detail: the HCI reason
+  PblBtMuseSetupEventClosed,              //!< detail: a PblBtMuseSetupCloseReason
+} PblBtMuseSetupEvent;
+
+typedef void (*PblBtMuseSetupEventHandler)(PblBtMuseSetupEvent event, uint16_t detail);
+
+void pbl_bt_muse_setup_set_event_handler(PblBtMuseSetupEventHandler handler);
+
 typedef struct {
   //! The window is open (advertising, or the Muse app is connected).
   bool open;
@@ -73,3 +95,6 @@ void pbl_bt_muse_setup_set_rx_handler(PblBtMuseSetupRxHandler handler);
 
 //! Notifies one value on the setup TX characteristic. False if not subscribed or out of buffers.
 bool pbl_bt_muse_setup_notify(const uint8_t *data, size_t length);
+
+//! Ends the Muse app's link, leaving the window open so it can connect again. False if no link.
+bool pbl_bt_muse_setup_disconnect_client(void);

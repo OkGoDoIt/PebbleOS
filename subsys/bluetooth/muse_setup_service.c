@@ -45,7 +45,7 @@ static const ble_uuid128_t s_tx_uuid =
 
 #define MUSE_SETUP_NAME_PREFIX "MuseGadget"
 //! The setup framing's largest packet is 160 bytes (ble_framing.py); leave headroom.
-#define MUSE_SETUP_MAX_VALUE (244)
+#define MUSE_SETUP_MAX_VALUE (253)
 //! Same floor as the audio companion's control notifications: setup traffic is a few hundred
 //! bytes in total and must never take the blocks the phone link needs.
 #define MUSE_SETUP_MSYS_FLOOR (3)
@@ -80,6 +80,7 @@ static struct {
   uint8_t last_tx[MUSE_SETUP_MAX_VALUE];
   uint16_t last_tx_len;
   PblBtMuseSetupRxHandler rx_handler;
+  PblBtMuseSetupEventHandler event_handler;
 } s_state = {
   .conn_handle = BLE_HS_CONN_HANDLE_NONE,
   .last_gap_event = -1,
@@ -87,6 +88,23 @@ static struct {
 
 static bool prv_is_muse_link(uint16_t conn_handle) {
   return s_state.conn_handle != BLE_HS_CONN_HANDLE_NONE && conn_handle == s_state.conn_handle;
+}
+
+//! bt_lock held.
+static void prv_emit_locked(PblBtMuseSetupEvent event, uint16_t detail) {
+  if (s_state.event_handler) {
+    s_state.event_handler(event, detail);
+  }
+}
+
+static const char *prv_close_reason_string(PblBtMuseSetupCloseReason reason) {
+  switch (reason) {
+    case PblBtMuseSetupCloseReasonClosed: return "closed";
+    case PblBtMuseSetupCloseReasonTimeout: return "window ended";
+    case PblBtMuseSetupCloseReasonPhoneLinkLost: return "phone link lost";
+    case PblBtMuseSetupCloseReasonError: return "advertising failed";
+  }
+  return "?";
 }
 
 // -----------------------------------------------------------------------------
@@ -312,10 +330,11 @@ static int prv_hide_peer_locked(void) {
 }
 
 //! bt_lock held.
-static void prv_end_window_locked(const char *why) {
+static void prv_end_window_locked(PblBtMuseSetupCloseReason reason) {
   if (!s_state.open) {
     return;
   }
+  const char *why = prv_close_reason_string(reason);
   PBL_LOG_INFO("Muse setup window closed: %s", why);
   s_state.open = false;
   strncpy(s_state.close_reason, why, sizeof(s_state.close_reason) - 1);
@@ -326,6 +345,7 @@ static void prv_end_window_locked(const char *why) {
   }
   prv_restore_peer_locked();
   gap_le_advert_return();
+  prv_emit_locked(PblBtMuseSetupEventClosed, (uint16_t)reason);
 }
 
 bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uint32_t duration_ms) {
@@ -386,7 +406,7 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
   if (rc != 0) {
     s_state.last_error = rc;
     PBL_LOG_ERR("Muse setup: advertising failed (0x%04x)", (uint16_t)rc);
-    prv_end_window_locked("advertising failed");
+    prv_end_window_locked(PblBtMuseSetupCloseReasonError);
     goto unlock;
   }
   PBL_LOG_INFO("Muse setup window open as %s for %lu s", s_state.name,
@@ -398,10 +418,10 @@ unlock:
   return ok;
 }
 
-static void prv_close(const char *why) {
+static void prv_close(PblBtMuseSetupCloseReason reason) {
   bt_lock();
   const uint16_t conn_handle = s_state.conn_handle;
-  prv_end_window_locked(why);
+  prv_end_window_locked(reason);
   bt_unlock();
   if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
     ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
@@ -409,14 +429,30 @@ static void prv_close(const char *why) {
 }
 
 void pbl_bt_muse_setup_close(void) {
-  prv_close("closed");
+  prv_close(PblBtMuseSetupCloseReasonClosed);
 }
 
 void pbl_bt_muse_setup_phone_link_lost(void) {
   if (!s_state.open) {
     return;
   }
-  prv_close("phone link lost");
+  prv_close(PblBtMuseSetupCloseReasonPhoneLinkLost);
+}
+
+void pbl_bt_muse_setup_set_event_handler(PblBtMuseSetupEventHandler handler) {
+  bt_lock();
+  s_state.event_handler = handler;
+  bt_unlock();
+}
+
+bool pbl_bt_muse_setup_disconnect_client(void) {
+  bt_lock();
+  const uint16_t conn_handle = s_state.conn_handle;
+  bt_unlock();
+  if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+    return false;
+  }
+  return ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM) == 0;
 }
 
 void pbl_bt_muse_setup_get_status(PblBtMuseSetupStatus *status) {
@@ -466,7 +502,7 @@ static void prv_handle_connect(const struct ble_gap_event *event) {
     if (s_state.open) {
       const int rc = prv_start_advertising_locked();
       if (rc != 0) {
-        prv_end_window_locked("re-adv after failed connect");
+        prv_end_window_locked(PblBtMuseSetupCloseReasonError);
       }
     }
     return;
@@ -493,6 +529,7 @@ static void prv_handle_connect(const struct ble_gap_event *event) {
   PBL_LOG_INFO("Muse setup link up: handle=%u resolved=%u same_phone=%u/%u",
                event->connect.conn_handle, s_state.resolved, s_state.same_phone_known,
                s_state.same_phone);
+  prv_emit_locked(PblBtMuseSetupEventClientConnected, s_state.mtu);
 }
 
 static void prv_handle_disconnect(const struct ble_gap_event *event) {
@@ -503,13 +540,15 @@ static void prv_handle_disconnect(const struct ble_gap_event *event) {
   s_state.conn_handle = BLE_HS_CONN_HANDLE_NONE;
   s_state.subscribed = false;
   nimble_conn_set_private_link(BLE_HS_CONN_HANDLE_NONE);
+  prv_emit_locked(PblBtMuseSetupEventClientDisconnected, (uint16_t)event->disconnect.reason);
 
   // Let the Muse app retry while the window lasts.
   if (s_state.open) {
     const int rc = prv_start_advertising_locked();
     if (rc != 0) {
       s_state.last_error = rc;
-      prv_end_window_locked(rc == BLE_HS_ETIMEOUT ? "window ended" : "re-advertising failed");
+      prv_end_window_locked(rc == BLE_HS_ETIMEOUT ? PblBtMuseSetupCloseReasonTimeout
+                                                   : PblBtMuseSetupCloseReasonError);
     }
   }
 }
@@ -531,15 +570,20 @@ static int prv_gap_event(struct ble_gap_event *event, void *arg) {
     case BLE_GAP_EVENT_ADV_COMPLETE:
       s_state.advertising = false;
       if (s_state.conn_handle == BLE_HS_CONN_HANDLE_NONE) {
-        prv_end_window_locked("window ended");
+        prv_end_window_locked(PblBtMuseSetupCloseReasonTimeout);
       }
       break;
     case BLE_GAP_EVENT_MTU:
-      s_state.mtu = event->mtu.value;
+      if (prv_is_muse_link(event->mtu.conn_handle)) {
+        s_state.mtu = event->mtu.value;
+        prv_emit_locked(PblBtMuseSetupEventMtu, s_state.mtu);
+      }
       break;
     case BLE_GAP_EVENT_SUBSCRIBE:
-      if (event->subscribe.attr_handle == s_tx_attr_handle) {
+      if (event->subscribe.attr_handle == s_tx_attr_handle &&
+          prv_is_muse_link(event->subscribe.conn_handle)) {
         s_state.subscribed = event->subscribe.cur_notify;
+        prv_emit_locked(PblBtMuseSetupEventSubscribed, s_state.subscribed ? 1 : 0);
       }
       break;
     case BLE_GAP_EVENT_CONN_UPDATE_REQ:
