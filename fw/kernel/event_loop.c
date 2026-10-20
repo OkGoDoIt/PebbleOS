@@ -1,6 +1,9 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+#include "pbl/services/audio_companion.h"
+#endif
 #include "event_loop.h"
 
 #include "events.h"
@@ -170,6 +173,12 @@ static void back_button_force_quit_handler(void *data) {
 static void launcher_handle_button_event(PebbleEvent *e) {
   ButtonId button_id = e->button.button_id;
   const bool watchface_running = app_manager_is_watchface_running();
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  // Every press and release, whatever is on screen: the release that ends a push-to-talk
+  // question must not be lost to a launch animation or a modal.
+  audio_companion_ptt_handle_button(button_id, e->type == PEBBLE_BUTTON_DOWN_EVENT);
+#endif
 
   // trigger the backlight on any button down event
   if (e->type == PEBBLE_BUTTON_DOWN_EVENT) {

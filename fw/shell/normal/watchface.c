@@ -2,6 +2,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "watchface.h"
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+#include <pbl/services/audio_companion.h>
+#endif
 
 #include <pbl/logging/logging.h>
 #include <pbl/services/compositor/compositor_transitions.h>
@@ -238,10 +241,20 @@ static bool prv_try_launch_peek_widget_app(ButtonId button, QuickViewButtonMode 
 #define prv_try_launch_peek_widget_app(button, fired_mode) false
 #endif
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+//! Whether holding `button` asks the assistant (the Muse app is that button's Quick Launch).
+static bool prv_button_hold_is_assistant(ButtonId button) {
+  return quick_launch_is_enabled(button) && quick_launch_get_app(button) == APP_ID_MUSE;
+}
+#endif
+
 static void prv_quick_launch_handler(ClickRecognizerRef recognizer, void *data) {
   ButtonId button = click_recognizer_get_button_id(recognizer);
 
   if (prv_is_any_combo_active()) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+    audio_companion_ptt_cancel();
+#endif
     return;
   }
 
@@ -257,6 +270,14 @@ static void prv_quick_launch_handler(ClickRecognizerRef recognizer, void *data) 
   }
   s_buttons_pressed = BIT_CLEAR; // Reset our own tracking
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  if (app_id == APP_ID_MUSE) {
+    // The hold is confirmed here, at the Quick Launch moment, not when the app has opened: a
+    // release while it opens must already count as the end of a question. Listening began at
+    // the press (watchface_handle_button_event), so the first words are kept.
+    audio_companion_ptt_commit();
+  }
+#endif
   prv_launch_quick_launch_app(app_id, button, APP_LAUNCH_QUICK_LAUNCH,
                               APP_QUICK_LAUNCH_ACTION_HOLD);
 }
@@ -359,6 +380,13 @@ void watchface_handle_button_event(PebbleEvent *e) {
   }
   switch (e->type) {
     case PEBBLE_BUTTON_DOWN_EVENT:
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+      // Listen from the press when this button's hold asks the assistant; a short press drops the
+      // audio on the watch (audio_companion_ptt_handle_button), unsent.
+      if (s_buttons_pressed == BIT_CLEAR && prv_button_hold_is_assistant(e->button.button_id)) {
+        audio_companion_ptt_arm(e->button.button_id, AudioCompanionPttTriggerQuickLaunch);
+      }
+#endif
       s_buttons_pressed |= (BIT_SET << e->button.button_id);
       click_recognizer_handle_button_down(&s_click_manager.recognizers[e->button.button_id]);
       prv_check_combo_back_hold();
