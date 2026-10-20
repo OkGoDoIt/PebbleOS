@@ -62,12 +62,16 @@ static struct {
   uint32_t tx_refused;
   RtcTicks deadline;
   int last_error;
+  int last_gap_event;
+  uint32_t gap_events;
+  char close_reason[24];
   char name[17];
   uint8_t last_tx[MUSE_SETUP_MAX_VALUE];
   uint16_t last_tx_len;
   PblBtMuseSetupRxHandler rx_handler;
 } s_state = {
   .conn_handle = BLE_HS_CONN_HANDLE_NONE,
+  .last_gap_event = -1,
 };
 
 static bool prv_is_muse_link(uint16_t conn_handle) {
@@ -256,6 +260,8 @@ static void prv_end_window_locked(const char *why) {
   }
   PBL_LOG_INFO("Muse setup window closed: %s", why);
   s_state.open = false;
+  strncpy(s_state.close_reason, why, sizeof(s_state.close_reason) - 1);
+  s_state.close_reason[sizeof(s_state.close_reason) - 1] = '\0';
   if (s_state.advertising) {
     ble_gap_adv_stop();
     s_state.advertising = false;
@@ -303,6 +309,9 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
   s_state.deadline = rtc_get_ticks() + (RtcTicks)duration_ms * RTC_TICKS_HZ / 1000;
   s_state.open = true;
   s_state.last_error = 0;
+  s_state.last_gap_event = -1;
+  s_state.gap_events = 0;
+  s_state.close_reason[0] = '\0';
   s_state.same_phone_known = false;
   s_state.rx_packets = s_state.rx_bytes = s_state.tx_packets = s_state.tx_refused = 0;
 
@@ -350,7 +359,10 @@ void pbl_bt_muse_setup_get_status(PblBtMuseSetupStatus *status) {
     .tx_refused = s_state.tx_refused,
     .seconds_left = s_state.open ? prv_ms_left_locked() / 1000 : 0,
     .last_error = s_state.last_error,
+    .last_gap_event = s_state.last_gap_event,
+    .gap_events = s_state.gap_events,
   };
+  memcpy(status->close_reason, s_state.close_reason, sizeof(status->close_reason));
   memcpy(status->name, s_state.name, sizeof(status->name));
   bt_unlock();
 }
@@ -368,8 +380,16 @@ void pbl_bt_muse_setup_set_rx_handler(PblBtMuseSetupRxHandler handler) {
 
 static void prv_handle_connect(const struct ble_gap_event *event) {
   if (event->connect.status != 0) {
+    // The controller stopped advertising on the CONNECT_IND, so the window must re-advertise.
     PBL_LOG_WRN("Muse setup connect failed (0x%04x)", (uint16_t)event->connect.status);
     s_state.advertising = false;
+    s_state.last_error = event->connect.status;
+    if (s_state.open) {
+      const int rc = prv_start_advertising_locked();
+      if (rc != 0) {
+        prv_end_window_locked("re-adv after failed connect");
+      }
+    }
     return;
   }
 
@@ -418,6 +438,10 @@ static void prv_handle_disconnect(const struct ble_gap_event *event) {
 static int prv_gap_event(struct ble_gap_event *event, void *arg) {
   int rc = 0;
   bt_lock();
+  s_state.last_gap_event = event->type;
+  s_state.gap_events++;
+  // Every event on the private link is rare and is the evidence an on-device test needs.
+  PBL_LOG_INFO("Muse setup GAP event %d", event->type);
   switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
       prv_handle_connect(event);

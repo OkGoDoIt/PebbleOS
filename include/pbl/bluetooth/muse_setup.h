@@ -37,6 +37,12 @@ typedef struct {
   uint32_t seconds_left;
   //! The last NimBLE error from opening or advertising, 0 if none.
   int last_error;
+  //! The last NimBLE GAP event type delivered to the window's own callback (-1 if none yet), and
+  //! how many it has received since the window opened.
+  int last_gap_event;
+  uint32_t gap_events;
+  //! Why the window last closed ("" while open or never opened).
+  char close_reason[24];
   char name[17];
 } PblBtMuseSetupStatus;
 

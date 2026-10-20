@@ -24,7 +24,7 @@ typedef struct {
   TextLayer *text;
   AppTimer *timer;
   char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN + 1];
-  char buffer[320];
+  char buffer[400];
 } MuseSetupTestData;
 
 static void prv_open_cb(void *context) {
@@ -47,14 +47,17 @@ static void prv_refresh(void *context) {
                      : status.same_phone ? "yes" : "NO";
   snprintf(data->buffer, sizeof(data->buffer),
            "Muse setup %s\n%s\n%lu:%02lu left\nLink: %s\nSame phone: %s%s\nMTU %u sub %s\n"
-           "RX %lu (%lu B)\nTX %lu  refused %lu\nPhone link: %s\nerr %d\nSELECT: %s",
+           "RX %lu (%lu B)\nTX %lu  refused %lu\nPhone link: %s\nerr %d  ev %d (x%lu)\n%s%s\n"
+           "SELECT: %s",
            status.open ? "OPEN" : "closed", status.name[0] ? status.name : "(not opened)",
            (unsigned long)(status.seconds_left / 60), (unsigned long)(status.seconds_left % 60),
            link, same, status.connected && status.resolved ? " (rpa)" : "", status.mtu,
            status.subscribed ? "yes" : "no", (unsigned long)status.rx_packets,
            (unsigned long)status.rx_bytes, (unsigned long)status.tx_packets,
            (unsigned long)status.tx_refused, status.phone_link_up ? "up" : "DOWN",
-           status.last_error, status.open ? "close" : "open");
+           status.last_error, status.last_gap_event, (unsigned long)status.gap_events,
+           status.close_reason[0] ? "closed: " : "", status.close_reason,
+           status.open ? "close" : "open");
   text_layer_set_text(data->text, data->buffer);
   data->timer = app_timer_register(500, prv_refresh, NULL);
 }
@@ -85,7 +88,7 @@ static void prv_init(void) {
   window_set_click_config_provider(data->window, prv_click_config);
   Layer *root = window_get_root_layer(data->window);
   data->text = text_layer_create(root->bounds);
-  text_layer_set_font(data->text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_font(data->text, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   layer_add_child(root, text_layer_get_layer(data->text));
   app_window_stack_push(data->window, true);
   prv_refresh(NULL);

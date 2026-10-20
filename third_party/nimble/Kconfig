@@ -24,6 +24,15 @@ config NIMBLE_HCI_SF32LB52_TRACE_LOG
     help
       Emit human-readable HCI trace lines through the standard logger.
 
+config NIMBLE_HCI_SF32LB52_TRACE_EVENTS
+    bool "Events and commands only"
+    help
+      Log one line per HCI command and per HCI event (except Number Of
+      Completed Packets) at INFO level in the NimBLE module, without
+      payloads or ACL data. Cheap enough to leave on while a phone link
+      streams; shows what the controller reported about advertising,
+      connections and their failures.
+
 endchoice
 
 choice "NIMBLE_LOG_LEVEL_CHOICE"
