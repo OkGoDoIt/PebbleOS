@@ -34,6 +34,23 @@ typedef struct {
       char options[AUDIO_COMPANION_WATCH_ACTION_MAX_OPTIONS]
                   [AUDIO_COMPANION_WATCH_ACTION_OPTION_MAX_BYTES + 1];
     } choose;
+    struct {
+      uint8_t command;  // AudioCompanionWatchMusicCommand
+    } music;
+    struct {
+      bool on;
+      uint16_t minutes;
+    } quiet_time;
+    struct {
+      char name[AUDIO_COMPANION_WATCH_ACTION_APP_NAME_MAX_BYTES + 1];
+    } launch_app;
+    struct {
+      uint8_t seconds;
+    } find_watch;
+    struct {
+      uint8_t metric;  // AudioCompanionWatchHealthMetric
+      uint8_t days;
+    } health;
   };
 } WatchActionRequest;
 
@@ -69,11 +86,33 @@ void watch_actions_receiver_gone(void);
 //! Timers still counting, for tests and diagnostics.
 uint32_t watch_actions_active_timer_count(void);
 
-//! Provided by audio_companion.c: sends WATCH_ACTION_RESULT to the attached receiver.
-bool audio_companion_send_watch_action_result(uint8_t action_id, uint8_t status, uint8_t value);
+//! Provided by audio_companion.c: sends WATCH_ACTION_RESULT to the attached receiver. `text` may be
+//! NULL.
+bool audio_companion_send_watch_action_result(uint8_t action_id, uint8_t status, uint8_t value,
+                                              const char *text);
 
-//! Provided by the platform (alarm service); a seam for tests.
+// ---- Provided by the platform (watch_actions_platform.c); seams for tests ----
+
+//! A one-off alarm in the watch's alarms. System task.
 bool watch_actions_create_alarm(uint8_t hour, uint8_t minute);
+
+//! Sends `command` to the phone's music player through the watch's link, and writes what is
+//! playing ("title\nartist") into `text`. False when no player is connected. System task.
+bool watch_actions_music(uint8_t command, char *text, size_t text_size);
+
+//! Quiet Time on or off. System task.
+void watch_actions_set_quiet_time(bool on);
+
+//! Opens the watch app whose name matches `name` and writes its name into `found`. False when no
+//! app matches. System task.
+bool watch_actions_launch_app(const char *name, char *found, size_t found_size);
+
+//! Buzzes and lights the watch for `seconds`. System task.
+void watch_actions_find_watch(uint8_t seconds);
+
+//! The watch's activity data for `metric` over `days` (today first), comma-separated, into
+//! `text`. False when the activity service has nothing. System task.
+bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_size);
 
 //! Unit tests only.
 void watch_actions_test_reset(void);

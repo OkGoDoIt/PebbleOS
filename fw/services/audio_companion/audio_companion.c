@@ -1915,12 +1915,13 @@ void audio_companion_assistant_dismiss(void) {
   prv_apply_pending();
 }
 
-bool audio_companion_send_watch_action_result(uint8_t action_id, uint8_t status, uint8_t value) {
+bool audio_companion_send_watch_action_result(uint8_t action_id, uint8_t status, uint8_t value,
+                                              const char *text) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  uint8_t buf[sizeof(AudioCompanionWatchActionResultMsg)];
-  const size_t length =
-      audio_companion_protocol_build_watch_action_result(buf, sizeof(buf), action_id, status,
-                                                         value);
+  uint8_t buf[sizeof(AudioCompanionWatchActionResultMsg) + 1 +
+              AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES];
+  const size_t length = audio_companion_protocol_build_watch_action_result(
+      buf, sizeof(buf), action_id, status, value, text);
   const bool sent = s_session.authorized && s_session.control_subscribed &&
                     pbl_bt_audio_companion_notify_control(buf, length);
   pbl_mutex_unlock(&s_lock);

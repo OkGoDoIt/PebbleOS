@@ -302,10 +302,24 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
   watch's alarms, at the next such time.
 - `3 Choose`: `u16 timeout_s` (10–300), `str question` (≤ 120), `u8 count` (2–6), then
   `count` × `str option` (≤ 48). The watch vibrates and asks; the wearer picks one or backs out.
+- `4 Music`: `u8 command` — 1 play, 2 pause, 3 play/pause, 4 next, 5 previous, 6 volume up,
+  7 volume down, 8 now playing (changes nothing). Sent to the phone's player over the watch's own
+  media link. Result text: what is playing, `title\nartist`, when known. Failed: no player.
+- `5 QuietTime`: `u8 on`, `u16 minutes` (0: until turned off). With minutes, the watch turns it
+  back off itself.
+- `6 LaunchApp`: `str name` (≤ 48). Opens the launcher app whose name matches best (exact, then
+  starts with, then contains; case-insensitive; never a watchface or a hidden app). Result text:
+  the app's name. Failed: nothing matched.
+- `7 FindWatch`: `u8 seconds` (1–30, 0 means 10). Buzzes and lights up.
+- `8 Health`: `u8 metric` — 1 steps, 2 distance (m), 3 active seconds, 4 active kcal, 5 sleep
+  seconds, 6 heart rate — and `u8 days` (1–7). Result text: the daily values comma-separated,
+  today first, `-1` for a day without data; for heart rate, `bpm,age_seconds` of the latest
+  reading. Failed: no activity data.
 
 `WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,
-`u8 value`. `status` 1 done (timer started, alarm set, option chosen: `value` is its index from
-0), 2 declined (the wearer backed out), 3 timed out, 4 failed, 5 unsupported kind.
+`u8 value`, then optionally `u8 text_length` (1–160) and that much UTF-8. `status` 1 done (timer
+started, alarm set, option chosen: `value` is its index from 0), 2 declined (the wearer backed
+out), 3 timed out, 4 failed, 5 unsupported kind. A receiver must accept the four-byte form.
 
 ## 5. Data Channel
 

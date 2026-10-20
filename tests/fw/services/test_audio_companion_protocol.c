@@ -571,11 +571,14 @@ void test_audio_companion_protocol__build_push_to_talk_out(void) {
   prv_assert_builder_matches("ptt_event_cancel_too_short", buf, len);
 
   len = audio_companion_protocol_build_watch_action_result(
-      buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDone, 1);
+      buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDone, 1, NULL);
   prv_assert_builder_matches("watch_action_result_chosen", buf, len);
   len = audio_companion_protocol_build_watch_action_result(
-      buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDeclined, 0);
+      buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDeclined, 0, NULL);
   prv_assert_builder_matches("watch_action_result_declined", buf, len);
+  len = audio_companion_protocol_build_watch_action_result(
+      buf, sizeof(buf), 6, AudioCompanionWatchActionStatusDone, 0, "Clair de lune\nDebussy");
+  prv_assert_builder_matches("watch_action_result_text", buf, len);
 
   // PTT_AUDIO: the header, then STREAM_DATA-style frame entries.
   uint8_t audio[128];

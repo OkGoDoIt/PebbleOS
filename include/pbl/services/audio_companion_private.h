@@ -228,6 +228,11 @@ typedef enum {
 #define AUDIO_COMPANION_WATCH_ACTION_OPTION_MAX_BYTES (48)
 #define AUDIO_COMPANION_WATCH_ACTION_MIN_OPTIONS (2)
 #define AUDIO_COMPANION_WATCH_ACTION_MAX_OPTIONS (6)
+//! Longest text a WATCH_ACTION_RESULT carries (now playing, an app's name, health numbers).
+#define AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES (160)
+#define AUDIO_COMPANION_WATCH_ACTION_APP_NAME_MAX_BYTES (48)
+#define AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS (7)
+#define AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECONDS (30)
 
 typedef enum {
   //! u32 seconds, str label: a countdown on the watch.
@@ -236,7 +241,39 @@ typedef enum {
   AudioCompanionWatchActionAlarm = 2,
   //! u16 timeout_s, str question, u8 count, str option x count: the wearer picks one.
   AudioCompanionWatchActionChoose = 3,
+  //! u8 command (AudioCompanionWatchMusicCommand): the phone's music, through the watch.
+  AudioCompanionWatchActionMusic = 4,
+  //! u8 on, u16 minutes (0: until turned off): Quiet Time.
+  AudioCompanionWatchActionQuietTime = 5,
+  //! str name: open the watch app whose name matches.
+  AudioCompanionWatchActionLaunchApp = 6,
+  //! u8 seconds (1-30): buzz and light up, to be found.
+  AudioCompanionWatchActionFindWatch = 7,
+  //! u8 metric (AudioCompanionWatchHealthMetric), u8 days (1-7): the watch's activity data.
+  AudioCompanionWatchActionHealth = 8,
 } AudioCompanionWatchActionKind;
+
+typedef enum {
+  AudioCompanionWatchMusicPlay = 1,
+  AudioCompanionWatchMusicPause = 2,
+  AudioCompanionWatchMusicTogglePlayPause = 3,
+  AudioCompanionWatchMusicNext = 4,
+  AudioCompanionWatchMusicPrevious = 5,
+  AudioCompanionWatchMusicVolumeUp = 6,
+  AudioCompanionWatchMusicVolumeDown = 7,
+  //! Nothing changes; the result says what is playing.
+  AudioCompanionWatchMusicNowPlaying = 8,
+} AudioCompanionWatchMusicCommand;
+
+typedef enum {
+  AudioCompanionWatchHealthSteps = 1,
+  AudioCompanionWatchHealthDistanceMeters = 2,
+  AudioCompanionWatchHealthActiveSeconds = 3,
+  AudioCompanionWatchHealthActiveKCalories = 4,
+  AudioCompanionWatchHealthSleepSeconds = 5,
+  //! The latest reading, not a daily value: "bpm,age_seconds".
+  AudioCompanionWatchHealthHeartRate = 6,
+} AudioCompanionWatchHealthMetric;
 
 typedef enum {
   AudioCompanionWatchActionStatusDone = 1,
@@ -492,6 +529,7 @@ typedef struct PBL_PACKED {
   uint8_t status;  // AudioCompanionWatchActionStatus
   //! Choose: the chosen option, from 0.
   uint8_t value;
+  //! Optionally followed by u8 text_length (1-160) and that much UTF-8 (Section 4.5).
 } AudioCompanionWatchActionResultMsg;
 
 typedef struct PBL_PACKED {
@@ -655,9 +693,11 @@ size_t audio_companion_protocol_build_ptt_event(uint8_t *buf, size_t buf_size, u
 size_t audio_companion_protocol_build_ptt_audio_header(uint8_t *buf, size_t buf_size,
                                                        uint8_t turn, uint16_t first_frame,
                                                        uint8_t frame_count);
+//! `text` may be NULL; longer than AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES is cut on
+//! a character boundary.
 size_t audio_companion_protocol_build_watch_action_result(uint8_t *buf, size_t buf_size,
                                                           uint8_t action_id, uint8_t status,
-                                                          uint8_t value);
+                                                          uint8_t value, const char *text);
 size_t audio_companion_protocol_build_ack(uint8_t *buf, size_t buf_size, uint8_t request_token,
                                           uint8_t status);
 size_t audio_companion_protocol_build_state_changed(uint8_t *buf, size_t buf_size,

@@ -741,10 +741,41 @@ static const uint8_t s_fx_watch_action_empty[] = {
   0x0e, 0x4d, 0x06, 0x00, 0x00,
 };
 
+// Buzz and light up for ten seconds
+static const uint8_t s_fx_watch_action_find_watch[] = {
+  0x0e, 0x4e, 0x07, 0x00, 0x02, 0x07, 0x0a,
+};
+
+// Step counts for today and the six days before
+static const uint8_t s_fx_watch_action_health_steps[] = {
+  0x0e, 0x4e, 0x07, 0x00, 0x03, 0x08, 0x01, 0x07,
+};
+
 // WATCH_ACTION with action id 0, which is never used
 static const uint8_t s_fx_watch_action_id_zero[] = {
   0x0e, 0x4c, 0x00, 0x00, 0x0b, 0x01, 0x58, 0x02, 0x00, 0x00, 0x05, 0x50,
   0x61, 0x73, 0x74, 0x61,
+};
+
+// Open the watch app named Workout
+static const uint8_t s_fx_watch_action_launch_app[] = {
+  0x0e, 0x4e, 0x07, 0x00, 0x09, 0x06, 0x07, 0x57, 0x6f, 0x72, 0x6b, 0x6f,
+  0x75, 0x74,
+};
+
+// Skip to the next track
+static const uint8_t s_fx_watch_action_music_next[] = {
+  0x0e, 0x4e, 0x07, 0x00, 0x02, 0x04, 0x04,
+};
+
+// Ask what is playing; nothing changes
+static const uint8_t s_fx_watch_action_music_now_playing[] = {
+  0x0e, 0x4e, 0x07, 0x00, 0x02, 0x04, 0x08,
+};
+
+// Quiet Time on for an hour
+static const uint8_t s_fx_watch_action_quiet_time[] = {
+  0x0e, 0x4e, 0x07, 0x00, 0x04, 0x05, 0x01, 0x3c, 0x00,
 };
 
 // The wearer picked the second option
@@ -755,6 +786,19 @@ static const uint8_t s_fx_watch_action_result_chosen[] = {
 // The wearer backed out of the choice
 static const uint8_t s_fx_watch_action_result_declined[] = {
   0x4a, 0x05, 0x02, 0x00,
+};
+
+// Done, with text: what is playing (title, then artist)
+static const uint8_t s_fx_watch_action_result_text[] = {
+  0x4a, 0x06, 0x01, 0x00, 0x15, 0x43, 0x6c, 0x61, 0x69, 0x72, 0x20, 0x64,
+  0x65, 0x20, 0x6c, 0x75, 0x6e, 0x65, 0x0a, 0x44, 0x65, 0x62, 0x75, 0x73,
+  0x73, 0x79,
+};
+
+// WATCH_ACTION_RESULT text length overruns the bytes present
+static const uint8_t s_fx_watch_action_result_text_truncated[] = {
+  0x4a, 0x06, 0x01, 0x00, 0x15, 0x43, 0x6c, 0x61, 0x69, 0x72, 0x20, 0x64,
+  0x65, 0x20, 0x6c, 0x75, 0x6e, 0x65, 0x0a, 0x44, 0x65, 0x62, 0x75,
 };
 
 // A ten-minute timer labelled Pasta, in one write
@@ -855,9 +899,17 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "watch_action_choose_first", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_choose_first, 185 },
   { "watch_action_choose_last", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_choose_last, 38 },
   { "watch_action_empty", FixtureChannelControlIn, FixtureExpectReject, s_fx_watch_action_empty, 5 },
+  { "watch_action_find_watch", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_find_watch, 7 },
+  { "watch_action_health_steps", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_health_steps, 8 },
   { "watch_action_id_zero", FixtureChannelControlIn, FixtureExpectReject, s_fx_watch_action_id_zero, 16 },
+  { "watch_action_launch_app", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_launch_app, 14 },
+  { "watch_action_music_next", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_music_next, 7 },
+  { "watch_action_music_now_playing", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_music_now_playing, 7 },
+  { "watch_action_quiet_time", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_quiet_time, 9 },
   { "watch_action_result_chosen", FixtureChannelControlOut, FixtureExpectParse, s_fx_watch_action_result_chosen, 4 },
   { "watch_action_result_declined", FixtureChannelControlOut, FixtureExpectParse, s_fx_watch_action_result_declined, 4 },
+  { "watch_action_result_text", FixtureChannelControlOut, FixtureExpectParse, s_fx_watch_action_result_text, 26 },
+  { "watch_action_result_text_truncated", FixtureChannelControlOut, FixtureExpectReject, s_fx_watch_action_result_text_truncated, 23 },
   { "watch_action_timer", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timer, 16 },
 };
 

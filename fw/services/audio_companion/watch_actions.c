@@ -30,6 +30,8 @@ static uint16_t s_assembly_length;
 static uint8_t s_assembly[AUDIO_COMPANION_WATCH_ACTION_PAYLOAD_MAX_BYTES];
 static uint8_t s_choice_action_id;
 static WatchTimer s_timers[WATCH_ACTIONS_MAX_TIMERS];
+//! Turns Quiet Time back off when the assistant set it for a while.
+static TimerID s_quiet_time_timer = TIMER_INVALID_ID;
 static WatchActionsChooseHandler s_choose_handler;
 static WatchActionsTimerDoneHandler s_timer_done_handler;
 static WatchActionsChooseDismissHandler s_dismiss_handler;
@@ -110,6 +112,35 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       }
       return r.ok;
     }
+    case AudioCompanionWatchActionMusic:
+      out->music.command = prv_u8(&r);
+      return r.ok && out->music.command >= AudioCompanionWatchMusicPlay &&
+             out->music.command <= AudioCompanionWatchMusicNowPlaying;
+    case AudioCompanionWatchActionQuietTime:
+      out->quiet_time.on = prv_u8(&r) != 0;
+      out->quiet_time.minutes = prv_u16(&r);
+      return r.ok;
+    case AudioCompanionWatchActionLaunchApp:
+      prv_string(&r, out->launch_app.name, AUDIO_COMPANION_WATCH_ACTION_APP_NAME_MAX_BYTES);
+      return r.ok && out->launch_app.name[0] != '\0';
+    case AudioCompanionWatchActionFindWatch:
+      out->find_watch.seconds = prv_u8(&r);
+      if (out->find_watch.seconds == 0) {
+        out->find_watch.seconds = 10;
+      } else if (out->find_watch.seconds > AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECONDS) {
+        out->find_watch.seconds = AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECONDS;
+      }
+      return r.ok;
+    case AudioCompanionWatchActionHealth:
+      out->health.metric = prv_u8(&r);
+      out->health.days = prv_u8(&r);
+      if (out->health.days == 0) {
+        out->health.days = 1;
+      } else if (out->health.days > AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS) {
+        out->health.days = AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS;
+      }
+      return r.ok && out->health.metric >= AudioCompanionWatchHealthSteps &&
+             out->health.metric <= AudioCompanionWatchHealthHeartRate;
     default:
       if (status_out) {
         *status_out = AudioCompanionWatchActionStatusUnsupported;
@@ -182,6 +213,30 @@ uint32_t watch_actions_active_timer_count(void) {
   return count;
 }
 
+// ---- Quiet Time for a while ----
+
+static void prv_quiet_time_off_system_task_cb(void *data) {
+  PBL_LOG_INFO("Watch action: Quiet Time over");
+  watch_actions_set_quiet_time(false);
+}
+
+static void prv_quiet_time_timer_cb(void *data) {
+  system_task_add_callback(prv_quiet_time_off_system_task_cb, NULL);
+}
+
+static void prv_set_quiet_time(bool on, uint16_t minutes) {
+  watch_actions_set_quiet_time(on);
+  if (s_quiet_time_timer == TIMER_INVALID_ID) {
+    s_quiet_time_timer = new_timer_create();
+  }
+  if (on && minutes > 0) {
+    new_timer_start(s_quiet_time_timer, (uint32_t)minutes * 60 * 1000, prv_quiet_time_timer_cb,
+                    NULL, 0);
+  } else {
+    new_timer_stop(s_quiet_time_timer);
+  }
+}
+
 // ---- running a complete action (system task, no service lock) ----
 
 static void prv_choose_kernel_main_cb(void *data) {
@@ -208,7 +263,8 @@ static void prv_run_system_task_cb(void *data) {
                    (unsigned long)request->timer.seconds, ok ? "set" : "failed");
       audio_companion_send_watch_action_result(
           pending->action_id,
-          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0);
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          NULL);
       kernel_free(pending);
       return;
     }
@@ -218,7 +274,8 @@ static void prv_run_system_task_cb(void *data) {
                    request->alarm.hour, request->alarm.minute, ok ? "set" : "failed");
       audio_companion_send_watch_action_result(
           pending->action_id,
-          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0);
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          NULL);
       kernel_free(pending);
       return;
     }
@@ -227,6 +284,56 @@ static void prv_run_system_task_cb(void *data) {
       // watch_actions_choice_result().
       launcher_task_add_callback(prv_choose_kernel_main_cb, pending);
       return;
+    case AudioCompanionWatchActionMusic: {
+      char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
+      const bool ok = watch_actions_music(request->music.command, text, sizeof(text));
+      PBL_LOG_INFO("Watch action %u: music %u %s", pending->action_id, request->music.command,
+                   ok ? "sent" : "failed");
+      audio_companion_send_watch_action_result(
+          pending->action_id,
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          text);
+      kernel_free(pending);
+      return;
+    }
+    case AudioCompanionWatchActionQuietTime:
+      prv_set_quiet_time(request->quiet_time.on, request->quiet_time.minutes);
+      PBL_LOG_INFO("Watch action %u: Quiet Time %s (%u min)", pending->action_id,
+                   request->quiet_time.on ? "on" : "off", request->quiet_time.minutes);
+      audio_companion_send_watch_action_result(pending->action_id,
+                                               AudioCompanionWatchActionStatusDone, 0, NULL);
+      kernel_free(pending);
+      return;
+    case AudioCompanionWatchActionLaunchApp: {
+      char found[AUDIO_COMPANION_WATCH_ACTION_APP_NAME_MAX_BYTES + 1] = {0};
+      const bool ok = watch_actions_launch_app(request->launch_app.name, found, sizeof(found));
+      PBL_LOG_INFO("Watch action %u: launch %s", pending->action_id, ok ? "found" : "no match");
+      audio_companion_send_watch_action_result(
+          pending->action_id,
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          ok ? found : NULL);
+      kernel_free(pending);
+      return;
+    }
+    case AudioCompanionWatchActionFindWatch:
+      watch_actions_find_watch(request->find_watch.seconds);
+      audio_companion_send_watch_action_result(pending->action_id,
+                                               AudioCompanionWatchActionStatusDone, 0, NULL);
+      kernel_free(pending);
+      return;
+    case AudioCompanionWatchActionHealth: {
+      char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
+      const bool ok =
+          watch_actions_health(request->health.metric, request->health.days, text, sizeof(text));
+      PBL_LOG_INFO("Watch action %u: health metric %u %s", pending->action_id,
+                   request->health.metric, ok ? "read" : "unavailable");
+      audio_companion_send_watch_action_result(
+          pending->action_id,
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          ok ? text : NULL);
+      kernel_free(pending);
+      return;
+    }
     default:
       kernel_free(pending);
       return;
@@ -237,7 +344,8 @@ static void prv_run_system_task_cb(void *data) {
 
 static void prv_reject_system_task_cb(void *data) {
   const uintptr_t packed = (uintptr_t)data;
-  audio_companion_send_watch_action_result((uint8_t)(packed >> 8), (uint8_t)(packed & 0xFF), 0);
+  audio_companion_send_watch_action_result((uint8_t)(packed >> 8), (uint8_t)(packed & 0xFF), 0,
+                                           NULL);
 }
 
 uint8_t watch_actions_handle_fragment(uint8_t action_id, uint8_t flags, const uint8_t *data,
@@ -304,7 +412,7 @@ void watch_actions_choice_result(uint8_t action_id, uint8_t status, uint8_t inde
     return;
   }
   PBL_LOG_INFO("Watch action %u: choice %u (%u)", action_id, status, index);
-  audio_companion_send_watch_action_result(action_id, status, index);
+  audio_companion_send_watch_action_result(action_id, status, index, NULL);
 }
 
 static void prv_dismiss_kernel_main_cb(void *data) {
@@ -339,6 +447,7 @@ void watch_actions_init(void) {
   for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
     s_timers[i].timer = TIMER_INVALID_ID;
   }
+  s_quiet_time_timer = TIMER_INVALID_ID;
 }
 
 void watch_actions_test_reset(void) {

@@ -306,7 +306,7 @@ size_t audio_companion_protocol_build_ptt_audio_header(uint8_t *buf, size_t buf_
 
 size_t audio_companion_protocol_build_watch_action_result(uint8_t *buf, size_t buf_size,
                                                           uint8_t action_id, uint8_t status,
-                                                          uint8_t value) {
+                                                          uint8_t value, const char *text) {
   if (!buf || buf_size < sizeof(AudioCompanionWatchActionResultMsg)) {
     return 0;
   }
@@ -317,7 +317,23 @@ size_t audio_companion_protocol_build_watch_action_result(uint8_t *buf, size_t b
     .value = value,
   };
   memcpy(buf, &msg, sizeof(msg));
-  return sizeof(msg);
+  size_t length = text ? strlen(text) : 0;
+  if (length == 0 || buf_size < sizeof(msg) + 2) {
+    return sizeof(msg);
+  }
+  size_t limit = AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES;
+  if (limit > buf_size - sizeof(msg) - 1) {
+    limit = buf_size - sizeof(msg) - 1;
+  }
+  if (length > limit) {
+    length = limit;
+    while (length > 0 && (((uint8_t)text[length]) & 0xC0) == 0x80) {
+      length--;
+    }
+  }
+  buf[sizeof(msg)] = (uint8_t)length;
+  memcpy(buf + sizeof(msg) + 1, text, length);
+  return sizeof(msg) + 1 + length;
 }
 
 size_t audio_companion_protocol_build_ack(uint8_t *buf, size_t buf_size, uint8_t request_token,

@@ -69,6 +69,47 @@ bool watch_actions_create_alarm(uint8_t hour, uint8_t minute) {
   s_alarm_minute = minute;
   return s_alarm_succeeds;
 }
+
+static int s_music_command;
+static bool s_music_connected;
+static bool s_quiet_time_on;
+static int s_quiet_time_calls;
+static char s_launched_app[64];
+static int s_find_seconds;
+
+bool watch_actions_music(uint8_t command, char *text, size_t text_size) {
+  s_music_command = command;
+  if (text_size) {
+    snprintf(text, text_size, "%s", s_music_connected ? "Clair de lune\nDebussy" : "");
+  }
+  return s_music_connected;
+}
+
+void watch_actions_set_quiet_time(bool on) {
+  s_quiet_time_on = on;
+  s_quiet_time_calls++;
+}
+
+bool watch_actions_launch_app(const char *name, char *found, size_t found_size) {
+  if (strcmp(name, "work") != 0) {
+    return false;
+  }
+  snprintf(s_launched_app, sizeof(s_launched_app), "Workout");
+  snprintf(found, found_size, "Workout");
+  return true;
+}
+
+void watch_actions_find_watch(uint8_t seconds) {
+  s_find_seconds = seconds;
+}
+
+bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_size) {
+  if (metric != AudioCompanionWatchHealthSteps) {
+    return false;
+  }
+  snprintf(text, text_size, "%s", days == 3 ? "8231,10422,-1" : "8231");
+  return true;
+}
 #endif
 
 void audio_companion_test_reset(void);
@@ -762,6 +803,12 @@ void test_audio_companion__initialize(void) {
   s_alarm_succeeds = true;
   s_alarm_hour = -1;
   s_alarm_minute = -1;
+  s_music_command = 0;
+  s_music_connected = true;
+  s_quiet_time_on = false;
+  s_quiet_time_calls = 0;
+  s_launched_app[0] = '\0';
+  s_find_seconds = 0;
 #endif
   audio_companion_test_reset();
   audio_companion_init();
@@ -3146,7 +3193,7 @@ static bool prv_last_watch_action_result(AudioCompanionWatchActionResultMsg *out
   if (!n) {
     return false;
   }
-  cl_assert_equal_i(n->length, sizeof(*out));
+  cl_assert(n->length >= sizeof(*out));
   memcpy(out, n->data, sizeof(*out));
   return true;
 }
@@ -3313,10 +3360,112 @@ void test_audio_companion__watch_actions_need_authorization(void) {
   cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdAck));
   cl_assert_equal_i(watch_actions_active_timer_count(), 0);
 }
+
+//! The result's text, when it carries one.
+static bool prv_last_watch_action_result_text(char *out, size_t out_size) {
+  const CapturedNotification *n = prv_last_control_msg(AudioCompanionCtrlMsgIdWatchActionResult);
+  if (!n || n->length <= sizeof(AudioCompanionWatchActionResultMsg)) {
+    return false;
+  }
+  const uint8_t length = n->data[sizeof(AudioCompanionWatchActionResultMsg)];
+  cl_assert_equal_i(n->length, sizeof(AudioCompanionWatchActionResultMsg) + 1 + length);
+  cl_assert(length < out_size);
+  memcpy(out, n->data + sizeof(AudioCompanionWatchActionResultMsg) + 1, length);
+  out[length] = '\0';
+  return true;
+}
+
+static void prv_send_simple_watch_action(uint8_t action_id, const uint8_t *payload, size_t length) {
+  prv_send_watch_action(action_id, payload, length);
+  fake_system_task_callbacks_invoke_pending();
+  prv_run_launcher_callbacks();
+}
+
+void test_audio_companion__watch_action_music_says_what_is_playing(void) {
+  prv_watch_actions_ready();
+  const uint8_t next[] = {AudioCompanionWatchActionMusic, AudioCompanionWatchMusicNext};
+  prv_send_simple_watch_action(0x61, next, sizeof(next));
+  cl_assert_equal_i(s_music_command, AudioCompanionWatchMusicNext);
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
+  char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1];
+  cl_assert(prv_last_watch_action_result_text(text, sizeof(text)));
+  cl_assert_equal_s(text, "Clair de lune\nDebussy");
+
+  // No player on the other end: said so, with nothing about a track.
+  s_music_connected = false;
+  const uint8_t play[] = {AudioCompanionWatchActionMusic, AudioCompanionWatchMusicPlay};
+  prv_send_simple_watch_action(0x62, play, sizeof(play));
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+  cl_assert(!prv_last_watch_action_result_text(text, sizeof(text)));
+
+  const uint8_t bad[] = {AudioCompanionWatchActionMusic, 99};
+  prv_send_simple_watch_action(0x63, bad, sizeof(bad));
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+}
+
+void test_audio_companion__watch_action_quiet_time_turns_itself_off(void) {
+  prv_watch_actions_ready();
+  const uint8_t hour[] = {AudioCompanionWatchActionQuietTime, 1, 60, 0};
+  prv_send_simple_watch_action(0x64, hour, sizeof(hour));
+  cl_assert(s_quiet_time_on);
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
+  // An hour later.
+  stub_new_timer_invoke(1);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_quiet_time_on);
+}
+
+void test_audio_companion__watch_action_opens_an_app_by_name(void) {
+  prv_watch_actions_ready();
+  uint8_t payload[16];
+  payload[0] = AudioCompanionWatchActionLaunchApp;
+  const size_t length = 1 + prv_wa_string(payload + 1, "work");
+  prv_send_simple_watch_action(0x65, payload, length);
+  cl_assert_equal_s(s_launched_app, "Workout");
+  char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1];
+  cl_assert(prv_last_watch_action_result_text(text, sizeof(text)));
+  cl_assert_equal_s(text, "Workout");
+
+  const size_t other = 1 + prv_wa_string(payload + 1, "zzz");
+  prv_send_simple_watch_action(0x66, payload, other);
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+}
+
+void test_audio_companion__watch_action_find_and_health(void) {
+  prv_watch_actions_ready();
+  const uint8_t find[] = {AudioCompanionWatchActionFindWatch, 200};
+  prv_send_simple_watch_action(0x67, find, sizeof(find));
+  cl_assert_equal_i(s_find_seconds, AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECONDS);
+
+  const uint8_t steps[] = {AudioCompanionWatchActionHealth, AudioCompanionWatchHealthSteps, 3};
+  prv_send_simple_watch_action(0x68, steps, sizeof(steps));
+  char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1];
+  cl_assert(prv_last_watch_action_result_text(text, sizeof(text)));
+  cl_assert_equal_s(text, "8231,10422,-1");
+
+  const uint8_t sleep[] = {AudioCompanionWatchActionHealth, AudioCompanionWatchHealthSleepSeconds,
+                           1};
+  prv_send_simple_watch_action(0x69, sleep, sizeof(sleep));
+  AudioCompanionWatchActionResultMsg result;
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+}
 #else
 // Push-to-talk is compiled out of this build; test_audio_companion_ptt runs these for real.
 #define PTT_ONLY(name) \
   void test_audio_companion__##name(void) {}
+PTT_ONLY(watch_action_music_says_what_is_playing)
+PTT_ONLY(watch_action_quiet_time_turns_itself_off)
+PTT_ONLY(watch_action_opens_an_app_by_name)
+PTT_ONLY(watch_action_find_and_health)
 PTT_ONLY(ptt_a_short_press_sends_nothing_and_stops_the_mic)
 PTT_ONLY(ptt_a_question_goes_out_whole_and_never_into_the_recording)
 PTT_ONLY(ptt_with_recording_on_both_hear_and_the_mic_stays_on)
