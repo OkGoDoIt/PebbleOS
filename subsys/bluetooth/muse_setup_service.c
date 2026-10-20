@@ -17,8 +17,15 @@
 #include <host/ble_hs.h>
 #include <host/ble_hs_adv.h>
 #include <host/ble_hs_id.h>
+#include <host/ble_store.h>
 #include <host/ble_uuid.h>
 #include <os/os_mbuf.h>
+
+// NimBLE's resolving-list access (nimble/host/src/ble_hs_pvcy_priv.h, a private header). Both
+// preempt GAP procedures around the HCI command themselves, so they are only called while the
+// window's advertising is stopped.
+int ble_hs_pvcy_remove_entry(uint8_t addr_type, const uint8_t *addr);
+int ble_hs_pvcy_add_entry(const uint8_t *addr, uint8_t addr_type, const uint8_t *irk);
 
 PBL_LOG_MODULE_DECLARE(bt, CONFIG_BT_LOG_LEVEL);
 
@@ -66,6 +73,10 @@ static struct {
   uint32_t gap_events;
   char close_reason[24];
   char name[17];
+  //! The phone's identity key is out of the controller's resolving list for the window.
+  bool peer_hidden;
+  ble_addr_t hidden_peer;
+  uint8_t hidden_irk[16];
   uint8_t last_tx[MUSE_SETUP_MAX_VALUE];
   uint16_t last_tx_len;
   PblBtMuseSetupRxHandler rx_handler;
@@ -253,6 +264,53 @@ static int prv_start_advertising_locked(void) {
   return rc;
 }
 
+//! bt_lock held. Puts the phone's identity key back in the controller's resolving list. Must run
+//! before any advertising restarts: NimBLE preempts GAP procedures around the HCI command.
+static void prv_restore_peer_locked(void) {
+  if (!s_state.peer_hidden) {
+    return;
+  }
+  s_state.peer_hidden = false;
+  const int rc = ble_hs_pvcy_add_entry(s_state.hidden_peer.val, s_state.hidden_peer.type,
+                                       s_state.hidden_irk);
+  if (rc != 0) {
+    PBL_LOG_ERR("Muse setup: restoring the phone's IRK failed (0x%04x)", (uint16_t)rc);
+    s_state.last_error = rc;
+  } else {
+    PBL_LOG_INFO("Muse setup: phone's IRK restored");
+  }
+}
+
+//! bt_lock held. The SF32LB52 ROM controller drops a connection request from a peer it is
+//! already connected to, and it recognises the phone by resolving its private address with the
+//! key in its resolving list. Taking the phone's key out for the window makes the phone's
+//! second connection look like a stranger's, which the controller accepts. The phone link itself
+//! is unaffected: it is established, and resolution only matters for new requests.
+static int prv_hide_peer_locked(void) {
+  struct ble_gap_conn_desc phone;
+  const uint16_t phone_handle = nimble_conn_phone_link();
+  if (phone_handle == BLE_HS_CONN_HANDLE_NONE || ble_gap_conn_find(phone_handle, &phone) != 0) {
+    PBL_LOG_ERR("Muse setup needs the phone link up");
+    return BLE_HS_ENOTCONN;
+  }
+  struct ble_store_key_sec key = {.peer_addr = phone.peer_id_addr};
+  struct ble_store_value_sec sec;
+  if (ble_store_read_peer_sec(&key, &sec) != 0 || !sec.irk_present) {
+    PBL_LOG_INFO("Muse setup: phone has no IRK; nothing to hide");
+    return 0;
+  }
+  const int rc = ble_hs_pvcy_remove_entry(phone.peer_id_addr.type, phone.peer_id_addr.val);
+  if (rc != 0) {
+    PBL_LOG_ERR("Muse setup: hiding the phone's IRK failed (0x%04x)", (uint16_t)rc);
+    return rc;
+  }
+  s_state.peer_hidden = true;
+  s_state.hidden_peer = phone.peer_id_addr;
+  memcpy(s_state.hidden_irk, sec.irk, sizeof(s_state.hidden_irk));
+  PBL_LOG_INFO("Muse setup: phone's IRK hidden for the window");
+  return 0;
+}
+
 //! bt_lock held.
 static void prv_end_window_locked(const char *why) {
   if (!s_state.open) {
@@ -266,6 +324,7 @@ static void prv_end_window_locked(const char *why) {
     ble_gap_adv_stop();
     s_state.advertising = false;
   }
+  prv_restore_peer_locked();
   gap_le_advert_return();
 }
 
@@ -291,14 +350,22 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
     goto unlock;
   }
 
+  int rc = prv_hide_peer_locked();
+  if (rc != 0) {
+    s_state.last_error = rc;
+    gap_le_advert_return();
+    goto unlock;
+  }
+
   ble_addr_t addr;
-  int rc = ble_hs_id_gen_rnd(0 /* static, not NRPA */, &addr);
+  rc = ble_hs_id_gen_rnd(0 /* static, not NRPA */, &addr);
   if (rc == 0) {
     rc = ble_hs_id_set_rnd(addr.val);
   }
   if (rc != 0) {
     s_state.last_error = rc;
     PBL_LOG_ERR("Muse setup: random address failed (0x%04x)", (uint16_t)rc);
+    prv_restore_peer_locked();
     gap_le_advert_return();
     goto unlock;
   }
@@ -372,6 +439,7 @@ void pbl_bt_muse_setup_get_status(PblBtMuseSetupStatus *status) {
     .last_error = s_state.last_error,
     .last_gap_event = s_state.last_gap_event,
     .gap_events = s_state.gap_events,
+    .peer_hidden = s_state.peer_hidden,
   };
   memcpy(status->close_reason, s_state.close_reason, sizeof(status->close_reason));
   memcpy(status->name, s_state.name, sizeof(status->name));
@@ -499,6 +567,7 @@ void pbl_bt_muse_setup_service_init(void) {
   s_state.advertising = false;
   s_state.conn_handle = BLE_HS_CONN_HANDLE_NONE;
   s_state.subscribed = false;
+  s_state.peer_hidden = false;  // the host reloads the resolving list from the store at start
   bt_unlock();
   nimble_conn_set_private_link(BLE_HS_CONN_HANDLE_NONE);
 

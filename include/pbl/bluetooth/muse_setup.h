@@ -43,6 +43,8 @@ typedef struct {
   uint32_t gap_events;
   //! Why the window last closed ("" while open or never opened).
   char close_reason[24];
+  //! The phone's identity key is out of the controller's resolving list (see the service).
+  bool peer_hidden;
   char name[17];
 } PblBtMuseSetupStatus;
 

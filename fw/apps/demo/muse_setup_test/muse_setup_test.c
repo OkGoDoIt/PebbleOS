@@ -47,7 +47,7 @@ static void prv_refresh(void *context) {
                      : status.same_phone ? "yes" : "NO";
   snprintf(data->buffer, sizeof(data->buffer),
            "Muse setup %s\n%s\n%lu:%02lu left\nLink: %s\nSame phone: %s%s\nMTU %u sub %s\n"
-           "RX %lu (%lu B)\nTX %lu  refused %lu\nPhone link: %s\nerr %d  ev %d (x%lu)\n%s%s\n"
+           "RX %lu (%lu B)\nTX %lu  refused %lu\nPhone link: %s  IRK %s\nerr %d  ev %d (x%lu)\n%s%s\n"
            "SELECT: %s",
            status.open ? "OPEN" : "closed", status.name[0] ? status.name : "(not opened)",
            (unsigned long)(status.seconds_left / 60), (unsigned long)(status.seconds_left % 60),
@@ -55,7 +55,7 @@ static void prv_refresh(void *context) {
            status.subscribed ? "yes" : "no", (unsigned long)status.rx_packets,
            (unsigned long)status.rx_bytes, (unsigned long)status.tx_packets,
            (unsigned long)status.tx_refused, status.phone_link_up ? "up" : "DOWN",
-           status.last_error, status.last_gap_event, (unsigned long)status.gap_events,
+           status.peer_hidden ? "hidden" : "listed", status.last_error, status.last_gap_event, (unsigned long)status.gap_events,
            status.close_reason[0] ? "closed: " : "", status.close_reason,
            status.open ? "close" : "open");
   text_layer_set_text(data->text, data->buffer);
