@@ -13,13 +13,21 @@
 #include "applib/ui/vibes.h"
 #include "applib/ui/window.h"
 #include "applib/ui/window_stack.h"
+#include "apps/system/muse/muse_app.h"
 #include "kernel/pbl_malloc.h"
 #include "kernel/pebble_tasks.h"
 #include "kernel/ui/kernel_ui.h"
 #include "kernel/ui/modals/modal_manager.h"
 #include "pbl/services/evented_timer.h"
 #include "pbl/services/light.h"
+#include "pbl/services/notifications/notification_storage.h"
+#include "pbl/services/notifications/notifications.h"
+#include "pbl/services/timeline/attribute.h"
+#include "pbl/services/timeline/item.h"
+#include <pbl/drivers/rtc.h>
 #include "resource/resource_ids.auto.h"
+#include "resource/timeline_resource_ids.auto.h"
+#include "services/audio_companion/assistant_view.h"
 #include "services/audio_companion/watch_actions.h"
 #include "system/passert.h"
 
@@ -275,9 +283,106 @@ static void prv_dismiss_handler(void) {
   window_stack_remove(&s_choice->window, true);
 }
 
+
+// ---- an answer that arrived while Muse was closed ----
+
+//! The answer (up to 1536 bytes) and its options as a list.
+#define MUSE_NOTIFICATION_BODY_BYTES                                                              \
+  (AUDIO_COMPANION_ASSISTANT_ANSWER_BYTES +                                                       \
+   AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS * (AUDIO_COMPANION_ASSISTANT_OPTION_BYTES + 4) + 4)
+
+static void *prv_notification_build(const AudioCompanionAssistantView *view) {
+  char *body = kernel_malloc(MUSE_NOTIFICATION_BODY_BYTES);
+  if (!body) {
+    return NULL;
+  }
+  assistant_view_notification_body(view, body, MUSE_NOTIFICATION_BODY_BYTES);
+  const bool failed = view->phase == AudioCompanionAssistantPhaseError;
+
+  AttributeList attrs = {0};
+  attribute_list_add_cstring(&attrs, AttributeIdTitle, "Muse");
+  if (view->heard[0]) {
+    // What was asked, above what Muse said about it.
+    attribute_list_add_cstring(&attrs, AttributeIdSubtitle, view->heard);
+  }
+  attribute_list_add_cstring(&attrs, AttributeIdBody, body);
+  attribute_list_add_uint32(&attrs, AttributeIdIconTiny, TIMELINE_RESOURCE_GENERIC_QUESTION);
+  attribute_list_add_uint8(&attrs, AttributeIdBgColor,
+                           PBL_IF_COLOR_ELSE(GColorCobaltBlueARGB8, GColorDarkGrayARGB8));
+
+  // Muse's options first (picking one answers it), then back into the conversation, then away.
+  const uint8_t options = failed ? 0 : view->option_count;
+  AttributeList option_attrs[AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS] = {0};
+  AttributeList open_attrs = {0};
+  AttributeList dismiss_attrs = {0};
+  TimelineItemAction actions[AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS + 2];
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < options; i++) {
+    if (!view->options[i][0]) {
+      continue;
+    }
+    attribute_list_add_cstring(&option_attrs[i], AttributeIdTitle, view->options[i]);
+    attribute_list_add_uint32(&option_attrs[i], AttributeIdLaunchCode,
+                              AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK_CODE(view->turn, i));
+    actions[count] = (TimelineItemAction){
+      .id = count, .type = TimelineItemActionTypeOpenWatchApp, .attr_list = option_attrs[i]};
+    count++;
+  }
+  attribute_list_add_cstring(&open_attrs, AttributeIdTitle, failed ? "Try Again" : "Reply");
+  attribute_list_add_uint32(&open_attrs, AttributeIdLaunchCode,
+                            AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN);
+  actions[count] = (TimelineItemAction){
+    .id = count, .type = TimelineItemActionTypeOpenWatchApp, .attr_list = open_attrs};
+  count++;
+  attribute_list_add_cstring(&dismiss_attrs, AttributeIdTitle, "Dismiss");
+  actions[count] = (TimelineItemAction){
+    .id = count, .type = TimelineItemActionTypeDismiss, .attr_list = dismiss_attrs};
+  count++;
+
+  TimelineItemActionGroup group = {.num_actions = count, .actions = actions};
+  TimelineItem *item = timeline_item_create_with_attributes(
+      rtc_get_time(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attrs, &group);
+  if (item) {
+    item->header.from_watch = true;
+    item->header.parent_id = (Uuid)MUSE_APP_UUID;
+  }
+  for (uint8_t i = 0; i < AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS; i++) {
+    attribute_list_destroy_list(&option_attrs[i]);
+  }
+  attribute_list_destroy_list(&open_attrs);
+  attribute_list_destroy_list(&dismiss_attrs);
+  attribute_list_destroy_list(&attrs);
+  kernel_free(body);
+  return item;
+}
+
+static void prv_notification_post(void *built, Uuid *id_out) {
+  TimelineItem *item = built;
+  *id_out = item->header.id;
+  // An ordinary notification, so Quiet Time, the filter, vibes and the list all apply.
+  notifications_add_notification(item);
+  timeline_item_destroy(item);
+}
+
+static void prv_notification_remove(const Uuid *id) {
+  if (!notification_storage_notification_exists(id)) {
+    return;
+  }
+  notification_storage_remove(id);
+  Uuid removed = *id;
+  notifications_handle_notification_removed(&removed);
+}
+
+static const AudioCompanionAssistantNotifier s_notifier = {
+  .build = prv_notification_build,
+  .post = prv_notification_post,
+  .remove = prv_notification_remove,
+};
+
 void audio_companion_actions_ui_init(void) {
   watch_actions_set_ui_handlers(prv_choose_handler, prv_timer_done_handler, prv_dismiss_handler);
   watch_actions_set_notice_handler(prv_notice_handler);
+  audio_companion_assistant_set_notifier(&s_notifier);
 }
 
 #else

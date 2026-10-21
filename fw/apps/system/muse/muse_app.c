@@ -12,6 +12,8 @@
 #include <applib/graphics/graphics.h>
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/kino/kino_layer.h>
+#include <applib/ui/action_menu_hierarchy.h>
+#include <applib/ui/action_menu_window.h>
 #include <applib/ui/animation.h>
 #include <applib/ui/property_animation.h>
 #include <applib/ui/scroll_layer.h>
@@ -21,14 +23,18 @@
 #include <applib/ui/window.h>
 #include <apps/system_app_ids.h>
 #include <kernel/pbl_malloc.h>
+#include <pbl/drivers/rtc.h>
 #include <pbl/services/audio_companion.h>
+#include <pbl/services/clock.h>
 #include <pbl/services/light.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
 #include <shell/normal/quick_launch.h>
 
 #include <pbl/util/size.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 //! The progress bar moves while listening; everything else changes at the phone's pace.
 #define MUSE_POLL_LISTENING_MS (100)
@@ -47,6 +53,14 @@
 #define MUSE_DOT_SIZE (2 * (MUSE_DOT_MAX_RADIUS + MUSE_DOT_OVERSHOOT + 1))
 //! Taller than the longest answer the watch keeps (1536 bytes) can lay out.
 #define MUSE_TEXT_MAX_HEIGHT (6000)
+//! Earlier exchanges of this visit, kept above the current one.
+#define MUSE_HISTORY_MAX (3)
+//! An exchange older than this shows when it happened.
+#define MUSE_SHOW_TIME_AFTER_S (10 * 60)
+//! An exchange older than this also shows its day.
+#define MUSE_SHOW_DAY_AFTER_S (12 * 60 * 60)
+#define MUSE_OPTION_PAD (6)
+#define MUSE_OPTION_RADIUS (6)
 
 #define MUSE_ACCENT PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack)
 #define MUSE_SECONDARY PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
@@ -59,10 +73,22 @@ typedef struct {
   bool centered;
   const char *title;
   const char *line;
+  //! Who and when, above an exchange: "From Muse", "2:41 PM".
+  const char *meta;
   const char *heard;
   const char *answer;
+  //! Muse's options, as buttons under the answer.
+  bool options;
   const char *footer;
+  //! Part of the conversation: earlier exchanges of this visit show above it.
+  bool conversation;
 } MuseScreen;
+
+//! An exchange of this visit that a newer one replaced.
+typedef struct {
+  char *heard;
+  char *answer;
+} MuseExchange;
 
 typedef struct {
   Window *window;
@@ -77,8 +103,26 @@ typedef struct {
   TextLayer *heard;
   TextLayer *answer;
   TextLayer *footer;
+  TextLayer *meta;
+  Layer *options;
+  Layer *divider;
+  TextLayer *history_heard[MUSE_HISTORY_MAX];
+  TextLayer *history_answer[MUSE_HISTORY_MAX];
   Layer *bar;
   AppTimer *timer;
+
+  //! Oldest first.
+  MuseExchange history[MUSE_HISTORY_MAX];
+  uint8_t history_count;
+  char meta_text[40];
+  char footer_text[96];
+  //! The options menu: its own copy, as the view may change while it is open.
+  ActionMenuConfig menu;
+  uint8_t menu_turn;
+  char menu_options[AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS][AUDIO_COMPANION_ASSISTANT_OPTION_BYTES];
+  //! A pick that couldn't go out, said on the screen it was made from (its generation).
+  bool pick_failed;
+  uint32_t pick_failed_generation;
 
   AudioCompanionAssistantView view;
   uint32_t generation;
@@ -106,7 +150,14 @@ static const char *prv_hint(ButtonId button, const char *up, const char *down, c
 }
 
 static const char *prv_ask_again(ButtonId button) {
-  return prv_hint(button, "Hold Up to ask again", "Hold Down to ask again", "Hold Select to ask again");
+  return prv_hint(button, "Hold Up to reply", "Hold Down to reply", "Hold Select to reply");
+}
+
+//! Under an answer that ends on Muse's options: how to pick one, and how to say something else.
+static const char *prv_options_hint(ButtonId button) {
+  return prv_hint(button, "Press Select to pick one\nHold Up to reply",
+                  "Press Select to pick one\nHold Down to reply",
+                  "Press Select to pick one\nHold Select to reply");
 }
 
 static const char *prv_try_again(ButtonId button) {
@@ -144,9 +195,40 @@ static const char *prv_error_line(uint8_t error, ButtonId button) {
   }
 }
 
-static MuseScreen prv_screen(const MuseAppData *data) {
+//! "From Muse" for a message Muse started; the time for an exchange that isn't recent. NULL for
+//! neither.
+static const char *prv_meta(MuseAppData *data) {
+  const AudioCompanionAssistantView *v = &data->view;
+  const bool from_muse = v->from_receiver && !v->heard[0];
+  const time_t now = rtc_get_time();
+  const bool old = v->began_at && now - v->began_at >= MUSE_SHOW_TIME_AFTER_S;
+  if (!from_muse && !old) {
+    return NULL;
+  }
+  char when[24] = "";
+  if (old) {
+    size_t used = 0;
+    if (now - v->began_at >= MUSE_SHOW_DAY_AFTER_S) {
+      struct tm local;
+      localtime_r(&v->began_at, &local);
+      used = strftime(when, sizeof(when), "%a ", &local);
+    }
+    clock_copy_time_string_timestamp(when + used, (uint8_t)(sizeof(when) - used), v->began_at);
+  }
+  if (from_muse && old) {
+    snprintf(data->meta_text, sizeof(data->meta_text), "From Muse \xC2\xB7 %s", when);
+  } else if (from_muse) {
+    snprintf(data->meta_text, sizeof(data->meta_text), "From Muse");
+  } else {
+    snprintf(data->meta_text, sizeof(data->meta_text), "%s", when);
+  }
+  return data->meta_text;
+}
+
+static MuseScreen prv_screen(MuseAppData *data) {
   const AudioCompanionAssistantView *v = &data->view;
   const char *heard = v->heard[0] ? v->heard : NULL;
+  const bool picked_but_failed = data->pick_failed && data->pick_failed_generation == v->generation;
   switch (v->phase) {
     case AudioCompanionAssistantPhaseListening:
       return (MuseScreen){
@@ -166,19 +248,44 @@ static MuseScreen prv_screen(const MuseAppData *data) {
     case AudioCompanionAssistantPhaseWaiting:
       return (MuseScreen){
         .working = true,
-        .centered = !heard,
+        .centered = !heard && data->history_count == 0,
         .title = v->status[0] ? v->status : "Thinking\xE2\x80\xA6",
         .heard = heard,
+        // Muse can take its time: nobody has to watch it work.
+        .footer = "You can leave. The answer will come as a notification.",
+        .conversation = true,
       };
     case AudioCompanionAssistantPhaseAnswering:
-    case AudioCompanionAssistantPhaseDone:
+    case AudioCompanionAssistantPhaseDone: {
+      const bool done = v->phase == AudioCompanionAssistantPhaseDone;
+      const bool options = done && v->option_count > 0;
+      const char *footer = NULL;
+      if (picked_but_failed) {
+        footer = "Can't reach your phone. Try again.";
+      } else if (done) {
+        footer = options ? prv_options_hint(data->ask_button) : prv_ask_again(data->ask_button);
+      }
       return (MuseScreen){
+        .meta = prv_meta(data),
         .heard = heard,
         .answer = v->answer[0] ? v->answer : "Done.",
-        .footer = v->phase == AudioCompanionAssistantPhaseDone ? prv_ask_again(data->ask_button)
-                                                                : NULL,
+        .options = options,
+        .footer = footer,
+        .conversation = true,
       };
+    }
     case AudioCompanionAssistantPhaseError:
+      if (v->error == AudioCompanionAssistantErrorStillWorking) {
+        // The phone stopped waiting; Muse didn't. Its answer comes as a message later.
+        return (MuseScreen){
+          .centered = data->history_count == 0,
+          .title = "Still working",
+          .line = "Muse will send the answer when it's ready.",
+          .heard = heard,
+          .footer = prv_ask_again(data->ask_button),
+          .conversation = true,
+        };
+      }
       return (MuseScreen){
         .icon = RESOURCE_ID_GENERIC_WARNING_LARGE,
         .centered = true,
@@ -233,6 +340,11 @@ static void prv_set_colors(MuseAppData *data, bool accent) {
   text_layer_set_text_color(data->answer, text);
   text_layer_set_text_color(data->heard, secondary);
   text_layer_set_text_color(data->footer, secondary);
+  text_layer_set_text_color(data->meta, secondary);
+  for (int i = 0; i < MUSE_HISTORY_MAX; i++) {
+    text_layer_set_text_color(data->history_heard[i], secondary);
+    text_layer_set_text_color(data->history_answer[i], text);
+  }
   // The time stays at the top, in the screen's own colors.
   status_bar_layer_set_colors(data->status_bar, accent ? MUSE_ACCENT : GColorWhite, text);
 }
@@ -308,6 +420,59 @@ static void prv_stop_dot(MuseAppData *data) {
   }
 }
 
+// ---- Muse's options, as the buttons it draws in its own app ----
+
+static GFont prv_option_font(void) {
+  return fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+}
+
+static int16_t prv_option_text_height(const char *text, int16_t width) {
+  return graphics_text_layout_get_max_used_size(app_state_get_graphics_context(), text,
+                                                prv_option_font(), GRect(0, 0, width, 1000),
+                                                GTextOverflowModeWordWrap, GTextAlignmentLeft,
+                                                NULL).h;
+}
+
+//! The buttons' total height at `width`, from the top of the first to the bottom of the last.
+static int16_t prv_options_height(const MuseAppData *data, int16_t width) {
+  int16_t height = 0;
+  for (uint8_t i = 0; i < data->view.option_count; i++) {
+    if (i) {
+      height += MUSE_GAP;
+    }
+    height += prv_option_text_height(data->view.options[i], width - 2 * MUSE_OPTION_PAD) +
+              2 * MUSE_OPTION_PAD;
+  }
+  return height;
+}
+
+static void prv_options_update_proc(Layer *layer, GContext *ctx) {
+  MuseAppData *data = app_state_get_user_data();
+  const GRect bounds = layer_get_bounds_by_value(layer);
+  const int16_t text_width = bounds.size.w - 2 * MUSE_OPTION_PAD;
+  int16_t y = 0;
+  graphics_context_set_stroke_color(ctx, MUSE_ACCENT);
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(MUSE_ACCENT, GColorBlack));
+  for (uint8_t i = 0; i < data->view.option_count; i++) {
+    const char *option = data->view.options[i];
+    const int16_t text = prv_option_text_height(option, text_width);
+    const GRect box = GRect(1, y + 1, bounds.size.w - 2, text + 2 * MUSE_OPTION_PAD - 2);
+    graphics_draw_round_rect(ctx, &box, MUSE_OPTION_RADIUS);
+    // Gothic's ascender leaves room above the letters: nudge them up to sit centred.
+    graphics_draw_text(ctx, option, prv_option_font(),
+                       GRect(MUSE_OPTION_PAD, y + MUSE_OPTION_PAD - 3, text_width, text + 4),
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+    y += text + 2 * MUSE_OPTION_PAD + MUSE_GAP;
+  }
+}
+
+static void prv_divider_update_proc(Layer *layer, GContext *ctx) {
+  const GRect bounds = layer_get_bounds_by_value(layer);
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
+  graphics_fill_rect(ctx, &GRect(0, bounds.size.h / 2, bounds.size.w, 1));
+}
+
 static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   const MuseScreen screen = prv_screen(data);
   const GRect bounds = layer_get_bounds_by_value(window_get_root_layer(data->window));
@@ -320,6 +485,21 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   text_layer_set_text_alignment(data->heard, align);
 
   int16_t y = MUSE_MARGIN;
+  // This visit's earlier exchanges, oldest first, above the one going on now.
+  const bool history = screen.conversation && data->history_count > 0;
+  for (int i = 0; i < MUSE_HISTORY_MAX; i++) {
+    const bool shown = history && i < data->history_count;
+    y = prv_place_text(data->history_heard[i], shown ? data->history[i].heard : NULL, y, width);
+    y = prv_place_text(data->history_answer[i], shown ? data->history[i].answer : NULL, y, width);
+  }
+  if (history) {
+    layer_set_frame(data->divider, &GRect(MUSE_MARGIN, y, width, MUSE_MARGIN));
+    layer_set_hidden(data->divider, false);
+    y += MUSE_MARGIN + MUSE_GAP;
+  } else {
+    layer_set_hidden(data->divider, true);
+  }
+  const int16_t current_top = y;
   if (screen.working) {
     layer_set_frame(data->dot, &GRect((bounds.size.w - MUSE_DOT_SIZE) / 2, y, MUSE_DOT_SIZE,
                                       MUSE_DOT_SIZE));
@@ -345,8 +525,18 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   }
   y = prv_place_text(data->title, screen.title, y, width);
   y = prv_place_text(data->line, screen.line, y, width);
+  y = prv_place_text(data->meta, screen.meta, y, width);
   y = prv_place_text(data->heard, screen.heard, y, width);
   y = prv_place_text(data->answer, screen.answer, y, width);
+  if (screen.options) {
+    const int16_t height = prv_options_height(data, width);
+    layer_set_frame(data->options, &GRect(MUSE_MARGIN, y, width, height));
+    layer_set_hidden(data->options, false);
+    layer_mark_dirty(data->options);
+    y += height + MUSE_GAP * 2;
+  } else {
+    layer_set_hidden(data->options, true);
+  }
   y = prv_place_text(data->footer, screen.footer, y, width);
   y += MUSE_MARGIN;
 
@@ -355,14 +545,16 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   const int16_t visible =
       bounds.size.h - top - (screen.accent ? MUSE_BAR_HEIGHT + MUSE_MARGIN : 0);
   Layer *scroll = scroll_layer_get_layer(data->scroll);
-  if (screen.centered && y < visible) {
+  if (screen.centered && !history && y < visible) {
     layer_set_frame(scroll, &GRect(0, top + (visible - y) / 2, bounds.size.w, y));
   } else {
     layer_set_frame(scroll, &GRect(0, top, bounds.size.w, bounds.size.h - top));
   }
   scroll_layer_set_content_size(data->scroll, GSize(bounds.size.w, y));
   if (scroll_to_top) {
-    scroll_layer_set_content_offset(data->scroll, GPointZero, false);
+    // A new exchange starts at its own top; Up scrolls back to the earlier ones.
+    const int16_t offset = history ? current_top - MUSE_GAP : 0;
+    scroll_layer_set_content_offset(data->scroll, GPoint(0, -offset), false);
   }
   layer_set_hidden(data->bar, !screen.accent);
   layer_mark_dirty(data->bar);
@@ -387,6 +579,52 @@ static void prv_bar_update_proc(Layer *layer, GContext *ctx) {
 
 static void prv_schedule(MuseAppData *data);
 
+static char *prv_copy(const char *text) {
+  if (!text || !text[0]) {
+    return NULL;
+  }
+  const size_t size = strlen(text) + 1;
+  char *copy = app_malloc(size);
+  if (copy) {
+    memcpy(copy, text, size);
+  }
+  return copy;
+}
+
+static void prv_free_exchange(MuseExchange *exchange) {
+  app_free(exchange->heard);
+  app_free(exchange->answer);
+  *exchange = (MuseExchange){0};
+}
+
+//! The exchange on screen gives way to a newer one: it stays above it for the rest of the visit.
+static void prv_keep_in_history(MuseAppData *data, const AudioCompanionAssistantView *old) {
+  if (!old->answer[0]) {
+    return;
+  }
+  if (data->history_count == MUSE_HISTORY_MAX) {
+    prv_free_exchange(&data->history[0]);
+    memmove(&data->history[0], &data->history[1], sizeof(MuseExchange) * (MUSE_HISTORY_MAX - 1));
+    data->history[MUSE_HISTORY_MAX - 1] = (MuseExchange){0};
+    data->history_count--;
+  }
+  data->history[data->history_count++] = (MuseExchange){
+    .heard = prv_copy(old->heard),
+    .answer = prv_copy(old->answer),
+  };
+}
+
+//! Whether `next` is a different exchange from `old` rather than more of it: another turn, or
+//! a reply on the same turn (a picked option, a follow-up) that cleared its answer.
+static bool prv_new_exchange(const AudioCompanionAssistantView *old,
+                             const AudioCompanionAssistantView *next) {
+  if (next->turn != old->turn) {
+    return next->phase != AudioCompanionAssistantPhaseIdle;
+  }
+  return old->phase == AudioCompanionAssistantPhaseDone &&
+         next->phase == AudioCompanionAssistantPhaseWaiting;
+}
+
 static void prv_refresh(MuseAppData *data) {
   const bool was_available = data->available;
   data->available = audio_companion_ptt_available();
@@ -397,7 +635,21 @@ static void prv_refresh(MuseAppData *data) {
   if (data->have_view && generation == data->generation && was_available == data->available) {
     return;
   }
-  audio_companion_assistant_get_view(&data->view);
+  if (data->have_view) {
+    AudioCompanionAssistantView *next = app_malloc(sizeof(*next));
+    if (next) {
+      audio_companion_assistant_get_view(next);
+      if (prv_new_exchange(&data->view, next)) {
+        prv_keep_in_history(data, &data->view);
+      }
+      data->view = *next;
+      app_free(next);
+    } else {
+      audio_companion_assistant_get_view(&data->view);
+    }
+  } else {
+    audio_companion_assistant_get_view(&data->view);
+  }
   data->generation = generation;
   const bool first = !data->have_view;
   data->have_view = true;
@@ -457,6 +709,51 @@ static void prv_ask_hold(ClickRecognizerRef recognizer, void *context) {
   prv_refresh(data);
 }
 
+static void prv_option_picked(ActionMenu *menu, const ActionMenuItem *item, void *context) {
+  MuseAppData *data = context;
+  const uint8_t index = (uint8_t)(uintptr_t)action_menu_item_get_action_data(item);
+  if (!audio_companion_assistant_pick(data->menu_turn, index)) {
+    data->pick_failed = true;
+    data->pick_failed_generation = data->view.generation;
+    vibes_double_pulse();
+    prv_layout(data, false);
+    return;
+  }
+  prv_refresh(data);
+}
+
+static void prv_options_menu_closed(ActionMenu *menu, const ActionMenuItem *item, void *context) {
+  action_menu_hierarchy_destroy(action_menu_get_root_level(menu), NULL, NULL);
+}
+
+//! Select, on an answer that ends on Muse's options: the same menu its notification shows.
+static void prv_select_click(ClickRecognizerRef recognizer, void *context) {
+  MuseAppData *data = app_state_get_user_data();
+  const AudioCompanionAssistantView *v = &data->view;
+  if (v->phase != AudioCompanionAssistantPhaseDone || v->option_count == 0) {
+    return;
+  }
+  ActionMenuLevel *level = action_menu_level_create(v->option_count);
+  if (!level) {
+    return;
+  }
+  data->menu_turn = v->turn;
+  memcpy(data->menu_options, v->options, sizeof(data->menu_options));
+  for (uint8_t i = 0; i < v->option_count; i++) {
+    if (data->menu_options[i][0]) {
+      action_menu_level_add_action(level, data->menu_options[i], prv_option_picked,
+                                   (void *)(uintptr_t)i);
+    }
+  }
+  data->menu = (ActionMenuConfig){
+    .root_level = level,
+    .context = data,
+    .colors = {.background = MUSE_ACCENT, .foreground = GColorWhite},
+    .did_close = prv_options_menu_closed,
+  };
+  app_action_menu_open(&data->menu);
+}
+
 //! The button Muse is on in Quick Launch: the one that opened it, or else the first that has it.
 static ButtonId prv_ask_button(void) {
   if (app_launch_reason() == APP_LAUNCH_QUICK_LAUNCH) {
@@ -478,6 +775,8 @@ static void prv_click_config(void *context) {
   MuseAppData *data = context;
   window_raw_click_subscribe(BUTTON_ID_SELECT, prv_ask_down, NULL, NULL);
   window_long_click_subscribe(BUTTON_ID_SELECT, MUSE_HOLD_MS, prv_ask_hold, NULL);
+  // A press shorter than the hold: Muse's options, when the answer has them.
+  window_single_click_subscribe(BUTTON_ID_SELECT, prv_select_click);
   if (data->ask_button != BUTTON_ID_SELECT) {
     // A press still scrolls; a hold asks (it no longer scrolls fast).
     window_raw_click_subscribe(data->ask_button, prv_ask_down, NULL, NULL);
@@ -525,6 +824,17 @@ static void prv_init(void) {
   data->heard = prv_text(data->scroll, FONT_KEY_GOTHIC_18);
   data->answer = prv_text(data->scroll, FONT_KEY_GOTHIC_24);
   data->footer = prv_text(data->scroll, FONT_KEY_GOTHIC_14);
+  data->meta = prv_text(data->scroll, FONT_KEY_GOTHIC_14);
+  for (int i = 0; i < MUSE_HISTORY_MAX; i++) {
+    data->history_heard[i] = prv_text(data->scroll, FONT_KEY_GOTHIC_14);
+    data->history_answer[i] = prv_text(data->scroll, FONT_KEY_GOTHIC_18);
+  }
+  data->divider = layer_create(GRectZero);
+  layer_set_update_proc(data->divider, prv_divider_update_proc);
+  scroll_layer_add_child(data->scroll, data->divider);
+  data->options = layer_create(GRectZero);
+  layer_set_update_proc(data->options, prv_options_update_proc);
+  scroll_layer_add_child(data->scroll, data->options);
 
   data->bar = layer_create(GRect(MUSE_MARGIN * 2, bounds.size.h - MUSE_MARGIN - MUSE_BAR_HEIGHT,
                                  bounds.size.w - MUSE_MARGIN * 4, MUSE_BAR_HEIGHT));
@@ -535,8 +845,19 @@ static void prv_init(void) {
   data->status_bar = status_bar_layer_create();
   layer_add_child(root, status_bar_layer_get_layer(data->status_bar));
 
-  // Opened by a Quick Launch hold: the question is already being heard.
-  data->asked = app_launch_reason() == APP_LAUNCH_QUICK_LAUNCH;
+  // Opened by a Quick Launch hold: the question is already being heard. Opened from a
+  // notification: it continues the conversation it came from.
+  const AppLaunchReason reason = app_launch_reason();
+  data->asked = reason == APP_LAUNCH_QUICK_LAUNCH || reason == APP_LAUNCH_TIMELINE_ACTION;
+  audio_companion_assistant_screen_opened();
+  if (reason == APP_LAUNCH_TIMELINE_ACTION) {
+    const uint32_t code = app_launch_get_args();
+    if (code & AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK) {
+      // An option picked on the notification: it goes to Muse, and its answer comes here. One
+      // whose answer has moved on opens the conversation as it is.
+      audio_companion_assistant_pick((uint8_t)(code >> 8), (uint8_t)code);
+    }
+  }
   prv_refresh(data);
   app_window_stack_push(data->window, true);
   prv_schedule(data);
@@ -544,12 +865,20 @@ static void prv_init(void) {
 
 static void prv_deinit(void) {
   MuseAppData *data = app_state_get_user_data();
-  // Leaving mid-question abandons it; a finished answer goes with the screen.
-  audio_companion_ptt_cancel();
-  audio_companion_assistant_dismiss();
+  // A question still held is abandoned; one already sent keeps going, and its answer comes as a
+  // notification.
+  audio_companion_assistant_screen_closed();
   app_timer_cancel(data->timer);
   prv_stop_dot(data);
   layer_destroy(data->dot);
+  for (int i = 0; i < MUSE_HISTORY_MAX; i++) {
+    prv_free_exchange(&data->history[i]);
+    text_layer_destroy(data->history_answer[i]);
+    text_layer_destroy(data->history_heard[i]);
+  }
+  layer_destroy(data->options);
+  layer_destroy(data->divider);
+  text_layer_destroy(data->meta);
   status_bar_layer_destroy(data->status_bar);
   text_layer_destroy(data->footer);
   text_layer_destroy(data->answer);
@@ -575,8 +904,7 @@ const PebbleProcessMd *muse_app_get_info(void) {
         {
           .main_func = prv_main,
           // UUID: 3b8e6f0a-41c2-4d7e-9a35-c0f1e2d4b6a8
-          .uuid = {0x3b, 0x8e, 0x6f, 0x0a, 0x41, 0xc2, 0x4d, 0x7e, 0x9a, 0x35, 0xc0, 0xf1, 0xe2,
-                   0xd4, 0xb6, 0xa8},
+          .uuid = MUSE_APP_UUID,
         },
     .name = "Muse",
     .icon_resource_id = RESOURCE_ID_GENERIC_QUESTION_TINY,

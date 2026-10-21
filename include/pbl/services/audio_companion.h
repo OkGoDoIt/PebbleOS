@@ -5,10 +5,12 @@
 #include "pbl/drivers/button_id.h"
 #include "pbl/services/audio_companion_private.h"
 #include "pbl/services/runlevel.h"
+#include "pbl/util/uuid.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 //! Audio companion background streaming service. Captures microphone audio,
 //! encodes it with Speex, and streams it over a dedicated watch-hosted GATT
@@ -169,6 +171,7 @@ typedef enum {
 #define AUDIO_COMPANION_ASSISTANT_HEARD_BYTES (AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES + 1)
 #define AUDIO_COMPANION_ASSISTANT_STATUS_BYTES (64)
 #define AUDIO_COMPANION_ASSISTANT_ANSWER_BYTES (1536)
+#define AUDIO_COMPANION_ASSISTANT_OPTION_BYTES (AUDIO_COMPANION_ASSISTANT_OPTION_MAX_BYTES + 1)
 
 typedef struct {
   //! Bumped on every change, so a screen can redraw only when something moved.
@@ -186,6 +189,14 @@ typedef struct {
   char answer[AUDIO_COMPANION_ASSISTANT_ANSWER_BYTES];
   //! The answer was longer than the watch keeps; it ends in an ellipsis.
   bool answer_truncated;
+  //! The receiver began this exchange (ASSISTANT_UPDATE Begin): a message the assistant sent by
+  //! itself has no question; a late answer has its question in `heard`.
+  bool from_receiver;
+  //! When the exchange began (UTC), so an older one can show its time.
+  time_t began_at;
+  //! What the wearer can pick to reply, in order.
+  uint8_t option_count;
+  char options[AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS][AUDIO_COMPANION_ASSISTANT_OPTION_BYTES];
 } AudioCompanionAssistantView;
 
 //! Whether a receiver that can take a question is attached right now.
@@ -209,5 +220,35 @@ void audio_companion_ptt_handle_button(ButtonId button, bool pressed);
 //! Copies what the watch should show. Returns the view's generation. Any task.
 uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out);
 
-//! The screen showing the answer closed: the view returns to idle once nothing is in flight.
-void audio_companion_assistant_dismiss(void);
+//! The assistant's screen is showing the conversation: what arrives now is read there, not
+//! sent as a notification, and the notifications posted while it was closed are taken back.
+void audio_companion_assistant_screen_opened(void);
+
+//! The assistant's screen closed. A question whose button is still held is abandoned; one
+//! already sent keeps going, and its answer arrives as a notification. A failure that was on
+//! screen is cleared; an answer stays, to be shown the next time.
+void audio_companion_assistant_screen_closed(void);
+
+//! The wearer picked option `index` of turn `turn`'s answer: the receiver sends it to the
+//! assistant as the wearer's reply, and its answer follows on the same turn. False when that
+//! answer is no longer the one shown, or no receiver can take it. Any task.
+bool audio_companion_assistant_pick(uint8_t turn, uint8_t index);
+
+//! Launch codes of the actions on the assistant's notifications (the assistant screen reads them
+//! from APP_LAUNCH_TIMELINE_ACTION): open the conversation, or pick an option of a turn's answer.
+#define AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN (1u)
+#define AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK (1u << 16)
+#define AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK_CODE(turn, index) \
+  (AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK | ((uint32_t)(turn) << 8) | (uint32_t)(index))
+
+//! Who turns an exchange into a watch notification, so the service holds no UI. `build` runs
+//! under the service's lock (allocation only: no flash, no waiting) and returns NULL when it
+//! can't; `post` adds what `build` made, frees it, and gives the notification's id; `remove`
+//! takes one back. `post` and `remove` run on the system task.
+typedef struct {
+  void *(*build)(const AudioCompanionAssistantView *view);
+  void (*post)(void *built, Uuid *id_out);
+  void (*remove)(const Uuid *id);
+} AudioCompanionAssistantNotifier;
+
+void audio_companion_assistant_set_notifier(const AudioCompanionAssistantNotifier *notifier);

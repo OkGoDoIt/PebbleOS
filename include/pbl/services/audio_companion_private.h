@@ -165,6 +165,10 @@ typedef enum {
 #define AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART (1u << 3)
 //! A Heard update after Done starts a follow-up on the same screen.
 #define AUDIO_COMPANION_CAPABILITY_FOLLOW_UP (1u << 4)
+//! The watch keeps the conversation: the exchange outlives its screen, an answer that arrives
+//! while the screen is closed becomes a notification, options come with the answer (Option) and
+//! are picked with PTT_EVENT Pick, and the receiver can begin a turn of its own (Begin).
+#define AUDIO_COMPANION_CAPABILITY_CONVERSATION (1u << 5)
 
 // ---- Push-to-talk (Section 4.4) ----
 
@@ -177,6 +181,8 @@ typedef enum {
   AudioCompanionPttEventStart = 1,
   AudioCompanionPttEventEnd = 2,
   AudioCompanionPttEventCancel = 3,
+  //! The wearer picked one of the options of the turn's answer; `detail` is its index.
+  AudioCompanionPttEventPick = 4,
 } AudioCompanionPttEvent;
 
 //! PTT_EVENT Start `detail`: what began the question.
@@ -214,7 +220,21 @@ typedef enum {
   //! The answer so far is replaced by this text; Answer appends to it from here. Sent when the
   //! assistant's finished answer differs from the words it streamed.
   AudioCompanionAssistantUpdateAnswerRestart = 6,
+  //! The receiver begins a turn of its own: a message the assistant sent by itself, or an answer
+  //! that came after the receiver stopped waiting. `detail` is an AudioCompanionAssistantBegin;
+  //! for a late answer the text is the question it answers.
+  AudioCompanionAssistantUpdateBegin = 7,
+  //! One option the wearer can pick to reply: `detail` its index, the text its words.
+  AudioCompanionAssistantUpdateOption = 8,
 } AudioCompanionAssistantUpdateKind;
+
+//! ASSISTANT_UPDATE Begin `detail`.
+typedef enum {
+  //! A message the assistant started (a scheduled result, an update it sends by itself).
+  AudioCompanionAssistantBeginMessage = 0,
+  //! The answer to a question the receiver had stopped waiting on.
+  AudioCompanionAssistantBeginLateAnswer = 1,
+} AudioCompanionAssistantBegin;
 
 typedef enum {
   AudioCompanionAssistantErrorNotSetUp = 1,
@@ -222,7 +242,14 @@ typedef enum {
   AudioCompanionAssistantErrorNoAnswer = 3,
   AudioCompanionAssistantErrorDidNotCatch = 4,
   AudioCompanionAssistantErrorBusy = 5,
+  //! The receiver stopped waiting while the assistant still works on it: the answer comes later,
+  //! as a turn the receiver begins.
+  AudioCompanionAssistantErrorStillWorking = 6,
 } AudioCompanionAssistantError;
+
+//! Options an answer can carry (ASSISTANT_UPDATE Option), and the longest one.
+#define AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS (6)
+#define AUDIO_COMPANION_ASSISTANT_OPTION_MAX_BYTES (48)
 
 // ---- Watch actions (Section 4.5) ----
 

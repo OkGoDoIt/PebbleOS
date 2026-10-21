@@ -2719,6 +2719,7 @@ typedef struct {
   int starts;
   int ends;
   int cancels;
+  int picks;
   AudioCompanionPttEventMsg start;
   AudioCompanionPttEventMsg last;
 } PttEvents;
@@ -2737,6 +2738,7 @@ static PttEvents prv_ptt_events(void) {
       case AudioCompanionPttEventStart: events.starts++; events.start = msg; break;
       case AudioCompanionPttEventEnd: events.ends++; break;
       case AudioCompanionPttEventCancel: events.cancels++; break;
+      case AudioCompanionPttEventPick: events.picks++; break;
     }
     events.last = msg;
   }
@@ -3078,10 +3080,12 @@ void test_audio_companion__ptt_the_answer_reaches_the_screen(void) {
   // Answered: the link goes back to its idle pace.
   cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
 
-  // Closing the screen clears it; a late word about that question isn't shown next time.
-  audio_companion_assistant_dismiss();
+  // Closing the screen keeps the answer for the next visit; a word after Done adds nothing.
+  audio_companion_assistant_screen_closed();
   prv_send_assistant_update(0x75, turn, AudioCompanionAssistantUpdateAnswer, 0, " Late.");
-  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
+  view = prv_view();
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseDone);
+  cl_assert_equal_s(view.answer, "Lunch with Sam at noon.");
 }
 
 void test_audio_companion__ptt_no_word_from_the_phone_ends_as_no_answer(void) {
@@ -3091,11 +3095,247 @@ void test_audio_companion__ptt_no_word_from_the_phone_ends_as_no_answer(void) {
   const TimerID quiet = audio_companion_test_get_ptt_quiet_timer();
   cl_assert(quiet != TIMER_INVALID_ID && stub_new_timer_is_scheduled(quiet));
 
+  // A minute and a half of quiet: the link slows down, and the question waits on (Muse can work
+  // for minutes, and the phone ends a question itself).
+  cl_assert(stub_new_timer_fire(quiet));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseWaiting);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+  cl_assert(stub_new_timer_is_scheduled(quiet));
+
+  // A quarter of an hour with no word: the phone went silent, and the watch gives up.
   cl_assert(stub_new_timer_fire(quiet));
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseError);
   cl_assert_equal_i(prv_view().error, AudioCompanionAssistantErrorNoAnswer);
   cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+}
+
+// ---- The conversation outlives its screen (PROTOCOL.md 4.4, capability bit5) ----
+
+static int s_notify_builds;
+static int s_notify_posts;
+static int s_notify_removes;
+static AudioCompanionAssistantView s_notified_view;
+static Uuid s_removed_ids[8];
+
+static void *prv_fake_notification_build(const AudioCompanionAssistantView *view) {
+  s_notify_builds++;
+  s_notified_view = *view;
+  return &s_notified_view;
+}
+
+static void prv_fake_notification_post(void *built, Uuid *id_out) {
+  cl_assert(built == &s_notified_view);
+  s_notify_posts++;
+  *id_out = (Uuid){.byte0 = (uint8_t)s_notify_posts};
+}
+
+static void prv_fake_notification_remove(const Uuid *id) {
+  if (s_notify_removes < (int)(sizeof(s_removed_ids) / sizeof(s_removed_ids[0]))) {
+    s_removed_ids[s_notify_removes] = *id;
+  }
+  s_notify_removes++;
+}
+
+static const AudioCompanionAssistantNotifier s_fake_notifier = {
+  .build = prv_fake_notification_build,
+  .post = prv_fake_notification_post,
+  .remove = prv_fake_notification_remove,
+};
+
+static void prv_install_fake_notifier(void) {
+  s_notify_builds = 0;
+  s_notify_posts = 0;
+  s_notify_removes = 0;
+  memset(&s_notified_view, 0, sizeof(s_notified_view));
+  audio_companion_assistant_set_notifier(&s_fake_notifier);
+}
+
+//! Answers `turn` with `answer` and the options, then Done.
+static void prv_answer(uint8_t turn, const char *answer, const char *const *options, int count) {
+  prv_send_assistant_update(0x60, turn, AudioCompanionAssistantUpdateHeard, 0, "pick a number");
+  prv_send_assistant_update(0x61, turn, AudioCompanionAssistantUpdateAnswer, 0, answer);
+  for (int i = 0; i < count; i++) {
+    prv_send_assistant_update(0x62, turn, AudioCompanionAssistantUpdateOption, (uint8_t)i,
+                              options[i]);
+  }
+  prv_send_assistant_update(0x63, turn, AudioCompanionAssistantUpdateDone, 0, NULL);
+  fake_system_task_callbacks_invoke_pending();
+}
+
+void test_audio_companion__ptt_watch_says_it_keeps_the_conversation(void) {
+  uint8_t buf[AUDIO_COMPANION_INFO_SIZE];
+  size_t length = sizeof(buf);
+  audio_companion_fill_info(buf, &length);
+  AudioCompanionInfo info;
+  memcpy(&info, buf, sizeof(info));
+  cl_assert(info.watch_capabilities & AUDIO_COMPANION_CAPABILITY_CONVERSATION);
+}
+
+void test_audio_companion__ptt_an_answer_while_the_screen_is_closed_is_a_notification(void) {
+  prv_install_fake_notifier();
+  prv_ptt_receiver_ready(false);
+  audio_companion_assistant_screen_opened();
+  const uint8_t turn = prv_ask_question(40);
+  // Left while Muse thinks: nothing is cancelled, and the question waits on.
+  audio_companion_assistant_screen_closed();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_ptt_events().cancels, 0);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseWaiting);
+
+  static const char *const options[] = {"Seven", "Twelve"};
+  prv_answer(turn, "Which one?", options, 2);
+  cl_assert_equal_i(s_notify_posts, 1);
+  cl_assert_equal_i(s_notified_view.turn, turn);
+  cl_assert_equal_s(s_notified_view.answer, "Which one?");
+  cl_assert_equal_i(s_notified_view.option_count, 2);
+  cl_assert_equal_s(s_notified_view.options[1], "Twelve");
+
+  // Opening Muse shows it there, and takes its notification back.
+  audio_companion_assistant_screen_opened();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_notify_removes, 1);
+  cl_assert_equal_i(s_removed_ids[0].byte0, 1);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseDone);
+  cl_assert_equal_s(prv_view().answer, "Which one?");
+}
+
+void test_audio_companion__ptt_an_answer_read_on_screen_is_not_a_notification(void) {
+  prv_install_fake_notifier();
+  prv_ptt_receiver_ready(false);
+  audio_companion_assistant_screen_opened();
+  const uint8_t turn = prv_ask_question(40);
+  prv_answer(turn, "Seven.", NULL, 0);
+  cl_assert_equal_i(s_notify_builds, 0);
+
+  // "Still working" says the answer comes later: no notification for it either.
+  audio_companion_assistant_screen_closed();
+  s_ptt_next_frame = 0;  // each question numbers its frames from 0
+  const uint8_t next = prv_ask_question(40);
+  prv_send_assistant_update(0x64, next, AudioCompanionAssistantUpdateError,
+                            AudioCompanionAssistantErrorStillWorking, NULL);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_notify_builds, 0);
+  cl_assert_equal_i(prv_view().error, AudioCompanionAssistantErrorStillWorking);
+}
+
+void test_audio_companion__ptt_a_failure_while_closed_is_a_notification_and_then_cleared(void) {
+  prv_install_fake_notifier();
+  prv_ptt_receiver_ready(false);
+  const uint8_t turn = prv_ask_question(40);
+  audio_companion_assistant_screen_closed();
+  prv_send_assistant_update(0x64, turn, AudioCompanionAssistantUpdateError,
+                            AudioCompanionAssistantErrorNoAnswer, NULL);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_notify_posts, 1);
+  cl_assert_equal_i(s_notified_view.phase, AudioCompanionAssistantPhaseError);
+
+  // Seen once on screen, the failure goes; the next visit starts fresh.
+  audio_companion_assistant_screen_opened();
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseError);
+  audio_companion_assistant_screen_closed();
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
+}
+
+void test_audio_companion__ptt_leaving_while_still_holding_abandons_the_question(void) {
+  prv_ptt_receiver_ready(false);
+  audio_companion_assistant_screen_opened();
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(20);
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_question_frames(40, prv_view().turn);
+
+  audio_companion_assistant_screen_closed();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_ptt_events().cancels, 1);
+  cl_assert(!s_mic_running);
+}
+
+void test_audio_companion__ptt_an_option_is_picked_and_waits_for_its_answer(void) {
+  prv_ptt_receiver_ready(false);
+  const uint8_t turn = prv_ask_question(40);
+  static const char *const options[] = {"Seven", "Twelve"};
+  prv_answer(turn, "Which one?", options, 2);
+  s_control_count = 0;
+
+  // Not this answer's turn, or an option it doesn't have: nothing goes.
+  cl_assert(!audio_companion_assistant_pick((uint8_t)(turn + 1), 0));
+  cl_assert(!audio_companion_assistant_pick(turn, 2));
+  cl_assert_equal_i(prv_ptt_events().picks, 0);
+
+  cl_assert(audio_companion_assistant_pick(turn, 1));
+  fake_system_task_callbacks_invoke_pending();
+  const PttEvents events = prv_ptt_events();
+  cl_assert_equal_i(events.picks, 1);
+  cl_assert_equal_i(events.last.turn, turn);
+  cl_assert_equal_i(events.last.detail, 1);
+  AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseWaiting);
+  cl_assert_equal_s(view.heard, "Twelve");
+  cl_assert_equal_i(view.option_count, 0);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MIN);
+
+  // The phone answers on the same turn.
+  prv_send_assistant_update(0x65, turn, AudioCompanionAssistantUpdateHeard, 0, "Twelve");
+  prv_send_assistant_update(0x66, turn, AudioCompanionAssistantUpdateAnswer, 0, "Correct!");
+  prv_send_assistant_update(0x67, turn, AudioCompanionAssistantUpdateDone, 0, NULL);
+  view = prv_view();
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseDone);
+  cl_assert_equal_s(view.answer, "Correct!");
+}
+
+void test_audio_companion__ptt_a_pick_needs_the_phone(void) {
+  prv_ptt_receiver_ready(false);
+  const uint8_t turn = prv_ask_question(40);
+  static const char *const options[] = {"Yes", "No"};
+  prv_answer(turn, "Book it?", options, 2);
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!audio_companion_assistant_pick(turn, 0));
+  // The answer and its options stay as they were.
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseDone);
+  cl_assert_equal_i(prv_view().option_count, 2);
+}
+
+void test_audio_companion__ptt_the_phone_begins_a_message_of_its_own(void) {
+  prv_install_fake_notifier();
+  prv_ptt_receiver_ready(false);
+  // Muse wrote by itself while nothing was going on: a new exchange with no question.
+  prv_send_assistant_update(0x68, 200, AudioCompanionAssistantUpdateBegin,
+                            AudioCompanionAssistantBeginMessage, NULL);
+  cl_assert_equal_i(prv_last_ack_status(0x68), AudioCompanionAckStatusOk);
+  prv_send_assistant_update(0x69, 200, AudioCompanionAssistantUpdateAnswer, 0,
+                            "Your 3 PM moved to 4.");
+  prv_send_assistant_update(0x6A, 200, AudioCompanionAssistantUpdateDone, 0, NULL);
+  fake_system_task_callbacks_invoke_pending();
+  AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.turn, 200);
+  cl_assert(view.from_receiver);
+  cl_assert_equal_s(view.heard, "");
+  cl_assert_equal_s(view.answer, "Your 3 PM moved to 4.");
+  cl_assert_equal_i(s_notify_posts, 1);
+
+  // The wearer's next question numbers itself after it.
+  const uint8_t turn = prv_ask_question(40);
+  cl_assert_equal_i(turn, 201);
+
+  // While that question waits, a late answer to an older one waits too.
+  prv_send_assistant_update(0x6B, 202, AudioCompanionAssistantUpdateBegin,
+                            AudioCompanionAssistantBeginLateAnswer, "what's the weather");
+  cl_assert_equal_i(prv_last_ack_status(0x6B), AudioCompanionAckStatusBusy);
+  cl_assert_equal_i(prv_view().turn, turn);
+
+  prv_answer(turn, "Done.", NULL, 0);
+  prv_send_assistant_update(0x6C, 202, AudioCompanionAssistantUpdateBegin,
+                            AudioCompanionAssistantBeginLateAnswer, "what's the weather");
+  cl_assert_equal_i(prv_last_ack_status(0x6C), AudioCompanionAckStatusOk);
+  view = prv_view();
+  cl_assert_equal_i(view.turn, 202);
+  cl_assert_equal_s(view.heard, "what's the weather");
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseAnswering);
 }
 
 void test_audio_companion__ptt_assistant_updates_need_authorization(void) {
@@ -3502,6 +3742,14 @@ PTT_ONLY(ptt_a_low_battery_pause_does_not_stop_a_question)
 PTT_ONLY(ptt_the_answer_reaches_the_screen)
 PTT_ONLY(ptt_no_word_from_the_phone_ends_as_no_answer)
 PTT_ONLY(ptt_assistant_updates_need_authorization)
+PTT_ONLY(ptt_watch_says_it_keeps_the_conversation)
+PTT_ONLY(ptt_an_answer_while_the_screen_is_closed_is_a_notification)
+PTT_ONLY(ptt_an_answer_read_on_screen_is_not_a_notification)
+PTT_ONLY(ptt_a_failure_while_closed_is_a_notification_and_then_cleared)
+PTT_ONLY(ptt_leaving_while_still_holding_abandons_the_question)
+PTT_ONLY(ptt_an_option_is_picked_and_waits_for_its_answer)
+PTT_ONLY(ptt_a_pick_needs_the_phone)
+PTT_ONLY(ptt_the_phone_begins_a_message_of_its_own)
 PTT_ONLY(watch_action_timer_is_set_and_rings)
 PTT_ONLY(watch_action_alarm_goes_to_the_alarm_service)
 PTT_ONLY(watch_action_choice_is_assembled_and_answered)

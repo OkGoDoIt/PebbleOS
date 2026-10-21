@@ -145,7 +145,7 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
       }
       memcpy(&header, data, sizeof(header));
       if (header.turn == 0 || header.kind < AudioCompanionAssistantUpdateHeard ||
-          header.kind > AudioCompanionAssistantUpdateAnswerRestart ||
+          header.kind > AudioCompanionAssistantUpdateOption ||
           header.length > AUDIO_COMPANION_ASSISTANT_TEXT_MAX_BYTES ||
           length < sizeof(header) + header.length) {
         return AudioCompanionParseResultMalformed;

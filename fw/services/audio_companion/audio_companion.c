@@ -454,6 +454,12 @@ typedef enum {
 #define PTT_RETRY_MS (30)
 //! How long the link stays quick after a question while no answer has finished.
 #define PTT_QUIET_LIMIT_MS (90 * 1000)
+//! How long the watch waits on a sent question with no word about it before giving up. The
+//! receiver ends a question itself (an answer, a failure, or "still working"); this is for one
+//! that went silent.
+#define PTT_ANSWER_LIMIT_MS (15 * 60 * 1000)
+//! Notifications posted while the assistant's screen was closed, taken back when it opens.
+#define ASSISTANT_MAX_NOTIFIED (4)
 
 typedef struct {
   PttPhase phase;
@@ -471,6 +477,10 @@ typedef struct {
   uint16_t finish_frames;
   bool send_posted;
   bool fast_link;
+  //! A pick waiting to go out (PTT_EVENT Pick), for `pick_turn`.
+  bool pick_pending;
+  uint8_t pick_turn;
+  uint8_t pick_index;
 } PttState;
 
 static PttState s_ptt;
@@ -483,6 +493,13 @@ static TimerID s_ptt_retry_timer = TIMER_INVALID_ID;
 static TimerID s_ptt_fast_link_timer = TIMER_INVALID_ID;
 //! What the watch shows for the current or last question.
 static AudioCompanionAssistantView s_assistant;
+//! The quiet timer is past the quick-link stage and now waits for the answer limit.
+static bool s_ptt_quiet_backstop;
+//! The assistant's screen is open: the conversation is read there, not in notifications.
+static bool s_assistant_screen_open;
+static const AudioCompanionAssistantNotifier *s_assistant_notifier;
+static Uuid s_assistant_notified[ASSISTANT_MAX_NOTIFIED];
+static uint8_t s_assistant_notified_count;
 
 static bool prv_ptt_capturing_locked(void);
 static void prv_ptt_abandon_locked(uint8_t error);
@@ -1421,7 +1438,8 @@ static bool prv_ptt_capturing_locked(void) {
 }
 
 static bool prv_ptt_sending_locked(void) {
-  return s_ptt.start_pending || s_ptt.finish_pending || s_ptt_queue_frames > 0;
+  return s_ptt.start_pending || s_ptt.finish_pending || s_ptt.pick_pending ||
+         s_ptt_queue_frames > 0;
 }
 
 static bool prv_ptt_receiver_ready_locked(void) {
@@ -1504,10 +1522,26 @@ static void prv_ptt_set_fast_link_locked(bool on) {
   prv_update_ble_responsiveness_locked();
 }
 
-//! PTT_QUIET_LIMIT_MS passed with no word from the receiver about the question on screen.
+static void prv_ptt_fast_link_timer_cb(void *data);
+static void prv_assistant_maybe_notify_locked(void);
+
+//! PTT_QUIET_LIMIT_MS passed with no word from the receiver about the question on screen: the link
+//! goes back to its idle pace, and the question waits on, up to PTT_ANSWER_LIMIT_MS.
 static void prv_ptt_fast_link_expired_system_task_cb(void *data) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   prv_ptt_set_fast_link_locked(false);
+  const bool waiting = s_assistant.phase == AudioCompanionAssistantPhaseSending ||
+                       s_assistant.phase == AudioCompanionAssistantPhaseWaiting ||
+                       s_assistant.phase == AudioCompanionAssistantPhaseAnswering;
+  if (!s_ptt_quiet_backstop && waiting) {
+    s_ptt_quiet_backstop = true;
+    new_timer_start(s_ptt_fast_link_timer, PTT_ANSWER_LIMIT_MS - PTT_QUIET_LIMIT_MS,
+                    prv_ptt_fast_link_timer_cb, NULL, 0);
+    pbl_mutex_unlock(&s_lock);
+    prv_apply_pending();
+    return;
+  }
+  s_ptt_quiet_backstop = false;
   if (!prv_ptt_capturing_locked() && !prv_ptt_sending_locked()) {
     switch (s_assistant.phase) {
       case AudioCompanionAssistantPhaseSending:
@@ -1521,6 +1555,7 @@ static void prv_ptt_fast_link_expired_system_task_cb(void *data) {
       default:
         break;
     }
+    prv_assistant_maybe_notify_locked();
   }
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
@@ -1532,6 +1567,7 @@ static void prv_ptt_fast_link_timer_cb(void *data) {
 
 static void prv_ptt_start_fast_link_locked(void) {
   prv_ptt_set_fast_link_locked(true);
+  s_ptt_quiet_backstop = false;
   if (s_ptt_fast_link_timer == TIMER_INVALID_ID) {
     s_ptt_fast_link_timer = new_timer_create();
   }
@@ -1578,9 +1614,15 @@ static void prv_ptt_abandon_locked(uint8_t error) {
                      s_assistant.phase != AudioCompanionAssistantPhaseDone &&
                      s_assistant.phase != AudioCompanionAssistantPhaseError;
   const bool was_capturing = prv_ptt_capturing_locked();
+  const bool pick_shown = s_ptt.pick_pending && s_assistant.turn == s_ptt.pick_turn &&
+                          s_assistant.phase == AudioCompanionAssistantPhaseWaiting;
   s_ptt.phase = PttPhaseIdle;
   s_ptt.start_pending = false;
   s_ptt.finish_pending = false;
+  s_ptt.pick_pending = false;
+  if (pick_shown) {
+    assistant_view_set_error(&s_assistant, error);
+  }
   prv_ptt_queue_reset_locked();
   if (shown && error) {
     assistant_view_set_error(&s_assistant, error);
@@ -1669,6 +1711,16 @@ static void prv_ptt_send_locked(void) {
         s_assistant.phase == AudioCompanionAssistantPhaseSending) {
       assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseWaiting);
     }
+  }
+  if (s_ptt.pick_pending) {
+    const size_t length = audio_companion_protocol_build_ptt_event(
+        event, sizeof(event), s_ptt.pick_turn, AudioCompanionPttEventPick, s_ptt.pick_index, 0, 0);
+    if (!pbl_bt_audio_companion_notify_control(event, length)) {
+      prv_ptt_arm_retry_locked();
+      return;
+    }
+    s_ptt.pick_pending = false;
+    PBL_LOG_INFO("Push-to-talk %u: option %u picked", s_ptt.pick_turn, s_ptt.pick_index + 1);
   }
 }
 
@@ -1834,6 +1886,7 @@ void audio_companion_ptt_commit(void) {
   s_ptt.commit_frame = s_ptt.frames;
   s_ptt.start_pending = true;
   assistant_view_begin(&s_assistant, s_ptt.turn, AUDIO_COMPANION_PTT_MAX_SECONDS);
+  s_assistant.began_at = rtc_get_time();
   prv_ptt_start_fast_link_locked();
   prv_ptt_post_send_locked();
   PBL_LOG_INFO("Push-to-talk %u: listening", s_ptt.turn);
@@ -1901,18 +1954,144 @@ uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out) {
   return generation;
 }
 
-void audio_companion_assistant_dismiss(void) {
+// ---- The conversation, on screen and off ----
+
+static void prv_assistant_post_system_task_cb(void *data) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  // Built under the lock from what is on the view now: the screen may have opened, or another
+  // exchange begun, since this was asked for.
+  void *built = NULL;
+  if (s_assistant_notifier && !s_assistant_screen_open &&
+      s_assistant.turn == (uint8_t)(uintptr_t)data &&
+      assistant_view_wants_notification(&s_assistant)) {
+    built = s_assistant_notifier->build(&s_assistant);
+  }
+  const AudioCompanionAssistantNotifier *notifier = s_assistant_notifier;
+  pbl_mutex_unlock(&s_lock);
+  if (!built) {
+    return;
+  }
+  Uuid id;
+  notifier->post(built, &id);
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool opened_meanwhile = s_assistant_screen_open;
+  if (!opened_meanwhile) {
+    if (s_assistant_notified_count == ASSISTANT_MAX_NOTIFIED) {
+      memmove(&s_assistant_notified[0], &s_assistant_notified[1],
+              sizeof(Uuid) * (ASSISTANT_MAX_NOTIFIED - 1));
+      s_assistant_notified_count--;
+    }
+    s_assistant_notified[s_assistant_notified_count++] = id;
+  }
+  pbl_mutex_unlock(&s_lock);
+  if (opened_meanwhile) {
+    notifier->remove(&id);
+  }
+}
+
+//! s_lock held. What the view now shows ended while its screen was closed: say it in a
+//! notification, from the system task.
+static void prv_assistant_maybe_notify_locked(void) {
+  if (s_assistant_screen_open || !s_assistant_notifier ||
+      !assistant_view_wants_notification(&s_assistant)) {
+    return;
+  }
+  system_task_add_callback(prv_assistant_post_system_task_cb,
+                           (void *)(uintptr_t)s_assistant.turn);
+}
+
+typedef struct {
+  uint8_t count;
+  Uuid ids[ASSISTANT_MAX_NOTIFIED];
+} AssistantNotifiedIds;
+
+static void prv_assistant_remove_system_task_cb(void *data) {
+  AssistantNotifiedIds *taken = data;
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const AudioCompanionAssistantNotifier *notifier = s_assistant_notifier;
+  pbl_mutex_unlock(&s_lock);
+  for (uint8_t i = 0; notifier && i < taken->count; i++) {
+    notifier->remove(&taken->ids[i]);
+  }
+  kernel_free(taken);
+}
+
+void audio_companion_assistant_set_notifier(const AudioCompanionAssistantNotifier *notifier) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_assistant_notifier = notifier;
+  pbl_mutex_unlock(&s_lock);
+}
+
+void audio_companion_assistant_screen_opened(void) {
+  if (!s_initialized) {
+    return;
+  }
+  AssistantNotifiedIds *taken = NULL;
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_assistant_screen_open = true;
+  if (s_assistant_notified_count) {
+    // Read where they were sent from: like a message read on the phone, they go.
+    taken = kernel_malloc(sizeof(*taken));
+    if (taken) {
+      taken->count = s_assistant_notified_count;
+      memcpy(taken->ids, s_assistant_notified, sizeof(Uuid) * s_assistant_notified_count);
+    }
+    s_assistant_notified_count = 0;
+  }
+  pbl_mutex_unlock(&s_lock);
+  if (taken) {
+    system_task_add_callback(prv_assistant_remove_system_task_cb, taken);
+  }
+}
+
+void audio_companion_assistant_screen_closed(void) {
   if (!s_initialized) {
     return;
   }
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  if (!prv_ptt_capturing_locked() && !prv_ptt_sending_locked()) {
-    // Late words about the closed question are not shown the next time the screen opens.
+  s_assistant_screen_open = false;
+  if (s_ptt.phase == PttPhaseArmed) {
+    // A press that never became a question: nothing was sent.
+    s_ptt.phase = PttPhaseIdle;
+    prv_ptt_queue_reset_locked();
+    prv_reevaluate_locked();
+  } else if (s_ptt.phase == PttPhaseLive) {
+    // Left while still holding the button: the question is abandoned.
+    prv_ptt_finish_locked(AudioCompanionPttEventCancel, AudioCompanionPttCancelCancelled);
+  }
+  // A question already released keeps going; its answer comes as a notification. A failure was
+  // read, and the next visit starts without it.
+  if (s_assistant.phase == AudioCompanionAssistantPhaseError && !prv_ptt_capturing_locked() &&
+      !prv_ptt_sending_locked()) {
     assistant_view_clear(&s_assistant);
-    prv_ptt_set_fast_link_locked(false);
   }
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
+}
+
+bool audio_companion_assistant_pick(uint8_t turn, uint8_t index) {
+  if (!s_initialized) {
+    return false;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool shown = turn != 0 && s_assistant.turn == turn &&
+                     s_assistant.phase == AudioCompanionAssistantPhaseDone &&
+                     index < s_assistant.option_count && s_assistant.options[index][0];
+  const bool ready = prv_ptt_receiver_ready_locked() && !s_ptt.pick_pending &&
+                     !prv_ptt_capturing_locked();
+  if (shown && ready) {
+    s_ptt.pick_pending = true;
+    s_ptt.pick_turn = turn;
+    s_ptt.pick_index = index;
+    assistant_view_pick(&s_assistant, index);
+    prv_ptt_start_fast_link_locked();
+    prv_ptt_post_send_locked();
+  }
+  pbl_mutex_unlock(&s_lock);
+  if (shown && ready) {
+    prv_apply_pending();
+  }
+  return shown && ready;
 }
 
 bool audio_companion_send_watch_action_result(uint8_t action_id, uint8_t status, uint8_t value,
@@ -3014,12 +3193,30 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         break;
       }
       const AudioCompanionAssistantUpdate *update = &msg->assistant_update;
+      if (update->kind == AudioCompanionAssistantUpdateBegin) {
+        // The receiver's own turn waits while one of the wearer's questions is under way.
+        const AudioCompanionAssistantPhase phase = s_assistant.phase;
+        if (prv_ptt_capturing_locked() || prv_ptt_sending_locked() ||
+            phase == AudioCompanionAssistantPhaseListening ||
+            phase == AudioCompanionAssistantPhaseSending ||
+            phase == AudioCompanionAssistantPhaseWaiting ||
+            phase == AudioCompanionAssistantPhaseAnswering) {
+          prv_send_ack_locked(update->request_token, AudioCompanionAckStatusBusy);
+          break;
+        }
+        // The wearer's next question numbers itself after this turn.
+        s_ptt_turn_counter = update->turn;
+      }
       assistant_view_apply(&s_assistant, update->turn, update->kind, update->detail,
                            update->text, update->length);
       if (update->turn == s_assistant.turn) {
+        if (update->kind == AudioCompanionAssistantUpdateBegin) {
+          s_assistant.began_at = rtc_get_time();
+        }
         if (update->kind == AudioCompanionAssistantUpdateDone ||
             update->kind == AudioCompanionAssistantUpdateError) {
           prv_ptt_set_fast_link_locked(false);
+          prv_assistant_maybe_notify_locked();
         } else {
           // Still talking about it: the link stays quick, and the quiet limit starts over.
           prv_ptt_start_fast_link_locked();
@@ -3204,7 +3401,8 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
   capabilities |=
       AUDIO_COMPANION_CAPABILITY_PUSH_TO_TALK | AUDIO_COMPANION_CAPABILITY_WATCH_ACTIONS |
-      AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART | AUDIO_COMPANION_CAPABILITY_FOLLOW_UP;
+      AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART | AUDIO_COMPANION_CAPABILITY_FOLLOW_UP |
+      AUDIO_COMPANION_CAPABILITY_CONVERSATION;
 #endif
   const AudioCompanionInfo info = {
     .info_version = 2,
@@ -3760,6 +3958,10 @@ void audio_companion_test_reset(void) {
   s_ptt_retry_timer = TIMER_INVALID_ID;
   s_ptt_fast_link_timer = TIMER_INVALID_ID;
   memset(&s_assistant, 0, sizeof(s_assistant));
+  s_ptt_quiet_backstop = false;
+  s_assistant_screen_open = false;
+  s_assistant_notifier = NULL;
+  s_assistant_notified_count = 0;
   watch_actions_test_reset();
 #endif
   s_mic_on_since_ms = 0;

@@ -51,7 +51,7 @@ A fixed 20-byte snapshot:
 | 4 | 1 | `codec_bitmap` | bit0 = Speex wideband |
 | 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending, bit3 = `send_backpressure_events` is meaningful |
 | 6 | 2 | `reserved0` | 0 |
-| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4), bit4 follow-up (4.4); other bits 0 |
+| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4), bit4 follow-up (4.4), bit5 conversation (4.4); other bits 0 |
 | 12 | 4 | `fw_version_packed` | `(major << 24) \| (minor << 16) \| patch`, diagnostics only |
 | 16 | 4 | `send_backpressure_events` | notifications the transport refused since service init; 0 unless `flags` bit3 is set |
 
@@ -262,6 +262,11 @@ before the hold is confirmed, that audio is discarded on the watch and nothing i
   `frame_count` is the number of frames sent (`0 .. frame_count-1`).
 - `3 Cancel`: no question. `detail` 1 too short (under 0.3 s), 2 cancelled, 3 receiver
   unavailable, 4 mic unavailable. Discard any frames of this turn.
+- `4 Pick`: the wearer picked option `detail` (0–5) of turn `turn`'s answer (`Option` below),
+  on the assistant screen or from a notification, maybe long after the answer. `frame_count` and
+  `max_seconds` are 0. The receiver sends that option to the assistant as the wearer's reply
+  and answers on the same turn, as for a question: `Heard` (the option's words), then the
+  answer. A receiver that no longer knows the turn's options answers `Error` 3. Needs bit5.
 
 `PTT_AUDIO` (`0x84`, Data, watch → phone): `u8 msg_id`, `u8 turn`, `u16 first_frame`,
 `u8 frame_count` (1–32), then `frame_count` entries of `u16 length`, `u8 payload[length]`, as in
@@ -285,9 +290,36 @@ shows is ACKed and ignored.
 - `6 AnswerRestart`: the answer so far is replaced by this text, and `Answer` appends to it from
   here. Sent when the assistant's finished answer differs from the words it streamed. Needs
   `watch_capabilities` bit3; a receiver sends it only to a watch that sets it.
+- `7 Begin`: the receiver begins a turn of its own, for a message the assistant sent by itself
+  (`detail` 0: a scheduled result, an update, a worker's report) or for an answer that came after
+  the receiver stopped waiting (`detail` 1: `text` is the question it answers). `turn` is the
+  receiver's choice; the watch's next question takes the turn after it. The watch starts a new
+  exchange, shown as answering; `Answer`, `AnswerRestart`, `Option` and `Done` for that turn
+  follow. While one of the wearer's questions is being asked or waits for its answer the watch
+  ACKs `busy`, and the receiver sends it again once that question has ended. Needs bit5.
+- `8 Option`: one thing the wearer can pick to reply: `detail` its index (0–5, in order), `text`
+  its words (1–48 bytes). Sent after the answer's text, before `Done`. `AnswerRestart`, a
+  follow-up `Heard` and `Begin` clear the options. The watch shows them under the answer and on
+  its notification; a pick comes back as `PTT_EVENT Pick`. Needs bit5; to a watch without it,
+  the receiver offers a choice with `WATCH_ACTION Choose` (Section 4.5) instead.
+
+`Error` `detail` 6 (still working): the receiver stopped waiting while the assistant still works
+on it. Its answer comes later as a `Begin` with `detail` 1. Needs bit5.
+
+With bit5 (conversation) the exchange outlives the assistant screen. Closing the screen
+abandons only a question whose button is still held; one already released keeps going, and
+updates for it keep applying. An answer (`Done`) or a failure (`Error`, except 6 and the
+watch's own phone- and mic-unavailable errors) that arrives while the screen is closed becomes
+an ordinary watch notification, so the wearer's notification settings apply to it. Its actions
+are the answer's options, a reply (which opens the screen on the conversation) and Dismiss.
+Opening the screen takes back the notifications posted while it was closed. A screen that
+opens shows the exchange as it is. The watch keeps the link quick for 90 s of quiet after a
+question and waits up to 15 minutes for word of it; ending it before that is the receiver's
+job.
 
 Typical order: `PTT_EVENT Start` → `PTT_AUDIO`… → `PTT_EVENT End` → `Status`… → `Heard` →
-`Answer`… → `Done`.
+`Answer`… → `Option`… → `Done`; later, maybe, `PTT_EVENT Pick` → `Heard` → `Answer`… → `Done`.
+A message of the assistant's own: `Begin` → `Answer`… → `Option`… → `Done`.
 
 ### 4.5 Watch actions
 

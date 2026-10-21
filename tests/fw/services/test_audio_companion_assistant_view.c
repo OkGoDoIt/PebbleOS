@@ -150,3 +150,89 @@ void test_audio_companion_assistant_view__heard_after_done_is_a_follow_up(void) 
   cl_assert_equal_s(s_view.answer, "Right, 14.");
   cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseDone);
 }
+
+void test_audio_companion_assistant_view__options_come_with_the_answer_and_go_with_it(void) {
+  assistant_view_begin(&s_view, 4, 15);
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateAnswer, 0, "Which one?"));
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateOption, 0, "Seven"));
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateOption, 1, "Twelve"));
+  // Past the last slot, or empty: not an option.
+  cl_assert(!prv_apply(4, AudioCompanionAssistantUpdateOption, AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS,
+                       "Nine"));
+  cl_assert(!prv_apply(4, AudioCompanionAssistantUpdateOption, 2, ""));
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateDone, 0, ""));
+  cl_assert_equal_i(s_view.option_count, 2);
+  cl_assert_equal_s(s_view.options[1], "Twelve");
+
+  // The body lists them after the answer.
+  char body[256];
+  assistant_view_notification_body(&s_view, body, sizeof(body));
+  cl_assert_equal_s(body, "Which one?\n\n\xE2\x80\xA2 Seven\n\xE2\x80\xA2 Twelve");
+  cl_assert(assistant_view_wants_notification(&s_view));
+
+  // Picking one makes it the question waiting for its answer.
+  assistant_view_pick(&s_view, 1);
+  cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseWaiting);
+  cl_assert_equal_s(s_view.heard, "Twelve");
+  cl_assert_equal_s(s_view.answer, "");
+  cl_assert_equal_i(s_view.option_count, 0);
+  cl_assert(!assistant_view_wants_notification(&s_view));
+
+  // A finished answer that replaces what streamed brings its own options, if any.
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateAnswer, 0, "Right"));
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateOption, 0, "Again"));
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateAnswerRestart, 0, "Right!"));
+  cl_assert_equal_i(s_view.option_count, 0);
+}
+
+void test_audio_companion_assistant_view__the_receiver_begins_its_own_exchange(void) {
+  assistant_view_begin(&s_view, 4, 15);
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateAnswer, 0, "Old."));
+  // A message Muse sent by itself: no question.
+  cl_assert(prv_apply(9, AudioCompanionAssistantUpdateBegin, AudioCompanionAssistantBeginMessage,
+                      "ignored"));
+  cl_assert_equal_i(s_view.turn, 9);
+  cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseAnswering);
+  cl_assert(s_view.from_receiver);
+  cl_assert_equal_s(s_view.heard, "");
+  cl_assert_equal_s(s_view.answer, "");
+  cl_assert_equal_i(s_view.max_seconds, 15);
+  // A late answer: its question is shown above it.
+  cl_assert(prv_apply(10, AudioCompanionAssistantUpdateBegin,
+                      AudioCompanionAssistantBeginLateAnswer, "what's the weather"));
+  cl_assert_equal_s(s_view.heard, "what's the weather");
+  cl_assert(prv_apply(10, AudioCompanionAssistantUpdateAnswer, 0, "Sunny."));
+  cl_assert_equal_s(s_view.answer, "Sunny.");
+}
+
+void test_audio_companion_assistant_view__which_endings_are_worth_a_notification(void) {
+  assistant_view_begin(&s_view, 4, 15);
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateDone, 0, ""));
+  // Done with no words: nothing to say.
+  cl_assert(!assistant_view_wants_notification(&s_view));
+
+  char body[128];
+  assistant_view_begin(&s_view, 5, 15);
+  cl_assert(prv_apply(5, AudioCompanionAssistantUpdateError, AudioCompanionAssistantErrorNoAnswer,
+                      ""));
+  cl_assert(assistant_view_wants_notification(&s_view));
+  assistant_view_notification_body(&s_view, body, sizeof(body));
+  cl_assert_equal_s(body, "Muse didn't answer. Try asking again.");
+
+  assistant_view_begin(&s_view, 6, 15);
+  cl_assert(prv_apply(6, AudioCompanionAssistantUpdateError,
+                      AudioCompanionAssistantErrorStillWorking, ""));
+  cl_assert(!assistant_view_wants_notification(&s_view));
+  assistant_view_set_error(&s_view, AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
+  cl_assert(!assistant_view_wants_notification(&s_view));
+}
+
+void test_audio_companion_assistant_view__a_long_body_is_cut_between_characters(void) {
+  assistant_view_begin(&s_view, 4, 15);
+  // "é" is two bytes: a 6-byte buffer holds "aé" and the NUL, never half of the second "é".
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateAnswer, 0, "a\xC3\xA9\xC3\xA9"));
+  cl_assert(prv_apply(4, AudioCompanionAssistantUpdateDone, 0, ""));
+  char body[5];
+  cl_assert_equal_i(assistant_view_notification_body(&s_view, body, sizeof(body)), 3);
+  cl_assert_equal_s(body, "a\xC3\xA9");
+}
