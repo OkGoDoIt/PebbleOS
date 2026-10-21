@@ -161,6 +161,8 @@ typedef enum {
 #define AUDIO_COMPANION_CAPABILITY_PUSH_TO_TALK (1u << 1)
 //! Watch actions the assistant can ask for: WATCH_ACTION / WATCH_ACTION_RESULT.
 #define AUDIO_COMPANION_CAPABILITY_WATCH_ACTIONS (1u << 2)
+//! ASSISTANT_UPDATE AnswerRestart (kind 6) is understood.
+#define AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART (1u << 3)
 
 // ---- Push-to-talk (Section 4.4) ----
 
@@ -207,6 +209,9 @@ typedef enum {
   AudioCompanionAssistantUpdateDone = 4,
   //! The turn failed; `detail` is an AudioCompanionAssistantError, text optional.
   AudioCompanionAssistantUpdateError = 5,
+  //! The answer so far is replaced by this text; Answer appends to it from here. Sent when the
+  //! assistant's finished answer differs from the words it streamed.
+  AudioCompanionAssistantUpdateAnswerRestart = 6,
 } AudioCompanionAssistantUpdateKind;
 
 typedef enum {

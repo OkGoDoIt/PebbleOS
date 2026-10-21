@@ -51,7 +51,7 @@ A fixed 20-byte snapshot:
 | 4 | 1 | `codec_bitmap` | bit0 = Speex wideband |
 | 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending, bit3 = `send_backpressure_events` is meaningful |
 | 6 | 2 | `reserved0` | 0 |
-| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5); other bits 0 |
+| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4); other bits 0 |
 | 12 | 4 | `fw_version_packed` | `(major << 24) \| (minor << 16) \| patch`, diagnostics only |
 | 16 | 4 | `send_backpressure_events` | notifications the transport refused since service init; 0 unless `flags` bit3 is set |
 
@@ -279,6 +279,9 @@ shows is ACKed and ignored.
 - `4 Done`: the answer is complete.
 - `5 Error`: the turn failed; `detail` 1 assistant not set up, 2 assistant unreachable, 3 no
   answer, 4 didn't catch that, 5 busy with another question; text optional.
+- `6 AnswerRestart`: the answer so far is replaced by this text, and `Answer` appends to it from
+  here. Sent when the assistant's finished answer differs from the words it streamed. Needs
+  `watch_capabilities` bit3; a receiver sends it only to a watch that sets it.
 
 Typical order: `PTT_EVENT Start` → `PTT_AUDIO`… → `PTT_EVENT End` → `Status`… → `Heard` →
 `Answer`… → `Done`.

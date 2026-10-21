@@ -119,3 +119,18 @@ void test_audio_companion_assistant_view__copy_cuts_between_characters(void) {
   cl_assert_equal_i(assistant_view_copy_utf8(out, sizeof(out), NULL, 5), 0);
   cl_assert_equal_s(out, "");
 }
+
+void test_audio_companion_assistant_view__a_restart_replaces_what_streamed(void) {
+  assistant_view_begin(&s_view, 1, 15);
+  prv_apply(1, AudioCompanionAssistantUpdateAnswer, 0, "1. 09:53 your first note");
+  cl_assert(prv_apply(1, AudioCompanionAssistantUpdateAnswerRestart, 0, "1. 09:53 - your 1st"));
+  prv_apply(1, AudioCompanionAssistantUpdateAnswer, 0, " voice note");
+  cl_assert_equal_s(s_view.answer, "1. 09:53 - your 1st voice note");
+  cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseAnswering);
+  prv_apply(1, AudioCompanionAssistantUpdateDone, 0, NULL);
+  // A late restart still corrects a finished answer, and leaves it finished.
+  cl_assert(prv_apply(1, AudioCompanionAssistantUpdateAnswerRestart, 0, "Final."));
+  cl_assert_equal_s(s_view.answer, "Final.");
+  cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseDone);
+}
+

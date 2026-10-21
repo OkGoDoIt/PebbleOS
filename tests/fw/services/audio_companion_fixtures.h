@@ -44,6 +44,13 @@ static const uint8_t s_fx_assistant_update_answer[] = {
   0x2e,
 };
 
+// The finished answer replaces what streamed
+static const uint8_t s_fx_assistant_update_answer_restart[] = {
+  0x0d, 0x4f, 0x07, 0x06, 0x00, 0x1e, 0x31, 0x2e, 0x20, 0x30, 0x39, 0x3a,
+  0x35, 0x33, 0x20, 0x2d, 0x20, 0x79, 0x6f, 0x75, 0x72, 0x20, 0x31, 0x73,
+  0x74, 0x20, 0x76, 0x6f, 0x69, 0x63, 0x65, 0x20, 0x6e, 0x6f, 0x74, 0x65,
+};
+
 // The answer is complete
 static const uint8_t s_fx_assistant_update_done[] = {
   0x0d, 0x43, 0x07, 0x04, 0x00, 0x00,
@@ -821,6 +828,7 @@ static const uint8_t s_fx_watch_action_timer[] = {
 static const ProtocolFixture s_protocol_fixtures[] = {
   { "ack_ok", FixtureChannelControlOut, FixtureExpectParse, s_fx_ack_ok, 3 },
   { "assistant_update_answer", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_answer, 73 },
+  { "assistant_update_answer_restart", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_answer_restart, 36 },
   { "assistant_update_done", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_done, 6 },
   { "assistant_update_error", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_error, 6 },
   { "assistant_update_heard", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_heard, 55 },

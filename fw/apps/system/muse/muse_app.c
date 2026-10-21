@@ -11,7 +11,10 @@
 #include <applib/graphics/graphics.h>
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/kino/kino_layer.h>
+#include <applib/ui/animation.h>
+#include <applib/ui/property_animation.h>
 #include <applib/ui/scroll_layer.h>
+#include <applib/ui/status_bar_layer.h>
 #include <applib/ui/text_layer.h>
 #include <applib/ui/vibes.h>
 #include <applib/ui/window.h>
@@ -31,12 +34,23 @@
 #define MUSE_MARGIN (10)
 #define MUSE_GAP (4)
 #define MUSE_BAR_HEIGHT (6)
+//! The dictation screen's working dot (voice_window.c), so waiting looks the way it does there.
+#define MUSE_DOT_MAX_RADIUS (9)
+#define MUSE_DOT_MIN_RADIUS (7)
+#define MUSE_DOT_OVERSHOOT (4)
+#define MUSE_DOT_PULSE_MS (270)
+#define MUSE_DOT_DELAY_MS (1000)
+#define MUSE_DOT_SIZE (2 * (MUSE_DOT_MAX_RADIUS + MUSE_DOT_OVERSHOOT + 1))
+//! Taller than the longest answer the watch keeps (1536 bytes) can lay out.
+#define MUSE_TEXT_MAX_HEIGHT (6000)
 
 #define MUSE_ACCENT PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack)
 #define MUSE_SECONDARY PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
 
 typedef struct {
   uint32_t icon;
+  //! Waiting on Muse: the pulsing dot.
+  bool working;
   bool accent;  // the listening screen: the mic is on
   bool centered;
   const char *title;
@@ -48,8 +62,12 @@ typedef struct {
 
 typedef struct {
   Window *window;
+  StatusBarLayer *status_bar;
   ScrollLayer *scroll;
   KinoLayer *icon;
+  Layer *dot;
+  Animation *dot_anim;
+  int16_t dot_radius;
   TextLayer *title;
   TextLayer *line;
   TextLayer *heard;
@@ -111,12 +129,14 @@ static MuseScreen prv_screen(const MuseAppData *data) {
       };
     case AudioCompanionAssistantPhaseSending:
       return (MuseScreen){
+        .working = true,
         .centered = true,
         .title = "Sending",
         .line = v->reached_max ? "Questions can run 15 seconds." : NULL,
       };
     case AudioCompanionAssistantPhaseWaiting:
       return (MuseScreen){
+        .working = true,
         .centered = !heard,
         .title = v->status[0] ? v->status : "Thinking\xE2\x80\xA6",
         .heard = heard,
@@ -168,7 +188,7 @@ static int16_t prv_place_text(TextLayer *layer, const char *text, int16_t y, int
   }
   layer_set_hidden(l, false);
   text_layer_set_text(layer, text);
-  layer_set_frame(l, &GRect(MUSE_MARGIN, y, width, 2000));
+  layer_set_frame(l, &GRect(MUSE_MARGIN, y, width, MUSE_TEXT_MAX_HEIGHT));
   const GSize size = text_layer_get_content_size(app_state_get_graphics_context(), layer);
   const int16_t height = size.h + MUSE_GAP;
   layer_set_frame(l, &GRect(MUSE_MARGIN, y, width, height));
@@ -184,6 +204,79 @@ static void prv_set_colors(MuseAppData *data, bool accent) {
   text_layer_set_text_color(data->answer, text);
   text_layer_set_text_color(data->heard, secondary);
   text_layer_set_text_color(data->footer, secondary);
+  // The time stays at the top, in the screen's own colors.
+  status_bar_layer_set_colors(data->status_bar, accent ? MUSE_ACCENT : GColorWhite, text);
+}
+
+// ---- the working dot (as the dictation screen shows while it transcribes) ----
+
+static void prv_dot_update_proc(Layer *layer, GContext *ctx) {
+  MuseAppData *data = app_state_get_user_data();
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(MUSE_ACCENT, GColorBlack));
+  const GRect bounds = layer_get_bounds_by_value(layer);
+  graphics_fill_circle(ctx, grect_center_point(&bounds), data->dot_radius);
+}
+
+static void prv_set_dot_radius(void *subject, int16_t radius) {
+  MuseAppData *data = subject;
+  data->dot_radius = radius;
+  layer_mark_dirty(data->dot);
+}
+
+static const PropertyAnimationImplementation s_dot_impl = {
+  .base = {.update = (AnimationUpdateImplementation)property_animation_update_int16},
+  .accessors = {.setter = {.int16 = prv_set_dot_radius}},
+};
+
+static Animation *prv_dot_stage(MuseAppData *data, int16_t from, int16_t to) {
+  PropertyAnimation *anim = property_animation_create(&s_dot_impl, data, NULL, NULL);
+  if (!anim) {
+    return NULL;
+  }
+  property_animation_set_from_int16(anim, &from);
+  property_animation_set_to_int16(anim, &to);
+  animation_set_duration((Animation *)anim, MUSE_DOT_PULSE_MS / 3);
+  animation_set_curve((Animation *)anim, AnimationCurveEaseInOut);
+  return (Animation *)anim;
+}
+
+static void prv_start_dot(MuseAppData *data) {
+  if (data->dot_anim && animation_is_scheduled(data->dot_anim)) {
+    return;
+  }
+  data->dot_radius = MUSE_DOT_MAX_RADIUS;
+  // Grow past full size, shrink, return; then rest, and again.
+  Animation *expand =
+      prv_dot_stage(data, MUSE_DOT_MAX_RADIUS, MUSE_DOT_MAX_RADIUS + MUSE_DOT_OVERSHOOT);
+  Animation *shrink =
+      prv_dot_stage(data, MUSE_DOT_MAX_RADIUS + MUSE_DOT_OVERSHOOT, MUSE_DOT_MIN_RADIUS);
+  Animation *revert = prv_dot_stage(data, MUSE_DOT_MIN_RADIUS, MUSE_DOT_MAX_RADIUS);
+  if (!expand || !shrink || !revert) {
+    if (expand) {
+      animation_destroy(expand);
+    }
+    if (shrink) {
+      animation_destroy(shrink);
+    }
+    if (revert) {
+      animation_destroy(revert);
+    }
+    return;
+  }
+  animation_set_delay(expand, MUSE_DOT_DELAY_MS);
+  data->dot_anim = animation_sequence_create(expand, shrink, revert, NULL);
+  if (!data->dot_anim) {
+    return;
+  }
+  animation_set_play_count(data->dot_anim, ANIMATION_PLAY_COUNT_INFINITE);
+  animation_schedule(data->dot_anim);
+}
+
+static void prv_stop_dot(MuseAppData *data) {
+  if (data->dot_anim) {
+    animation_unschedule(data->dot_anim);
+    data->dot_anim = NULL;
+  }
 }
 
 static void prv_layout(MuseAppData *data, bool scroll_to_top) {
@@ -198,6 +291,16 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   text_layer_set_text_alignment(data->heard, align);
 
   int16_t y = MUSE_MARGIN;
+  if (screen.working) {
+    layer_set_frame(data->dot, &GRect((bounds.size.w - MUSE_DOT_SIZE) / 2, y, MUSE_DOT_SIZE,
+                                      MUSE_DOT_SIZE));
+    layer_set_hidden(data->dot, false);
+    prv_start_dot(data);
+    y += MUSE_DOT_SIZE + MUSE_GAP * 2;
+  } else {
+    layer_set_hidden(data->dot, true);
+    prv_stop_dot(data);
+  }
   Layer *icon = kino_layer_get_layer(data->icon);
   if (screen.icon) {
     if (screen.icon != data->shown_icon) {
@@ -218,13 +321,15 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   y = prv_place_text(data->footer, screen.footer, y, width);
   y += MUSE_MARGIN;
 
-  // Short screens sit in the middle; long ones scroll.
-  const int16_t visible = bounds.size.h - (screen.accent ? MUSE_BAR_HEIGHT + MUSE_MARGIN : 0);
+  // Below the status bar: short screens sit in the middle; long ones scroll.
+  const int16_t top = STATUS_BAR_LAYER_HEIGHT;
+  const int16_t visible =
+      bounds.size.h - top - (screen.accent ? MUSE_BAR_HEIGHT + MUSE_MARGIN : 0);
   Layer *scroll = scroll_layer_get_layer(data->scroll);
   if (screen.centered && y < visible) {
-    layer_set_frame(scroll, &GRect(0, (visible - y) / 2, bounds.size.w, y));
+    layer_set_frame(scroll, &GRect(0, top + (visible - y) / 2, bounds.size.w, y));
   } else {
-    layer_set_frame(scroll, &GRect(0, 0, bounds.size.w, bounds.size.h));
+    layer_set_frame(scroll, &GRect(0, top, bounds.size.w, bounds.size.h - top));
   }
   scroll_layer_set_content_size(data->scroll, GSize(bounds.size.w, y));
   if (scroll_to_top) {
@@ -352,6 +457,10 @@ static void prv_init(void) {
 
   data->icon = kino_layer_create(GRectZero);
   scroll_layer_add_child(data->scroll, kino_layer_get_layer(data->icon));
+  data->dot = layer_create(GRectZero);
+  layer_set_update_proc(data->dot, prv_dot_update_proc);
+  layer_set_hidden(data->dot, true);
+  scroll_layer_add_child(data->scroll, data->dot);
   data->title = prv_text(data->scroll, FONT_KEY_GOTHIC_24_BOLD);
   data->line = prv_text(data->scroll, FONT_KEY_GOTHIC_18);
   data->heard = prv_text(data->scroll, FONT_KEY_GOTHIC_18);
@@ -362,6 +471,10 @@ static void prv_init(void) {
                                  bounds.size.w - MUSE_MARGIN * 4, MUSE_BAR_HEIGHT));
   layer_set_update_proc(data->bar, prv_bar_update_proc);
   layer_add_child(root, data->bar);
+
+  // The standard status bar, so the time is always there.
+  data->status_bar = status_bar_layer_create();
+  layer_add_child(root, status_bar_layer_get_layer(data->status_bar));
 
   // Opened by a Quick Launch hold: the question is already being heard.
   data->asked = app_launch_reason() == APP_LAUNCH_QUICK_LAUNCH;
@@ -376,6 +489,9 @@ static void prv_deinit(void) {
   audio_companion_ptt_cancel();
   audio_companion_assistant_dismiss();
   app_timer_cancel(data->timer);
+  prv_stop_dot(data);
+  layer_destroy(data->dot);
+  status_bar_layer_destroy(data->status_bar);
   text_layer_destroy(data->footer);
   text_layer_destroy(data->answer);
   text_layer_destroy(data->heard);

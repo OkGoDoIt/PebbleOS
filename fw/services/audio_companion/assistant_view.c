@@ -101,6 +101,21 @@ bool assistant_view_apply(AudioCompanionAssistantView *view, uint8_t turn, uint8
         view->phase = AudioCompanionAssistantPhaseWaiting;
       }
       break;
+    case AudioCompanionAssistantUpdateAnswerRestart:
+      if (view->phase == AudioCompanionAssistantPhaseError) {
+        return false;
+      }
+      // The finished answer replaces what streamed; more may follow as Answer.
+      view->answer[0] = '\0';
+      view->answer_truncated = false;
+      if (length) {
+        prv_append_answer(view, text, length);
+      }
+      if (view->phase != AudioCompanionAssistantPhaseDone) {
+        view->phase = AudioCompanionAssistantPhaseAnswering;
+      }
+      view->status[0] = '\0';
+      break;
     case AudioCompanionAssistantUpdateAnswer:
       if (view->phase == AudioCompanionAssistantPhaseDone ||
           view->phase == AudioCompanionAssistantPhaseError || view->answer_truncated) {
