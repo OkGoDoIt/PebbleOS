@@ -324,8 +324,11 @@ static int16_t prv_place_text(TextLayer *layer, const char *text, int16_t y, int
   }
   layer_set_hidden(l, false);
   text_layer_set_text(layer, text);
-  layer_set_frame(l, &GRect(MUSE_MARGIN, y, width, MUSE_TEXT_MAX_HEIGHT));
-  const GSize size = text_layer_get_content_size(app_state_get_graphics_context(), layer);
+  // Measured afresh, not through the layer's layout cache: drawing fills that cache with only the
+  // lines that fit on screen, and an unchanged answer measured through it came back cut to them.
+  const GSize size = graphics_text_layout_get_max_used_size(
+      app_state_get_graphics_context(), text, layer->font, GRect(0, 0, width, MUSE_TEXT_MAX_HEIGHT),
+      layer->overflow_mode, layer->text_alignment, NULL);
   const int16_t height = size.h + MUSE_GAP;
   layer_set_frame(l, &GRect(MUSE_MARGIN, y, width, height));
   return y + height + MUSE_GAP;
