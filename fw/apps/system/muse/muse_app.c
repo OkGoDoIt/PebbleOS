@@ -248,7 +248,7 @@ static MuseScreen prv_screen(MuseAppData *data) {
     case AudioCompanionAssistantPhaseWaiting:
       return (MuseScreen){
         .working = true,
-        .centered = !heard && data->history_count == 0,
+        .centered = data->history_count == 0,
         .title = v->status[0] ? v->status : "Thinking\xE2\x80\xA6",
         .heard = heard,
         // Muse can take its time: nobody has to watch it work.
@@ -486,6 +486,7 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   text_layer_set_text_alignment(data->title, align);
   text_layer_set_text_alignment(data->line, align);
   text_layer_set_text_alignment(data->heard, align);
+  text_layer_set_text_alignment(data->footer, align);
 
   int16_t y = MUSE_MARGIN;
   // This visit's earlier exchanges, oldest first, above the one going on now.
