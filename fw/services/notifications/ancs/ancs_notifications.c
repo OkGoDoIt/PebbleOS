@@ -24,6 +24,8 @@
 #include <kernel/pbl_malloc.h>
 #include <system/passert.h>
 
+#include <string.h>
+
 PBL_LOG_MODULE_DECLARE(service_notifications, CONFIG_SERVICE_NOTIFICATIONS_LOG_LEVEL);
 
 static const Uuid uuid_reminders_data_source = UUID_REMINDERS_DATA_SOURCE;
@@ -225,6 +227,24 @@ static bool prv_should_ignore_because_muted(const iOSNotifPrefs *app_notif_prefs
   return ancs_filtering_is_muted(app_notif_prefs);
 }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+//! The audio companion app hands a Muse answer to the phone with a notification there ("Muse sent
+//! a link"). The watch has already shown that answer, so iOS's copy of it is dropped.
+#define AUDIO_COMPANION_APP_ID_PREFIX "dev.audiocompanion.app"
+#define AUDIO_COMPANION_HANDOFF_TITLE_PREFIX "Muse"
+
+static bool prv_attribute_has_prefix(const ANCSAttribute *attr, const char *prefix) {
+  const size_t length = strlen(prefix);
+  return attr && attr->length >= length && memcmp(attr->value, prefix, length) == 0;
+}
+
+static bool prv_should_ignore_because_companion_handoff(const ANCSAttribute *app_id,
+                                                        const ANCSAttribute *title) {
+  return prv_attribute_has_prefix(app_id, AUDIO_COMPANION_APP_ID_PREFIX) &&
+         prv_attribute_has_prefix(title, AUDIO_COMPANION_HANDOFF_TITLE_PREFIX);
+}
+#endif
+
 static bool prv_should_ignore_notification(uint32_t uid, time_t timestamp,
                                            ANCSAttribute **notif_attributes,
                                            iOSNotifPrefs *app_notif_prefs) {
@@ -274,6 +294,13 @@ static bool prv_should_ignore_notification(uint32_t uid, time_t timestamp,
         "time-based reminder was found in db");
     return true;
   }
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  if (prv_should_ignore_because_companion_handoff(app_id, title)) {
+    PBL_LOG_DBG("Ignoring the audio companion's Muse handoff: the watch showed it already");
+    return true;
+  }
+#endif
 
   // filter out super-old notifications
   if (prv_should_ignore_because_stale(timestamp)) {
