@@ -3204,7 +3204,7 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
   capabilities |=
       AUDIO_COMPANION_CAPABILITY_PUSH_TO_TALK | AUDIO_COMPANION_CAPABILITY_WATCH_ACTIONS |
-      AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART;
+      AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART | AUDIO_COMPANION_CAPABILITY_FOLLOW_UP;
 #endif
   const AudioCompanionInfo info = {
     .info_version = 2,

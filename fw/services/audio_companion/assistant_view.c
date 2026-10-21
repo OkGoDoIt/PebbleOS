@@ -89,6 +89,13 @@ bool assistant_view_apply(AudioCompanionAssistantView *view, uint8_t turn, uint8
   }
   switch (kind) {
     case AudioCompanionAssistantUpdateHeard:
+      if (view->phase == AudioCompanionAssistantPhaseDone) {
+        // A follow-up on this screen (an option Muse offered, picked): it waits for its answer.
+        view->answer[0] = '\0';
+        view->answer_truncated = false;
+        view->status[0] = '\0';
+        view->phase = AudioCompanionAssistantPhaseWaiting;
+      }
       assistant_view_copy_utf8(view->heard, sizeof(view->heard), text, length);
       if (view->phase == AudioCompanionAssistantPhaseSending ||
           view->phase == AudioCompanionAssistantPhaseListening) {

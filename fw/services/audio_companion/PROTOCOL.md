@@ -51,7 +51,7 @@ A fixed 20-byte snapshot:
 | 4 | 1 | `codec_bitmap` | bit0 = Speex wideband |
 | 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending, bit3 = `send_backpressure_events` is meaningful |
 | 6 | 2 | `reserved0` | 0 |
-| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4); other bits 0 |
+| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4), bit4 follow-up (4.4); other bits 0 |
 | 12 | 4 | `fw_version_packed` | `(major << 24) \| (minor << 16) \| patch`, diagnostics only |
 | 16 | 4 | `send_backpressure_events` | notifications the transport refused since service init; 0 unless `flags` bit3 is set |
 
@@ -273,7 +273,10 @@ press; a missing range is lost audio. Sent as the frames are encoded, at most on
 `u8 kind`, `u8 detail`, `u8 length` (0–180), `u8 text[length]` (UTF-8, cut on a character
 boundary). The watch shows it for that turn and ACKs; an update for a turn the watch no longer
 shows is ACKed and ignored.
-- `1 Heard`: what the assistant understood the question to be; replaces any earlier one.
+- `1 Heard`: what the assistant understood the question to be; replaces any earlier one. After
+  `Done` it starts a follow-up on the same turn: the answer is cleared and the watch waits for
+  the next one (the wearer picked an option the assistant offered, Section 4.5 `Choose`). Needs
+  `watch_capabilities` bit4; a receiver sends it after `Done` only to a watch that sets it.
 - `2 Status`: what the assistant is doing ("Searching the web"); replaces any earlier one.
 - `3 Answer`: more of the answer, appended. Plain text; line breaks allowed.
 - `4 Done`: the answer is complete.

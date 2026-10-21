@@ -134,3 +134,19 @@ void test_audio_companion_assistant_view__a_restart_replaces_what_streamed(void)
   cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseDone);
 }
 
+
+void test_audio_companion_assistant_view__heard_after_done_is_a_follow_up(void) {
+  assistant_view_begin(&s_view, 2, 15);
+  prv_apply(2, AudioCompanionAssistantUpdateHeard, 0, "Ask me a question with A, B, C");
+  prv_apply(2, AudioCompanionAssistantUpdateAnswer, 0, "What is 2 times 7?\nA: 12\nB: 14");
+  prv_apply(2, AudioCompanionAssistantUpdateDone, 0, NULL);
+  // The option picked on the watch goes to Muse: it shows as asked, and its answer is awaited.
+  cl_assert(prv_apply(2, AudioCompanionAssistantUpdateHeard, 0, "B: 14"));
+  cl_assert_equal_s(s_view.heard, "B: 14");
+  cl_assert_equal_s(s_view.answer, "");
+  cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseWaiting);
+  prv_apply(2, AudioCompanionAssistantUpdateAnswer, 0, "Right, 14.");
+  prv_apply(2, AudioCompanionAssistantUpdateDone, 0, NULL);
+  cl_assert_equal_s(s_view.answer, "Right, 14.");
+  cl_assert_equal_i(s_view.phase, AudioCompanionAssistantPhaseDone);
+}

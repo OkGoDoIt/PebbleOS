@@ -163,6 +163,8 @@ typedef enum {
 #define AUDIO_COMPANION_CAPABILITY_WATCH_ACTIONS (1u << 2)
 //! ASSISTANT_UPDATE AnswerRestart (kind 6) is understood.
 #define AUDIO_COMPANION_CAPABILITY_ANSWER_RESTART (1u << 3)
+//! A Heard update after Done starts a follow-up on the same screen.
+#define AUDIO_COMPANION_CAPABILITY_FOLLOW_UP (1u << 4)
 
 // ---- Push-to-talk (Section 4.4) ----
 

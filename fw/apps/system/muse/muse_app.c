@@ -378,6 +378,10 @@ static void prv_refresh(MuseAppData *data) {
     data->asked = true;
   }
 
+  if (v->phase == AudioCompanionAssistantPhaseWaiting && data->answered_turn == v->turn) {
+    // A follow-up on this screen: its answer taps the wrist too.
+    data->answered_turn = 0;
+  }
   const bool answer_phase = v->phase == AudioCompanionAssistantPhaseAnswering ||
                             v->phase == AudioCompanionAssistantPhaseDone;
   if (!first && answer_phase && data->answered_turn != v->turn) {
