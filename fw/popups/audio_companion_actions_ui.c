@@ -24,6 +24,7 @@
 #include "pbl/services/notifications/notifications.h"
 #include "pbl/services/timeline/attribute.h"
 #include "pbl/services/timeline/item.h"
+#include "pbl/services/timeline/timeline.h"
 #include <pbl/drivers/rtc.h>
 #include "resource/resource_ids.auto.h"
 #include "resource/timeline_resource_ids.auto.h"
@@ -330,7 +331,7 @@ static void *prv_notification_build(const AudioCompanionAssistantView *view) {
   }
   attribute_list_add_cstring(&open_attrs, AttributeIdTitle, failed ? "Try Again" : "Reply");
   attribute_list_add_uint32(&open_attrs, AttributeIdLaunchCode,
-                            AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN);
+                            AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN_CODE(view->turn));
   actions[count] = (TimelineItemAction){
     .id = count, .type = TimelineItemActionTypeOpenWatchApp, .attr_list = open_attrs};
   count++;
@@ -373,6 +374,37 @@ static void prv_notification_remove(const Uuid *id) {
   notifications_handle_notification_removed(&removed);
 }
 
+bool audio_companion_assistant_open_from_notification(const TimelineItem *item) {
+  static const Uuid muse = MUSE_APP_UUID;
+  if (!item || !uuid_equal(&item->header.parent_id, &muse)) {
+    return false;
+  }
+  for (uint8_t i = 0; i < item->action_group.num_actions; i++) {
+    const TimelineItemAction *action = &item->action_group.actions[i];
+    if (action->type != TimelineItemActionTypeOpenWatchApp) {
+      continue;
+    }
+    const uint32_t code = attribute_get_uint32(&action->attr_list, AttributeIdLaunchCode, 0);
+    if ((code & AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN_AT) ||
+        code == AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN) {
+      // Back into the conversation, at this exchange, as if Muse had never been left.
+      timeline_invoke_action(item, action, NULL);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool audio_companion_assistant_open_notification(const Uuid *id) {
+  TimelineItem item;
+  if (!id || !notification_storage_get(id, &item)) {
+    return false;
+  }
+  const bool opened = audio_companion_assistant_open_from_notification(&item);
+  timeline_item_free_allocated_buffer(&item);
+  return opened;
+}
+
 static const AudioCompanionAssistantNotifier s_notifier = {
   .build = prv_notification_build,
   .post = prv_notification_post,
@@ -388,6 +420,14 @@ void audio_companion_actions_ui_init(void) {
 #else
 
 void audio_companion_actions_ui_init(void) {
+}
+
+bool audio_companion_assistant_open_from_notification(const TimelineItem *item) {
+  return false;
+}
+
+bool audio_companion_assistant_open_notification(const Uuid *id) {
+  return false;
 }
 
 #endif

@@ -27,6 +27,9 @@
 #include <pbl/services/audio_companion.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/light.h>
+#include <pbl/services/notifications/notification_storage.h>
+#include <pbl/services/timeline/attribute.h>
+#include <pbl/services/timeline/item.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
 #include <shell/normal/quick_launch.h>
@@ -84,10 +87,12 @@ typedef struct {
   bool conversation;
 } MuseScreen;
 
-//! An exchange of this visit that a newer one replaced.
+//! An exchange of this visit that a newer one replaced, or one that arrived while Muse was
+//! closed.
 typedef struct {
   char *heard;
   char *answer;
+  uint8_t turn;
 } MuseExchange;
 
 typedef struct {
@@ -120,6 +125,8 @@ typedef struct {
   ActionMenuConfig menu;
   uint8_t menu_turn;
   char menu_options[AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS][AUDIO_COMPANION_ASSISTANT_OPTION_BYTES];
+  //! Opened from a notification: the exchange to show first.
+  uint8_t focus_turn;
   //! A pick that couldn't go out, said on the screen it was made from (its generation).
   bool pick_failed;
   uint32_t pick_failed_generation;
@@ -556,8 +563,19 @@ static void prv_layout(MuseAppData *data, bool scroll_to_top) {
   }
   scroll_layer_set_content_size(data->scroll, GSize(bounds.size.w, y));
   if (scroll_to_top) {
-    // A new exchange starts at its own top; Up scrolls back to the earlier ones.
-    const int16_t offset = history ? current_top - MUSE_GAP : 0;
+    // A new exchange starts at its own top; Up scrolls back to the earlier ones. Opened from the
+    // notification of an earlier one, that one is shown first.
+    int16_t offset = history ? current_top - MUSE_GAP : 0;
+    for (int i = 0; history && data->focus_turn && i < data->history_count; i++) {
+      if (data->history[i].turn == data->focus_turn) {
+        offset = layer_get_frame_by_value(text_layer_get_layer(data->history_heard[i])).origin.y;
+        if (!data->history[i].heard) {
+          offset = layer_get_frame_by_value(text_layer_get_layer(data->history_answer[i])).origin.y;
+        }
+        offset = MAX(0, offset - MUSE_GAP);
+      }
+    }
+    data->focus_turn = 0;
     scroll_layer_set_content_offset(data->scroll, GPoint(0, -offset), false);
   }
   layer_set_hidden(data->bar, !screen.accent);
@@ -601,9 +619,9 @@ static void prv_free_exchange(MuseExchange *exchange) {
   *exchange = (MuseExchange){0};
 }
 
-//! The exchange on screen gives way to a newer one: it stays above it for the rest of the visit.
-static void prv_keep_in_history(MuseAppData *data, const AudioCompanionAssistantView *old) {
-  if (!old->answer[0]) {
+static void prv_add_history(MuseAppData *data, const char *heard, const char *answer,
+                            uint8_t turn) {
+  if (!answer || !answer[0]) {
     return;
   }
   if (data->history_count == MUSE_HISTORY_MAX) {
@@ -613,9 +631,34 @@ static void prv_keep_in_history(MuseAppData *data, const AudioCompanionAssistant
     data->history_count--;
   }
   data->history[data->history_count++] = (MuseExchange){
-    .heard = prv_copy(old->heard),
-    .answer = prv_copy(old->answer),
+    .heard = prv_copy(heard),
+    .answer = prv_copy(answer),
+    .turn = turn,
   };
+}
+
+//! The exchange on screen gives way to a newer one: it stays above it for the rest of the visit.
+static void prv_keep_in_history(MuseAppData *data, const AudioCompanionAssistantView *old) {
+  prv_add_history(data, old->heard, old->answer, old->turn);
+}
+
+//! What arrived while Muse was closed, read back from its notifications (oldest first), so the
+//! conversation reads as if Muse had never been left. The exchange on screen is shown live.
+static void prv_show_missed(MuseAppData *data, const AudioCompanionAssistantMissed *missed,
+                            uint8_t count) {
+  for (uint8_t i = 0; i < count; i++) {
+    if (data->have_view && missed[i].turn == data->view.turn &&
+        data->view.phase != AudioCompanionAssistantPhaseIdle) {
+      continue;
+    }
+    TimelineItem item;
+    if (!notification_storage_get(&missed[i].id, &item)) {
+      continue;
+    }
+    prv_add_history(data, attribute_get_string(&item.attr_list, AttributeIdSubtitle, ""),
+                    attribute_get_string(&item.attr_list, AttributeIdBody, ""), missed[i].turn);
+    timeline_item_free_allocated_buffer(&item);
+  }
 }
 
 //! Whether `next` is a different exchange from `old` rather than more of it: another turn, or
@@ -853,16 +896,25 @@ static void prv_init(void) {
   // notification: it continues the conversation it came from.
   const AppLaunchReason reason = app_launch_reason();
   data->asked = reason == APP_LAUNCH_QUICK_LAUNCH || reason == APP_LAUNCH_TIMELINE_ACTION;
-  audio_companion_assistant_screen_opened();
+  AudioCompanionAssistantMissed missed[MUSE_HISTORY_MAX + 1];
+  const uint8_t missed_count = audio_companion_assistant_screen_opened(missed, ARRAY_LENGTH(missed));
   if (reason == APP_LAUNCH_TIMELINE_ACTION) {
     const uint32_t code = app_launch_get_args();
     if (code & AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK) {
       // An option picked on the notification: it goes to Muse, and its answer comes here. One
       // whose answer has moved on opens the conversation as it is.
       audio_companion_assistant_pick((uint8_t)(code >> 8), (uint8_t)code);
+    } else if (code & AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN_AT) {
+      data->focus_turn = (uint8_t)(code >> 8);
     }
   }
   prv_refresh(data);
+  if (missed_count) {
+    prv_show_missed(data, missed, missed_count);
+    prv_layout(data, true);
+    // Shown here now: like a message read on the phone, their notifications go.
+    audio_companion_assistant_take_back(missed, missed_count);
+  }
   app_window_stack_push(data->window, true);
   prv_schedule(data);
 }

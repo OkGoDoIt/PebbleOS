@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include "popups/audio_companion_actions_ui.h"
 #include "notifications.h"
 
 #include "notifications_history.h"
@@ -223,6 +224,12 @@ static void prv_notifications_history_init(NotificationsData *data) {
 }
 
 static bool prv_push_single_notification_window(const Uuid *id) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  // Muse's notifications open the conversation they belong to.
+  if (audio_companion_assistant_open_notification(id)) {
+    return true;
+  }
+#endif
   notification_window_init_history(false);
   if (notification_window_is_modal()) {
     return false;
@@ -634,6 +641,13 @@ static void prv_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, vo
     prv_push_group_window(notifications_data, row);
     return;
   }
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  // Muse's notifications open the conversation they belong to.
+  if (audio_companion_assistant_open_notification(notifications_history_row_get_latest_id(row))) {
+    return;
+  }
+#endif
 
   bool success = prv_push_notification_window(notifications_data, row);
   if (!success) {

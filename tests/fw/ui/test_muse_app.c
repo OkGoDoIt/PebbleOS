@@ -111,8 +111,40 @@ bool audio_companion_ptt_arm(ButtonId button, AudioCompanionPttTrigger trigger) 
 }
 
 void audio_companion_ptt_commit(void) {}
-void audio_companion_assistant_screen_opened(void) {}
+static AudioCompanionAssistantMissed s_missed[2];
+static uint8_t s_missed_count;
+static int s_taken_back;
+
+uint8_t audio_companion_assistant_screen_opened(AudioCompanionAssistantMissed *missed,
+                                                uint8_t max) {
+  const uint8_t count = MIN(max, s_missed_count);
+  memcpy(missed, s_missed, sizeof(s_missed[0]) * count);
+  return count;
+}
+
+void audio_companion_assistant_take_back(const AudioCompanionAssistantMissed *missed,
+                                         uint8_t count) {
+  s_taken_back += count;
+}
+
 void audio_companion_assistant_screen_closed(void) {}
+
+// The notifications Muse posted while closed, as storage holds them.
+#include <pbl/services/timeline/item.h>
+static const char *s_missed_heard = "remind me to get coffee";
+static const char *s_missed_body = "Done \xE2\x80\x94 set for 5pm today (Oct 21, 17:00).";
+
+bool notification_storage_get(const Uuid *id, TimelineItem *item_out) {
+  memset(item_out, 0, sizeof(*item_out));
+  return true;
+}
+
+void timeline_item_free_allocated_buffer(TimelineItem *item) {}
+
+const char *attribute_get_string(const AttributeList *attr_list, AttributeId id,
+                                 char *default_value) {
+  return id == AttributeIdSubtitle ? s_missed_heard : s_missed_body;
+}
 
 bool audio_companion_assistant_pick(uint8_t turn, uint8_t index) {
   s_picks++;
@@ -224,7 +256,13 @@ void test_muse_app__initialize(void) {
 
   memset(&s_view, 0, sizeof(s_view));
   s_picks = 0;
+  s_missed_count = 0;
+  s_taken_back = 0;
   rtc_set_time(1760000000);
+}
+
+//! Opens the app, as the wearer would, after the test has set what it finds.
+static void prv_open(void) {
   prv_init();
   s_data = app_state_get_user_data();
 }
@@ -270,6 +308,7 @@ static const char *prv_shown(TextLayer *layer) {
 //////////////////////
 
 void test_muse_app__ask(void) {
+  prv_open();
   AudioCompanionAssistantView view = {0};
   prv_show(&view);
   cl_assert_equal_s(prv_shown(s_data->title), "Ask Muse");
@@ -278,6 +317,7 @@ void test_muse_app__ask(void) {
 }
 
 void test_muse_app__thinking_says_you_can_leave(void) {
+  prv_open();
   AudioCompanionAssistantView view =
       prv_view(3, AudioCompanionAssistantPhaseWaiting, "how far did I walk yesterday \xF0\x9F\x91\x8D", NULL);
   prv_show(&view);
@@ -287,6 +327,7 @@ void test_muse_app__thinking_says_you_can_leave(void) {
 }
 
 void test_muse_app__an_answer_with_options_shows_them_as_buttons(void) {
+  prv_open();
   AudioCompanionAssistantView view =
       prv_view(3, AudioCompanionAssistantPhaseDone, "quiz me", "What is 2 times 7?");
   view.option_count = 3;
@@ -300,6 +341,7 @@ void test_muse_app__an_answer_with_options_shows_them_as_buttons(void) {
 }
 
 void test_muse_app__a_follow_up_keeps_the_last_exchange_above(void) {
+  prv_open();
   AudioCompanionAssistantView first =
       prv_view(3, AudioCompanionAssistantPhaseDone, "how far did I walk yesterday",
                "You walked 6.2 km yesterday, about 8,100 steps.");
@@ -319,6 +361,7 @@ void test_muse_app__a_follow_up_keeps_the_last_exchange_above(void) {
 }
 
 void test_muse_app__a_message_muse_started_says_who_it_is_from(void) {
+  prv_open();
   AudioCompanionAssistantView view =
       prv_view(200, AudioCompanionAssistantPhaseDone, NULL,
                "Your 3 PM with Sam moved to 4. I updated your calendar.");
@@ -330,6 +373,7 @@ void test_muse_app__a_message_muse_started_says_who_it_is_from(void) {
 }
 
 void test_muse_app__an_answer_handed_to_the_phone_says_so(void) {
+  prv_open();
   AudioCompanionAssistantView view = prv_view(
       5, AudioCompanionAssistantPhaseDone, "find me the passport renewal form",
       "You can renew by mail with form DS-82 if your last passport is under 15 years old.\n\n"
@@ -339,6 +383,7 @@ void test_muse_app__an_answer_handed_to_the_phone_says_so(void) {
 }
 
 void test_muse_app__still_working(void) {
+  prv_open();
   AudioCompanionAssistantView view =
       prv_view(6, AudioCompanionAssistantPhaseError, "book a table for two at 7", NULL);
   view.error = AudioCompanionAssistantErrorStillWorking;
@@ -364,6 +409,7 @@ static const char *const s_long_answer =
     "The detailed report is attached below.";
 
 void test_muse_app__a_long_answer_is_laid_out_whole(void) {
+  prv_open();
   AudioCompanionAssistantView view =
       prv_view(2, AudioCompanionAssistantPhaseDone, "Clean overview only", s_long_answer);
   prv_show(&view);
@@ -382,6 +428,7 @@ void test_muse_app__a_long_answer_is_laid_out_whole(void) {
 }
 
 void test_muse_app__a_streamed_answer_is_laid_out_whole(void) {
+  prv_open();
   // As the watch sees it: the answer grows a few words at a time, then is done.
   AudioCompanionAssistantView view =
       prv_view(2, AudioCompanionAssistantPhaseWaiting, "Clean overview only", NULL);
@@ -408,4 +455,22 @@ void test_muse_app__a_streamed_answer_is_laid_out_whole(void) {
       s_data->scroll, GPoint(0, -(scroll_layer_get_content_size(s_data->scroll).h - 200)), false);
   window_render(s_data->window, &s_ctx);
   prv_save("streamed_bottom");
+}
+
+void test_muse_app__what_came_while_away_reads_as_one_conversation(void) {
+  // A reminder was set while Muse was closed; then Muse wrote again. Opening Muse shows both.
+  s_missed[0] = (AudioCompanionAssistantMissed){.turn = 4};
+  s_missed[1] = (AudioCompanionAssistantMissed){.turn = 5};
+  s_missed_count = 2;
+  s_view = prv_view(5, AudioCompanionAssistantPhaseDone, NULL,
+                    "Also: the specialty coffee place closes at 6 today.");
+  s_view.from_receiver = true;
+  s_view.generation = 1;
+  prv_open();
+  cl_assert_equal_i(s_data->history_count, 1);
+  cl_assert_equal_s(s_data->history[0].heard, "remind me to get coffee");
+  cl_assert_equal_i(s_taken_back, 2);
+  window_set_on_screen(s_data->window, true, true);
+  window_render(s_data->window, &s_ctx);
+  prv_save("while_away");
 }

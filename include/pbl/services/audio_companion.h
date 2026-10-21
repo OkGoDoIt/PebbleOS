@@ -220,9 +220,22 @@ void audio_companion_ptt_handle_button(ButtonId button, bool pressed);
 //! Copies what the watch should show. Returns the view's generation. Any task.
 uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out);
 
-//! The assistant's screen is showing the conversation: what arrives now is read there, not
-//! sent as a notification, and the notifications posted while it was closed are taken back.
-void audio_companion_assistant_screen_opened(void);
+//! A notification posted while the assistant's screen was closed, and the turn it was about.
+typedef struct {
+  Uuid id;
+  uint8_t turn;
+} AudioCompanionAssistantMissed;
+
+//! The assistant's screen is showing the conversation: what arrives now is read there, not sent
+//! as a notification. Copies into `missed` (oldest first) the notifications posted while it was
+//! closed, for the screen to show those exchanges too, and returns how many; they stay until
+//! audio_companion_assistant_take_back().
+uint8_t audio_companion_assistant_screen_opened(AudioCompanionAssistantMissed *missed,
+                                                uint8_t max);
+
+//! Removes notifications the screen has now shown, like a message read on the phone. Any task.
+void audio_companion_assistant_take_back(const AudioCompanionAssistantMissed *missed,
+                                         uint8_t count);
 
 //! The assistant's screen closed. A question whose button is still held is abandoned; one
 //! already sent keeps going, and its answer arrives as a notification. A failure that was on
@@ -240,6 +253,10 @@ bool audio_companion_assistant_pick(uint8_t turn, uint8_t index);
 #define AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK (1u << 16)
 #define AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK_CODE(turn, index) \
   (AUDIO_COMPANION_ASSISTANT_LAUNCH_PICK | ((uint32_t)(turn) << 8) | (uint32_t)(index))
+//! Opens the conversation at turn `turn`'s exchange.
+#define AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN_AT (1u << 17)
+#define AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN_CODE(turn) \
+  (AUDIO_COMPANION_ASSISTANT_LAUNCH_OPEN_AT | ((uint32_t)(turn) << 8))
 
 //! Who turns an exchange into a watch notification, so the service holds no UI. `build` runs
 //! under the service's lock (allocation only: no flash, no waiting) and returns NULL when it

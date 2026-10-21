@@ -3188,7 +3188,7 @@ void test_audio_companion__ptt_watch_says_it_keeps_the_conversation(void) {
 void test_audio_companion__ptt_an_answer_while_the_screen_is_closed_is_a_notification(void) {
   prv_install_fake_notifier();
   prv_ptt_receiver_ready(false);
-  audio_companion_assistant_screen_opened();
+  audio_companion_assistant_screen_opened(NULL, 0);
   const uint8_t turn = prv_ask_question(40);
   // Left while Muse thinks: nothing is cancelled, and the question waits on.
   audio_companion_assistant_screen_closed();
@@ -3204,11 +3204,22 @@ void test_audio_companion__ptt_an_answer_while_the_screen_is_closed_is_a_notific
   cl_assert_equal_i(s_notified_view.option_count, 2);
   cl_assert_equal_s(s_notified_view.options[1], "Twelve");
 
-  // Opening Muse shows it there, and takes its notification back.
-  audio_companion_assistant_screen_opened();
+  // Opening Muse hands it the notification, to show that exchange in the conversation...
+  AudioCompanionAssistantMissed missed[4];
+  const uint8_t count = audio_companion_assistant_screen_opened(missed, 4);
+  cl_assert_equal_i(count, 1);
+  cl_assert_equal_i(missed[0].id.byte0, 1);
+  cl_assert_equal_i(missed[0].turn, turn);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(s_notify_removes, 0);
+  // ...and once shown there, the notification goes.
+  audio_companion_assistant_take_back(missed, count);
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(s_notify_removes, 1);
   cl_assert_equal_i(s_removed_ids[0].byte0, 1);
+  // Nothing is handed over twice.
+  audio_companion_assistant_screen_closed();
+  cl_assert_equal_i(audio_companion_assistant_screen_opened(missed, 4), 0);
   cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseDone);
   cl_assert_equal_s(prv_view().answer, "Which one?");
 }
@@ -3216,7 +3227,7 @@ void test_audio_companion__ptt_an_answer_while_the_screen_is_closed_is_a_notific
 void test_audio_companion__ptt_an_answer_read_on_screen_is_not_a_notification(void) {
   prv_install_fake_notifier();
   prv_ptt_receiver_ready(false);
-  audio_companion_assistant_screen_opened();
+  audio_companion_assistant_screen_opened(NULL, 0);
   const uint8_t turn = prv_ask_question(40);
   prv_answer(turn, "Seven.", NULL, 0);
   cl_assert_equal_i(s_notify_builds, 0);
@@ -3244,7 +3255,7 @@ void test_audio_companion__ptt_a_failure_while_closed_is_a_notification_and_then
   cl_assert_equal_i(s_notified_view.phase, AudioCompanionAssistantPhaseError);
 
   // Seen once on screen, the failure goes; the next visit starts fresh.
-  audio_companion_assistant_screen_opened();
+  audio_companion_assistant_screen_opened(NULL, 0);
   cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseError);
   audio_companion_assistant_screen_closed();
   cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
@@ -3252,7 +3263,7 @@ void test_audio_companion__ptt_a_failure_while_closed_is_a_notification_and_then
 
 void test_audio_companion__ptt_leaving_while_still_holding_abandons_the_question(void) {
   prv_ptt_receiver_ready(false);
-  audio_companion_assistant_screen_opened();
+  audio_companion_assistant_screen_opened(NULL, 0);
   cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
   fake_system_task_callbacks_invoke_pending();
   prv_feed_frames(20);

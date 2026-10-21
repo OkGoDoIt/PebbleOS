@@ -36,6 +36,7 @@
 #endif
 #include <pbl/services/regular_timer.h>
 #include <pbl/services/timeline/actions_endpoint.h>
+#include "popups/audio_companion_actions_ui.h"
 #include <pbl/services/timeline/attribute.h>
 #include <pbl/services/timeline/notification_layout.h>
 #include <pbl/services/timeline/swap_layer.h>
@@ -1032,6 +1033,12 @@ static void prv_select_single_click_handler(ClickRecognizerRef recognizer, void 
   prv_note_touched(window_data);
 
   TimelineItem *item = prv_get_current_notification(window_data);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  // Muse's notifications open the conversation they belong to.
+  if (audio_companion_assistant_open_from_notification(item)) {
+    return;
+  }
+#endif
   if (!prv_should_provide_action_menu_for_item(window_data, item)) {
     return;
   }

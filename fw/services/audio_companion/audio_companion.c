@@ -498,7 +498,7 @@ static bool s_ptt_quiet_backstop;
 //! The assistant's screen is open: the conversation is read there, not in notifications.
 static bool s_assistant_screen_open;
 static const AudioCompanionAssistantNotifier *s_assistant_notifier;
-static Uuid s_assistant_notified[ASSISTANT_MAX_NOTIFIED];
+static AudioCompanionAssistantMissed s_assistant_notified[ASSISTANT_MAX_NOTIFIED];
 static uint8_t s_assistant_notified_count;
 
 static bool prv_ptt_capturing_locked(void);
@@ -1978,10 +1978,13 @@ static void prv_assistant_post_system_task_cb(void *data) {
   if (!opened_meanwhile) {
     if (s_assistant_notified_count == ASSISTANT_MAX_NOTIFIED) {
       memmove(&s_assistant_notified[0], &s_assistant_notified[1],
-              sizeof(Uuid) * (ASSISTANT_MAX_NOTIFIED - 1));
+              sizeof(s_assistant_notified[0]) * (ASSISTANT_MAX_NOTIFIED - 1));
       s_assistant_notified_count--;
     }
-    s_assistant_notified[s_assistant_notified_count++] = id;
+    s_assistant_notified[s_assistant_notified_count++] = (AudioCompanionAssistantMissed){
+      .id = id,
+      .turn = (uint8_t)(uintptr_t)data,
+    };
   }
   pbl_mutex_unlock(&s_lock);
   if (opened_meanwhile) {
@@ -2016,32 +2019,44 @@ static void prv_assistant_remove_system_task_cb(void *data) {
   kernel_free(taken);
 }
 
+void audio_companion_assistant_take_back(const AudioCompanionAssistantMissed *missed,
+                                         uint8_t count) {
+  if (!s_initialized || !missed || count == 0) {
+    return;
+  }
+  AssistantNotifiedIds *taken = kernel_malloc(sizeof(*taken));
+  if (!taken) {
+    return;
+  }
+  taken->count = MIN(count, ASSISTANT_MAX_NOTIFIED);
+  for (uint8_t i = 0; i < taken->count; i++) {
+    taken->ids[i] = missed[i].id;
+  }
+  system_task_add_callback(prv_assistant_remove_system_task_cb, taken);
+}
+
 void audio_companion_assistant_set_notifier(const AudioCompanionAssistantNotifier *notifier) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   s_assistant_notifier = notifier;
   pbl_mutex_unlock(&s_lock);
 }
 
-void audio_companion_assistant_screen_opened(void) {
+uint8_t audio_companion_assistant_screen_opened(AudioCompanionAssistantMissed *missed,
+                                                uint8_t max) {
   if (!s_initialized) {
-    return;
+    return 0;
   }
-  AssistantNotifiedIds *taken = NULL;
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   s_assistant_screen_open = true;
-  if (s_assistant_notified_count) {
-    // Read where they were sent from: like a message read on the phone, they go.
-    taken = kernel_malloc(sizeof(*taken));
-    if (taken) {
-      taken->count = s_assistant_notified_count;
-      memcpy(taken->ids, s_assistant_notified, sizeof(Uuid) * s_assistant_notified_count);
-    }
-    s_assistant_notified_count = 0;
+  // The screen shows them as part of the conversation, then takes them back.
+  const uint8_t count = missed ? MIN(max, s_assistant_notified_count) : 0;
+  const uint8_t skip = s_assistant_notified_count - count;
+  if (count) {
+    memcpy(missed, &s_assistant_notified[skip], sizeof(s_assistant_notified[0]) * count);
   }
+  s_assistant_notified_count = 0;
   pbl_mutex_unlock(&s_lock);
-  if (taken) {
-    system_task_add_callback(prv_assistant_remove_system_task_cb, taken);
-  }
+  return count;
 }
 
 void audio_companion_assistant_screen_closed(void) {
