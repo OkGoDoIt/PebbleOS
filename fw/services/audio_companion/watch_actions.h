@@ -119,8 +119,14 @@ bool watch_actions_launch_app(const char *name, char *found, size_t found_size);
 void watch_actions_find_watch(uint8_t seconds);
 
 //! The watch's activity data for `metric` over `days` (today first), comma-separated, into
-//! `text`. False when the activity service has nothing. System task.
+//! `text`. False when the activity service has nothing; `text` may then say why
+//! (AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF). System task.
 bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_size);
+
+//! Each of the last `days` days' heart rate (today first) from the minute history, read a slice
+//! at a time on the system task so nothing else waits; sends action `action_id`'s result when
+//! done. System task.
+void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days);
 
 //! Unit tests only.
 void watch_actions_test_reset(void);

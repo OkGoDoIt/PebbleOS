@@ -90,6 +90,13 @@ void watch_actions_set_quiet_time(bool on) {
   s_quiet_time_calls++;
 }
 
+static uint8_t s_heart_rate_days;
+void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days) {
+  s_heart_rate_days = days;
+  audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusDone, 0,
+                                           "72/55/140,-1");
+}
+
 bool watch_actions_launch_app(const char *name, char *found, size_t found_size) {
   if (strcmp(name, "work") != 0) {
     return false;
@@ -104,6 +111,11 @@ void watch_actions_find_watch(uint8_t seconds) {
 }
 
 bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_size) {
+  if (metric == AudioCompanionWatchHealthHeartRate) {
+    // Background heart rate is off on this watch.
+    snprintf(text, text_size, "%s", AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF);
+    return false;
+  }
   if (metric != AudioCompanionWatchHealthSteps) {
     return false;
   }
@@ -3719,6 +3731,20 @@ void test_audio_companion__watch_action_find_and_health(void) {
   AudioCompanionWatchActionResultMsg result;
   cl_assert(prv_last_watch_action_result(&result));
   cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+
+  // Heart rate: off says so, and each day's comes from the minute history.
+  const uint8_t heart[] = {AudioCompanionWatchActionHealth, AudioCompanionWatchHealthHeartRate, 1};
+  prv_send_simple_watch_action(0x6A, heart, sizeof(heart));
+  cl_assert(prv_last_watch_action_result(&result));
+  cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusFailed);
+  cl_assert(prv_last_watch_action_result_text(text, sizeof(text)));
+  cl_assert_equal_s(text, AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF);
+  const uint8_t daily[] = {AudioCompanionWatchActionHealth, AudioCompanionWatchHealthHeartRateDaily,
+                           2};
+  prv_send_simple_watch_action(0x6B, daily, sizeof(daily));
+  cl_assert_equal_i(s_heart_rate_days, 2);
+  cl_assert(prv_last_watch_action_result_text(text, sizeof(text)));
+  cl_assert_equal_s(text, "72/55/140,-1");
 }
 #else
 // Push-to-talk is compiled out of this build; test_audio_companion_ptt runs these for real.

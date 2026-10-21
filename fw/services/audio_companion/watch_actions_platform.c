@@ -13,6 +13,12 @@
 #include "pbl/services/notifications/do_not_disturb.h"
 #ifdef CONFIG_SERVICE_ACTIVITY
 #include "pbl/services/activity/activity.h"
+#include "pbl/services/activity/activity_algorithm.h"
+#include "pbl/services/system_task.h"
+#include "pbl/services/time.h"
+#include "kernel/pbl_malloc.h"
+#include "applib/pbl_std/pbl_std.h"
+#include <pbl/util/math.h>
 #endif
 
 #include <ctype.h>
@@ -196,6 +202,10 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
   if (metric == AudioCompanionWatchHealthHeartRate) {
     int32_t bpm = -1;
     int32_t updated_utc = 0;
+    if (!activity_prefs_heart_rate_is_enabled()) {
+      snprintf(text, text_size, "%s", AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF);
+      return false;
+    }
     if (!activity_get_metric(ActivityMetricHeartRateFilteredBPM, 1, &bpm) || bpm <= 0) {
       return false;
     }
@@ -240,5 +250,129 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
   return true;
 #else
   return false;
+#endif
+}
+
+// ---- Heart rate by day, from the minute history ----
+
+#ifdef CONFIG_SERVICE_ACTIVITY
+//! Minutes read per pass: the system task also drains audio, so a pass stays short.
+#define HR_SLICE_MINUTES (60)
+
+typedef struct {
+  uint8_t action_id;
+  uint8_t days;
+  uint8_t day;
+  bool any;
+  time_t day_start;
+  time_t day_end;
+  time_t cursor;
+  uint32_t sum;
+  uint16_t count;
+  uint8_t low;
+  uint8_t high;
+  int16_t average[AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS];
+  uint8_t lows[AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS];
+  uint8_t highs[AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS];
+  HealthMinuteData minutes[HR_SLICE_MINUTES];
+} HeartRateDays;
+
+static void prv_hr_start_day(HeartRateDays *job) {
+  const time_t today = time_start_of_today();
+  job->day_start = today - (time_t)job->day * SECONDS_PER_DAY;
+  job->day_end = job->day == 0 ? rtc_get_time() : job->day_start + SECONDS_PER_DAY;
+  job->cursor = job->day_start;
+  job->sum = 0;
+  job->count = 0;
+  job->low = UINT8_MAX;
+  job->high = 0;
+}
+
+static void prv_hr_finish(HeartRateDays *job) {
+  char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
+  size_t used = 0;
+  for (uint8_t i = 0; i < job->days && used < sizeof(text); i++) {
+    const int written =
+        job->average[i] < 0
+            ? snprintf(text + used, sizeof(text) - used, i ? ",-1" : "-1")
+            : snprintf(text + used, sizeof(text) - used, i ? ",%d/%u/%u" : "%d/%u/%u",
+                       job->average[i], job->lows[i], job->highs[i]);
+    if (written < 0) {
+      break;
+    }
+    used += (size_t)written;
+  }
+  PBL_LOG_INFO("Watch action %u: heart rate for %u day(s) %s", job->action_id, job->days,
+               job->any ? "read" : "unavailable");
+  audio_companion_send_watch_action_result(
+      job->action_id,
+      job->any ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+      job->any ? text : NULL);
+  kernel_free(job);
+}
+
+static void prv_hr_step_system_task_cb(void *data) {
+  HeartRateDays *job = data;
+  if (job->cursor < job->day_end) {
+    uint32_t count = (uint32_t)((job->day_end - job->cursor) / SECONDS_PER_MINUTE);
+    count = MAX(1, MIN(count, HR_SLICE_MINUTES));
+    const time_t asked = job->cursor;
+    time_t start = asked;
+    uint32_t got = count;
+    if (activity_algorithm_get_minute_history(job->minutes, &got, &start) && got > 0) {
+      for (uint32_t i = 0; i < got && i < HR_SLICE_MINUTES; i++) {
+        const uint8_t bpm = job->minutes[i].heart_rate_bpm;
+        if (job->minutes[i].is_invalid || bpm == 0) {
+          continue;
+        }
+        job->sum += bpm;
+        job->count++;
+        job->low = MIN(job->low, bpm);
+        job->high = MAX(job->high, bpm);
+      }
+      job->cursor = start + (time_t)got * SECONDS_PER_MINUTE;
+    }
+    // Always forward, even when the history had nothing for the slice.
+    job->cursor = MAX(job->cursor, asked + (time_t)count * SECONDS_PER_MINUTE);
+    system_task_add_callback(prv_hr_step_system_task_cb, job);
+    return;
+  }
+  if (job->count) {
+    job->average[job->day] = (int16_t)((job->sum + job->count / 2) / job->count);
+    job->lows[job->day] = job->low;
+    job->highs[job->day] = job->high;
+    job->any = true;
+  } else {
+    job->average[job->day] = -1;
+  }
+  if (++job->day < job->days) {
+    prv_hr_start_day(job);
+    system_task_add_callback(prv_hr_step_system_task_cb, job);
+    return;
+  }
+  prv_hr_finish(job);
+}
+#endif
+
+void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days) {
+#ifdef CONFIG_SERVICE_ACTIVITY
+  if (!activity_prefs_heart_rate_is_enabled()) {
+    audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
+                                             AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF);
+    return;
+  }
+  HeartRateDays *job = activity_tracking_on() ? kernel_zalloc(sizeof(*job)) : NULL;
+  if (!job) {
+    audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
+                                             NULL);
+    return;
+  }
+  job->action_id = action_id;
+  job->days = MAX(1, MIN(days, AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS));
+  prv_hr_start_day(job);
+  system_task_add_callback(prv_hr_step_system_task_cb, job);
+#else
+  audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
+                                           NULL);
 #endif
 }

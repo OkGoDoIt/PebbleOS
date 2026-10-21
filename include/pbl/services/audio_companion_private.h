@@ -310,7 +310,12 @@ typedef enum {
   AudioCompanionWatchHealthSleepSeconds = 5,
   //! The latest reading, not a daily value: "bpm,age_seconds".
   AudioCompanionWatchHealthHeartRate = 6,
+  //! Each day's heart rate from the minute history, today first: "avg/min/max" or "-1".
+  AudioCompanionWatchHealthHeartRateDaily = 7,
 } AudioCompanionWatchHealthMetric;
+
+//! Result text of a heart rate read that failed because background heart rate is off.
+#define AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF "off"
 
 typedef enum {
   AudioCompanionWatchActionStatusDone = 1,

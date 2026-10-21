@@ -141,7 +141,7 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
         out->health.days = AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS;
       }
       return r.ok && out->health.metric >= AudioCompanionWatchHealthSteps &&
-             out->health.metric <= AudioCompanionWatchHealthHeartRate;
+             out->health.metric <= AudioCompanionWatchHealthHeartRateDaily;
     case AudioCompanionWatchActionNotice:
       prv_string(&r, out->notice.text, AUDIO_COMPANION_WATCH_ACTION_NOTICE_MAX_BYTES);
       return r.ok && out->notice.text[0] != '\0';
@@ -353,6 +353,12 @@ static void prv_run_system_task_cb(void *data) {
       return;
     }
     case AudioCompanionWatchActionHealth: {
+      if (request->health.metric == AudioCompanionWatchHealthHeartRateDaily) {
+        // Read from the minute history a little at a time; the result is sent when it's done.
+        watch_actions_heart_rate_daily(pending->action_id, request->health.days);
+        kernel_free(pending);
+        return;
+      }
       char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
       const bool ok =
           watch_actions_health(request->health.metric, request->health.days, text, sizeof(text));
@@ -361,7 +367,7 @@ static void prv_run_system_task_cb(void *data) {
       audio_companion_send_watch_action_result(
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
-          ok ? text : NULL);
+          (ok || text[0]) ? text : NULL);
       kernel_free(pending);
       return;
     }

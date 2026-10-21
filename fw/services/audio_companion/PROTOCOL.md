@@ -350,9 +350,12 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
   the app's name. Failed: nothing matched.
 - `7 FindWatch`: `u8 seconds` (1–30, 0 means 10). Buzzes and lights up.
 - `8 Health`: `u8 metric` — 1 steps, 2 distance (m), 3 active seconds, 4 active kcal, 5 sleep
-  seconds, 6 heart rate — and `u8 days` (1–7). Result text: the daily values comma-separated,
-  today first, `-1` for a day without data; for heart rate, `bpm,age_seconds` of the latest
-  reading. Failed: no activity data.
+  seconds, 6 heart rate, 7 heart rate by day — and `u8 days` (1–7). Result text: the daily values
+  comma-separated, today first, `-1` for a day without data; for heart rate, `bpm,age_seconds` of
+  the latest reading; for heart rate by day, each day's `average/lowest/highest` bpm from the
+  watch's minute history. Failed: no activity data; for heart rate, the text `off` when
+  background heart rate is turned off on the watch. Heart rate by day is read a slice at a time
+  and can take a few seconds.
 - `9 Notice`: `str text` (≤ 120). A short message from the receiver itself (not the assistant),
   shown on the watch until dismissed or for 15 s.
 
