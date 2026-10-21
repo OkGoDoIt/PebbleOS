@@ -5,6 +5,7 @@
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
 
 #include <applib/app.h>
+#include <applib/app_launch_button.h>
 #include <applib/app_launch_reason.h>
 #include <applib/app_timer.h>
 #include <applib/fonts/fonts.h>
@@ -18,12 +19,15 @@
 #include <applib/ui/text_layer.h>
 #include <applib/ui/vibes.h>
 #include <applib/ui/window.h>
+#include <apps/system_app_ids.h>
 #include <kernel/pbl_malloc.h>
 #include <pbl/services/audio_companion.h>
 #include <pbl/services/light.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
+#include <shell/normal/quick_launch.h>
 
+#include <pbl/util/size.h>
 #include <string.h>
 
 //! The progress bar moves while listening; everything else changes at the phone's pace.
@@ -82,12 +86,37 @@ typedef struct {
   bool available;
   //! A question was asked from this screen (or brought it up): the next one is a follow-up.
   bool asked;
+  //! The button a hold asks with, besides Select: Muse's Quick Launch button, so a hold asks
+  //! the same way from the watchface and here. Select when Muse has none.
+  ButtonId ask_button;
   uint8_t answered_turn;
   uint8_t max_turn;
   uint32_t shown_icon;
 } MuseAppData;
 
 // ---- what to show ----
+
+//! The hints name the button that asks.
+static const char *prv_hint(ButtonId button, const char *up, const char *down, const char *select) {
+  switch (button) {
+    case BUTTON_ID_UP: return up;
+    case BUTTON_ID_DOWN: return down;
+    default: return select;
+  }
+}
+
+static const char *prv_ask_again(ButtonId button) {
+  return prv_hint(button, "Hold Up to ask again", "Hold Down to ask again", "Hold Select to ask again");
+}
+
+static const char *prv_try_again(ButtonId button) {
+  return prv_hint(button, "Hold Up and try again.", "Hold Down and try again.",
+                  "Hold Select and try again.");
+}
+
+static const char *prv_speak(ButtonId button) {
+  return prv_hint(button, "Hold Up and speak", "Hold Down and speak", "Hold Select and speak");
+}
 
 static const char *prv_error_title(uint8_t error) {
   switch (error) {
@@ -102,12 +131,12 @@ static const char *prv_error_title(uint8_t error) {
   }
 }
 
-static const char *prv_error_line(uint8_t error) {
+static const char *prv_error_line(uint8_t error, ButtonId button) {
   switch (error) {
     case AudioCompanionAssistantErrorNotSetUp: return "Set it up in Pebble Audio on your phone.";
     case AudioCompanionAssistantErrorUnreachable: return "Check your phone's connection.";
     case AudioCompanionAssistantErrorNoAnswer: return "Muse didn't reply. Try again.";
-    case AudioCompanionAssistantErrorDidNotCatch: return "Hold Select and try again.";
+    case AudioCompanionAssistantErrorDidNotCatch: return prv_try_again(button);
     case AudioCompanionAssistantErrorBusy:
     case AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE: return "Try again in a moment.";
     case AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE:
@@ -146,7 +175,7 @@ static MuseScreen prv_screen(const MuseAppData *data) {
       return (MuseScreen){
         .heard = heard,
         .answer = v->answer[0] ? v->answer : "Done.",
-        .footer = v->phase == AudioCompanionAssistantPhaseDone ? "Hold Select to ask again"
+        .footer = v->phase == AudioCompanionAssistantPhaseDone ? prv_ask_again(data->ask_button)
                                                                 : NULL,
       };
     case AudioCompanionAssistantPhaseError:
@@ -154,7 +183,7 @@ static MuseScreen prv_screen(const MuseAppData *data) {
         .icon = RESOURCE_ID_GENERIC_WARNING_LARGE,
         .centered = true,
         .title = prv_error_title(v->error),
-        .line = prv_error_line(v->error),
+        .line = prv_error_line(v->error, data->ask_button),
         .heard = v->error == AudioCompanionAssistantErrorDidNotCatch ? NULL : heard,
       };
     case AudioCompanionAssistantPhaseIdle:
@@ -166,14 +195,14 @@ static MuseScreen prv_screen(const MuseAppData *data) {
       .icon = RESOURCE_ID_GENERIC_WARNING_LARGE,
       .centered = true,
       .title = prv_error_title(AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE),
-      .line = prv_error_line(AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE),
+      .line = prv_error_line(AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE, data->ask_button),
     };
   }
   return (MuseScreen){
     .icon = RESOURCE_ID_VOICE_MICROPHONE_LARGE,
     .centered = true,
     .title = "Ask Muse",
-    .line = "Hold Select and speak",
+    .line = prv_speak(data->ask_button),
   };
 }
 
@@ -413,23 +442,47 @@ static void prv_schedule(MuseAppData *data) {
 
 // ---- buttons ----
 
-static void prv_select_down(ClickRecognizerRef recognizer, void *context) {
+static void prv_ask_down(ClickRecognizerRef recognizer, void *context) {
   MuseAppData *data = app_state_get_user_data();
   // Listening starts at the press so the first words are kept; it only becomes a question once
-  // the hold lasts (prv_select_hold). The release is handled by the service, wherever it lands.
-  audio_companion_ptt_arm(BUTTON_ID_SELECT, data->asked ? AudioCompanionPttTriggerFollowUp
-                                                        : AudioCompanionPttTriggerInApp);
+  // the hold lasts (prv_ask_hold). The release is handled by the service, wherever it lands.
+  audio_companion_ptt_arm(click_recognizer_get_button_id(recognizer),
+                          data->asked ? AudioCompanionPttTriggerFollowUp
+                                      : AudioCompanionPttTriggerInApp);
 }
 
-static void prv_select_hold(ClickRecognizerRef recognizer, void *context) {
+static void prv_ask_hold(ClickRecognizerRef recognizer, void *context) {
   MuseAppData *data = app_state_get_user_data();
   audio_companion_ptt_commit();
   prv_refresh(data);
 }
 
+//! The button Muse is on in Quick Launch: the one that opened it, or else the first that has it.
+static ButtonId prv_ask_button(void) {
+  if (app_launch_reason() == APP_LAUNCH_QUICK_LAUNCH) {
+    const ButtonId launched = app_launch_button();
+    if (launched == BUTTON_ID_UP || launched == BUTTON_ID_DOWN) {
+      return launched;
+    }
+  }
+  const ButtonId buttons[] = { BUTTON_ID_UP, BUTTON_ID_DOWN };
+  for (size_t i = 0; i < ARRAY_LENGTH(buttons); i++) {
+    if (quick_launch_is_enabled(buttons[i]) && quick_launch_get_app(buttons[i]) == APP_ID_MUSE) {
+      return buttons[i];
+    }
+  }
+  return BUTTON_ID_SELECT;
+}
+
 static void prv_click_config(void *context) {
-  window_raw_click_subscribe(BUTTON_ID_SELECT, prv_select_down, NULL, NULL);
-  window_long_click_subscribe(BUTTON_ID_SELECT, MUSE_HOLD_MS, prv_select_hold, NULL);
+  MuseAppData *data = context;
+  window_raw_click_subscribe(BUTTON_ID_SELECT, prv_ask_down, NULL, NULL);
+  window_long_click_subscribe(BUTTON_ID_SELECT, MUSE_HOLD_MS, prv_ask_hold, NULL);
+  if (data->ask_button != BUTTON_ID_SELECT) {
+    // A press still scrolls; a hold asks (it no longer scrolls fast).
+    window_raw_click_subscribe(data->ask_button, prv_ask_down, NULL, NULL);
+    window_long_click_subscribe(data->ask_button, MUSE_HOLD_MS, prv_ask_hold, NULL);
+  }
 }
 
 // ---- app ----
@@ -453,6 +506,8 @@ static void prv_init(void) {
 
   data->scroll = scroll_layer_create(bounds);
   scroll_layer_set_shadow_hidden(data->scroll, true);
+  data->ask_button = prv_ask_button();
+  scroll_layer_set_context(data->scroll, data);
   scroll_layer_set_callbacks(data->scroll, (ScrollLayerCallbacks){
     .click_config_provider = prv_click_config,
   });
