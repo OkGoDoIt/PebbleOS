@@ -493,6 +493,10 @@ static TimerID s_ptt_retry_timer = TIMER_INVALID_ID;
 static TimerID s_ptt_fast_link_timer = TIMER_INVALID_ID;
 //! What the watch shows for the current or last question.
 static AudioCompanionAssistantView s_assistant;
+//! The exchange shown before the question under way began, until that question is answered or
+//! fails (kernel heap, so it costs nothing between questions). A question that comes to nothing
+//! gives it back: a hold that only opened the screen never costs the conversation.
+static AudioCompanionAssistantView *s_assistant_before;
 //! The quiet timer is past the quick-link stage and now waits for the answer limit.
 static bool s_ptt_quiet_backstop;
 //! The assistant's screen is open: the conversation is read there, not in notifications.
@@ -503,6 +507,7 @@ static uint8_t s_assistant_notified_count;
 
 static bool prv_ptt_capturing_locked(void);
 static void prv_ptt_abandon_locked(uint8_t error);
+static void prv_assistant_drop_before_locked(void);
 #endif
 static bool s_stationary_muted;        //!< stationary AND quiet: the mic is off to save the PDM rails
 static uint32_t s_stationary_since_ms; //!< uptime the Stationary runlevel was entered; 0 outside it
@@ -1543,6 +1548,7 @@ static void prv_ptt_fast_link_expired_system_task_cb(void *data) {
   }
   s_ptt_quiet_backstop = false;
   if (!prv_ptt_capturing_locked() && !prv_ptt_sending_locked()) {
+    prv_assistant_drop_before_locked();
     switch (s_assistant.phase) {
       case AudioCompanionAssistantPhaseSending:
       case AudioCompanionAssistantPhaseWaiting:
@@ -1578,6 +1584,54 @@ static void prv_ptt_apply_system_task_cb(void *data) {
   prv_apply_pending();
 }
 
+//! Whether `view` is an exchange of the conversation worth coming back to: something was said.
+static bool prv_assistant_is_exchange(const AudioCompanionAssistantView *view) {
+  switch (view->phase) {
+    case AudioCompanionAssistantPhaseWaiting:
+    case AudioCompanionAssistantPhaseAnswering:
+    case AudioCompanionAssistantPhaseDone:
+      return true;
+    case AudioCompanionAssistantPhaseError:
+      return view->error == AudioCompanionAssistantErrorStillWorking;
+    default:
+      return false;
+  }
+}
+
+static void prv_assistant_drop_before_locked(void) {
+  kernel_free(s_assistant_before);
+  s_assistant_before = NULL;
+}
+
+//! s_lock held. A question begins on the view: keep the exchange it replaces, if there is one
+//! and the heap can spare it.
+static void prv_assistant_keep_before_locked(void) {
+  if (!prv_assistant_is_exchange(&s_assistant)) {
+    prv_assistant_drop_before_locked();
+    return;
+  }
+  if (!s_assistant_before) {
+    s_assistant_before = kernel_malloc(sizeof(*s_assistant_before));
+  }
+  if (s_assistant_before) {
+    *s_assistant_before = s_assistant;
+  }
+}
+
+//! s_lock held. The question on the view came to nothing: the exchange before it is shown again,
+//! with `notice` (0, or why). False when there was none to give back.
+static bool prv_assistant_restore_before_locked(uint8_t notice) {
+  if (!s_assistant_before) {
+    return false;
+  }
+  const uint32_t generation = s_assistant.generation;
+  s_assistant = *s_assistant_before;
+  s_assistant.generation = generation + 1;
+  s_assistant.notice = notice;
+  prv_assistant_drop_before_locked();
+  return true;
+}
+
 //! The question's capture is over: END or CANCEL goes out after whatever audio is queued (or,
 //! for a cancel, instead of it). Stops the mic unless recording wants it.
 static void prv_ptt_finish_locked(uint8_t event, uint8_t detail) {
@@ -1597,7 +1651,10 @@ static void prv_ptt_finish_locked(uint8_t event, uint8_t detail) {
   }
   if (s_assistant.turn == s_ptt.turn) {
     if (cancel) {
-      assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseIdle);
+      // Never asked: the conversation is as it was before the hold.
+      if (!prv_assistant_restore_before_locked(0)) {
+        assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseIdle);
+      }
       prv_ptt_set_fast_link_locked(false);
     } else {
       assistant_view_set_phase(&s_assistant, AudioCompanionAssistantPhaseSending);
@@ -1626,6 +1683,7 @@ static void prv_ptt_abandon_locked(uint8_t error) {
   prv_ptt_queue_reset_locked();
   if (shown && error) {
     assistant_view_set_error(&s_assistant, error);
+    prv_assistant_drop_before_locked();
   }
   prv_ptt_set_fast_link_locked(false);
   if (was_capturing) {
@@ -1784,6 +1842,7 @@ static void prv_ptt_receiver_gone_locked(void) {
              s_assistant.phase == AudioCompanionAssistantPhaseAnswering) {
     assistant_view_set_error(&s_assistant, AUDIO_COMPANION_ASSISTANT_ERROR_PHONE_UNAVAILABLE);
   }
+  prv_assistant_drop_before_locked();
 }
 
 
@@ -1885,6 +1944,7 @@ void audio_companion_ptt_commit(void) {
   s_ptt.phase = PttPhaseLive;
   s_ptt.commit_frame = s_ptt.frames;
   s_ptt.start_pending = true;
+  prv_assistant_keep_before_locked();
   assistant_view_begin(&s_assistant, s_ptt.turn, AUDIO_COMPANION_PTT_MAX_SECONDS);
   s_assistant.began_at = rtc_get_time();
   prv_ptt_start_fast_link_locked();
@@ -1952,6 +2012,19 @@ uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out) {
   const uint32_t generation = s_assistant.generation;
   pbl_mutex_unlock(&s_lock);
   return generation;
+}
+
+bool audio_companion_assistant_get_before(AudioCompanionAssistantView *out) {
+  if (!s_initialized || !out) {
+    return false;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool have = s_assistant_before != NULL;
+  if (have) {
+    *out = *s_assistant_before;
+  }
+  pbl_mutex_unlock(&s_lock);
+  return have;
 }
 
 // ---- The conversation, on screen and off ----
@@ -2079,6 +2152,9 @@ void audio_companion_assistant_screen_closed(void) {
   if (s_assistant.phase == AudioCompanionAssistantPhaseError && !prv_ptt_capturing_locked() &&
       !prv_ptt_sending_locked()) {
     assistant_view_clear(&s_assistant);
+  } else if (s_assistant.notice) {
+    s_assistant.notice = 0;
+    s_assistant.generation++;
   }
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
@@ -3222,6 +3298,15 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         // The wearer's next question numbers itself after this turn.
         s_ptt_turn_counter = update->turn;
       }
+      if (update->kind == AudioCompanionAssistantUpdateError &&
+          update->detail == AudioCompanionAssistantErrorDidNotCatch &&
+          update->turn == s_assistant.turn && prv_assistant_restore_before_locked(update->detail)) {
+        // No words in it: the question never happened, and the conversation is shown again with
+        // a word about it.
+        prv_ptt_set_fast_link_locked(false);
+        prv_send_ack_locked(update->request_token, AudioCompanionAckStatusOk);
+        break;
+      }
       assistant_view_apply(&s_assistant, update->turn, update->kind, update->detail,
                            update->text, update->length);
       if (update->turn == s_assistant.turn) {
@@ -3231,6 +3316,7 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         if (update->kind == AudioCompanionAssistantUpdateDone ||
             update->kind == AudioCompanionAssistantUpdateError) {
           prv_ptt_set_fast_link_locked(false);
+          prv_assistant_drop_before_locked();
           prv_assistant_maybe_notify_locked();
         } else {
           // Still talking about it: the link stays quick, and the quiet limit starts over.
@@ -3973,6 +4059,8 @@ void audio_companion_test_reset(void) {
   s_ptt_retry_timer = TIMER_INVALID_ID;
   s_ptt_fast_link_timer = TIMER_INVALID_ID;
   memset(&s_assistant, 0, sizeof(s_assistant));
+  kernel_free(s_assistant_before);
+  s_assistant_before = NULL;
   s_ptt_quiet_backstop = false;
   s_assistant_screen_open = false;
   s_assistant_notifier = NULL;

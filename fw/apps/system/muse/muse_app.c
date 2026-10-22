@@ -172,6 +172,13 @@ static const char *prv_try_again(ButtonId button) {
                   "Hold Select and try again.");
 }
 
+//! Under the conversation, when the question asked after it held no words.
+static const char *prv_did_not_catch(ButtonId button) {
+  return prv_hint(button, "Didn't catch that. Hold Up to try again.",
+                  "Didn't catch that. Hold Down to try again.",
+                  "Didn't catch that. Hold Select to try again.");
+}
+
 static const char *prv_speak(ButtonId button) {
   return prv_hint(button, "Hold Up and speak", "Hold Down and speak", "Hold Select and speak");
 }
@@ -232,7 +239,7 @@ static const char *prv_meta(MuseAppData *data) {
   return data->meta_text;
 }
 
-static MuseScreen prv_screen(MuseAppData *data) {
+static MuseScreen prv_screen_for_phase(MuseAppData *data) {
   const AudioCompanionAssistantView *v = &data->view;
   const char *heard = v->heard[0] ? v->heard : NULL;
   const bool picked_but_failed = data->pick_failed && data->pick_failed_generation == v->generation;
@@ -318,6 +325,14 @@ static MuseScreen prv_screen(MuseAppData *data) {
     .title = "Ask Muse",
     .line = prv_speak(data->ask_button),
   };
+}
+
+static MuseScreen prv_screen(MuseAppData *data) {
+  MuseScreen screen = prv_screen_for_phase(data);
+  if (data->view.notice == AudioCompanionAssistantErrorDidNotCatch && screen.conversation) {
+    screen.footer = prv_did_not_catch(data->ask_button);
+  }
+  return screen;
 }
 
 // ---- layout ----
@@ -661,6 +676,38 @@ static void prv_show_missed(MuseAppData *data, const AudioCompanionAssistantMiss
   }
 }
 
+//! The exchange now on screen is the newest one kept above it, given back by a question that came
+//! to nothing: it moves back down, and its answer, already read, doesn't tap the wrist again.
+static void prv_take_back_from_history(MuseAppData *data) {
+  const AudioCompanionAssistantView *v = &data->view;
+  if (data->history_count == 0 || v->phase == AudioCompanionAssistantPhaseIdle ||
+      data->history[data->history_count - 1].turn != v->turn) {
+    return;
+  }
+  data->history_count--;
+  prv_free_exchange(&data->history[data->history_count]);
+  data->answered_turn = v->turn;
+}
+
+//! Opened on a question just begun (a Quick Launch hold): the exchange it follows shows above it,
+//! as if Muse had been open all along.
+static void prv_show_before(MuseAppData *data) {
+  const AudioCompanionAssistantPhase phase = data->view.phase;
+  if (phase != AudioCompanionAssistantPhaseListening &&
+      phase != AudioCompanionAssistantPhaseSending &&
+      phase != AudioCompanionAssistantPhaseWaiting) {
+    return;
+  }
+  AudioCompanionAssistantView *before = app_malloc(sizeof(*before));
+  if (!before) {
+    return;
+  }
+  if (audio_companion_assistant_get_before(before) && before->turn != data->view.turn) {
+    prv_keep_in_history(data, before);
+  }
+  app_free(before);
+}
+
 //! Whether `next` is a different exchange from `old` rather than more of it: another turn, or
 //! a reply on the same turn (a picked option, a follow-up) that cleared its answer.
 static bool prv_new_exchange(const AudioCompanionAssistantView *old,
@@ -700,6 +747,11 @@ static void prv_refresh(MuseAppData *data) {
   data->generation = generation;
   const bool first = !data->have_view;
   data->have_view = true;
+  if (first) {
+    prv_show_before(data);
+  } else if (data->view.turn != was_turn) {
+    prv_take_back_from_history(data);
+  }
   const AudioCompanionAssistantView *v = &data->view;
   if (v->phase != AudioCompanionAssistantPhaseIdle && v->turn > data->max_turn) {
     data->max_turn = v->turn;

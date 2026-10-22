@@ -197,6 +197,9 @@ typedef struct {
   //! What the wearer can pick to reply, in order.
   uint8_t option_count;
   char options[AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS][AUDIO_COMPANION_ASSISTANT_OPTION_BYTES];
+  //! A question asked after this exchange came to nothing it could send (the receiver heard no
+  //! words: AudioCompanionAssistantErrorDidNotCatch), so this exchange is shown again. 0 for none.
+  uint8_t notice;
 } AudioCompanionAssistantView;
 
 //! Whether a receiver that can take a question is attached right now.
@@ -219,6 +222,12 @@ void audio_companion_ptt_handle_button(ButtonId button, bool pressed);
 
 //! Copies what the watch should show. Returns the view's generation. Any task.
 uint32_t audio_companion_assistant_get_view(AudioCompanionAssistantView *out);
+
+//! Until the question under way is answered or fails, copies the exchange the watch showed before
+//! it began, and returns true. That exchange comes back if the question comes to nothing: a hold
+//! released too soon to be a question, or one the receiver heard no words in, leaves the
+//! conversation as it was. False when there is none. Any task.
+bool audio_companion_assistant_get_before(AudioCompanionAssistantView *out);
 
 //! A notification posted while the assistant's screen was closed, and the turn it was about.
 typedef struct {

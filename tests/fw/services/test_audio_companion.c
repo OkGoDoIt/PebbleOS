@@ -3261,6 +3261,103 @@ void test_audio_companion__ptt_a_failure_while_closed_is_a_notification_and_then
   cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseIdle);
 }
 
+//! Answers a first question with "Seven." and starts a second, held past the commit. Returns the
+//! first question's turn.
+static uint8_t prv_answer_one_and_hold_another(void) {
+  const uint8_t first = prv_ask_question(40);
+  prv_answer(first, "Seven.", NULL, 0);
+  s_ptt_next_frame = 0;
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_UP, AudioCompanionPttTriggerQuickLaunch));
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(20);
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseListening);
+  return first;
+}
+
+void test_audio_companion__ptt_a_hold_that_only_opened_muse_keeps_the_conversation(void) {
+  prv_ptt_receiver_ready(false);
+  const uint8_t first = prv_answer_one_and_hold_another();
+  // The screen opening on the new question can show the exchange it follows.
+  AudioCompanionAssistantView before;
+  cl_assert(audio_companion_assistant_get_before(&before));
+  cl_assert_equal_i(before.turn, first);
+  cl_assert_equal_s(before.answer, "Seven.");
+
+  // Let go before saying anything: nothing was asked, and the answer is back on screen.
+  prv_feed_frames(TEST_PTT_TOO_SHORT_FRAMES - 5);
+  audio_companion_ptt_handle_button(BUTTON_ID_UP, false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_ptt_events().last.detail, AudioCompanionPttCancelTooShort);
+  const AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.turn, first);
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseDone);
+  cl_assert_equal_s(view.answer, "Seven.");
+  cl_assert_equal_i(view.notice, 0);
+  cl_assert(!audio_companion_assistant_get_before(&before));
+}
+
+void test_audio_companion__ptt_a_question_with_no_words_gives_the_conversation_back(void) {
+  prv_ptt_receiver_ready(false);
+  const uint8_t first = prv_answer_one_and_hold_another();
+  const uint8_t second = prv_view().turn;
+  prv_feed_question_frames(60, second);
+  audio_companion_ptt_handle_button(BUTTON_ID_UP, false);
+  prv_feed_question_frames(TEST_PTT_TAIL_FRAMES, second);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseWaiting);
+
+  // The phone heard no words in it: the exchange before comes back, saying so.
+  prv_send_assistant_update(0x66, second, AudioCompanionAssistantUpdateError,
+                            AudioCompanionAssistantErrorDidNotCatch, NULL);
+  cl_assert_equal_i(prv_last_ack_status(0x66), AudioCompanionAckStatusOk);
+  AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.turn, first);
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseDone);
+  cl_assert_equal_s(view.answer, "Seven.");
+  cl_assert_equal_i(view.notice, AudioCompanionAssistantErrorDidNotCatch);
+  cl_assert_equal_i(s_response_time_state, PBL_BT_RESPONSE_TIME_MAX);
+
+  // Read once; the next visit shows the conversation without it.
+  audio_companion_assistant_screen_opened(NULL, 0);
+  audio_companion_assistant_screen_closed();
+  view = prv_view();
+  cl_assert_equal_s(view.answer, "Seven.");
+  cl_assert_equal_i(view.notice, 0);
+}
+
+void test_audio_companion__ptt_an_answered_question_lets_the_last_exchange_go(void) {
+  prv_ptt_receiver_ready(false);
+  prv_answer_one_and_hold_another();
+  const uint8_t second = prv_view().turn;
+  prv_feed_question_frames(60, second);
+  audio_companion_ptt_handle_button(BUTTON_ID_UP, false);
+  prv_feed_question_frames(TEST_PTT_TAIL_FRAMES, second);
+  AudioCompanionAssistantView before;
+  cl_assert(audio_companion_assistant_get_before(&before));
+
+  prv_answer(second, "Twelve.", NULL, 0);
+  cl_assert_equal_s(prv_view().answer, "Twelve.");
+  cl_assert(!audio_companion_assistant_get_before(&before));
+}
+
+void test_audio_companion__ptt_a_failure_is_shown_even_with_a_conversation_before(void) {
+  prv_ptt_receiver_ready(false);
+  prv_answer_one_and_hold_another();
+  const uint8_t second = prv_view().turn;
+  prv_feed_question_frames(60, second);
+  audio_companion_ptt_handle_button(BUTTON_ID_UP, false);
+  prv_feed_question_frames(TEST_PTT_TAIL_FRAMES, second);
+
+  // A failure the wearer can act on still says so, on its own screen.
+  prv_send_assistant_update(0x67, second, AudioCompanionAssistantUpdateError,
+                            AudioCompanionAssistantErrorUnreachable, NULL);
+  const AudioCompanionAssistantView view = prv_view();
+  cl_assert_equal_i(view.turn, second);
+  cl_assert_equal_i(view.phase, AudioCompanionAssistantPhaseError);
+  cl_assert_equal_i(view.error, AudioCompanionAssistantErrorUnreachable);
+}
+
 void test_audio_companion__ptt_leaving_while_still_holding_abandons_the_question(void) {
   prv_ptt_receiver_ready(false);
   audio_companion_assistant_screen_opened(NULL, 0);
@@ -3783,6 +3880,10 @@ PTT_ONLY(ptt_watch_says_it_keeps_the_conversation)
 PTT_ONLY(ptt_an_answer_while_the_screen_is_closed_is_a_notification)
 PTT_ONLY(ptt_an_answer_read_on_screen_is_not_a_notification)
 PTT_ONLY(ptt_a_failure_while_closed_is_a_notification_and_then_cleared)
+PTT_ONLY(ptt_a_hold_that_only_opened_muse_keeps_the_conversation)
+PTT_ONLY(ptt_a_question_with_no_words_gives_the_conversation_back)
+PTT_ONLY(ptt_an_answered_question_lets_the_last_exchange_go)
+PTT_ONLY(ptt_a_failure_is_shown_even_with_a_conversation_before)
 PTT_ONLY(ptt_leaving_while_still_holding_abandons_the_question)
 PTT_ONLY(ptt_an_option_is_picked_and_waits_for_its_answer)
 PTT_ONLY(ptt_a_pick_needs_the_phone)

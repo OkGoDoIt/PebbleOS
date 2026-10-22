@@ -111,6 +111,16 @@ bool audio_companion_ptt_arm(ButtonId button, AudioCompanionPttTrigger trigger) 
 }
 
 void audio_companion_ptt_commit(void) {}
+
+static bool s_have_before;
+static AudioCompanionAssistantView s_before;
+
+bool audio_companion_assistant_get_before(AudioCompanionAssistantView *out) {
+  if (s_have_before) {
+    *out = s_before;
+  }
+  return s_have_before;
+}
 static AudioCompanionAssistantMissed s_missed[2];
 static uint8_t s_missed_count;
 static int s_taken_back;
@@ -258,6 +268,7 @@ void test_muse_app__initialize(void) {
   s_picks = 0;
   s_missed_count = 0;
   s_taken_back = 0;
+  s_have_before = false;
   rtc_set_time(1760000000);
 }
 
@@ -473,4 +484,54 @@ void test_muse_app__what_came_while_away_reads_as_one_conversation(void) {
   window_set_on_screen(s_data->window, true, true);
   window_render(s_data->window, &s_ctx);
   prv_save("while_away");
+}
+
+//! Muse opened by a Quick Launch hold, on the question just begun after "how far did I walk".
+static void prv_open_on_a_new_question(void) {
+  s_before = prv_view(3, AudioCompanionAssistantPhaseDone, "how far did I walk yesterday",
+                      "You walked 6.2 km yesterday, about 8,100 steps.");
+  s_have_before = true;
+  s_view = prv_view(4, AudioCompanionAssistantPhaseListening, NULL, NULL);
+  s_view.generation = 1;
+  prv_open();
+}
+
+void test_muse_app__a_quick_launch_hold_keeps_the_conversation_above_the_question(void) {
+  prv_open_on_a_new_question();
+  cl_assert_equal_i(s_data->history_count, 1);
+  cl_assert_equal_s(s_data->history[0].answer, "You walked 6.2 km yesterday, about 8,100 steps.");
+  // Heard and thinking: the earlier exchange sits above it.
+  s_have_before = false;
+  AudioCompanionAssistantView waiting =
+      prv_view(4, AudioCompanionAssistantPhaseWaiting, "and the day before", NULL);
+  prv_show(&waiting);
+  cl_assert_equal_i(s_data->history_count, 1);
+  scroll_layer_set_content_offset(s_data->scroll, GPointZero, false);
+  window_render(s_data->window, &s_ctx);
+  prv_save("quick_launch_thinking");
+}
+
+void test_muse_app__a_hold_released_without_a_question_shows_the_conversation(void) {
+  prv_open_on_a_new_question();
+  // The service gives the earlier exchange back: it is the one on screen again, not twice.
+  s_have_before = false;
+  prv_show(&s_before);
+  cl_assert_equal_i(s_data->history_count, 0);
+  cl_assert_equal_s(prv_shown(s_data->answer), "You walked 6.2 km yesterday, about 8,100 steps.");
+  cl_assert_equal_s(prv_shown(s_data->footer), "Hold Down to reply");
+  // Already read: no tap on the wrist for it.
+  cl_assert_equal_i(s_data->answered_turn, 3);
+  prv_save("released_without_a_question");
+}
+
+void test_muse_app__a_question_with_no_words_says_so_under_the_conversation(void) {
+  prv_open_on_a_new_question();
+  s_have_before = false;
+  AudioCompanionAssistantView back = s_before;
+  back.notice = AudioCompanionAssistantErrorDidNotCatch;
+  prv_show(&back);
+  cl_assert_equal_i(s_data->history_count, 0);
+  cl_assert_equal_s(prv_shown(s_data->answer), "You walked 6.2 km yesterday, about 8,100 steps.");
+  cl_assert_equal_s(prv_shown(s_data->footer), "Didn't catch that. Hold Down to try again.");
+  prv_save("did_not_catch");
 }
