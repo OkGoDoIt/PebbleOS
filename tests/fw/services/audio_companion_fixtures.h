@@ -51,6 +51,13 @@ static const uint8_t s_fx_assistant_update_answer_restart[] = {
   0x74, 0x20, 0x76, 0x6f, 0x69, 0x63, 0x65, 0x20, 0x6e, 0x6f, 0x74, 0x65,
 };
 
+// The phone begins a turn of its own: an answer that came after it stopped waiting
+static const uint8_t s_fx_assistant_update_begin_late_answer[] = {
+  0x0d, 0x50, 0xc8, 0x07, 0x01, 0x1b, 0x77, 0x68, 0x61, 0x74, 0x27, 0x73,
+  0x20, 0x74, 0x68, 0x65, 0x20, 0x77, 0x65, 0x61, 0x74, 0x68, 0x65, 0x72,
+  0x20, 0x74, 0x6f, 0x6d, 0x6f, 0x72, 0x72, 0x6f, 0x77,
+};
+
 // The answer is complete
 static const uint8_t s_fx_assistant_update_done[] = {
   0x0d, 0x43, 0x07, 0x04, 0x00, 0x00,
@@ -68,6 +75,11 @@ static const uint8_t s_fx_assistant_update_heard[] = {
   0x20, 0x6c, 0x69, 0x6b, 0x65, 0x20, 0x69, 0x6e, 0x20, 0x41, 0x75, 0x73,
   0x74, 0x69, 0x6e, 0x20, 0x74, 0x68, 0x69, 0x73, 0x20, 0x61, 0x66, 0x74,
   0x65, 0x72, 0x6e, 0x6f, 0x6f, 0x6e, 0x3f,
+};
+
+// The answer's second option, shown under it and on its notification
+static const uint8_t s_fx_assistant_update_option[] = {
+  0x0d, 0x51, 0x07, 0x08, 0x01, 0x05, 0x42, 0x3a, 0x20, 0x31, 0x34,
 };
 
 // ASSISTANT_UPDATE text of 181 bytes exceeds the 180-byte limit
@@ -241,6 +253,24 @@ static const uint8_t s_fx_info_v2_after_fault[] = {
   0x02, 0x01, 0x01, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x24, 0x04, 0x07, 0x00, 0x00, 0x00, 0x10, 0x00, 0x05, 0x01,
   0xcd, 0xab, 0x00, 0x10, 0x01, 0xef, 0x00, 0x10,
+};
+
+// A moment marked with nothing recording: the watch's clock alone
+static const uint8_t s_fx_moment_mark_not_recording[] = {
+  0x4b, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x38, 0x2a, 0xa8, 0x58, 0xa0, 0x01, 0x00, 0x00,
+};
+
+// A moment marked while recording: on the stream's own clock, and the watch's
+static const uint8_t s_fx_moment_mark_recording[] = {
+  0x4b, 0x03, 0x01, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x80, 0xd6, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0xe2, 0x42, 0xa7, 0x58, 0xa0, 0x01, 0x00, 0x00,
+};
+
+// MOMENT_MARK one byte short of its 24
+static const uint8_t s_fx_moment_mark_truncated[] = {
+  0x4b, 0x03, 0x01, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x80, 0xd6, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0xe2, 0x42, 0xa7, 0x58, 0xa0, 0x01, 0x00,
 };
 
 // App gave up on the pairing
@@ -470,6 +500,11 @@ static const uint8_t s_fx_ptt_event_cancel_too_short[] = {
 // Released after 212 frames (4.24 s)
 static const uint8_t s_fx_ptt_event_end[] = {
   0x49, 0x07, 0x02, 0x01, 0xd4, 0x00, 0x00, 0x00,
+};
+
+// The wearer picked the answer's second option, on the watch or its notification
+static const uint8_t s_fx_ptt_event_pick[] = {
+  0x49, 0x07, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00,
 };
 
 // PTT_EVENT missing the last byte of max_seconds
@@ -829,9 +864,11 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "ack_ok", FixtureChannelControlOut, FixtureExpectParse, s_fx_ack_ok, 3 },
   { "assistant_update_answer", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_answer, 73 },
   { "assistant_update_answer_restart", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_answer_restart, 36 },
+  { "assistant_update_begin_late_answer", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_begin_late_answer, 33 },
   { "assistant_update_done", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_done, 6 },
   { "assistant_update_error", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_error, 6 },
   { "assistant_update_heard", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_heard, 55 },
+  { "assistant_update_option", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_option, 11 },
   { "assistant_update_too_long", FixtureChannelControlIn, FixtureExpectReject, s_fx_assistant_update_too_long, 187 },
   { "assistant_update_truncated", FixtureChannelControlIn, FixtureExpectReject, s_fx_assistant_update_truncated, 11 },
   { "assistant_update_turn_zero", FixtureChannelControlIn, FixtureExpectReject, s_fx_assistant_update_turn_zero, 8 },
@@ -858,6 +895,9 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "info_streaming", FixtureChannelInfo, FixtureExpectParse, s_fx_info_streaming, 20 },
   { "info_truncated", FixtureChannelInfo, FixtureExpectReject, s_fx_info_truncated, 12 },
   { "info_v2_after_fault", FixtureChannelInfo, FixtureExpectParse, s_fx_info_v2_after_fault, 32 },
+  { "moment_mark_not_recording", FixtureChannelControlOut, FixtureExpectParse, s_fx_moment_mark_not_recording, 24 },
+  { "moment_mark_recording", FixtureChannelControlOut, FixtureExpectParse, s_fx_moment_mark_recording, 24 },
+  { "moment_mark_truncated", FixtureChannelControlOut, FixtureExpectReject, s_fx_moment_mark_truncated, 23 },
   { "muse_setup_close_failed", FixtureChannelControlIn, FixtureExpectParse, s_fx_muse_setup_close_failed, 3 },
   { "muse_setup_close_paired", FixtureChannelControlIn, FixtureExpectParse, s_fx_muse_setup_close_paired, 3 },
   { "muse_setup_disconnect", FixtureChannelControlIn, FixtureExpectParse, s_fx_muse_setup_disconnect, 4 },
@@ -887,6 +927,7 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "ptt_audio_truncated", FixtureChannelData, FixtureExpectReject, s_fx_ptt_audio_truncated, 32 },
   { "ptt_event_cancel_too_short", FixtureChannelControlOut, FixtureExpectParse, s_fx_ptt_event_cancel_too_short, 8 },
   { "ptt_event_end", FixtureChannelControlOut, FixtureExpectParse, s_fx_ptt_event_end, 8 },
+  { "ptt_event_pick", FixtureChannelControlOut, FixtureExpectParse, s_fx_ptt_event_pick, 8 },
   { "ptt_event_short", FixtureChannelControlOut, FixtureExpectReject, s_fx_ptt_event_short, 7 },
   { "ptt_event_start", FixtureChannelControlOut, FixtureExpectParse, s_fx_ptt_event_start, 8 },
   { "receiver_health", FixtureChannelControlIn, FixtureExpectParse, s_fx_receiver_health, 8 },

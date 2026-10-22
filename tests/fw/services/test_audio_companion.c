@@ -899,6 +899,92 @@ void test_audio_companion__phone_media_query_only_reaches_a_listening_receiver(v
   cl_assert_equal_i(query->length, 1);
 }
 
+static AudioCompanionMomentMarkMsg prv_last_moment(void) {
+  const CapturedNotification *sent = prv_last_control_msg(AudioCompanionCtrlMsgIdMomentMark);
+  cl_assert(sent);
+  cl_assert_equal_i(sent->length, sizeof(AudioCompanionMomentMarkMsg));
+  AudioCompanionMomentMarkMsg msg;
+  memcpy(&msg, sent->data, sizeof(msg));
+  return msg;
+}
+
+void test_audio_companion__a_marked_moment_is_on_the_recordings_clock(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(50);
+
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkRecorded);
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg first = prv_last_moment();
+  cl_assert_equal_i(first.mark_id, 1);
+  cl_assert(first.flags & AUDIO_COMPANION_MOMENT_FLAG_RECORDING);
+  cl_assert_equal_i(first.stream_id, prv_current_stream_id());
+  cl_assert_equal_i(first.wall_ms, 1000 * 1000 + 123);
+
+  // Ten frames later, ten frames further along the stream.
+  prv_feed_frames(10);
+  audio_companion_mark_moment();
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg second = prv_last_moment();
+  cl_assert_equal_i(second.mark_id, 2);
+  cl_assert_equal_i(second.sample_index - first.sample_index,
+                    10 * AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES);
+}
+
+void test_audio_companion__a_moment_marked_while_the_phone_is_away_waits_for_it(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  s_control_count = 0;
+
+  audio_companion_mark_moment();
+  audio_companion_mark_moment();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdMomentMark));
+
+  // Back: both go, oldest first, once.
+  prv_subscribe(true, true);
+  prv_authenticate();
+  fake_system_task_callbacks_invoke_pending();
+  int marks = 0;
+  uint8_t ids[2] = {0};
+  for (uint32_t i = 0; i < s_control_count; i++) {
+    if (s_control_notifications[i].data[0] == AudioCompanionCtrlMsgIdMomentMark && marks < 2) {
+      ids[marks++] = ((const AudioCompanionMomentMarkMsg *)s_control_notifications[i].data)->mark_id;
+    }
+  }
+  cl_assert_equal_i(marks, 2);
+  cl_assert_equal_i(ids[0], 1);
+  cl_assert_equal_i(ids[1], 2);
+  s_control_count = 0;
+  prv_subscribe(true, true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdMomentMark));
+}
+
+void test_audio_companion__a_refused_mark_is_kept_for_the_next_try(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  s_notify_control_succeeds = false;
+  audio_companion_mark_moment();
+  fake_system_task_callbacks_invoke_pending();
+  s_notify_control_succeeds = true;
+  s_control_count = 0;
+  prv_subscribe(true, true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_last_moment().mark_id, 1);
+}
+
+void test_audio_companion__nothing_is_marked_without_a_receiver(void) {
+  s_auth_receiver_exists = false;
+  audio_companion_set_enabled(true);
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkNoReceiver);
+}
+
 void test_audio_companion__denies_auth_while_disabled(void) {
   prv_subscribe(true, true);
   prv_authenticate();

@@ -426,6 +426,15 @@ static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
 
+//! Moments marked on the watch and not yet sent (MOMENT_MARK), oldest first. A mark made while
+//! the receiver is away waits here; past this many the oldest goes.
+#define MOMENTS_MAX_QUEUED (8)
+static AudioCompanionMomentMarkMsg s_moments[MOMENTS_MAX_QUEUED];
+static uint8_t s_moments_count;
+static uint8_t s_moment_counter;
+static bool s_moments_flush_posted;
+static void prv_moments_post_flush_locked(void);
+
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
 // ---- Push-to-talk state (PROTOCOL.md 4.4), all guarded by s_lock ----
 
@@ -2988,6 +2997,7 @@ static void prv_handle_auth_request_locked(const AudioCompanionAuthRequest *req)
       s_stream_attached = false;
       prv_send_auth_result_locked(req->request_token, AudioCompanionAuthStatusOk, granted);
       prv_reevaluate_locked();
+      prv_moments_post_flush_locked();
       break;
     case AudioCompanionAuthEvalMismatch:
       PBL_LOG_WRN("Audio companion auth denied: receiver mismatch");
@@ -3064,6 +3074,7 @@ void audio_companion_handle_consent_response(bool granted) {
     s_stream_attached = false;  // fresh receiver session; see prv_handle_auth_request_locked
     prv_send_auth_result_locked(token, AudioCompanionAuthStatusOk, granted_version);
     prv_reevaluate_locked();
+    prv_moments_post_flush_locked();
   } else {
     prv_send_auth_result_locked(token, AudioCompanionAuthStatusInvalid, 0);
   }
@@ -3411,6 +3422,7 @@ static void prv_subscription_system_task_cb(void *data) {
   // so it fires regardless of whether the receiver subscribes before or after AUTH — iOS subscribes
   // both characteristics first, so doing it here would miss the common reconnect.
   prv_reevaluate_locked();
+  prv_moments_post_flush_locked();
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
 }
@@ -3964,6 +3976,63 @@ bool audio_companion_relay_notify_control(const uint8_t *data, size_t length) {
 }
 #endif
 
+// ---- Marked moments (PROTOCOL.md 4.6) ----
+
+//! Sends what is queued, oldest first, while the receiver takes it. Whatever it refuses stays
+//! for the next time the receiver is ready.
+static void prv_moments_flush_system_task_cb(void *data) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_moments_flush_posted = false;
+  uint8_t sent = 0;
+  while (sent < s_moments_count && s_session.authorized && s_session.control_subscribed) {
+    if (!pbl_bt_audio_companion_notify_control((const uint8_t *)&s_moments[sent],
+                                               sizeof(s_moments[sent]))) {
+      break;
+    }
+    PBL_LOG_DBG("Moment %u sent", s_moments[sent].mark_id);
+    sent++;
+  }
+  if (sent) {
+    memmove(&s_moments[0], &s_moments[sent], sizeof(s_moments[0]) * (s_moments_count - sent));
+    s_moments_count -= sent;
+  }
+  pbl_mutex_unlock(&s_lock);
+}
+
+static void prv_moments_post_flush_locked(void) {
+  if (s_moments_count == 0 || s_moments_flush_posted || !s_session.authorized ||
+      !s_session.control_subscribed) {
+    return;
+  }
+  s_moments_flush_posted = true;
+  system_task_add_callback(prv_moments_flush_system_task_cb, NULL);
+}
+
+AudioCompanionMarkResult audio_companion_mark_moment(void) {
+  if (!s_initialized) {
+    return AudioCompanionMarkNoReceiver;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (!audio_companion_auth_receiver_exists()) {
+    pbl_mutex_unlock(&s_lock);
+    return AudioCompanionMarkNoReceiver;
+  }
+  const bool recording = s_owns_mic && s_record_capture && s_stream_active;
+  s_moment_counter = (uint8_t)(s_moment_counter + 1) ? (uint8_t)(s_moment_counter + 1) : 1;
+  if (s_moments_count == MOMENTS_MAX_QUEUED) {
+    memmove(&s_moments[0], &s_moments[1], sizeof(s_moments[0]) * (MOMENTS_MAX_QUEUED - 1));
+    s_moments_count--;
+  }
+  audio_companion_protocol_build_moment_mark(
+      (uint8_t *)&s_moments[s_moments_count++], sizeof(s_moments[0]), s_moment_counter,
+      recording ? AUDIO_COMPANION_MOMENT_FLAG_RECORDING : 0, recording ? s_stream_id : 0,
+      recording ? s_next_sample_index : 0, prv_wall_clock_ms());
+  PBL_LOG_INFO("Moment %u marked%s", s_moment_counter, recording ? "" : " (not recording)");
+  prv_moments_post_flush_locked();
+  pbl_mutex_unlock(&s_lock);
+  return recording ? AudioCompanionMarkRecorded : AudioCompanionMarkNotRecording;
+}
+
 bool audio_companion_query_phone_media(void) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   // A receiver presumed gone is often just a suspended iOS app, and a control notification is
@@ -4042,6 +4111,9 @@ void audio_companion_test_reset(void) {
   memset(&s_session, 0, sizeof(s_session));
   memset(&s_consent, 0, sizeof(s_consent));
   memset(&s_enable_request, 0, sizeof(s_enable_request));
+  s_moments_count = 0;
+  s_moment_counter = 0;
+  s_moments_flush_posted = false;
   s_consent_handler = NULL;
   s_enable_handler = NULL;
   s_consent_timer = TIMER_INVALID_ID;

@@ -585,6 +585,14 @@
       ]
     },
     {
+      "id": -141,
+      "enum": "MARK_MOMENT",
+      "md_fn": "mark_moment_get_info",
+      "ifdefs": [
+        "CONFIG_SERVICE_AUDIO_COMPANION"
+      ]
+    },
+    {
       "id": -84,
       "enum": "VIBE_SCORE",
       "md_fn": "vibe_score_demo_get_info",

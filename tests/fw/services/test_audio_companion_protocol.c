@@ -570,6 +570,14 @@ void test_audio_companion_protocol__build_push_to_talk_out(void) {
                                                  AudioCompanionPttCancelTooShort, 9, 0);
   prv_assert_builder_matches("ptt_event_cancel_too_short", buf, len);
 
+  len = audio_companion_protocol_build_moment_mark(buf, sizeof(buf), 3,
+                                                  AUDIO_COMPANION_MOMENT_FLAG_RECORDING, 0x2A,
+                                                  1234560, 1788193751778ULL);
+  prv_assert_builder_matches("moment_mark_recording", buf, len);
+  len = audio_companion_protocol_build_moment_mark(buf, sizeof(buf), 4, 0, 0, 0, 1788193811000ULL);
+  prv_assert_builder_matches("moment_mark_not_recording", buf, len);
+  cl_assert_equal_i(audio_companion_protocol_build_moment_mark(buf, 23, 4, 0, 0, 0, 1), 0);
+
   len = audio_companion_protocol_build_watch_action_result(
       buf, sizeof(buf), 5, AudioCompanionWatchActionStatusDone, 1, NULL);
   prv_assert_builder_matches("watch_action_result_chosen", buf, len);

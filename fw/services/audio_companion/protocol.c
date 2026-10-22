@@ -235,6 +235,24 @@ size_t audio_companion_protocol_build_phone_media_query(uint8_t *buf, size_t buf
   return sizeof(msg);
 }
 
+size_t audio_companion_protocol_build_moment_mark(uint8_t *buf, size_t buf_size, uint8_t mark_id,
+                                                  uint8_t flags, uint32_t stream_id,
+                                                  uint64_t sample_index, uint64_t wall_ms) {
+  if (!buf || buf_size < sizeof(AudioCompanionMomentMarkMsg)) {
+    return 0;
+  }
+  const AudioCompanionMomentMarkMsg msg = {
+    .msg_id = AudioCompanionCtrlMsgIdMomentMark,
+    .mark_id = mark_id,
+    .flags = flags,
+    .stream_id = stream_id,
+    .sample_index = sample_index,
+    .wall_ms = wall_ms,
+  };
+  memcpy(buf, &msg, sizeof(msg));
+  return sizeof(msg);
+}
+
 size_t audio_companion_protocol_build_muse_setup_rx(uint8_t *buf, size_t buf_size, uint8_t seq,
                                                     uint8_t flags, const uint8_t *data,
                                                     uint8_t length) {

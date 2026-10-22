@@ -59,6 +59,7 @@ typedef enum {
   AudioCompanionCtrlMsgIdMuseSetupEvent = 0x48,
   AudioCompanionCtrlMsgIdPttEvent = 0x49,
   AudioCompanionCtrlMsgIdWatchActionResult = 0x4A,
+  AudioCompanionCtrlMsgIdMomentMark = 0x4B,
 } AudioCompanionCtrlOutMsgId;
 
 //! Watch -> phone data message ids (notifications on the Data characteristic).
@@ -535,6 +536,24 @@ typedef struct PBL_PACKED {
   uint16_t max_seconds;
 } AudioCompanionPttEventMsg;
 
+//! MOMENT_MARK flags.
+#define AUDIO_COMPANION_MOMENT_FLAG_RECORDING (1u << 0)
+
+//! The wearer marked this moment as important (PROTOCOL.md 4.6).
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
+  //! Counts marks, wrapping 255 -> 1; never 0. With `wall_ms`, names a mark sent twice.
+  uint8_t mark_id;
+  uint8_t flags;
+  uint8_t reserved;
+  //! The recording's stream at the mark, and its next sample there: the moment on the same
+  //! clock as the audio. 0 and 0 when nothing was recording.
+  uint32_t stream_id;
+  uint64_t sample_index;
+  //! The watch's clock at the mark, UTC ms.
+  uint64_t wall_ms;
+} AudioCompanionMomentMarkMsg;
+
 typedef struct PBL_PACKED {
   uint8_t msg_id;
   uint8_t turn;
@@ -731,6 +750,9 @@ size_t audio_companion_protocol_build_muse_setup_event(uint8_t *buf, size_t buf_
 size_t audio_companion_protocol_build_ptt_event(uint8_t *buf, size_t buf_size, uint8_t turn,
                                                 uint8_t event, uint8_t detail,
                                                 uint16_t frame_count, uint16_t max_seconds);
+size_t audio_companion_protocol_build_moment_mark(uint8_t *buf, size_t buf_size, uint8_t mark_id,
+                                                  uint8_t flags, uint32_t stream_id,
+                                                  uint64_t sample_index, uint64_t wall_ms);
 //! Writes only the 5-byte PTT_AUDIO header; the caller appends frame entries.
 size_t audio_companion_protocol_build_ptt_audio_header(uint8_t *buf, size_t buf_size,
                                                        uint8_t turn, uint16_t first_frame,

@@ -152,6 +152,7 @@ already on, the watch may return `ACK(ok)` immediately.
 | `0x48` | `MUSE_SETUP_EVENT` | 7 |
 | `0x49` | `PTT_EVENT` | 8 |
 | `0x4A` | `WATCH_ACTION_RESULT` | 4 |
+| `0x4B` | `MOMENT_MARK` | 24 |
 
 `AUTH_RESULT` (`0x41`): `u8 msg_id`, `u8 request_token`, `u8 status`, `u8 granted_proto_version`.
 Status: 0 ok, 1 pending-user-consent, 2 denied-mismatch, 3 denied-disabled, 4 invalid.
@@ -363,6 +364,26 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
 `u8 value`, then optionally `u8 text_length` (1–160) and that much UTF-8. `status` 1 done (timer
 started, alarm set, option chosen: `value` is its index from 0), 2 declined (the wearer backed
 out), 3 timed out, 4 failed, 5 unsupported kind. A receiver must accept the four-byte form.
+
+### 4.6 Marked moments
+
+The wearer can mark a moment as important from the watch (a Quick Launch action). Needs an
+authorized receiver; nothing is asked of it but to keep the mark.
+
+`MOMENT_MARK` (`0x4B`, watch → phone): `u8 msg_id`, `u8 mark_id` (counts marks, 1–255 then 1
+again; never 0), `u8 flags` (bit0 `RECORDING`), `u8 reserved` (0), `u32 stream_id`,
+`u64 sample_index`, `u64 wall_ms`.
+
+- `RECORDING` set: the recording was running, and `stream_id`/`sample_index` are its stream and
+  the next sample it would number, so the moment sits on the audio's own clock
+  (`start_time_ms + sample_index × 1000 / sample_rate_hz` of that stream). The audio around it
+  may arrive later, from the spool.
+- `RECORDING` clear: nothing was recording; `stream_id` and `sample_index` are 0, and only
+  `wall_ms` (the watch's clock, UTC ms, the same clock as `start_time_ms`) places the moment.
+
+A mark made while the receiver is away waits on the watch (the latest 8) and is sent when it
+is authorized and subscribed again, oldest first. The same mark may arrive twice; `mark_id`
+with `wall_ms` names it. Nothing answers it.
 
 ## 5. Data Channel
 

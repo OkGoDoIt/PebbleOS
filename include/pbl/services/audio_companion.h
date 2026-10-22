@@ -120,6 +120,20 @@ bool audio_companion_get_receiver_name(char *buf, size_t buf_size);
 //! (PHONE_MEDIA_QUERY). Its answer arrives later through music_set_phone_audio_report().
 //! @return False when no authorized receiver is listening, so no answer will come.
 bool audio_companion_query_phone_media(void);
+
+//! What marking a moment did.
+typedef enum {
+  //! Marked while recording: the moment is in the audio.
+  AudioCompanionMarkRecorded = 0,
+  //! Marked, but nothing is recording: the receiver keeps the time alone.
+  AudioCompanionMarkNotRecording,
+  //! No receiver has been set up, so there is nowhere for a mark to go.
+  AudioCompanionMarkNoReceiver,
+} AudioCompanionMarkResult;
+
+//! The wearer marked this moment as important (MOMENT_MARK). Goes to the receiver now, or is
+//! kept until it is back (the most recent few). Any task.
+AudioCompanionMarkResult audio_companion_mark_moment(void);
 //! User revoke from watch Settings: wipes identity, notifies the app, stops.
 void audio_companion_forget_receiver(void);
 
