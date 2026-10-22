@@ -2792,7 +2792,7 @@ void test_audio_companion__runlevel_setting_override(void) {
 //! Mirrored from audio_companion.c.
 #define TEST_PTT_PRE_ROLL_MAX_FRAMES (75)
 #define TEST_PTT_TAIL_FRAMES (6)
-#define TEST_PTT_TOO_SHORT_FRAMES (15)
+#define TEST_PTT_TOO_SHORT_FRAMES (40)
 #define TEST_PTT_MAX_FRAMES (AUDIO_COMPANION_PTT_MAX_SECONDS * 1000 / 20)
 
 static uint16_t s_ptt_next_frame;

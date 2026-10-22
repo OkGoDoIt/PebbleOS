@@ -455,8 +455,10 @@ typedef enum {
 //! Keep listening 120 ms past the release: the mic hands frames over a buffer late, and the last
 //! syllable is usually in it.
 #define PTT_TAIL_FRAMES (6)
-//! Under 0.3 s between the commit and the release is a change of mind, not a question.
-#define PTT_TOO_SHORT_FRAMES (15)
+//! Under 0.8 s between the commit and the release is a hold that only meant to open Muse, not a
+//! question: the screen it opened keeps the conversation it had. Holds of 0.8-0.9 s in all reached
+//! Muse as questions under the old 0.3 s; real questions run 2 s and more.
+#define PTT_TOO_SHORT_FRAMES (40)
 #define PTT_MAX_FRAMES \
   (AUDIO_COMPANION_PTT_MAX_SECONDS * 1000 / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
 //! Retry pause after the transport refused a push-to-talk notification.
