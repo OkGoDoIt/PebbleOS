@@ -194,16 +194,22 @@ void light_enable_interaction(void) {}
 
 void app_window_stack_push(Window *window, bool animated) {}
 
+static const char *s_menu_labels[6];
+static unsigned s_menu_count;
+
 ActionMenu *app_action_menu_open(ActionMenuConfig *config) {
   return NULL;
 }
 
 ActionMenuLevel *action_menu_level_create(uint16_t max_items) {
-  return NULL;
+  s_menu_count = 0;
+  return (ActionMenuLevel *)&s_menu_count;
 }
 
 ActionMenuItem *action_menu_level_add_action(ActionMenuLevel *level, const char *label,
                                              ActionMenuPerformActionCb cb, void *action_data) {
+  cl_assert(s_menu_count < 6);
+  s_menu_labels[s_menu_count++] = label;
   return NULL;
 }
 
@@ -349,6 +355,31 @@ void test_muse_app__an_answer_with_options_shows_them_as_buttons(void) {
   cl_assert(!layer_get_hidden(s_data->options));
   cl_assert_equal_s(prv_shown(s_data->footer), "Press Select to pick one\nHold Down to reply");
   prv_save("options");
+}
+
+void test_muse_app__four_alarm_choices_remain_reachable_below_long_answer(void) {
+  prv_open();
+  AudioCompanionAssistantView view = prv_view(4, AudioCompanionAssistantPhaseDone,
+      "Set a smart alarm for approximately 11.8 AM.",
+      "That time came through unclear - approximately 11.8 AM - and I don't want to set the "
+      "wrong alarm.\n\nAlso, the tool I have only sets an exact one-time alarm, no smart-wake "
+      "window.\n\nDid you mean one of these?");
+  view.option_count = 4;
+  strcpy(view.options[0], "11:48 AM");
+  strcpy(view.options[1], "11:08 AM");
+  strcpy(view.options[2], "11:18 AM");
+  strcpy(view.options[3], "11:58 AM");
+  prv_show(&view);
+  cl_assert(!layer_get_hidden(s_data->options));
+  prv_save("alarm_choices_top");
+  prv_select_click(NULL, s_data);
+  cl_assert_equal_i(s_menu_count, 4);
+  cl_assert_equal_s(s_menu_labels[2], "11:18 AM");
+  GRect options;
+  layer_get_frame(s_data->options, &options);
+  scroll_layer_set_content_offset(s_data->scroll, GPoint(0, -options.origin.y), false);
+  window_render(s_data->window, &s_ctx);
+  prv_save("alarm_choices_scrolled");
 }
 
 void test_muse_app__a_follow_up_keeps_the_last_exchange_above(void) {

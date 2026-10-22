@@ -359,6 +359,18 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
   and can take a few seconds.
 - `9 Notice`: `str text` (≤ 120). A short message from the receiver itself (not the assistant),
   shown on the watch until dismissed or for 15 s.
+- `10 Alarms`: `u8 operation` (0 list, 1 create, 2 update, 3 delete), `u8 id` (0–9),
+  `u8 hour`, `u8 minute`, `u8 smart`, `u8 enabled`. Hour/minute use 0–23 / 0–59;
+  smart/enabled use 0/1. A field of 255 preserves it on update. Create requires time,
+  smart and enabled=1, creates a one-time alarm and returns its id in result `value`.
+  Update/delete require an existing id; update preserves recurrence, sound and vibration.
+  List ignores fields and returns all alarms, one fixed-width `iHHMMsekDD\n` record each:
+  id, hour, minute, smart, enabled, native kind (0 daily, 1 weekends, 2 weekdays,
+  3 once, 4 custom), two hex digits of scheduled days (Sunday bit0). Ten records fit
+  in 110 bytes. Empty text means no alarms. Smart wake uses the native fixed 30-minute
+  window BEFORE the given time. Labels are not stored. Older firmware returns Unsupported;
+  the phone may fall back to kind 2 only for regular one-time creation.
+
 
 `WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,
 `u8 value`, then optionally `u8 text_length` (1–160) and that much UTF-8. `status` 1 done (timer

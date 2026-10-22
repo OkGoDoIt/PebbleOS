@@ -64,6 +64,13 @@ static bool s_alarm_succeeds;
 static int s_alarm_hour;
 static int s_alarm_minute;
 
+bool watch_actions_alarms(const WatchActionRequest *request, uint8_t *id,
+                          char *text, size_t text_size) {
+  *id = 2;
+  text[0] = '\0';
+  return true;
+}
+
 bool watch_actions_create_alarm(uint8_t hour, uint8_t minute) {
   s_alarm_hour = hour;
   s_alarm_minute = minute;
@@ -3981,3 +3988,21 @@ PTT_ONLY(watch_action_unknown_kind_is_reported_unsupported)
 PTT_ONLY(watch_action_choice_leaves_with_its_receiver)
 PTT_ONLY(watch_actions_need_authorization)
 #endif  // CONFIG_SERVICE_AUDIO_COMPANION_PTT
+
+void test_audio_companion__alarm_management_payload_validation(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  WatchActionRequest request;
+  uint8_t status;
+  uint8_t payload[] = {10, 1, 0, 11, 18, 1, 1};
+  cl_assert(watch_actions_parse(payload, sizeof(payload), &request, &status));
+  cl_assert_equal_i(request.alarms.smart, 1);
+  cl_assert(!watch_actions_parse(payload, sizeof(payload) - 1, &request, &status));
+  payload[3] = 24;
+  cl_assert(!watch_actions_parse(payload, sizeof(payload), &request, &status));
+  payload[1] = 2;
+  payload[3] = 255;
+  cl_assert(watch_actions_parse(payload, sizeof(payload), &request, &status));
+  payload[5] = 2;
+  cl_assert(!watch_actions_parse(payload, sizeof(payload), &request, &status));
+#endif
+}

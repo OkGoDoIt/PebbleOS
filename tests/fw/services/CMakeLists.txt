@@ -657,3 +657,8 @@ pbl_clar_test(test_audio_companion_speex
     "NB_DEC_STACK=(1500*sizeof(spx_sig_t))"
   OVERRIDES dummy_board
 )
+
+pbl_clar_test(test_audio_companion_alarms
+  SOURCES fw/services/audio_companion/watch_actions_alarms.c
+  OVERRIDES dummy_board
+)

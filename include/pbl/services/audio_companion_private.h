@@ -289,6 +289,7 @@ typedef enum {
   AudioCompanionWatchActionHealth = 8,
   //! str text (<= 120): a short message from the receiver, shown until dismissed or 15 s.
   AudioCompanionWatchActionNotice = 9,
+  AudioCompanionWatchActionAlarms = 10,
 } AudioCompanionWatchActionKind;
 
 typedef enum {

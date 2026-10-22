@@ -99,6 +99,20 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       out->alarm.minute = prv_u8(&r);
       prv_string(&r, out->alarm.label, AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES);
       return r.ok && out->alarm.hour <= 23 && out->alarm.minute <= 59;
+    case AudioCompanionWatchActionAlarms:
+      out->alarms.operation = prv_u8(&r);
+      out->alarms.id = prv_u8(&r);
+      out->alarms.hour = prv_u8(&r);
+      out->alarms.minute = prv_u8(&r);
+      out->alarms.smart = prv_u8(&r);
+      out->alarms.enabled = prv_u8(&r);
+      return r.ok && r.offset == r.length && out->alarms.operation <= 3 &&
+             out->alarms.id <= 9 && (out->alarms.hour <= 23 || out->alarms.hour == 255) &&
+             (out->alarms.minute <= 59 || out->alarms.minute == 255) &&
+             (out->alarms.smart <= 1 || out->alarms.smart == 255) &&
+             (out->alarms.enabled <= 1 || out->alarms.enabled == 255) &&
+             (out->alarms.operation != 1 || (out->alarms.hour <= 23 &&
+              out->alarms.minute <= 59 && out->alarms.smart <= 1 && out->alarms.enabled == 1));
     case AudioCompanionWatchActionChoose: {
       const uint16_t timeout = prv_u16(&r);
       out->choose.timeout_s = timeout < 10 ? 10 : (timeout > 300 ? 300 : timeout);
@@ -293,6 +307,16 @@ static void prv_run_system_task_cb(void *data) {
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           NULL);
+      kernel_free(pending);
+      return;
+    }
+    case AudioCompanionWatchActionAlarms: {
+      uint8_t id = 0;
+      char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
+      const bool ok = watch_actions_alarms(request, &id, text, sizeof(text));
+      audio_companion_send_watch_action_result(pending->action_id,
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed,
+          id, text);
       kernel_free(pending);
       return;
     }

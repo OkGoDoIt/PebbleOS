@@ -750,6 +750,26 @@ static const uint8_t s_fx_watch_action_alarm[] = {
   0x67, 0x68, 0x74,
 };
 
+// Native regular/smart alarm management: delete
+static const uint8_t s_fx_watch_action_alarms_delete[] = {
+  0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x03, 0x03, 0xff, 0xff, 0xff, 0xff,
+};
+
+// Native regular/smart alarm management: list
+static const uint8_t s_fx_watch_action_alarms_list[] = {
+  0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+};
+
+// Native regular/smart alarm management: smart_create
+static const uint8_t s_fx_watch_action_alarms_smart_create[] = {
+  0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x01, 0x00, 0x0b, 0x12, 0x01, 0x01,
+};
+
+// Native regular/smart alarm management: update
+static const uint8_t s_fx_watch_action_alarms_update[] = {
+  0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x02, 0x03, 0xff, 0x1e, 0xff, 0xff,
+};
+
 // First write of a choice whose payload is longer than one write; MORE set
 static const uint8_t s_fx_watch_action_choose_first[] = {
   0x0e, 0x4a, 0x05, 0x01, 0xb4, 0x03, 0x5a, 0x00, 0x7a, 0x57, 0x68, 0x69,
@@ -956,6 +976,10 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "stream_stop_shutdown", FixtureChannelData, FixtureExpectParse, s_fx_stream_stop_shutdown, 22 },
   { "stream_stop_user_disabled", FixtureChannelData, FixtureExpectParse, s_fx_stream_stop_user_disabled, 22 },
   { "watch_action_alarm", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarm, 15 },
+  { "watch_action_alarms_delete", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_delete, 12 },
+  { "watch_action_alarms_list", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_list, 12 },
+  { "watch_action_alarms_smart_create", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_smart_create, 12 },
+  { "watch_action_alarms_update", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_update, 12 },
   { "watch_action_choose_first", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_choose_first, 185 },
   { "watch_action_choose_last", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_choose_last, 38 },
   { "watch_action_empty", FixtureChannelControlIn, FixtureExpectReject, s_fx_watch_action_empty, 5 },

@@ -28,6 +28,14 @@ typedef struct {
       char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
     } alarm;
     struct {
+      uint8_t operation; // 0 list, 1 create, 2 update, 3 delete
+      uint8_t id;
+      uint8_t hour; // 255 preserves the field on update
+      uint8_t minute;
+      uint8_t smart;
+      uint8_t enabled;
+    } alarms;
+    struct {
       uint16_t timeout_s;
       char question[AUDIO_COMPANION_WATCH_ACTION_QUESTION_MAX_BYTES + 1];
       uint8_t count;
@@ -130,3 +138,7 @@ void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days);
 
 //! Unit tests only.
 void watch_actions_test_reset(void);
+
+//! Manage native regular/smart alarms; returns the created id and compact list text.
+bool watch_actions_alarms(const WatchActionRequest *request, uint8_t *id,
+                          char *text, size_t text_size);
