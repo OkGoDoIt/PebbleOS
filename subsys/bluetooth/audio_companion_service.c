@@ -15,7 +15,6 @@
 #include <host/ble_hs.h>
 #include <host/ble_uuid.h>
 #include <os/os_mbuf.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(bt, CONFIG_BT_LOG_LEVEL);
 

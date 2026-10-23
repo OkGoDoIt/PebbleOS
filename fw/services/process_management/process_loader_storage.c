@@ -7,6 +7,7 @@
 
 #include <pbl/crc/crc.h>
 #include <pbl/drivers/flash.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/filesystem/pfs.h>
 #include <pbl/services/process_management/app_storage.h>
@@ -14,12 +15,9 @@
 #include <kernel/util/segment.h>
 #include <process_management/pebble_process_md.h>
 #include <process_management/process_loader.h>
-#include <system/passert.h>
+#include <process_management/process_runtime.h>
 
 PBL_LOG_MODULE_DECLARE(service_process_management, CONFIG_SERVICE_PROCESS_MANAGEMENT_LOG_LEVEL);
-
-//! This comes from the generated pebble.auto.c with all the exported functions in it.
-extern const void *const g_pbl_system_tbl[];
 
 // ----------------------------------------------------------------------------------------------
 static bool prv_verify_checksum(const PebbleProcessInfo *app_info, const uint8_t *data) {
@@ -144,7 +142,8 @@ static bool prv_verify_loaded_header(const PebbleProcessInfo *info, const uint8_
   return false;
 }
 
-static bool prv_apply_relocations(const PebbleProcessInfo *info, MemorySegment *destination) {
+static bool prv_apply_relocations(PebbleTask task, const PebbleProcessInfo *info,
+                                  MemorySegment *destination) {
   // Relocation entries point to uint32_t slots in the loaded image
   // Slot values are still relative to the app image
   // Legacy SDK apps can have a non-word-aligned image size, which places the
@@ -177,7 +176,7 @@ static bool prv_apply_relocations(const PebbleProcessInfo *info, MemorySegment *
     }
 
     const uint32_t relocated_value =
-        (uint32_t)(uintptr_t)prv_offset_to_address(destination, app_relative_value);
+        process_runtime_address(task, prv_offset_to_address(destination, app_relative_value));
     memcpy(addr_to_change, &relocated_value, sizeof(relocated_value));
   }
 
@@ -201,13 +200,13 @@ static bool prv_initialize_sdk_process(PebbleTask task, const PebbleProcessInfo 
     return false;
   }
 
-  if (!prv_apply_relocations(info, destination)) {
+  if (!prv_apply_relocations(task, info, destination)) {
     return false;
   }
 
   // Write this after relocations so app relocations can't corrupt the pointer to the SDK table
   uint32_t *pbl_jump_table_addr = prv_offset_to_address(destination, info->sym_table_addr);
-  *pbl_jump_table_addr = (uint32_t)(uintptr_t)&g_pbl_system_tbl;
+  *pbl_jump_table_addr = process_runtime_sdk_table(task);
 
   return true;
 }
@@ -219,7 +218,7 @@ static bool prv_load_from_flash(const PebbleProcessMd *app_md, PebbleTask task,
   AppStorageGetAppInfoResult result;
   AppInstallId app_id = process_metadata_get_code_bank_num(app_md);
 
-  result = app_storage_get_process_info(&info, NULL, app_id, task);
+  result = app_storage_get_process_info(&info, nullptr, app_id, task);
 
   if (result != GET_APP_INFO_SUCCESS) {
     // Failed to load the app out of flash, this function will have already printed an error.
@@ -283,12 +282,12 @@ void *process_loader_load(const PebbleProcessMd *app_md, PebbleTask task,
                           MemorySegment *destination) {
   if (app_md->process_storage == ProcessStorageFlash) {
     if (!prv_load_from_flash(app_md, task, destination)) {
-      return NULL;
+      return nullptr;
     }
   } else if (app_md->process_storage == ProcessStorageResource) {
     PebbleProcessMdResource *res_app_md = (PebbleProcessMdResource *)app_md;
     if (!prv_load_from_resource(res_app_md, task, destination)) {
-      return NULL;
+      return nullptr;
     }
   }
 
@@ -299,8 +298,8 @@ void *process_loader_load(const PebbleProcessMd *app_md, PebbleTask task,
   size_t loaded_size = process_metadata_get_size_bytes(app_md);
   if (loaded_size) {
     void *main_func = prv_offset_to_address(destination, (uintptr_t)app_md->main_func);
-    if (!memory_segment_split(destination, NULL, loaded_size)) {
-      return NULL;
+    if (!memory_segment_split(destination, nullptr, loaded_size)) {
+      return nullptr;
     }
     // Set the THUMB bit on the function pointer.
     return (void *)((uintptr_t)main_func | 1);

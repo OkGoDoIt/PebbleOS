@@ -1,7 +1,8 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/activity/activity_algorithm.h>
 #include <pbl/services/activity/activity_private.h>
@@ -11,6 +12,7 @@
 #include <pbl/services/data_logging/data_logging_service.h>
 #include <pbl/services/filesystem/pfs.h>
 #include <pbl/services/light.h>
+#include <pbl/services/light_level.h>
 #include <pbl/services/settings/settings_file.h>
 #include <pbl/services/system_task.h>
 #include <pbl/services/time.h>
@@ -23,7 +25,6 @@
 #include <applib/accel_service.h>
 #include <applib/data_logging.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_activity, CONFIG_SERVICE_ACTIVITY_LOG_LEVEL);
 
@@ -79,7 +80,7 @@ typedef struct {
   struct pbl_shared_cbuf_client dls_minute_data_client;
   AlgMinuteRecord cbuf_record; // space for tmp record here to decrease stack requirements
 } AlgState;
-static AlgState *s_alg_state = NULL;
+static AlgState *s_alg_state = nullptr;
 
 // ----------------------------------------------------------------------------------------------
 static bool prv_lock(void) {
@@ -88,7 +89,7 @@ static bool prv_lock(void) {
     PBL_LOG_ERR("Trying to use the activity algorithm but it hasn't been initialized");
     return false;
 #else
-    WTF;
+    pbl_panic();
 #endif
   }
   pbl_mutex_lock(&s_alg_state->mutex, PBL_FOREVER);
@@ -101,12 +102,12 @@ static void prv_unlock(void) {
 
 // ----------------------------------------------------------------------------------------------
 // Open the minute data settings file and malloc space for the file struct
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 static PBL_NOINLINE SettingsFile *prv_minute_data_file_open(void) {
   SettingsFile *file = kernel_malloc_check(sizeof(SettingsFile));
   if (settings_file_open(file, ALG_MINUTE_DATA_FILE_NAME, ALG_MINUTE_DATA_FILE_LEN) != S_SUCCESS) {
     PBL_LOG_ERR("No minute data file");
-    return NULL;
+    return nullptr;
   }
   return file;
 }
@@ -149,7 +150,7 @@ static void prv_create_activity_session_cb(void *context, KAlgActivityType kalg_
       activity = ActivitySessionType_Sleep;
       break;
     case KAlgActivityTypeCount:
-      WTF;
+      pbl_panic();
       break;
   }
   PBL_ASSERTN(activity != ActivitySessionTypeCount);
@@ -256,7 +257,7 @@ bool activity_algorithm_dump_minute_data_to_log(void) {
   }
 
   bool success = false;
-  SettingsFile *file = NULL;
+  SettingsFile *file = nullptr;
 
   // Open the minute data file
   file = prv_minute_data_file_open();
@@ -339,10 +340,10 @@ static SettingsFile *prv_validate_and_trim_minute_file(SettingsFile *file, uint1
   s_alg_state->num_minute_records = 0;
 
   // Open settings file containing our minute data
-  if (file == NULL) {
+  if (file == nullptr) {
     need_close = true;
     file = prv_minute_data_file_open();
-    if (file == NULL) {
+    if (file == nullptr) {
       goto exit;
     }
   }
@@ -376,7 +377,7 @@ static SettingsFile *prv_validate_and_trim_minute_file(SettingsFile *file, uint1
 exit:
   if (file && (need_close || nuke_file)) {
     prv_minute_data_file_close(file);
-    file = NULL;
+    file = nullptr;
   }
 
   if (nuke_file) {
@@ -400,7 +401,7 @@ static void prv_init_minute_record(AlgMinuteRecordHdr *hdr, time_t utc_sec, bool
 }
 
 // -------------------------------------------------------------------------------------
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 static void PBL_NOINLINE prv_set_file_minute_record_entry(AlgMinuteFileRecord *file_record,
                                                           AlgMinuteDLSSample *data,
                                                           uint16_t sample_idx, time_t sample_utc,
@@ -466,7 +467,7 @@ exit:
 // -------------------------------------------------------------------------------------
 static DataLoggingSession *prv_get_dls_minute_session(void) {
   // Open up the data logging session if we don't have one
-  if (s_alg_state->dls_session == NULL) {
+  if (s_alg_state->dls_session == nullptr) {
     // We don't need to be buffered since we are logging from the KernelBG task and this
     // saves having to allocate another buffer from the kernel heap.
     const bool buffered = false;
@@ -480,14 +481,14 @@ static DataLoggingSession *prv_get_dls_minute_session(void) {
       // times because each time you reboot, you get new sessions created and reach the limit
       // of the max # of sessions allowed.
       PBL_LOG_WRN("Error creating activity logging session");
-      return NULL;
+      return nullptr;
     }
   }
   return s_alg_state->dls_session;
 }
 
 // -------------------------------------------------------------------------------------
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 static void PBL_NOINLINE prv_set_dls_minute_record_entry(AlgMinuteDLSRecord *dls_record,
                                                          AlgMinuteDLSSample *data,
                                                          uint16_t sample_idx, time_t sample_utc,
@@ -518,7 +519,7 @@ static void PBL_NOINLINE prv_set_dls_minute_record_entry(AlgMinuteDLSRecord *dls
 // Prepare a minute record for writing. Either file_record or dls_record should be non-NULL,
 // never both.
 // Returns true if we have enough data to prepare a record, false if not enough data.
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 static bool PBL_NOINLINE prv_prepare_minute_data(uint16_t uncertain_m, time_t sleep_start_utc,
                                                  uint16_t sleep_len_m,
                                                  AlgMinuteFileRecord *file_record,
@@ -581,9 +582,9 @@ static bool PBL_NOINLINE prv_prepare_minute_data(uint16_t uncertain_m, time_t sl
 static void prv_send_minute_data(uint16_t uncertain_m, time_t sleep_start_utc, uint16_t sleep_len_m,
                                  bool to_file, bool force_send) {
   // If writing to DLS, make sure we can open up the session we need first
-  DataLoggingSession *dls_session = NULL;
-  AlgMinuteFileRecord *file_record = NULL;
-  AlgMinuteDLSRecord *dls_record = NULL;
+  DataLoggingSession *dls_session = nullptr;
+  AlgMinuteFileRecord *file_record = nullptr;
+  AlgMinuteDLSRecord *dls_record = nullptr;
 
   if (to_file) {
     file_record = &s_alg_state->file_record;
@@ -600,7 +601,7 @@ static void prv_send_minute_data(uint16_t uncertain_m, time_t sleep_start_utc, u
   // While we have whole minute records available for sending, send them.
   while (prv_prepare_minute_data(uncertain_m, sleep_start_utc, sleep_len_m, file_record, dls_record,
                                  force_send)) {
-    PBL_ASSERTN((file_record == NULL) != (dls_record == NULL));
+    PBL_ASSERTN((file_record == nullptr) != (dls_record == nullptr));
     if (file_record) {
       prv_write_minute_file_record(file_record);
     }
@@ -608,7 +609,6 @@ static void prv_send_minute_data(uint16_t uncertain_m, time_t sleep_start_utc, u
     if (dls_record) {
       // Handle writing the record out to data logging
       DataLoggingResult result = dls_log(dls_session, dls_record, 1);
-      // PBL-43622: Will revert later
       PBL_LOG_DBG("Logging %" PRIu8 " MLD Records, First UTC: %" PRIu32,
                   dls_record->hdr.num_samples, dls_record->hdr.time_utc);
       if (result != DATA_LOGGING_SUCCESS) {
@@ -703,7 +703,7 @@ void activity_algorithm_post_process_sleep_sessions(uint16_t num_input_sessions,
   // Now, go through and fix up the labels on the sleep sessions that should be categorized as
   // naps
   ActivitySession *session = sessions;
-  ActivitySession *most_recent_nap_session = NULL;
+  ActivitySession *most_recent_nap_session = nullptr;
   for (unsigned i = 0; i < num_input_sessions; i++, session++) {
     const unsigned start_minute = time_util_get_minute_of_day(session->start_utc);
     const time_t end_utc = session->start_utc + (session->length_min * PBL_SEC_PER_MIN);
@@ -747,7 +747,7 @@ void activity_algorithm_post_process_sleep_sessions(uint16_t num_input_sessions,
     // always follow the container session that they belong to. This is assumption is valid given
     // the way that the algorithm identifies sleep sessions.
     if (session->type == ActivitySessionType_RestfulSleep) {
-      if (most_recent_nap_session == NULL) {
+      if (most_recent_nap_session == nullptr) {
         continue;
       }
       if ((session->start_utc < most_recent_nap_session->start_utc) ||
@@ -797,7 +797,7 @@ bool activity_algorithm_init(AccelSamplingRate *sampling_rate) {
   pbl_shared_cbuf_add_client(&s_alg_state->minute_data_cbuf, &s_alg_state->dls_minute_data_client);
 
   // Init the algorithm state
-  kalg_init(k_state, NULL);
+  kalg_init(k_state, nullptr);
 
   // Count # of records in minute file
   uint32_t num_records;
@@ -845,7 +845,7 @@ bool activity_algorithm_deinit(void) {
   kernel_free(s_alg_state->k_state);
 
   kernel_free(s_alg_state);
-  s_alg_state = NULL;
+  s_alg_state = nullptr;
   return true;
 }
 
@@ -877,7 +877,7 @@ void activity_algorithm_handle_accel(AccelRawData *data, uint32_t num_samples,
 }
 
 // ------------------------------------------------------------------------------------
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 // Returns distance we traveled in the last minute, in mm.
 static uint32_t PBL_NOINLINE prv_fill_minute_record(time_t utc_sec, AlgMinuteDLSSample *m_rec) {
   uint16_t vmc;
@@ -892,7 +892,7 @@ static uint32_t PBL_NOINLINE prv_fill_minute_record(time_t utc_sec, AlgMinuteDLS
   // Scale the reading into the 8-bit light field; saturate rather than wrap so a
   // sensor whose range exceeds the field doesn't alias bright light down to
   // "dark". The light service value is screen-compensated and in lux, matching
-  // the domain ambient_light_level_to_enum() expects when reading back.
+  // the domain light_level_to_enum() expects when reading back.
   const uint32_t light_level = light_get_ambient_lux();
   m_rec->base.light = MIN(ROUND(light_level, ALG_RAW_LIGHT_SENSOR_DIVIDE_BY), UINT8_MAX);
 
@@ -965,7 +965,7 @@ static void prv_activity_update_states(time_t utc_sec, AlgMinuteRecord *record_o
   kalg_activities_update(s_alg_state->k_state, utc_sec, m_rec->base.steps, m_rec->base.vmc,
                          m_rec->base.orientation, not_worn, m_rec->resting_calories,
                          m_rec->active_calories, minute_distance_mm, shutting_down,
-                         prv_create_activity_session_cb, NULL);
+                         prv_create_activity_session_cb, nullptr);
 }
 
 // ------------------------------------------------------------------------------------
@@ -1061,6 +1061,8 @@ void activity_algorithm_activity_hrm_set_paused(bool paused) {
 // This structure contains the context used by the activity_algorithm_get_minute_history() call
 typedef struct {
   HealthMinuteData *minute_data;
+  //! When set, only heart rates are written here instead of minute_data, indexed from utc_start
+  uint8_t *heart_rate_bpm;
   uint32_t array_size;
 
   uint32_t oldest_key;
@@ -1109,9 +1111,14 @@ static bool prv_insert_health_minute_record(AlgReadMinutesContext *context, time
   }
   context->last_record_idx_written = dst_index;
 
+  if (context->heart_rate_bpm) {
+    context->heart_rate_bpm[dst_index] = heart_rate_bpm;
+    return false;
+  }
+
   // Put it in
   uint32_t raw_light = base_fields->light * ALG_RAW_LIGHT_SENSOR_DIVIDE_BY;
-  AmbientLightLevel health_light_level = ambient_light_level_to_enum(raw_light);
+  AmbientLightLevel health_light_level = light_level_to_enum(raw_light);
   HealthMinuteData record = {
     .steps = base_fields->steps,
     .orientation = base_fields->orientation,
@@ -1211,60 +1218,59 @@ exit:
 }
 
 // -------------------------------------------------------------------------------
-bool activity_algorithm_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_records,
-                                           time_t *utc_start) {
+// Read the minute data file, then the minutes still in RAM, into the context's output in a
+// single pass. The context only needs its output fields and utc_start set.
+static bool prv_read_minutes(AlgReadMinutesContext *context, time_t oldest_requested_utc) {
   if (!prv_lock()) {
     return false;
   }
 
-  bool success = true;
-  SettingsFile *file = NULL;
-  uint32_t array_size = *num_records;
-
-  // Open the minute data file
-  file = prv_minute_data_file_open();
+  bool success = false;
+  SettingsFile *file = prv_minute_data_file_open();
   if (!file) {
-    success = false;
     goto exit;
   }
 
-  // Init for missing records
-  memset(minute_data, 0xFF, array_size * sizeof(HealthMinuteData));
-
   // Figure out the lowest key value for for chunks that go into this buffer
-  time_t utc_now = rtc_get_time();
+  const time_t utc_now = rtc_get_time();
   const time_t oldest_possible =
       utc_now - ALG_MINUTE_FILE_MAX_ENTRIES * ALG_MINUTES_PER_FILE_RECORD * PBL_SEC_PER_MIN;
-  time_t oldest_requested_utc = *utc_start;
   oldest_requested_utc = MAX(oldest_possible, oldest_requested_utc);
 
-  // Create the context
-  AlgReadMinutesContext context = (AlgReadMinutesContext){
-    .minute_data = minute_data,
-    .array_size = array_size,
-    .oldest_key = prv_minute_file_get_settings_key(oldest_requested_utc) - 1,
-    .newest_key = prv_minute_file_get_settings_key(utc_now) + 1,
-    .utc_start = 0,
-    .oldest_requested_utc = oldest_requested_utc,
-    .last_record_idx_written = -1,
-  };
+  context->oldest_key = prv_minute_file_get_settings_key(oldest_requested_utc) - 1;
+  context->newest_key = prv_minute_file_get_settings_key(utc_now) + 1;
+  context->oldest_requested_utc = oldest_requested_utc;
+  context->last_record_idx_written = -1;
 
   // Read the minute data from flash
-  status_t status = settings_file_each(file, prv_read_minute_history_file_cb, &context);
-  if (status != S_SUCCESS) {
-    success = false;
+  if (settings_file_each(file, prv_read_minute_history_file_cb, context) != S_SUCCESS) {
     goto exit;
   }
 
   // Fill in any data we have in RAM as well
-  prv_read_minute_history_buffer(&context);
+  prv_read_minute_history_buffer(context);
+  success = true;
 
 exit:
   if (file) {
     prv_minute_data_file_close(file);
   }
   prv_unlock();
+  return success;
+}
 
+// -------------------------------------------------------------------------------
+bool activity_algorithm_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_records,
+                                           time_t *utc_start) {
+  AlgReadMinutesContext context = {
+    .minute_data = minute_data,
+    .array_size = *num_records,
+  };
+
+  // Init for missing records
+  memset(minute_data, 0xFF, *num_records * sizeof(HealthMinuteData));
+
+  const bool success = prv_read_minutes(&context, *utc_start);
   if (success) {
     // Return number of records that were written, including missing records in the middle
     *num_records = context.last_record_idx_written + 1;
@@ -1274,6 +1280,21 @@ exit:
     *utc_start = 0;
   }
   return success;
+}
+
+// -------------------------------------------------------------------------------
+bool activity_algorithm_get_minute_heart_rate(uint8_t *heart_rate_bpm, uint32_t num_minutes,
+                                              time_t utc_start) {
+  utc_start -= utc_start % PBL_SEC_PER_MIN;
+  AlgReadMinutesContext context = {
+    .heart_rate_bpm = heart_rate_bpm,
+    .array_size = num_minutes,
+    // Fixed, so minutes are indexed from the requested start rather than the first record
+    .utc_start = utc_start,
+  };
+
+  memset(heart_rate_bpm, 0, num_minutes);
+  return prv_read_minutes(&context, utc_start);
 }
 
 // -------------------------------------------------------------------------------
@@ -1295,7 +1316,7 @@ bool activity_algorithm_minute_file_info(bool compact_first, uint32_t *num_recor
     return false;
   }
   bool success = false;
-  SettingsFile *file = NULL;
+  SettingsFile *file = nullptr;
 
   file = prv_minute_data_file_open();
   if (file && compact_first) {

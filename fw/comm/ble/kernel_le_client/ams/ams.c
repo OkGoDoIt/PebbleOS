@@ -9,7 +9,9 @@
 #include <string.h>
 
 #include <pbl/btutil/bt_device.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/music_internal.h>
 #include <pbl/util/units.h>
@@ -22,8 +24,8 @@
 #include <comm/bt_lock.h>
 #include <kernel/event_loop.h>
 #include <kernel/pbl_malloc.h>
+#include <kernel/pebble_tasks.h>
 #include <system/hexdump.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(bt, CONFIG_BT_LOG_LEVEL);
 
@@ -252,11 +254,11 @@ static void prv_register_next_entity(void *unused) {
   uint8_t cmd_length = 0;
   const uint8_t *cmd_value = prv_get_registration_cmd_for_entity(entity_id, &cmd_length);
   const enum pbl_bt_errno e =
-      gatt_client_op_write(entity_update_characteristic, cmd_value, cmd_length, GAPLEClientKernel);
+      gatt_client_op_write(entity_update_characteristic, cmd_value, cmd_length);
   if (e != PBL_BT_ERRNO_OK) {
     if (e == PBL_BT_ERRNO_NOT_ENOUGH_RESOURCES) {
       // Need to wait for space to become available
-      launcher_task_add_callback(&prv_register_next_entity, NULL);
+      launcher_task_add_callback(&prv_register_next_entity, nullptr);
     } else {
       // Most likely the LE connection got busted, don't think retrying will help.
       PBL_LOG_ERR("Write failed %i", e);
@@ -360,7 +362,7 @@ static bool prv_handle_player_playback_info_value(const char *value, uint32_t va
       break;
 
     default:
-      WTF;
+      pbl_panic();
   }
   return true /* should_continue */;
 }
@@ -535,7 +537,7 @@ static void prv_handle_update(const AMSEntityUpdateNotification *update,
           return;
         case AMSTrackAttributeIDTitle:
           prv_handle_track_title_update(update, value_length);
-          // FIXME: This is a workaround. See PBL-21818
+          // New track: reset the position until the next playback info update.
           music_update_track_position(0);
           return;
         case AMSTrackAttributeIDDuration:
@@ -599,8 +601,8 @@ void ams_handle_service_discovered(pbl_bt_characteristic_t *characteristics) {
 
   const pbl_bt_characteristic_t entity_update_characteristic =
       characteristics[AMSCharacteristicEntityUpdate];
-  const enum pbl_bt_errno e = gatt_client_subscriptions_subscribe(
-      entity_update_characteristic, BLESubscriptionNotifications, GAPLEClientKernel);
+  const enum pbl_bt_errno e = gatt_client_subscriptions_subscribe(entity_update_characteristic,
+                                                                  BLESubscriptionNotifications);
   // Reject the service if subscribing fails instead of asserting (e.g. a "fake
   // AMS" without CCCD).
   if (e != PBL_BT_ERRNO_OK) {
@@ -627,7 +629,7 @@ void ams_handle_subscribe(pbl_bt_characteristic_t subscribed_characteristic,
   AMSCharacteristic characteristic_id = prv_get_id_for_characteristic(subscribed_characteristic);
   if (characteristic_id != AMSCharacteristicEntityUpdate) {
     // Only Entity Update characteristic is expected to be subscribed to
-    WTF;
+    pbl_panic();
   }
 
   if (error != PBL_BT_GATT_ERROR_SUCCESS) {
@@ -639,7 +641,7 @@ void ams_handle_subscribe(pbl_bt_characteristic_t subscribed_characteristic,
     PBL_LOG_ERR("Another music service was already connected. Aborting AMS setup.");
     return;
   }
-  prv_register_next_entity(NULL);
+  prv_register_next_entity(nullptr);
 }
 
 void ams_handle_write_response(pbl_bt_characteristic_t characteristic,
@@ -666,7 +668,7 @@ void ams_handle_write_response(pbl_bt_characteristic_t characteristic,
   }
   PBL_LOG_DBG("AMS Registered for entity_id=%u", entity_id);
   ++s_ams_client->next_entity_to_register;
-  prv_register_next_entity(NULL);
+  prv_register_next_entity(nullptr);
 }
 
 void ams_handle_read_or_notification(pbl_bt_characteristic_t characteristic, const uint8_t *value,
@@ -687,7 +689,7 @@ void ams_destroy(void) {
   prv_set_connected(false);
 
   kernel_free(s_ams_client);
-  s_ams_client = NULL;
+  s_ams_client = nullptr;
 }
 
 static void prv_send_command_kernel_main_task_cb(void *data) {
@@ -697,8 +699,7 @@ static void prv_send_command_kernel_main_task_cb(void *data) {
   const AMSRemoteCommandID command_id = (uintptr_t)data;
   pbl_bt_characteristic_t characteristic =
       s_ams_client->characteristics[AMSCharacteristicRemoteCommand];
-  enum pbl_bt_errno error =
-      gatt_client_op_write(characteristic, (const uint8_t *)&command_id, 1, GAPLEClientKernel);
+  enum pbl_bt_errno error = gatt_client_op_write(characteristic, (const uint8_t *)&command_id, 1);
   const bool has_error = (error != PBL_BT_ERRNO_OK);
   if (has_error) {
     PBL_LOG_ERR("Couldn't write command: %d", error);

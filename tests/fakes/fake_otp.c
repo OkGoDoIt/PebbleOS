@@ -3,13 +3,11 @@
 
 #include "fake_otp.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <pbl/drivers/otp.h>
-
-#include <system/passert.h>
+#include <pbl/kernel/assert.h>
 
 char s_otp_buffer[512];
 uint8_t s_otp_locks[16];

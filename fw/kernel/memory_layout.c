@@ -258,8 +258,12 @@ bool memory_layout_is_pointer_in_region(const MpuRegion *region, const void *ptr
 }
 
 bool memory_layout_is_buffer_in_region(const MpuRegion *region, const void *buf, size_t length) {
+  uintptr_t buf_end;
+  if (ckd_add(&buf_end, (uintptr_t)buf, length)) {
+    return false;
+  }
   return memory_layout_is_pointer_in_region(region, buf) &&
-         memory_layout_is_pointer_in_region(region, (char *)buf + length - 1);
+         memory_layout_is_pointer_in_region(region, (void *)(buf_end - 1));
 }
 
 bool memory_layout_is_cstring_in_region(const MpuRegion *region, const char *str,
@@ -270,16 +274,10 @@ bool memory_layout_is_cstring_in_region(const MpuRegion *region, const char *str
     return false;
   }
 
-  const char *str_max_end = MIN((const char *)region_end, str + max_length);
+  size_t avail = region_end - (uintptr_t)str;
+  size_t scan_len = (max_length < avail) ? max_length + 1 : avail;
 
-  size_t str_len = strnlen(str, str_max_end - str);
-
-  if (str[str_len] != 0) {
-    // No null between here and the end of the memory region.
-    return false;
-  }
-
-  return true;
+  return strnlen(str, scan_len) < scan_len;
 }
 
 #ifdef CONFIG_SHELL
@@ -299,5 +297,5 @@ static int prv_cmd_mpu(const struct pbl_shell *sh, size_t argc, char **argv) {
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_sys, mpu, NULL, "Dump the MPU regions", prv_cmd_mpu, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys, mpu, nullptr, "Dump the MPU regions", prv_cmd_mpu, 0, 0);
 #endif

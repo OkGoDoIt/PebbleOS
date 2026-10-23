@@ -14,14 +14,17 @@
 static void selected_pwm_percentage(NumberWindow *nw, void *ctx) {
   static bool on = true;
   int8_t val = number_window_get_value(nw);
-  vibe_set_strength(val);
-  vibe_ctl(on);
+  if (on) {
+    (void)pbl_vibe_start(VIBE, val);
+  } else {
+    (void)pbl_vibe_stop(VIBE);
+  }
   on = !on;
 }
 
 static void handle_init(void) {
   NumberWindow *vibe_num_window = number_window_create(
-      "Vibe Strength", (NumberWindowCallbacks){.selected = selected_pwm_percentage}, NULL);
+      "Vibe Strength", (NumberWindowCallbacks){.selected = selected_pwm_percentage}, nullptr);
   app_state_set_user_data(vibe_num_window);
 
   uint8_t scale_granularity = 5; // 5 percent at a time

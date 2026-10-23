@@ -6,7 +6,6 @@
 #include "activity.h"
 #include "hr_util.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/kernel/compiler.h>
@@ -525,6 +524,8 @@ typedef struct {
   uint32_t phase_started_ts;
   /** A valid reading arrived during this attempt. */
   bool got_reading;
+  /** SpO2 of the last valid reading, in percent. */
+  uint8_t percent;
   /** A KernelBG callback running the state machine is queued. */
   bool update_pending;
 } ActivitySpO2ActivitySupport;

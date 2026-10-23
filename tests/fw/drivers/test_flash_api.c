@@ -6,16 +6,6 @@
 
 #include <clar.h>
 #include <fake_new_timer.h>
-#include <stubs_analytics.h>
-#include <stubs_irq.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_sem.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
-#include <stubs_worker_manager.h>
 
 void flash_api_reset_for_test(void);
 TimerID flash_api_get_erase_poll_timer_for_test(void);
@@ -166,13 +156,13 @@ status_t flash_impl_write_security_register(uint32_t addr, uint8_t val) {
 }
 
 const FlashSecurityRegisters *flash_impl_security_registers_info(void) {
-  return NULL;
+  return nullptr;
 }
 
 void flash_erase_init(void) {
 }
 
-void *callback_context = NULL;
+void *callback_context = nullptr;
 status_t callback_status = -12345;
 static void callback(void *context, status_t status) {
   callback_context = context;
@@ -180,7 +170,7 @@ static void callback(void *context, status_t status) {
 }
 
 void test_flash_api__initialize(void) {
-  callback_context = NULL;
+  callback_context = nullptr;
   callback_status = -12345;
 
   get_sector_base_calls = 0;
@@ -202,13 +192,13 @@ void test_flash_api__cleanup(void) {
 }
 
 void test_flash_api__erase_subsector_calls_right_impl_func(void) {
-  flash_erase_subsector(0, callback, NULL);
+  flash_erase_subsector(0, callback, nullptr);
   cl_assert_equal_i(erase_subsector_begin_calls, 1);
   cl_assert_equal_i(erase_sector_begin_calls, 0);
 }
 
 void test_flash_api__erase_sector_calls_right_impl_func(void) {
-  flash_erase_sector(0, callback, NULL);
+  flash_erase_sector(0, callback, nullptr);
   cl_assert_equal_i(erase_sector_begin_calls, 1);
   cl_assert_equal_i(erase_subsector_begin_calls, 0);
 }
@@ -237,7 +227,7 @@ void uncorrectable_erase_error_cb(void *context, status_t result) {
 void test_flash_api__handle_uncorrectable_erase_error(void) {
   get_erase_status_fn = return_error;
   TimerID erase_timer = flash_api_get_erase_poll_timer_for_test();
-  flash_erase_sector(0, uncorrectable_erase_error_cb, NULL);
+  flash_erase_sector(0, uncorrectable_erase_error_cb, nullptr);
   int i;
   for (i = 0; i < 20 && !uncorrectable_erase_error_cb_called; ++i) {
     cl_assert(stub_new_timer_is_scheduled(erase_timer));

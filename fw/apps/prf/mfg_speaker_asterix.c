@@ -10,10 +10,11 @@
 #include <applib/ui/text_layer.h>
 #include <applib/ui/window.h>
 #include <apps/prf/mfg_test_result.h>
+#include <board/board.h>
 #include <kernel/pbl_malloc.h>
-#include <kernel/util/sleep.h>
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
+#include <syscall/syscall.h>
 
 #define DA7212_CIF_CTRL            0x1D
 #define DA7212_DAI_CLK_MODE        0x28
@@ -43,19 +44,19 @@ static void da7212_register_write(uint8_t reg, uint8_t value) {
   uint8_t data[2] = {reg, value};
   bool ret;
 
-  i2c_use(I2C_DA7212);
+  pbl_i2c_use(I2C_DA7212);
 
-  ret = i2c_write_block(I2C_DA7212, 2, data);
+  ret = pbl_i2c_write_block(I2C_DA7212, 2, data) == 0;
   PBL_ASSERTN(ret);
 
-  i2c_release(I2C_DA7212);
+  pbl_i2c_release(I2C_DA7212);
 }
 
 static void prv_da7212_play_tone(void) {
   // CIF_CTRL: soft reset
   da7212_register_write(DA7212_CIF_CTRL, 0x80);
 
-  psleep(10);
+  sys_psleep(10);
 
   // SYSTEM_ACTIVE: wake-up
   da7212_register_write(DA7212_SYSTEM_ACTIVE, 0x01);
@@ -158,7 +159,7 @@ static void prv_handle_init(void) {
 
   prv_da7212_play_tone();
 
-  app_timer_register(5000, prv_timer_callback, NULL);
+  app_timer_register(5000, prv_timer_callback, nullptr);
 }
 
 static void s_main(void) {

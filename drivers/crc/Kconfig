@@ -4,10 +4,18 @@
 config CRC_SF32LB
     bool "SiFli SF32LB CRC unit"
     default y if SOC_SF32LB52
-    select HAL_SIFLI
+    depends on CLK_SF32LB
     select CRC_HW_ACCEL
     help
       Computes CRC-32 and the legacy checksum on the SF32LB CRC unit.
+
+config CRC_SHELL
+    bool "Shell commands"
+    default y
+    depends on SHELL && CRC_HW_ACCEL
+    help
+      The crc shell command, to check the CRC unit against the software
+      implementation and time both.
 
 if CRC_SF32LB
 

@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -61,7 +60,7 @@ typedef struct PBL_PACKED {
   EventID event_id : 8;
   EventFlags event_flags : 8;
   CategoryID category_id : 8;
-  uint8_t category_count; //<! FIXME PBL-1619: signed?
+  uint8_t category_count;
   uint32_t uid;
 } NSNotification;
 

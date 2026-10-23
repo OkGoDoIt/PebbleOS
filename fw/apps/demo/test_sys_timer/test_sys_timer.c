@@ -3,6 +3,8 @@
 
 #undef CONFIG_LOG_HASHED
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/services/regular_timer.h>
@@ -11,10 +13,9 @@
 #include <applib/app.h>
 #include <applib/ui/ui.h>
 #include <kernel/pbl_malloc.h>
-#include <kernel/util/sleep.h>
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
-#include <system/passert.h>
+#include <syscall/syscall.h>
 
 #define NUM_MAX_TIMERS 10
 
@@ -48,7 +49,7 @@ static void timer_callback(void *data) {
 static void stuck_timer_callback(void *data) {
   PBL_LOG_DBG("STT entering infinite loop in callback");
   while (true) {
-    psleep(100);
+    sys_psleep(100);
   }
 }
 
@@ -59,7 +60,7 @@ static void long_timer_callback(void *data) {
   PBL_LOG_DBG("STT long running callback %d executed", idx);
   s_app_data->fired_time[idx] = rtc_get_ticks();
 
-  psleep(250);
+  sys_psleep(250);
   return;
 }
 
@@ -114,17 +115,17 @@ static void menu_callback_prefix(int index, void *ctx) {
     }
   }
 
-  if (s_app_data->app_timer != NULL) {
+  if (s_app_data->app_timer != nullptr) {
     app_timer_cancel(s_app_data->app_timer);
     s_app_data->app_timer = 0;
   }
 
   // Cancel and delete old regular timers if present
   for (int i = 0; i < NUM_MAX_TIMERS; i++) {
-    if (s_app_data->reg_timers[i].cb != NULL) {
+    if (s_app_data->reg_timers[i].cb != nullptr) {
       PBL_LOG_DBG("STT deleting previous regular timer %d", i);
       regular_timer_remove_callback(&s_app_data->reg_timers[i]);
-      s_app_data->reg_timers[i].cb = NULL;
+      s_app_data->reg_timers[i].cb = nullptr;
     }
   }
 }
@@ -150,7 +151,7 @@ void single_shot_timer_menu_cb(int index, void *ctx) {
   PBL_LOG_DBG("STT firing in %d ms", (int)expire_ms);
 
   // Wait for it to fire
-  psleep(300);
+  sys_psleep(300);
   PBL_ASSERTN(s_app_data->fired_time[timer_idx_0] != 0);
   scheduled = new_timer_scheduled(s_app_data->timer[timer_idx_0], &expire_ms);
   PBL_ASSERTN(!scheduled);
@@ -196,7 +197,7 @@ void two_timers_menu_cb(int index, void *ctx) {
   PBL_ASSERTN(success);
 
   // Wait for them to fire
-  psleep(500);
+  sys_psleep(500);
   PBL_ASSERTN(s_app_data->fired_time[timer_idx_0] != 0);
   PBL_ASSERTN(s_app_data->fired_time[timer_idx_1] != 0);
   PBL_ASSERTN(s_app_data->fired_time[timer_idx_1] < s_app_data->fired_time[timer_idx_0]);
@@ -217,7 +218,7 @@ void deferred_delete_menu_cb(int index, void *ctx) {
   s_app_data->timer[0] = new_timer_create();
   bool success = new_timer_start(s_app_data->timer[0], 1, long_timer_callback, cb_data, zero_flags);
   PBL_ASSERTN(success);
-  psleep(50);
+  sys_psleep(50);
 
   // Stop and then delete it
   success = new_timer_stop(s_app_data->timer[0]);
@@ -237,7 +238,7 @@ void fail_if_executing_menu_cb(int index, void *ctx) {
   s_app_data->timer[0] = new_timer_create();
   bool success = new_timer_start(s_app_data->timer[0], 1, long_timer_callback, cb_data, zero_flags);
   PBL_ASSERTN(success);
-  psleep(50);
+  sys_psleep(50);
 
   // try and reschedule while it's executing
   success = new_timer_start(s_app_data->timer[0], 1, long_timer_callback, cb_data,
@@ -335,15 +336,15 @@ void reg_timer_delete_then_add_from_cb_menu_cb(int index, void *ctx) {
 
   // Wait for timer to run at least twice
   PBL_LOG_DBG("waiting for callback to run 2 times");
-  psleep(2200);
+  sys_psleep(2200);
 
   PBL_ASSERT(s_reg_timer_3_callback_count >= 2, "Callback didn't run at least twice");
 }
 
 // =================================================================================
-void croak_menu_cb(int index, void *ctx) {
+void panic_menu_cb(int index, void *ctx) {
   menu_callback_prefix(index, ctx);
-  PBL_CROAK("DIE!");
+  pbl_panic("DIE!");
 }
 
 // =================================================================================
@@ -364,7 +365,7 @@ static void prv_window_load(Window *window) {
     {.title = "RT: sch 1 min from cb", .callback = reg_timer_schedule_1min_from_cb_menu_cb},
     {.title = "RT: delete from cb", .callback = reg_timer_delete_from_cb_menu_cb},
     {.title = "RT: delete+add from cb", .callback = reg_timer_delete_then_add_from_cb_menu_cb},
-    {.title = "croak", .callback = croak_menu_cb}
+    {.title = "panic", .callback = panic_menu_cb}
   };
   static const SimpleMenuSection sections[] = {
     {.items = menu_items, .num_items = ARRAY_LENGTH(menu_items)}
@@ -374,7 +375,7 @@ static void prv_window_load(Window *window) {
   GRect bounds = window_layer->bounds;
 
   data->menu_layer =
-      simple_menu_layer_create(bounds, data->window, sections, ARRAY_LENGTH(sections), NULL);
+      simple_menu_layer_create(bounds, data->window, sections, ARRAY_LENGTH(sections), nullptr);
   layer_add_child(window_layer, simple_menu_layer_get_layer(data->menu_layer));
 }
 
@@ -391,7 +392,7 @@ static void handle_init(void) {
   s_app_data = data;
 
   data->window = window_create();
-  if (data->window == NULL) {
+  if (data->window == nullptr) {
     return;
   }
   window_init(data->window, "");

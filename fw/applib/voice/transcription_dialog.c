@@ -3,6 +3,8 @@
 
 #include "transcription_dialog.h"
 
+#include <pbl/kernel/assert.h>
+
 #include <applib/applib_malloc.auto.h>
 #include <applib/graphics/gtypes.h>
 #include <applib/graphics/utf8.h>
@@ -12,7 +14,6 @@
 #include <kernel/ui/kernel_ui.h>
 #include <resource/resource_ids.auto.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 #define SCROLL_ANIMATION_DURATION (300)
 #define POP_WINDOW_DELAY          (400)
@@ -110,7 +111,7 @@ static void prv_start_text_animation(TranscriptionDialog *transcription_dialog) 
   }
 
   transcription_dialog->animation =
-      property_animation_create(&animated_text_len, transcription_dialog, NULL, NULL);
+      property_animation_create(&animated_text_len, transcription_dialog, nullptr, nullptr);
   if (!transcription_dialog->animation) {
     return;
   }
@@ -142,7 +143,7 @@ static void prv_transcription_dialog_unload(void *context) {
   TranscriptionDialog *transcription_dialog = context;
   if (transcription_dialog->pop_timer) {
     app_timer_cancel(transcription_dialog->pop_timer);
-    transcription_dialog->pop_timer = NULL;
+    transcription_dialog->pop_timer = nullptr;
   }
   prv_stop_text_animation(transcription_dialog);
 }
@@ -160,7 +161,7 @@ static void prv_transcription_dialog_load(void *context) {
 
 static void prv_transcription_dialog_select_cb(void *context) {
   TranscriptionDialog *transcription_dialog = context;
-  transcription_dialog->pop_timer = NULL;
+  transcription_dialog->pop_timer = nullptr;
   if (transcription_dialog->keep_alive_on_select) {
     action_bar_layer_clear_icon(&transcription_dialog->e_dialog.action_bar, BUTTON_ID_SELECT);
   } else {
@@ -236,7 +237,7 @@ void transcription_dialog_keep_alive_on_select(TranscriptionDialog *transcriptio
 TranscriptionDialog *transcription_dialog_create(void) {
   TranscriptionDialog *transcription_dialog = applib_type_malloc(TranscriptionDialog);
   if (!transcription_dialog) {
-    return NULL;
+    return nullptr;
   }
 
   transcription_dialog_init(transcription_dialog);

@@ -5,6 +5,7 @@
 
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/activity/activity.h>
 #include <pbl/services/alarms/alarm.h>
 #include <pbl/services/i18n/i18n.h>
@@ -20,7 +21,6 @@
 #include <kernel/pbl_malloc.h>
 #include <popups/health_tracking_ui.h>
 #include <shell/prefs.h>
-#include <system/passert.h>
 
 typedef struct {
   OptionMenu *alarm_type_menu;
@@ -169,7 +169,7 @@ static void prv_time_picker_window_appear(Window *window) {
     .label = i18n_get(label, data),
     .range = {
       .update = true,
-      .text = is_smart ? i18n_get(range_text, data) : NULL,
+      .text = is_smart ? i18n_get(range_text, data) : nullptr,
       .duration_m = SMART_ALARM_RANGE_S / PBL_SEC_PER_MIN,
       .enabled = is_smart,
     },
@@ -231,7 +231,7 @@ static void prv_setup_time_picker_window(AlarmEditorData *data) {
 static void prv_type_menu_unload(OptionMenu *option_menu, void *context) {
   AlarmEditorData *data = settings_option_menu_get_context(context);
   prv_call_complete_cancelled_if_no_alarm(data);
-  data->alarm_type_menu = NULL;
+  data->alarm_type_menu = nullptr;
 }
 
 static void prv_type_menu_select(OptionMenu *option_menu, int selection, void *context) {

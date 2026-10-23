@@ -3,8 +3,6 @@
 
 #include <pbl/services/voice/transcription.h>
 
-#include <system/passert.h>
-
 // Check that there are no null terminators or special characters in the word
 static bool prv_validate_word(utf8_t *str, uint16_t size) {
   for (uint16_t i = 0; i < size; i++) {
@@ -23,7 +21,7 @@ bool transcription_validate(const Transcription *transcription, size_t size) {
 
   uint8_t *end = (uint8_t *)transcription + size;
 
-  uint8_t *cursor = NULL;
+  uint8_t *cursor = nullptr;
   const TranscriptionSentence *sentence = transcription->sentences;
 
   for (size_t i = 0; i < transcription->sentence_count; i++) {
@@ -60,7 +58,7 @@ void *transcription_iterate_sentences(const TranscriptionSentence *sentence, siz
       break;
     }
 
-    sentence = transcription_iterate_words(sentence->words, sentence->word_count, NULL, NULL);
+    sentence = transcription_iterate_words(sentence->words, sentence->word_count, nullptr, nullptr);
   }
   return (void *)sentence;
 }

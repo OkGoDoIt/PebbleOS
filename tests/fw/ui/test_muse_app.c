@@ -34,32 +34,13 @@ GContext *graphics_context_get_current_context(void) {
 // Stubs
 /////////////////////
 
-#include <stubs_analytics.h>
 #include <stubs_app_install_manager.h>
 #include <stubs_app_state.h>
-#include <stubs_app_timer.h>
-#include <stubs_bootbits.h>
 #include <stubs_buffer.h>
-#include <stubs_click.h>
-#include <stubs_heap.h>
 #include <stubs_logging.h>
 #include <stubs_memory_layout.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
 #include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_process_manager.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
 #include <stubs_syscall_internal.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_unobstructed_area.h>
-#include <stubs_vibes.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
 
 AnimationProgress animation_timing_scaled(AnimationProgress time_normalized,
                                           AnimationProgress interval_start,

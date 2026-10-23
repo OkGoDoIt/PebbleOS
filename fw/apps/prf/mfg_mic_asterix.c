@@ -12,14 +12,15 @@
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/text_layer.h>
 #include <applib/ui/window.h>
+#include <board/board.h>
 #include <console/dbgserial.h>
 #include <flash_region/flash_region.h>
 #include <kernel/pbl_malloc.h>
-#include <kernel/util/sleep.h>
 #include <nrfx_i2s.h>
 #include <nrfx_pdm.h>
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
+#include <syscall/syscall.h>
 
 #define DUMP_RECORDING_DBGSERIAL 0
 #define PLAY_SINEWAVE            0
@@ -94,25 +95,25 @@ static void da7212_register_write(uint8_t reg, uint8_t value) {
   uint8_t data[2] = {reg, value};
   bool ret;
 
-  i2c_use(I2C_DA7212);
+  pbl_i2c_use(I2C_DA7212);
   PBL_LOG_DBG("Writing DA7212 register 0x%02x with value 0x%02x", reg, value);
 
-  ret = i2c_write_block(I2C_DA7212, 2, data);
+  ret = pbl_i2c_write_block(I2C_DA7212, 2, data) == 0;
   PBL_ASSERTN(ret);
 
-  i2c_release(I2C_DA7212);
+  pbl_i2c_release(I2C_DA7212);
 }
 
 static uint8_t da7212_register_read(uint8_t reg) {
   uint8_t data;
   bool ret;
 
-  i2c_use(I2C_DA7212);
+  pbl_i2c_use(I2C_DA7212);
 
-  ret = i2c_read_register(I2C_DA7212, reg, &data);
+  ret = pbl_i2c_read_register(I2C_DA7212, reg, &data) == 0;
   PBL_ASSERTN(ret);
 
-  i2c_release(I2C_DA7212);
+  pbl_i2c_release(I2C_DA7212);
 
   return data;
 }
@@ -121,7 +122,7 @@ static void prv_codec_setup(void) {
   // CIF_CTRL: soft reset
   da7212_register_write(DA7212_CIF_CTRL, 0x80);
 
-  psleep(10);
+  sys_psleep(10);
 
   // SYSTEM_ACTIVE: wake-up
   da7212_register_write(DA7212_SYSTEM_ACTIVE, 0x01);
@@ -129,7 +130,7 @@ static void prv_codec_setup(void) {
   // REFERENCES: enable master bias
   da7212_register_write(DA7212_REFERENCES, 0x08);
 
-  psleep(30);
+  sys_psleep(30);
 
   // LDO_CTRL: enable LDO, 1.05V
   da7212_register_write(DA7212_LDO_CTRL, 0x80);
@@ -154,7 +155,7 @@ static void prv_codec_setup(void) {
   da7212_register_write(0xF2, 0x03);
   da7212_register_write(0xF0, 0x00);
 
-  psleep(40);
+  sys_psleep(40);
 
   PBL_ASSERT(da7212_register_read(DA7212_PLL_STATUS) == 0x07, "DA7212 PLL not locked");
 
@@ -190,7 +191,7 @@ static void prv_codec_standby(void) {
 
 static void prv_data_handler(nrfx_i2s_buffers_t const *p_released, uint32_t status) {
 #if !PLAY_SINEWAVE
-  PBL_ASSERT(!(status == NRFX_I2S_STATUS_NEXT_BUFFERS_NEEDED && p_released == NULL),
+  PBL_ASSERT(!(status == NRFX_I2S_STATUS_NEXT_BUFFERS_NEEDED && p_released == nullptr),
              "I2S buffers re-used");
 
   if (status == NRFX_I2S_STATUS_NEXT_BUFFERS_NEEDED) {
@@ -199,7 +200,7 @@ static void prv_data_handler(nrfx_i2s_buffers_t const *p_released, uint32_t stat
     nrfx_i2s_next_buffers_set(&s_i2s, &s_i2s_bufs);
   }
 
-  if (p_released != NULL && p_released->p_tx_buffer != NULL) {
+  if (p_released != nullptr && p_released->p_tx_buffer != nullptr) {
     s_buf_wr = (int16_t *)p_released->p_tx_buffer;
     pbl_sem_give(&s_need_data);
   }
@@ -341,7 +342,7 @@ static void prv_playback(void) {
   PBL_ASSERTN(err == NRFX_SUCCESS);
 
   prv_codec_setup();
-  psleep(3000);
+  sys_psleep(3000);
   prv_codec_standby();
 
   nrfx_i2s_stop(&s_i2s);

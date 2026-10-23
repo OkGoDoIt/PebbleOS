@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: 2024 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os.path
 
 FUNCTION_PTR_FILE = "pebble.auto.c"
+# The table's entries by index, for runtimes that dispatch app calls by name.
+FUNCTION_LIST_FILE = "pebble.auto.json"
 
 
 def gen_function_pointer_array(functions):
@@ -39,3 +42,12 @@ def gen_function_pointer_array(functions):
 def make_fw_shims(functions, pbl_output_dir):
     with open(os.path.join(pbl_output_dir, "fw", FUNCTION_PTR_FILE), "w") as fptr_c:
         fptr_c.write(gen_function_pointer_array(functions))
+    with open(os.path.join(pbl_output_dir, "fw", FUNCTION_LIST_FILE), "w") as f:
+        json.dump(
+            [
+                None if fn.removed else {"name": fn.name, "impl": fn.impl_name}
+                for fn in functions
+            ],
+            f,
+            indent=0,
+        )

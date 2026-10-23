@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/timeline/notification_layout.h>
 #include <pbl/util/trig.h>
 
@@ -17,76 +18,11 @@
 // Stubs
 /////////////////////
 
-#include <stubs_action_menu.h>
-#include <stubs_alarm_layout.h>
-#include <stubs_alerts.h>
 // stubs_alerts_preferences.h intentionally omitted; see local replacements below
 #include <pbl/services/notifications/alerts_preferences_private.h>
 
-#include <stubs_analytics.h>
-#include <stubs_ancs_filtering.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_app_timer.h>
-#include <stubs_app_window_stack.h>
-#include <stubs_bluetooth_persistent_storage.h>
-#include <stubs_bootbits.h>
 #include <stubs_buffer.h>
-#include <stubs_calendar_layout.h>
-#include <stubs_click.h>
-#include <stubs_content_indicator.h>
-#include <stubs_dialog.h>
-#include <stubs_do_not_disturb.h>
-#include <stubs_event_loop.h>
-#include <stubs_event_service_client.h>
-#include <stubs_evented_timer.h>
-#include <stubs_generic_layout.h>
-#include <stubs_health_layout.h>
-#include <stubs_heap.h>
-#include <stubs_i18n.h>
 #include <stubs_imaging.h>
-#include <stubs_ios_notif_pref_db.h>
-#include <stubs_layer.h>
-#include <stubs_light.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_menu_cell_layer.h>
-#include <stubs_modal_manager.h>
-#include <stubs_mutex.h>
-#include <stubs_notification_storage.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_process_info.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_peek_layer.h>
-#include <stubs_pin_db.h>
-#include <stubs_print.h>
-#include <stubs_process_manager.h>
-#include <stubs_regular_timer.h>
-#include <stubs_reminder_db.h>
-#include <stubs_reminders.h>
-#include <stubs_serial.h>
-#include <stubs_session.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_simple_dialog.h>
-#include <stubs_sleep.h>
-#include <stubs_sports_layout.h>
-#include <stubs_syscall_internal.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_time.h>
-#include <stubs_timeline.h>
-#include <stubs_timeline_actions.h>
-#include <stubs_timeline_item.h>
-#include <stubs_timeline_layer.h>
-#include <stubs_timeline_peek.h>
-#include <stubs_vibe_client.h>
-#include <stubs_vibe_score.h>
-#include <stubs_vibe_score_info.h>
-#include <stubs_vibes.h>
-#include <stubs_weather_layout.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
 
 // Local replacements for stubs_alerts_preferences.h so the notification status
 // bar style is settable per test (a strong override cannot share a TU with the
@@ -209,7 +145,7 @@ void clock_copy_time_string(char *buffer, uint8_t buf_size) {
 LayoutLayer *prv_get_layout_handler(SwapLayer *swap_layer, int8_t rel_position, void *context) {
   // Only support one layout at a time for now
   if (rel_position != 0) {
-    return NULL;
+    return nullptr;
   }
 
   NotificationWindowData *data = context;
@@ -370,7 +306,7 @@ static void prv_render_notification_window(unsigned int num_down_scrolls) {
   for (int i = 0; i < num_down_scrolls; i++) {
     prv_attempt_scroll(swap_layer, ScrollDirectionDown, false /* is_repeating */);
     fake_animation_complete(swap_layer->animation);
-    swap_layer->animation = NULL;
+    swap_layer->animation = nullptr;
   }
 
   // Force the display of the action button
@@ -492,7 +428,7 @@ void test_notification_window__body_icon(void) {
   s_test_data = (NotificationWindowTestData){
     .icon_id = TIMELINE_RESOURCE_NOTIFICATION_GOOGLE_HANGOUTS,
     .title = "Kevin Conley",
-    .subtitle = (PreferredContentSizeDefault >= PreferredContentSizeLarge) ? "New mail!" : NULL,
+    .subtitle = (PreferredContentSizeDefault >= PreferredContentSizeLarge) ? "New mail!" : nullptr,
     .body = "❤",
     .background_color = GColorIslamicGreen,
   };
@@ -513,5 +449,18 @@ void test_notification_window__big_bold(void) {
   const unsigned int num_down_scrolls =
       PBL_IF_RECT_ELSE((PreferredContentSizeDefault < PreferredContentSizeLarge) ? 1 : 0, 0);
   prv_prepare_canvas_and_render_notification_windows(num_down_scrolls);
+  FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
+}
+
+void test_notification_window__emoji(void) {
+  s_test_data = (NotificationWindowTestData){
+    .icon_id = TIMELINE_RESOURCE_NOTIFICATION_FACEBOOK_MESSENGER,
+    .title = "Henry 😎",
+    .body = "On my way 😃👍 See you soon 🎉",
+    .show_notification_timestamp = true,
+    .timestamp = "Just now",
+    .background_color = GColorPictonBlue,
+  };
+  prv_prepare_canvas_and_render_notification_windows(0 /* num_down_scrolls */);
   FAKE_GRAPHICS_CONTEXT_CHECK_DEST_BITMAP_FILE();
 }

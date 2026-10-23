@@ -5,10 +5,10 @@
 
 #include "text.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/math.h>
@@ -17,8 +17,8 @@
 #include <applib/fonts/fonts.h>
 #include <applib/fonts/fonts_private.h>
 #include <resource/resource_ids.auto.h>
+#include <resource/system_resource.h>
 #include <syscall/syscall.h>
-#include <system/passert.h>
 #include <system/profiler.h>
 
 #define RLE4_UNITS_BIT_WIDTH (4)
@@ -148,7 +148,7 @@ static uint32_t prv_get_cache_key(const FontResource *font_res, Codepoint codepo
 static uint32_t prv_get_glyph_table_offset(FontCache *font_cache, Codepoint codepoint,
                                            const FontResource *font_res) {
   int min_idx = 0;
-  int max_idx = prv_load_offset_table(codepoint, font_cache, font_res);
+  int max_idx = prv_load_offset_table(codepoint, font_cache, font_res) - 1;
 
   uint32_t offset = 0;
   while (max_idx >= min_idx) {
@@ -314,7 +314,7 @@ static bool prv_load_glyph_bitmap(Codepoint codepoint, const FontResource *font_
   }
 
   PBL_ASSERT(glyph_size_bytes <= CACHE_GLYPH_SIZE,
-             "text codepoint %" PRIx32 " is %zu bytes, overflowing %zu max size", codepoint,
+             "text codepoint %" PRIx32 " is %zu bytes, overflowing %d max size", codepoint,
              glyph_size_bytes, CACHE_GLYPH_SIZE);
 
   if (glyph_size_bytes) {
@@ -358,7 +358,7 @@ static PBL_ALWAYS_INLINE const GlyphData *prv_get_glyph_metadata_from_spi(
   }
 
   const uint32_t cache_key = prv_get_cache_key(font_res, codepoint);
-  LineCacheData *cached = NULL;
+  LineCacheData *cached = nullptr;
 
   // If we don't have bitmap caching, we have a single glyph_buffer that contains the last used
   // glyph. If this matches the glyph we're looking for right now, that's what we want to use.
@@ -387,11 +387,11 @@ static PBL_ALWAYS_INLINE const GlyphData *prv_get_glyph_metadata_from_spi(
   if (cached) {
     if (cached->resource_offset == 0) {
       // missing character
-      return NULL;
+      return nullptr;
     }
     if (need_bitmap && !cached->is_bitmap_loaded &&
         !prv_load_glyph_bitmap(codepoint, font_res, cached)) {
-      return NULL;
+      return nullptr;
     }
     return prv_line_cache_glyph(cached);
   }
@@ -406,7 +406,7 @@ static PBL_ALWAYS_INLINE const GlyphData *prv_get_glyph_metadata_from_spi(
     PBL_LOG_DBG("offset for cp: %" PRIx32 " is NULL", codepoint);
     // Put the missing character into our cache so we don't waste time looking for it again
     keyed_circular_cache_push(&font_cache->line_cache, cache_key, data);
-    return NULL;
+    return nullptr;
   }
 
   size_t num_bytes_loaded;
@@ -436,7 +436,7 @@ static PBL_ALWAYS_INLINE const GlyphData *prv_get_glyph_metadata_from_spi(
   if (!num_bytes_loaded) {
     PBL_LOG_WRN("Failed to load glyph metadata from resources; cp: %" PRIx32 ", offset: %" PRIx32,
                 codepoint, data->resource_offset);
-    return NULL;
+    return nullptr;
   }
 
   // Copy the info into the glyph_buffer.
@@ -449,7 +449,7 @@ static PBL_ALWAYS_INLINE const GlyphData *prv_get_glyph_metadata_from_spi(
   LineCacheData *final_data = (LineCacheData *)(font_cache->glyph_buffer);
 
   if (need_bitmap && !prv_load_glyph_bitmap(codepoint, font_res, final_data)) {
-    return NULL;
+    return nullptr;
   }
 
   // We push `data`, which will be cooked data if the bitmap is stored along with it, or
@@ -515,7 +515,9 @@ static bool prv_load_font_res(ResAppNum app_num, uint32_t resource_id, FontResou
       break;
     case FONT_VERSION_3:
       // Make sure that the font header is internally consistent
-      PBL_ASSERTN(header.size == sizeof(FontMetaDataV3));
+      if (header.size != sizeof(FontMetaDataV3)) {
+        return false;
+      }
 
       // HACK alert: Copy the feature bits to the top two bits of the header version.
       if (header.features & FEATURE_OFFSET_16) {
@@ -572,12 +574,6 @@ static const FontResource *prv_font_res_for_codepoint(Codepoint codepoint,
   return font_res;
 }
 
-static void prv_resource_changed_callback(void *data) {
-  FontInfo *font_info = (FontInfo *)data;
-  font_info->loaded = false;
-  font_info->extended = false;
-}
-
 ///////////////////////////
 // Public API
 bool text_resources_init_font(ResAppNum app_num, uint32_t font_resource, uint32_t extended_resource,
@@ -587,15 +583,13 @@ bool text_resources_init_font(ResAppNum app_num, uint32_t font_resource, uint32_
       !prv_load_font_res(app_num, font_resource, &font_info->base, false /* is_extended */)) {
     return false;
   }
+  font_info->extended = false;
+  font_info->extension = (FontResource){};
   // look for an extension font and load it
   if (extended_resource) {
-    // if you want 3rd party apps to use extended fonts, you'll have to unwatch when they unload
-    // and create a syscall for resource_watch
+    // System fonts are invalidated when a pack file changes; 3rd party apps would need their own
+    // resource watch, unwatched when they unload.
     PBL_ASSERTN(app_num == SYSTEM_APP);
-    if (font_info->extension_changed_cb == NULL) {
-      font_info->extension_changed_cb =
-          resource_watch(app_num, extended_resource, prv_resource_changed_callback, font_info);
-    }
     font_info->extended = prv_load_font_res(app_num, extended_resource, &font_info->extension,
                                             true /* is_extended */);
   }
@@ -626,7 +620,7 @@ static const GlyphData *prv_get_glyph_in_font(FontCache *font_cache, Codepoint c
   // hint, not a hard partition. Skipped when the emoji font took over.
   if (!data && owner == font_info) {
     const FontResource *other = (font_res == &font_info->base)
-                                    ? (font_info->extended ? &font_info->extension : NULL)
+                                    ? (font_info->extended ? &font_info->extension : nullptr)
                                     : &font_info->base;
     if (other) {
       prv_check_font_cache(font_cache, other);
@@ -646,7 +640,7 @@ static const GlyphData *prv_get_glyph_in_font(FontCache *font_cache, Codepoint c
 // A substitute font bakes top_offset against its own baseline (== base max_height for PBF), so
 // drop its glyphs onto ours. Our own base/extension are already aligned; never shift up.
 static int16_t prv_baseline_adjust(const FontInfo *font_info, const FontInfo *owner) {
-  if (owner == NULL || owner == font_info) {
+  if (owner == nullptr || owner == font_info) {
     return 0;
   }
   return MAX(0, (int16_t)font_info->base.md.max_height - (int16_t)owner->base.md.max_height);
@@ -665,19 +659,45 @@ static void prv_set_location(GlyphLocation *location_out, const FontCache *font_
   }
 }
 
+// The font another pack extends base_resource_id with, fetched once per base and generation.
+static FontInfo *prv_get_language_font(FontCache *font_cache, uint32_t base_resource_id,
+                                       uint8_t slot) {
+  if (font_cache->language_base_id != base_resource_id) {
+    font_cache->language_base_id = base_resource_id;
+    font_cache->language_fetched = 0;
+  }
+  FontInfo *font = &font_cache->language_fonts[slot];
+  if (!(font_cache->language_fetched & (1u << slot))) {
+    font_cache->language_fetched |= 1u << slot;
+    // The entry is about to hold another font, so an offset table read from it is stale
+    if (font_cache->cached_font == &font->base || font_cache->cached_font == &font->extension) {
+      font_cache->cached_font = NULL;
+    }
+    if (!sys_font_get_language_font(base_resource_id, slot, font)) {
+      font->loaded = false;
+    }
+  }
+  return font->loaded ? font : NULL;
+}
+
 static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint,
                                       FontInfo *font_info, bool need_bitmap,
                                       GlyphLocation *location_out) {
   if (location_out) {
-    *location_out = (GlyphLocation){0};
+    *location_out = (GlyphLocation){};
+  }
+
+  if (font_cache->language_generation !=
+      __atomic_load_n(&g_font_language_generation, __ATOMIC_ACQUIRE)) {
+    text_resources_reset_cache(font_cache);
   }
 
   if (!font_info->loaded) {
     sys_font_reload_font(font_info);
   }
 
-  const FontInfo *owner = NULL;
-  const FontResource *font_res = NULL;
+  const FontInfo *owner = nullptr;
+  const FontResource *font_res = nullptr;
 
   // (a) Requested codepoint in the primary font.
   const GlyphData *data =
@@ -687,6 +707,22 @@ static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint
     return data;
   }
 
+  if (font_info->base.app_num == SYSTEM_APP) {
+    for (uint8_t slot = 0; slot < LANGUAGE_PACK_COUNT; ++slot) {
+      FontInfo *extra = prv_get_language_font(font_cache, font_info->base.resource_id, slot);
+      if (!extra) {
+        continue;
+      }
+      data = prv_get_glyph_in_font(font_cache, codepoint, extra, need_bitmap, &owner, &font_res);
+      if (data) {
+        // Pack extensions already use the primary font's baseline, even when loaded as a base.
+        prv_set_location(location_out, font_cache, font_info, owner == extra ? font_info : owner,
+                         font_res);
+        return data;
+      }
+    }
+  }
+
   // (b) Missing from the primary font: retry the SAME codepoint once against the system fallback
   //     font, which carries a wider character set. The fallback is a process-global, not per-font
   //     state, so it lives here in the renderer rather than on FontInfo (whose layout is frozen
@@ -694,8 +730,8 @@ static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint
   //     keeping text_resources independent of the fonts.c config layer. prv_get_glyph_in_font does
   //     not recurse into the fallback, so at most one extra font is consulted with no loop. Skip
   //     when the primary already is the fallback font.
-  FontInfo *fallback = sys_font_get_system_font(NULL);
-  if (fallback != NULL && fallback != font_info) {
+  FontInfo *fallback = sys_font_get_system_font(nullptr);
+  if (fallback != nullptr && fallback != font_info) {
     if (!fallback->loaded) {
       sys_font_reload_font(fallback);
     }
@@ -722,14 +758,14 @@ static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint
     }
   }
   PBL_LOG_WRN("failed to load glyph, fallback, or wildcard");
-  return NULL;
+  return nullptr;
 }
 
 int8_t text_resources_get_glyph_horiz_advance(FontCache *font_cache, const Codepoint codepoint,
                                               FontInfo *font_info) {
   // Metadata only: measuring must not pay the deep bitmap load; render pre-loads it in walk_line().
   const GlyphData *g =
-      prv_get_glyph(font_cache, codepoint, font_info, false /* need_bitmap */, NULL);
+      prv_get_glyph(font_cache, codepoint, font_info, false /* need_bitmap */, nullptr);
   if (!g) {
     return 0;
   }
@@ -741,7 +777,32 @@ const GlyphData *text_resources_get_glyph(FontCache *font_cache, const Codepoint
   return prv_get_glyph(font_cache, codepoint, font_info, true /* need_bitmap */, location_out);
 }
 
+GRect text_resources_get_glyph_frame(FontCache *font_cache, Codepoint codepoint,
+                                     FontInfo *font_info) {
+  GlyphLocation location;
+  // RLE4 glyphs only know their height once their bitmap is decoded
+  const GlyphData *glyph =
+      prv_get_glyph(font_cache, codepoint, font_info, true /* need_bitmap */, &location);
+  if (!glyph) {
+    return GRectZero;
+  }
+  return GRect(glyph->header.left_offset_px, glyph->header.top_offset_px + location.baseline_adjust,
+               glyph->header.width_px, glyph->header.height_px);
+}
+
 bool text_resources_glyph_is_color(const GlyphLocation *location) {
   return location->font_res &&
          HAS_FEATURE(location->font_res->md.version, VERSION_FIELD_FEATURE_COLOR);
+}
+
+void text_resources_reset_cache(FontCache *font_cache) {
+  memset(font_cache->cache_keys, 0, sizeof(font_cache->cache_keys));
+  memset(font_cache->cache_data, 0, sizeof(font_cache->cache_data));
+  keyed_circular_cache_init(&font_cache->line_cache, font_cache->cache_keys, font_cache->cache_data,
+                            sizeof(LineCacheData), LINE_CACHE_SIZE);
+  font_cache->glyph_buffer_key = 0;
+  font_cache->offset_table_id = -1;
+  font_cache->cached_font = NULL;
+  font_cache->language_fetched = 0;
+  font_cache->language_generation = __atomic_load_n(&g_font_language_generation, __ATOMIC_ACQUIRE);
 }

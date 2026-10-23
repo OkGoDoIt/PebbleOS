@@ -7,7 +7,7 @@
 #include <time.h>
 
 #include <pbl/drivers/accel.h>
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/als.h>
 #include <pbl/drivers/audio.h>
 #include <pbl/drivers/backlight.h>
 #include <pbl/drivers/battery.h>
@@ -44,13 +44,11 @@
 #define TEMP_MIN_MC                   15000      // 15.0C
 #define TEMP_MAX_MC                   35000      // 35.0C
 
-// Idle phase parameters
-#define IDLE_DURATION_SEC     (10 * 3600) // 10 hours
-#define IDLE_MAX_DROP_PERCENT 6           // Fail if battery drops more than this during idle
-
-// Discharge phase parameters — bring battery down to a safe shipping level.
-// Adjust here if the target ever changes.
-#define DISCHARGE_TARGET_PERCENT 65
+// Drain, settle and idle phase parameters
+#define DRAIN_TARGET_PERCENT  70
+#define SETTLE_DURATION_SEC   (2 * 3600)
+#define IDLE_DURATION_SEC     (8 * 3600)
+#define IDLE_MAX_DROP_PERCENT 3
 
 #ifdef CONFIG_SPEAKER
 static const int16_t sine_wave_4k[] = {
@@ -62,8 +60,9 @@ typedef enum {
   AgingStateWaitPlug = 0,
   AgingStateChargingAndCycling,
   AgingStateWaitUnplug,
+  AgingStateDraining,
+  AgingStateSettling,
   AgingStateIdle,
-  AgingStateDischarging,
   AgingStatePass,
   AgingStateFail,
 } AgingState;
@@ -107,8 +106,9 @@ typedef struct {
   // Set once the PMIC reports charge complete during the charge+cycle phase
   bool charge_complete;
 
-  // Battery state at start of idle phase, used for the 6% drop check
+  // Battery state at start of idle phase, used for the drop check
   uint8_t initial_percent;
+  int32_t initial_voltage_mv;
 
   char fail_reason[64];
 
@@ -139,12 +139,12 @@ static void prv_format_time(char *buffer, size_t size, uint32_t seconds) {
 static void prv_cleanup_component(AppData *data) {
 #ifdef CONFIG_MAG
   if (data->component == ComponentMag) {
-    mag_release();
+    (void)pbl_mag_set_sampling_interval(MAG, 0U, nullptr);
   }
 #endif
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
   if (data->component >= ComponentBacklightWhite && data->component <= ComponentBacklightBlue) {
-    backlight_set_color(data->saved_backlight_color);
+    (void)pbl_backlight_set_color(BACKLIGHT, data->saved_backlight_color);
     light_enable(false);
   }
 #else
@@ -160,10 +160,17 @@ static void prv_cleanup_component(AppData *data) {
 #endif
 }
 
+static void prv_drain_light_enable(AppData *data, bool enable) {
+#ifdef CONFIG_BACKLIGHT_HAS_COLOR
+  (void)pbl_backlight_set_color(BACKLIGHT, enable ? 0xFFFFFF : data->saved_backlight_color);
+#endif
+  light_enable(enable);
+}
+
 static void prv_start_component(AppData *data) {
 #ifdef CONFIG_MAG
   if (data->component == ComponentMag) {
-    mag_start_sampling();
+    (void)pbl_mag_set_sampling_interval(MAG, 200000U, nullptr);
   }
 #endif
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
@@ -218,6 +225,9 @@ static void prv_report_result(bool passed) {
 }
 
 static void prv_enter_fail(AppData *data, const char *reason) {
+  if (data->state == AgingStateDraining) {
+    prv_drain_light_enable(data, false);
+  }
   prv_cleanup_component(data);
   // Restore charging in case we disabled it during the charge+cycle phase,
   // so the device is left in a normal state on exit.
@@ -241,7 +251,7 @@ static void prv_run_component_display(AppData *data) {
   switch (data->component) {
     case ComponentAccel: {
       AccelDriverSample sample;
-      accel_peek(&sample);
+      pbl_accel_peek(ACCEL, &sample);
       comp_name = "Accel";
       sniprintf(comp_detail, sizeof(comp_detail), "X:%" PRIi16 " Y:%" PRIi16 " Z:%" PRIi16,
                 sample.x, sample.y, sample.z);
@@ -249,8 +259,8 @@ static void prv_run_component_display(AppData *data) {
     }
 #ifdef CONFIG_MAG
     case ComponentMag: {
-      MagData mag_sample;
-      mag_read_data(&mag_sample);
+      MagData mag_sample = {};
+      (void)pbl_mag_peek(MAG, &mag_sample);
       comp_name = "Mag";
       sniprintf(comp_detail, sizeof(comp_detail), "X:%" PRIi16 " Y:%" PRIi16 " Z:%" PRIi16,
                 mag_sample.x, mag_sample.y, mag_sample.z);
@@ -259,19 +269,19 @@ static void prv_run_component_display(AppData *data) {
 #endif
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
     case ComponentBacklightWhite:
-      backlight_set_color(0xD0D0D0);
+      (void)pbl_backlight_set_color(BACKLIGHT, 0xD0D0D0);
       comp_name = "BL White";
       break;
     case ComponentBacklightRed:
-      backlight_set_color(0xFF0000);
+      (void)pbl_backlight_set_color(BACKLIGHT, 0xFF0000);
       comp_name = "BL Red";
       break;
     case ComponentBacklightGreen:
-      backlight_set_color(0x00FF00);
+      (void)pbl_backlight_set_color(BACKLIGHT, 0x00FF00);
       comp_name = "BL Green";
       break;
     case ComponentBacklightBlue:
-      backlight_set_color(0x0000FF);
+      (void)pbl_backlight_set_color(BACKLIGHT, 0x0000FF);
       comp_name = "BL Blue";
       break;
 #else
@@ -290,7 +300,8 @@ static void prv_run_component_display(AppData *data) {
       break;
 #endif
     case ComponentALS: {
-      uint32_t level = ambient_light_get_light_level();
+      uint32_t level = 0U;
+      (void)pbl_als_read(ALS, &level);
       comp_name = "ALS";
       sniprintf(comp_detail, sizeof(comp_detail), "Level: %" PRIu32, level);
       break;
@@ -361,7 +372,7 @@ static void prv_run_component_display(AppData *data) {
             temp_c, temp_c_frac, comp_detail);
 }
 
-static void prv_handle_tick(struct tm *tick_time, TimeUnits units_changed) {
+static void prv_handle_tick(struct pbl_tm *tick_time, TimeUnits units_changed) {
   AppData *data = app_state_get_user_data();
 
   switch (data->state) {
@@ -448,22 +459,105 @@ static void prv_handle_tick(struct tm *tick_time, TimeUnits units_changed) {
     case AgingStateWaitUnplug: {
       BatteryChargeState cs = battery_get_charge_state();
       if (!cs.is_plugged) {
-        data->state = AgingStateIdle;
+        // Near full the fuel gauge can sit at 99-100% for hours regardless of
+        // consumption, so the idle drop is measured from a settled lower SoC.
+        data->state = AgingStateDraining;
         data->phase_elapsed_sec = 0;
-        data->initial_percent = cs.charge_percent;
-        sniprintf(data->status_string, sizeof(data->status_string), "IDLE\nStarting...");
+        prv_drain_light_enable(data, true);
+        // The remaining phases only need occasional screen refreshes, so tick
+        // once a minute to cut wake-ups and the test's own power draw.
+        tick_timer_service_subscribe(MINUTE_UNIT, prv_handle_tick);
+        sniprintf(data->status_string, sizeof(data->status_string), "DRAINING\nStarting...");
       } else {
         sniprintf(data->status_string, sizeof(data->status_string),
                   "UNPLUG WATCH\n\nCharged to %" PRIu8
                   "%%\n"
-                  "Unplug to begin\nidle test",
+                  "Unplug to begin\ndrain",
                   cs.charge_percent);
       }
       break;
     }
 
+    case AgingStateDraining: {
+      data->phase_elapsed_sec += PBL_SEC_PER_MIN;
+
+      BatteryConstants bc;
+      battery_get_constants(&bc);
+      BatteryChargeState cs = battery_get_charge_state();
+
+      if (cs.is_plugged) {
+        prv_enter_fail(data, "Plugged while\ndraining");
+        break;
+      }
+
+      if (cs.charge_percent <= DRAIN_TARGET_PERCENT) {
+        prv_drain_light_enable(data, false);
+        data->state = AgingStateSettling;
+        data->phase_elapsed_sec = 0;
+        sniprintf(data->status_string, sizeof(data->status_string), "SETTLING\nStarting...");
+        break;
+      }
+
+      char time_str[16];
+      prv_format_time(time_str, sizeof(time_str), data->phase_elapsed_sec);
+
+      int8_t temp_c = (int8_t)(bc.t_mc / 1000);
+      uint8_t temp_c_frac = ((bc.t_mc > 0 ? bc.t_mc : -bc.t_mc) % 1000) / 10;
+
+      sniprintf(data->status_string, sizeof(data->status_string),
+                "DRAINING\nTime: %s\n\n"
+                "%" PRId32 "mV %" PRIu8
+                "%%\n"
+                "%" PRId8 ".%02" PRIu8
+                "C\n\n"
+                "Target: %d%%",
+                time_str, bc.v_mv, cs.charge_percent, temp_c, temp_c_frac, DRAIN_TARGET_PERCENT);
+      break;
+    }
+
+    case AgingStateSettling: {
+      data->phase_elapsed_sec += PBL_SEC_PER_MIN;
+
+      BatteryConstants bc;
+      battery_get_constants(&bc);
+      BatteryChargeState cs = battery_get_charge_state();
+
+      if (cs.is_plugged) {
+        prv_enter_fail(data, "Plugged while\nsettling");
+        break;
+      }
+
+      // The fuel gauge keeps converging for a while after the drain, so the
+      // idle baseline is only taken once it has settled.
+      if (data->phase_elapsed_sec >= SETTLE_DURATION_SEC) {
+        data->state = AgingStateIdle;
+        data->phase_elapsed_sec = 0;
+        data->initial_percent = cs.charge_percent;
+        data->initial_voltage_mv = bc.v_mv;
+        sniprintf(data->status_string, sizeof(data->status_string), "IDLE\nStarting...");
+        break;
+      }
+
+      char time_str[16], rem_str[16];
+      prv_format_time(time_str, sizeof(time_str), data->phase_elapsed_sec);
+      prv_format_time(rem_str, sizeof(rem_str), SETTLE_DURATION_SEC - data->phase_elapsed_sec);
+
+      int8_t temp_c = (int8_t)(bc.t_mc / 1000);
+      uint8_t temp_c_frac = ((bc.t_mc > 0 ? bc.t_mc : -bc.t_mc) % 1000) / 10;
+
+      sniprintf(data->status_string, sizeof(data->status_string),
+                "SETTLING\n"
+                "Elapsed: %s\n"
+                "Remain: %s\n"
+                "%" PRId32 "mV %" PRIu8
+                "%%\n"
+                "%" PRId8 ".%02" PRIu8 "C",
+                time_str, rem_str, bc.v_mv, cs.charge_percent, temp_c, temp_c_frac);
+      break;
+    }
+
     case AgingStateIdle: {
-      data->phase_elapsed_sec++;
+      data->phase_elapsed_sec += PBL_SEC_PER_MIN;
 
       BatteryConstants bc;
       battery_get_constants(&bc);
@@ -481,6 +575,11 @@ static void prv_handle_tick(struct tm *tick_time, TimeUnits units_changed) {
 
       // Phase done?
       if (data->phase_elapsed_sec >= IDLE_DURATION_SEC) {
+        int32_t drop_mv = data->initial_voltage_mv - bc.v_mv;
+        PBL_LOG_INFO("Aging idle: SoC %u -> %u, %" PRId32 "mV -> %" PRId32 "mV",
+                     (unsigned int)data->initial_percent, (unsigned int)cs.charge_percent,
+                     data->initial_voltage_mv, bc.v_mv);
+
         if (drop > IDLE_MAX_DROP_PERCENT) {
           char reason[64];
           sniprintf(reason, sizeof(reason), "Idle drop %" PRId8 "%%\n> %d%%", drop,
@@ -488,17 +587,13 @@ static void prv_handle_tick(struct tm *tick_time, TimeUnits units_changed) {
           prv_enter_fail(data, reason);
           break;
         }
-        // Idle passed — discharge to safe shipping level with backlight on
-        data->state = AgingStateDischarging;
-        data->phase_elapsed_sec = 0;
-#ifdef CONFIG_BACKLIGHT_HAS_COLOR
-        data->saved_backlight_color = backlight_get_color();
-        backlight_set_color(0xFFFFFF);
-#endif
-        light_enable(true);
-        // The screen only needs occasional refreshes while discharging, so
-        // tick once a minute to cut wake-ups and the test's own power draw.
-        tick_timer_service_subscribe(MINUTE_UNIT, prv_handle_tick);
+
+        data->state = AgingStatePass;
+        sniprintf(data->status_string, sizeof(data->status_string),
+                  "PASS\n\nIdle drop %" PRId8 "%%\n%" PRId32 "mV\nNow %" PRIu8 "%%", drop, drop_mv,
+                  cs.charge_percent);
+        prv_report_result(true);
+        tick_timer_service_unsubscribe();
         break;
       }
 
@@ -523,54 +618,6 @@ static void prv_handle_tick(struct tm *tick_time, TimeUnits units_changed) {
       break;
     }
 
-    case AgingStateDischarging: {
-      // This phase ticks once a minute (see the Idle->Discharge transition).
-      data->phase_elapsed_sec += PBL_SEC_PER_MIN;
-
-      BatteryConstants bc;
-      battery_get_constants(&bc);
-      BatteryChargeState cs = battery_get_charge_state();
-
-      if (cs.is_plugged) {
-        light_enable(false);
-#ifdef CONFIG_BACKLIGHT_HAS_COLOR
-        backlight_set_color(data->saved_backlight_color);
-#endif
-        prv_enter_fail(data, "Plugged while\ndischarging");
-        break;
-      }
-
-      if (cs.charge_percent <= DISCHARGE_TARGET_PERCENT) {
-        light_enable(false);
-#ifdef CONFIG_BACKLIGHT_HAS_COLOR
-        backlight_set_color(data->saved_backlight_color);
-#endif
-        data->state = AgingStatePass;
-        sniprintf(data->status_string, sizeof(data->status_string),
-                  "PASS\n\nDischarged to\n%" PRIu8 "%%", cs.charge_percent);
-        prv_report_result(true);
-        tick_timer_service_unsubscribe();
-        break;
-      }
-
-      char time_str[16];
-      prv_format_time(time_str, sizeof(time_str), data->phase_elapsed_sec);
-
-      int8_t temp_c = (int8_t)(bc.t_mc / 1000);
-      uint8_t temp_c_frac = ((bc.t_mc > 0 ? bc.t_mc : -bc.t_mc) % 1000) / 10;
-
-      sniprintf(data->status_string, sizeof(data->status_string),
-                "DISCHARGING\nTime: %s\n\n"
-                "%" PRId32 "mV %" PRIu8
-                "%%\n"
-                "%" PRId8 ".%02" PRIu8
-                "C\n\n"
-                "Target: %d%%",
-                time_str, bc.v_mv, cs.charge_percent, temp_c, temp_c_frac,
-                DISCHARGE_TARGET_PERCENT);
-      break;
-    }
-
     case AgingStatePass:
     case AgingStateFail:
       return;
@@ -586,11 +633,8 @@ static void prv_handle_tick(struct tm *tick_time, TimeUnits units_changed) {
 static void prv_back_click_handler(ClickRecognizerRef recognizer, void *context) {
   AppData *data = app_state_get_user_data();
 
-  if (data->state == AgingStateDischarging) {
-    light_enable(false);
-#ifdef CONFIG_BACKLIGHT_HAS_COLOR
-    backlight_set_color(data->saved_backlight_color);
-#endif
+  if (data->state == AgingStateDraining) {
+    prv_drain_light_enable(data, false);
   } else if (data->state == AgingStateChargingAndCycling) {
     prv_cleanup_component(data);
     battery_set_charge_enable(true);
@@ -615,6 +659,9 @@ static void prv_handle_init(void) {
     .state = AgingStateWaitPlug,
 #ifdef CONFIG_SPEAKER
     .audio_playing = false,
+#endif
+#ifdef CONFIG_BACKLIGHT_HAS_COLOR
+    .saved_backlight_color = pbl_backlight_get_color(BACKLIGHT),
 #endif
   };
 

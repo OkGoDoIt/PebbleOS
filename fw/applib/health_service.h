@@ -3,12 +3,11 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 
-#include <pbl/drivers/ambient_light.h>
 #include <pbl/services/hrm/hrm_manager.h>
+#include <pbl/services/light_level.h>
 
 //! @addtogroup Foundation
 //! @{
@@ -22,8 +21,7 @@
 //!
 //! @{
 
-// convenient macros to distinguish between health and no health.
-// TODO: PBL-21978 remove redundant comments as a workaround around for SDK generator
+// Docs are duplicated in both branches so that the SDK generator picks them up.
 #if defined(PBL_HEALTH)
 
 //! Convenience macro to switch between two expressions depending on health support.

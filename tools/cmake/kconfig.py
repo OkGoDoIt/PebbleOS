@@ -73,6 +73,7 @@ def write_config_cmake(path, kconf, board, deps):
         f'set(PBL_BOARD "{board.target}")\n',
         f'set(PBL_BOARD_NAME "{board.name}")\n',
         f'set(PBL_BOARD_REVISION "{board.revision or ""}")\n',
+        f'set(PBL_BOARD_VARIANT "{board.variant or ""}")\n',
         f'set(PBL_BOARD_NORMALIZED "{board.normalized}")\n',
         'set(PBL_BOARD_RUNNERS "{}")\n'.format(";".join(board.runners)),
     ]
@@ -138,6 +139,14 @@ def main():
         kconf.load_config(revision_defconfig, replace=False)
         sources.append(revision_defconfig)
 
+    if board.variant:
+        board_variant_defconfig = os.path.join(
+            srcdir, "boards", board.name, f"defconfig.{board.variant}"
+        )
+        if os.path.exists(board_variant_defconfig):
+            kconf.load_config(board_variant_defconfig, replace=False)
+            sources.append(board_variant_defconfig)
+
     prj_conf = os.path.join(srcdir, "fw", "prj.conf")
     if os.path.exists(prj_conf):
         kconf.load_config(prj_conf, replace=False)
@@ -148,9 +157,14 @@ def main():
         kconf.load_config(variant_conf, replace=False)
         sources.append(variant_conf)
 
-    # An interactively edited configuration, kept across reconfigurations.
+    # An interactively edited configuration, kept across reconfigurations. It
+    # overrides the fragments above on purpose, like the -D overrides below.
     if args.fragment and os.path.exists(args.fragment):
+        kconf.warn_assign_override = False
+        kconf.warn_assign_redun = False
         kconf.load_config(args.fragment, replace=False)
+        kconf.warn_assign_override = True
+        kconf.warn_assign_redun = True
         sources.append(args.fragment)
 
     for override in args.override:

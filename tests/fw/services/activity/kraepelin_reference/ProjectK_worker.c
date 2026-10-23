@@ -201,7 +201,7 @@ static void summ_datalog() {
   /* >>>>> START MODIFY BLOCK HEADER, TIMESTAMP AND MOOD <<<<< */
   // add the timestamp at the top of first block and reset the mood index
   if (i_summ_blk == 0) {
-    write_time_to_array_head(time(NULL), blk_buf);
+    write_time_to_array_head(time(nullptr), blk_buf);
     blk_buf[4] = CUR_PK_VERSION;
   }
 
@@ -281,7 +281,7 @@ static void epoch_analysis() {
   }
 
   /* WEAR TIME CALCULATION, NO THRESHOLD */
-  uint32_t pim_5sec_ary[3] = {0};
+  uint32_t pim_5sec_ary[3] = {};
 
   // If this is the first epoch after an init, we need to prime the butterworth filter used
   // by prv_pim_filter to avoid getting jumps in VMC due to the discontinuity
@@ -360,7 +360,7 @@ static void epoch_analysis() {
 }
 
 #if PEBBLE_APP
-void tick_summ_datalog_second_handler(struct tm *tick_time, TimeUnits units_changed) {
+void tick_summ_datalog_second_handler(struct pbl_tm *tick_time, TimeUnits units_changed) {
   static int8_t cur_min = -1; // this tracks the current min, 0-59 values
   // this is to protect against summ_datalog() being called more than once a min
 
@@ -517,7 +517,7 @@ void ref_minute_stats(uint8_t *orientation, uint8_t *vmc) {
 }
 
 //
-// void tick_summ_datalog_handler(struct tm *tick_time, TimeUnits units_changed){
+// void tick_summ_datalog_handler(struct pbl_tm *tick_time, TimeUnits units_changed){
 //   static int8_t cur_min = -1; // this tracks the current min, 0-59 values
 //   // this is to protect against summ_datalog() being called more than once a min
 //

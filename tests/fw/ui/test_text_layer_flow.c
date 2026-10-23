@@ -9,18 +9,6 @@
 // Stubs
 /////////////////////
 #include <stubs_app_state.h>
-#include <stubs_fonts.h>
-#include <stubs_graphics.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_process_manager.h>
-#include <stubs_system_theme.h>
-#include <stubs_text_layout.h>
-#include <stubs_ui_window.h>
-#include <stubs_unobstructed_area.h>
 
 void graphics_context_set_fill_color(GContext *ctx, GColor color) {
 }
@@ -42,7 +30,7 @@ void test_text_layer_flow__initialize(void) {
   window = (Window){.layer.window = &window};
   text_layer_init(&text_layer, &GRect(10, 20, 30, 40));
   text_layer.layer.window = &window;
-  scroll_layer_is_instance_value = NULL;
+  scroll_layer_is_instance_value = nullptr;
 }
 
 void test_text_layer_flow__cleanup(void) {
@@ -54,10 +42,10 @@ void test_text_layer_flow__return_value_handling(void) {
   cl_assert(false == text_layer_calc_text_flow_paging_values(&text_layer, &origin, &page));
   layer_add_child(&window.layer, &text_layer.layer);
   cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, &origin, &page));
-  cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, &origin, NULL));
-  cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, NULL, &page));
-  cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, NULL, NULL));
-  cl_assert(false == text_layer_calc_text_flow_paging_values(NULL, NULL, NULL));
+  cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, &origin, nullptr));
+  cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, nullptr, &page));
+  cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, nullptr, nullptr));
+  cl_assert(false == text_layer_calc_text_flow_paging_values(nullptr, nullptr, nullptr));
 
   cl_assert_equal_gpoint(origin, text_layer.layer.frame.origin);
   cl_assert_equal_gpoint(page.origin, origin);
@@ -73,7 +61,7 @@ void test_text_layer_flow__paging_container(void) {
 
   GPoint origin;
   GRect page;
-  scroll_layer_is_instance_value = NULL;
+  scroll_layer_is_instance_value = nullptr;
   cl_assert(true == text_layer_calc_text_flow_paging_values(&text_layer, &origin, &page));
 
   // text_layer's absolute coordinate as

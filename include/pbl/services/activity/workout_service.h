@@ -6,8 +6,6 @@
 #include "activity.h"
 #include "hr_util.h"
 
-#include <stdbool.h>
-
 #include <kernel/events.h>
 
 /**
@@ -174,5 +172,50 @@ bool workout_service_get_current_workout_type(ActivitySessionType *type_out);
 bool workout_service_get_current_workout_info(int32_t *steps_out, int32_t *duration_s_out,
                                               int32_t *distance_m_out, int32_t *current_bpm_out,
                                               HRZone *current_hr_zone_out);
+
+/** @brief Metrics of the current workout, taken at one instant. */
+typedef struct WorkoutServiceMetrics {
+  /** Steps. */
+  int32_t steps;
+  /** Duration excluding pauses, in seconds. */
+  int32_t duration_s;
+  /** Distance, in meters. */
+  int32_t distance_m;
+  /** Current heart rate, in beats per minute. */
+  int32_t current_bpm;
+  /** Current heart rate zone. */
+  HRZone current_hr_zone;
+  /** Valid heart rate samples while not paused, grows with every new reading. */
+  int32_t hr_samples;
+  /** Average of the valid heart rate samples, in beats per minute. */
+  int32_t avg_bpm;
+  /** Estimated active kilocalories. */
+  int32_t active_kcal;
+  /** Seconds spent in each heart rate zone, indexed by HRZone. */
+  int32_t hr_zone_time_s[HRZoneCount];
+  /** Latest SpO2 in percent, or zero if none yet. */
+  int32_t spo2_pct;
+  /** Lowest SpO2 in percent, or zero if none yet. */
+  int32_t spo2_min_pct;
+  /** An SpO2 reading is in progress, pausing heart rate. */
+  bool spo2_measuring;
+} WorkoutServiceMetrics;
+
+/**
+ * @brief Get all metrics of the current workout at once.
+ *
+ * @param[out] metrics_out Metrics, left untouched without a workout.
+ * @return true if a workout is ongoing.
+ */
+bool workout_service_get_current_workout_metrics(WorkoutServiceMetrics *metrics_out);
+
+/**
+ * @brief Record an SpO2 reading taken during the current workout.
+ *
+ * No-op without a workout or while it is paused. Called from KernelBG.
+ *
+ * @param percent SpO2, in percent.
+ */
+void workout_service_handle_spo2(uint8_t percent);
 
 /** @} */

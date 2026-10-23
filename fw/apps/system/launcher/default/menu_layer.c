@@ -6,6 +6,7 @@
 #include "app_glance_service.h"
 #include "menu_layer_private.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/util/testing.h>
 
@@ -15,7 +16,6 @@
 #include <resource/resource_ids.auto.h>
 #include <shell/prefs.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 #define LAUNCHER_MENU_LAYER_CONTENT_INDICATOR_LAYER_HEIGHT (32)
 #define LAUNCHER_MENU_LAYER_GENERIC_APP_ICON (RESOURCE_ID_MENU_LAYER_GENERIC_WATCHAPP_ICON)
@@ -23,57 +23,8 @@
 ////////////////////////
 // Styles
 
-static const LauncherMenuLayerStyle s_styles[NumPreferredContentSizes] = {
-  //! @note this is the same as Medium until Small is designed
-  [PreferredContentSizeSmall] =
-      {
-        .title_font_key = FONT_KEY_GOTHIC_18_BOLD,
-        .subtitle_font_key = FONT_KEY_GOTHIC_14,
-#if PBL_RECT
-        .cell_height = LAUNCHER_MENU_LAYER_MIN_CELL_HEIGHT,
-#else
-        .focused_cell_height = LAUNCHER_MENU_LAYER_MIN_FOCUSED_CELL_HEIGHT,
-        .unfocused_cell_height = LAUNCHER_MENU_LAYER_MIN_UNFOCUSED_CELL_HEIGHT,
-#endif
-      },
-  [PreferredContentSizeMedium] =
-      {
-        .title_font_key = FONT_KEY_GOTHIC_18_BOLD,
-        .subtitle_font_key = FONT_KEY_GOTHIC_14,
-#if PBL_RECT
-        .cell_height = LAUNCHER_MENU_LAYER_MIN_CELL_HEIGHT,
-#else
-        .focused_cell_height = LAUNCHER_MENU_LAYER_MIN_FOCUSED_CELL_HEIGHT,
-        .unfocused_cell_height = LAUNCHER_MENU_LAYER_MIN_UNFOCUSED_CELL_HEIGHT,
-#endif
-      },
-  [PreferredContentSizeLarge] =
-      {
-        .title_font_key = FONT_KEY_GOTHIC_24_BOLD,
-        .subtitle_font_key = FONT_KEY_GOTHIC_18,
-        .title_margin_h = PBL_IF_RECT_ELSE(-3, 0),
-#if PBL_RECT
-        .cell_height = 50,
-#else
-        .focused_cell_height = 55,
-        .unfocused_cell_height = 45,
-#endif
-      },
-  [PreferredContentSizeExtraLarge] = {
-    .title_font_key = FONT_KEY_GOTHIC_28_BOLD,
-    .subtitle_font_key = FONT_KEY_GOTHIC_24,
-    .title_margin_h = PBL_IF_RECT_ELSE(-3, 0),
-#if PBL_RECT
-    .cell_height = 60,
-#else
-    .focused_cell_height = 66,
-    .unfocused_cell_height = 56,
-#endif
-  },
-};
-
 const LauncherMenuLayerStyle *launcher_menu_layer_get_style(void) {
-  return &s_styles[system_theme_get_content_size()];
+  return &system_theme_get_style()->launcher;
 }
 
 #if PBL_ROUND
@@ -111,7 +62,7 @@ static void prv_glance_changed(void *context) {
 ////////////////////////
 // MenuLayer callbacks
 
-static void prv_menu_layer_select(PBL_UNUSED MenuLayer *menu_layer, MenuIndex *cell_index,
+static void prv_menu_layer_select([[maybe_unused]] MenuLayer *menu_layer, MenuIndex *cell_index,
                                   void *context) {
   LauncherMenuLayer *launcher_menu_layer = context;
   AppMenuDataSource *data_source = launcher_menu_layer->data_source;
@@ -124,7 +75,7 @@ static void prv_menu_layer_select(PBL_UNUSED MenuLayer *menu_layer, MenuIndex *c
     return;
   }
   // Disable all clicking on the window so the user can't scroll anymore
-  window_set_click_config_provider(window, NULL);
+  window_set_click_config_provider(window, nullptr);
 
   // Capture what app we should launch - we'll actually launch it as part of an app task callback
   // we register in our .draw_row callback so that we don't launch the app until after we finish
@@ -141,8 +92,9 @@ static void prv_menu_layer_select(PBL_UNUSED MenuLayer *menu_layer, MenuIndex *c
   prv_launcher_menu_layer_mark_dirty(launcher_menu_layer);
 }
 
-static uint16_t prv_menu_layer_get_num_rows(PBL_UNUSED MenuLayer *menu_layer,
-                                            PBL_UNUSED uint16_t section_index, void *context) {
+static uint16_t prv_menu_layer_get_num_rows([[maybe_unused]] MenuLayer *menu_layer,
+                                            [[maybe_unused]] uint16_t section_index,
+                                            void *context) {
   LauncherMenuLayer *launcher_menu_layer = context;
   AppMenuDataSource *data_source = launcher_menu_layer->data_source;
   return data_source ? app_menu_data_source_get_count(data_source) : (uint16_t)0;
@@ -186,10 +138,12 @@ static void prv_menu_layer_draw_row(GContext *ctx, const Layer *cell_layer, Menu
   }
 }
 
-static int16_t prv_menu_layer_get_cell_height(PBL_UNUSED MenuLayer *menu_layer,
-                                              PBL_UNUSED MenuIndex *cell_index, void *context) {
+static int16_t prv_menu_layer_get_cell_height([[maybe_unused]] MenuLayer *menu_layer,
+                                              [[maybe_unused]] MenuIndex *cell_index,
+                                              void *context) {
   LauncherMenuLayer *launcher_menu_layer = context;
-  const LauncherMenuLayerStyle *style = &s_styles[launcher_menu_layer->content_size];
+  const LauncherMenuLayerStyle *style =
+      &system_theme_get_style_for_size(launcher_menu_layer->content_size)->launcher;
 #if PBL_RECT
   return style->cell_height;
 #elif PBL_ROUND
@@ -213,9 +167,10 @@ static void prv_play_glance_for_row(LauncherMenuLayer *launcher_menu_layer, uint
   launcher_app_glance_service_play_glance_for_app_node(&launcher_menu_layer->glance_service, node);
 }
 
-static void prv_menu_layer_selection_will_change(MenuLayer *PBL_UNUSED menu_layer,
+static void prv_menu_layer_selection_will_change([[maybe_unused]] MenuLayer *menu_layer,
                                                  MenuIndex *new_index,
-                                                 MenuIndex PBL_UNUSED old_index, void *context) {
+                                                 [[maybe_unused]] MenuIndex old_index,
+                                                 void *context) {
   LauncherMenuLayer *launcher_menu_layer = context;
   prv_play_glance_for_row(launcher_menu_layer, new_index->row);
 }
@@ -254,7 +209,8 @@ void launcher_menu_layer_init(LauncherMenuLayer *launcher_menu_layer,
 
   GRect menu_layer_frame = frame;
 #if PBL_ROUND
-  const LauncherMenuLayerStyle *style = &s_styles[launcher_menu_layer->content_size];
+  const LauncherMenuLayerStyle *style =
+      &system_theme_get_style_for_size(launcher_menu_layer->content_size)->launcher;
   const int top_bottom_inset =
       (frame.size.h - style->focused_cell_height -
        (2 * prv_num_unfocused_rows_per_side(style) * style->unfocused_cell_height)) /
@@ -338,7 +294,7 @@ void launcher_menu_layer_init(LauncherMenuLayer *launcher_menu_layer,
 
 Layer *launcher_menu_layer_get_layer(LauncherMenuLayer *launcher_menu_layer) {
   if (!launcher_menu_layer) {
-    return NULL;
+    return nullptr;
   }
 
   return &launcher_menu_layer->container_layer;

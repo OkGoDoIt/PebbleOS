@@ -4,12 +4,13 @@
 #include "gatt_client_operations.h"
 
 #include <pbl/bluetooth/gatt.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/util/list.h>
 
 #include <comm/bt_lock.h>
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 // -------------------------------------------------------------------------------------------------
 //! @see gatt_client_accessors.c / gatt_client_subscriptions.c
@@ -40,22 +41,20 @@ typedef struct {
 typedef struct GattClientEventContext {
   ListNode node;
   PebbleBLEGATTClientEventType subtype;
-  GAPLEClient client;
   uintptr_t obj_ref;
 } GattClientEventContext;
 
-static ReadResponseData *s_read_responses[GAPLEClientNum];
+static ReadResponseData *s_read_responses;
 
 //! Keeps track of the current outstanding GattClientOperations (reads/writes). Useful for freeing
 //! the outstanding op's memory when a connection dies in the middle.
-static GattClientEventContext *s_client_event_ctxs[GAPLEClientNum];
+static GattClientEventContext *s_client_event_ctxs;
 
-static void prv_send_event(PebbleBLEGATTClientEventType subtype, GAPLEClient client,
-                           uintptr_t object_ref, uint16_t value_length,
-                           enum pbl_bt_gatt_error gatt_error) {
+static void prv_send_event(PebbleBLEGATTClientEventType subtype, uintptr_t object_ref,
+                           uint16_t value_length, enum pbl_bt_gatt_error gatt_error) {
   PebbleEvent e = {
     .type = PEBBLE_BLE_GATT_CLIENT_EVENT,
-    .task_mask = ~(gap_le_pebble_task_bit_for_client(client)),
+    .task_mask = (PebbleTaskBitset) ~(1u << PebbleTask_KernelMain),
     .bluetooth = {
       .le = {
         .gatt_client = {
@@ -93,21 +92,14 @@ static enum pbl_bt_gatt_error prv_handle_response(
       .length = val_len,
     };
     memcpy(read_response->value, resp->value, val_len);
-    if (s_read_responses[data->client]) {
-      list_append(&s_read_responses[data->client]->node, &read_response->node);
+    if (s_read_responses) {
+      list_append(&s_read_responses->node, &read_response->node);
     } else {
-      s_read_responses[data->client] = read_response;
+      s_read_responses = read_response;
     }
   }
   *gatt_value_length = val_len;
   return PBL_BT_GATT_ERROR_SUCCESS;
-}
-
-static bool prv_ctx_in_client_event_ctxs(GattClientEventContext *context) {
-  const bool exists =
-      (list_contains(&s_client_event_ctxs[GAPLEClientApp]->node, &context->node) ||
-       list_contains(&s_client_event_ctxs[GAPLEClientKernel]->node, &context->node));
-  return exists;
 }
 
 void pbl_bt_cb_gatt_client_operations_handle_response(
@@ -117,8 +109,7 @@ void pbl_bt_cb_gatt_client_operations_handle_response(
   {
     //! Special case: writes to the "Client Characteristic Configuration Descriptor" are handled by
     //! the gatt_client_subscriptions.c module.
-    if (data->client == GAPLEClientKernel &&
-        data->subtype == PebbleBLEGATTClientEventTypeCharacteristicSubscribe) {
+    if (data->subtype == PebbleBLEGATTClientEventTypeCharacteristicSubscribe) {
       prv_internal_write_cccd_response_cb(event);
       goto cleanup;
     }
@@ -128,7 +119,8 @@ void pbl_bt_cb_gatt_client_operations_handle_response(
     //! which cleans up all of the memory for the nodes in the lists in `s_client_event_ctxs`.
     //! Here, we check if the context related to the response coming in has already been cleaned up,
     //! and if it has, we instantly unlock and continue on.
-    if (!prv_ctx_in_client_event_ctxs(event->context)) {
+    if (!list_contains(&s_client_event_ctxs->node,
+                       &((GattClientEventContext *)event->context)->node)) {
       goto unlock;
     }
 
@@ -154,15 +146,15 @@ void pbl_bt_cb_gatt_client_operations_handle_response(
           break;
         }
         default:
-          WTF;
+          pbl_panic();
       }
     }
 
-    prv_send_event(data->subtype, data->client, data->obj_ref, gatt_value_length, gatt_err_code);
+    prv_send_event(data->subtype, data->obj_ref, gatt_value_length, gatt_err_code);
   }
 
 cleanup:
-  list_remove(event->context, (ListNode **)&s_client_event_ctxs[data->client], NULL);
+  list_remove(event->context, (ListNode **)&s_client_event_ctxs, nullptr);
   kernel_free(event->context);
 unlock:
   bt_unlock();
@@ -170,18 +162,17 @@ unlock:
 
 typedef uint16_t (*HandleAndConnectionGetter)(uintptr_t obj_ref, GAPLEConnection **connection_out);
 
-static GattClientEventContext *prv_create_event_context(GAPLEClient client) {
+static GattClientEventContext *prv_create_event_context(void) {
   GattClientEventContext *evt_ctx = kernel_zalloc(sizeof(GattClientEventContext));
   if (evt_ctx) {
-    s_client_event_ctxs[client] =
-        (GattClientEventContext *)list_prepend(&s_client_event_ctxs[client]->node, &evt_ctx->node);
+    s_client_event_ctxs =
+        (GattClientEventContext *)list_prepend(&s_client_event_ctxs->node, &evt_ctx->node);
   }
 
   return evt_ctx;
 }
 
-static enum pbl_bt_errno prv_read(uintptr_t obj_ref, GAPLEClient client,
-                                  HandleAndConnectionGetter handle_getter,
+static enum pbl_bt_errno prv_read(uintptr_t obj_ref, HandleAndConnectionGetter handle_getter,
                                   PebbleBLEGATTClientEventType subtype) {
   enum pbl_bt_errno ret_val = PBL_BT_ERRNO_OK;
   GAPLEConnection *connection;
@@ -196,14 +187,13 @@ static enum pbl_bt_errno prv_read(uintptr_t obj_ref, GAPLEClient client,
       return PBL_BT_ERRNO_INVALID_PARAMETER;
     }
 
-    data = prv_create_event_context(client);
+    data = prv_create_event_context();
     if (!data) {
       bt_unlock();
       return PBL_BT_ERRNO_NOT_ENOUGH_RESOURCES;
     }
 
     // Zero'd out and added to list in `prv_create_event_context`
-    data->client = client;
     data->subtype = subtype;
     data->obj_ref = obj_ref;
   }
@@ -216,7 +206,7 @@ static enum pbl_bt_errno prv_read(uintptr_t obj_ref, GAPLEClient client,
   if (ret_val != PBL_BT_ERRNO_OK) {
     // Clean up the context we created if the driver call failed
     bt_lock();
-    list_remove(&data->node, (ListNode **)&s_client_event_ctxs[client], NULL);
+    list_remove(&data->node, (ListNode **)&s_client_event_ctxs, nullptr);
     kernel_free(data);
     bt_unlock();
   }
@@ -224,7 +214,7 @@ static enum pbl_bt_errno prv_read(uintptr_t obj_ref, GAPLEClient client,
 }
 
 static enum pbl_bt_errno prv_write(uintptr_t obj_ref, const uint8_t *value, size_t value_length,
-                                   GAPLEClient client, HandleAndConnectionGetter handle_getter,
+                                   HandleAndConnectionGetter handle_getter,
                                    PebbleBLEGATTClientEventType subtype) {
   enum pbl_bt_errno ret_val = PBL_BT_ERRNO_OK;
   GAPLEConnection *connection;
@@ -239,14 +229,13 @@ static enum pbl_bt_errno prv_write(uintptr_t obj_ref, const uint8_t *value, size
       return PBL_BT_ERRNO_INVALID_PARAMETER;
     }
 
-    data = prv_create_event_context(client);
+    data = prv_create_event_context();
     if (!data) {
       bt_unlock();
       return PBL_BT_ERRNO_NOT_ENOUGH_RESOURCES;
     }
 
     // Zero'd out and added to list in `prv_create_event_context`
-    data->client = client;
     data->subtype = subtype;
     data->obj_ref = obj_ref;
   }
@@ -259,49 +248,51 @@ static enum pbl_bt_errno prv_write(uintptr_t obj_ref, const uint8_t *value, size
   if (ret_val != PBL_BT_ERRNO_OK) {
     // Clean up the context we created if the driver call failed
     bt_lock();
-    list_remove(&data->node, (ListNode **)&s_client_event_ctxs[client], NULL);
+    list_remove(&data->node, (ListNode **)&s_client_event_ctxs, nullptr);
     kernel_free(data);
     bt_unlock();
   }
   return ret_val;
 }
 
-enum pbl_bt_errno gatt_client_op_read(pbl_bt_characteristic_t characteristic, GAPLEClient client) {
-  return prv_read(characteristic, client, gatt_client_characteristic_get_handle_and_connection,
+enum pbl_bt_errno gatt_client_op_read(pbl_bt_characteristic_t characteristic) {
+  return prv_read(characteristic, gatt_client_characteristic_get_handle_and_connection,
                   PebbleBLEGATTClientEventTypeCharacteristicRead);
 }
 
-void gatt_client_consume_read_response(uintptr_t object_ref, uint8_t value_out[],
-                                       uint16_t value_length, GAPLEClient client) {
+bool gatt_client_consume_read_response(uintptr_t object_ref, uint8_t value_out[],
+                                       uint16_t value_length) {
+  bool consumed = false;
+
   bt_lock();
   {
     // For responses with 0 length, no ReadResponseData is created therefore
     // should not be attempted to be consumed.
-    PBL_ASSERTN(value_length);
-
-    PBL_ASSERTN(s_read_responses[client]);
-    ReadResponseData *read_response = s_read_responses[client];
-    PBL_ASSERTN(value_length == read_response->length);
-    PBL_ASSERTN(object_ref == read_response->object_ref);
-    if (value_out) {
-      memcpy(value_out, read_response->value, read_response->length);
+    ReadResponseData *read_response = s_read_responses;
+    if (value_length != 0 && read_response != nullptr && value_length == read_response->length &&
+        object_ref == read_response->object_ref) {
+      if (value_out) {
+        memcpy(value_out, read_response->value, read_response->length);
+      }
+      list_remove(&read_response->node, (ListNode **)&s_read_responses, nullptr);
+      kernel_free(read_response);
+      consumed = true;
     }
-    list_remove(&read_response->node, (ListNode **)&s_read_responses[client], NULL);
-    kernel_free(read_response);
   }
   bt_unlock();
+
+  return consumed;
 }
 
 enum pbl_bt_errno gatt_client_op_write(pbl_bt_characteristic_t characteristic, const uint8_t *value,
-                                       size_t value_length, GAPLEClient client) {
-  return prv_write(characteristic, value, value_length, client,
+                                       size_t value_length) {
+  return prv_write(characteristic, value, value_length,
                    gatt_client_characteristic_get_handle_and_connection,
                    PebbleBLEGATTClientEventTypeCharacteristicWrite);
 }
 
 enum pbl_bt_errno gatt_client_op_write_without_response(pbl_bt_characteristic_t characteristic,
-                                                        const uint8_t *value, size_t value_length,
-                                                        GAPLEClient client) {
+                                                        const uint8_t *value, size_t value_length) {
   GAPLEConnection *connection;
   uint16_t att_handle;
 
@@ -322,22 +313,15 @@ enum pbl_bt_errno gatt_client_op_write_without_response(pbl_bt_characteristic_t 
 }
 
 enum pbl_bt_errno gatt_client_op_write_descriptor(pbl_bt_descriptor_t descriptor,
-                                                  const uint8_t *value, size_t value_length,
-                                                  GAPLEClient client) {
-  return prv_write(descriptor, value, value_length, client,
+                                                  const uint8_t *value, size_t value_length) {
+  return prv_write(descriptor, value, value_length,
                    gatt_client_descriptor_get_handle_and_connection,
                    PebbleBLEGATTClientEventTypeDescriptorWrite);
 }
 
-enum pbl_bt_errno gatt_client_op_read_descriptor(pbl_bt_descriptor_t descriptor,
-                                                 GAPLEClient client) {
-  return prv_read(descriptor, client, gatt_client_descriptor_get_handle_and_connection,
-                  PebbleBLEGATTClientEventTypeDescriptorRead);
-}
-
 enum pbl_bt_errno gatt_client_op_write_descriptor_cccd(pbl_bt_descriptor_t cccd,
                                                        const uint16_t *value) {
-  return prv_write(cccd, (const uint8_t *)value, sizeof(*value), GAPLEClientKernel,
+  return prv_write(cccd, (const uint8_t *)value, sizeof(*value),
                    gatt_client_descriptor_get_handle_and_connection,
                    PebbleBLEGATTClientEventTypeCharacteristicSubscribe);
 }
@@ -347,20 +331,20 @@ static bool prv_deinit_ctx_list(ListNode *node, void *unused) {
   return true;
 }
 
-void gatt_client_op_cleanup(GAPLEClient client) {
+void gatt_client_op_cleanup(void) {
   bt_lock();
   {
     // Free all memory associated with outstanding operations
-    list_foreach(&s_client_event_ctxs[client]->node, prv_deinit_ctx_list, NULL);
-    s_client_event_ctxs[client] = NULL;
+    list_foreach(&s_client_event_ctxs->node, prv_deinit_ctx_list, nullptr);
+    s_client_event_ctxs = nullptr;
 
-    ReadResponseData *read_response = s_read_responses[client];
+    ReadResponseData *read_response = s_read_responses;
     while (read_response) {
       ReadResponseData *next_read_response = (ReadResponseData *)read_response->node.next;
       kernel_free(read_response);
       read_response = next_read_response;
     }
-    s_read_responses[client] = NULL;
+    s_read_responses = nullptr;
   }
   bt_unlock();
 }

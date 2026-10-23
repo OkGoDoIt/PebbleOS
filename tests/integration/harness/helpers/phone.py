@@ -12,8 +12,9 @@ import struct
 import threading
 import time
 
-from harness.ble import AUTO, HOST_ADDRESS, HOST_NAME, REVERSED, BleLink
+from harness.ble import HOST_ADDRESS, HOST_NAME, REVERSED, BleLink
 from harness.errors import HarnessError, Unsupported, WatchTimeout
+from harness.helpers.pairing import WatchPairing
 from harness.lab import PHONE_BUMBLE, PHONE_COREAPP
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,11 @@ FLAG_RECOVERY = 0x01
 RESET_INTO_RECOVERY = 0xFF
 # How long the phone waits for the test to answer a pairing.
 ANSWER_TIMEOUT_S = 60.0
+
+#: What the phone runs: what its app tells the watch, and the services its
+#: GATT server hosts.
+ANDROID = "android"
+IOS = "ios"
 
 
 def send_raw(pebble, endpoint, payload):
@@ -239,7 +245,14 @@ def _is_pairing_failure(error):
 
 
 class BumblePhone(Phone):
-    """The harness as the phone, through a Bluetooth controller."""
+    """The harness as the phone, through a Bluetooth controller, running
+    ``os``: :data:`ANDROID`, or :data:`IOS`, which hosts ANCS (``ancs``), AMS
+    (``ams``) and Device Information as an iPhone does. It connects to
+    ``watch``, by default the DUT's own address: on a real radio, other
+    watches in range advertise too."""
+
+    ancs = None
+    ams = None
 
     def __init__(
         self,
@@ -247,21 +260,30 @@ class BumblePhone(Phone):
         keystore,
         address=HOST_ADDRESS,
         name=HOST_NAME,
-        watch=AUTO,
+        watch=None,
         ppogatt=REVERSED,
+        os=ANDROID,
         **link_options,
     ):
         if not dut.ble_controller:
             raise HarnessError("no Bluetooth controller for the phone")
         self.dut = dut
+        if os not in (ANDROID, IOS):
+            raise HarnessError(f"no phone OS {os!r}")
+        self.os = os
+        if watch is None:
+            watch = WatchPairing(dut).address()
+        if os == IOS:
+            from harness.ble.apple import AMS, ANCS, DeviceInformation
+
+            self.ancs = ANCS(clock=self.watch_time)
+            self.ams = AMS()
+            link_options["services"] = [self.ancs, self.ams, DeviceInformation()]
         self.link = BleLink(
             watch,
             dut.ble_controller,
             keystore=keystore,
-            snoop=os.path.join(
-                os.path.dirname(keystore),
-                f"btsnoop-{address.replace(':', '')}-{{instance}}.log",
-            ),
+            snoop=_snoop(keystore, address),
             confirm_pairing=dut.confirm_pairing,
             address=address,
             name=name,
@@ -280,11 +302,22 @@ class BumblePhone(Phone):
 
     def connect(self, timeout=90.0):
         from harness.ble.transport import BleTransport
-        from harness.connections import start_protocol
+        from harness.connections import (
+            PHONE_OS_ANDROID,
+            PHONE_OS_IOS,
+            PHONE_OS_UNKNOWN,
+            start_protocol,
+        )
 
+        platform = PHONE_OS_IOS if self.os == IOS else PHONE_OS_ANDROID
+        # The harness's session, an Android app's to the watch, would take
+        # what is the phone's (e.g. the music) instead of its app or AMS.
+        self.dut.set_phone_platform(PHONE_OS_UNKNOWN)
         self.link.open(timeout)
         self.inbox = Inbox()
-        self.pebble = start_protocol(BleTransport(self.link, on_frame=self.inbox))
+        self.pebble = start_protocol(
+            BleTransport(self.link, on_frame=self.inbox), platform
+        )
         return self
 
     def pair(self, timeout=90.0):
@@ -298,12 +331,15 @@ class BumblePhone(Phone):
         return self._pairing.start()
 
     def disconnect(self):
+        from harness.connections import PHONE_OS_ANDROID
+
         if self._pairing is not None:
             # Unblock a comparison the test left unanswered.
             self._pairing.answer(False)
             self._pairing = None
         self.pebble = None
         self.link.close()
+        self.dut.set_phone_platform(PHONE_OS_ANDROID)
 
 
 class CoreAppPhone(Phone):
@@ -311,6 +347,13 @@ class CoreAppPhone(Phone):
 
     def __init__(self, dut):
         raise Unsupported("CoreApp phones are not supported yet")
+
+
+def _snoop(keystore, address):
+    return os.path.join(
+        os.path.dirname(keystore),
+        f"btsnoop-{address.replace(':', '')}-{{instance}}.log",
+    )
 
 
 def _keystore(results_dir, address):
@@ -327,7 +370,7 @@ def forget_bonds(results_dir):
 
 def make_phone(dut, phone_setup, results_dir, **options):
     """The setup's phone. ``options`` other than the defaults (another
-    identity, forward PPoGATT) need a Bumble phone."""
+    identity, forward PPoGATT, iOS) need a Bumble phone."""
     if phone_setup.type == PHONE_COREAPP:
         if options:
             raise Unsupported(f"{', '.join(options)} need a Bumble phone")

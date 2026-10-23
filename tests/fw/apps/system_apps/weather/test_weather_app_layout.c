@@ -35,31 +35,6 @@
 // Stubs
 /////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_animation_timing.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_app_timer.h>
-#include <stubs_bootbits.h>
-#include <stubs_click.h>
-#include <stubs_i18n.h>
-#include <stubs_layer.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_process_info.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_serial.h>
-#include <stubs_sleep.h>
-#include <stubs_status_bar_layer.h>
-#include <stubs_syscalls.h>
-#include <stubs_system_theme.h>
-#include <stubs_task_wdt.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
-
 // Helper Functions
 /////////////////////
 
@@ -83,7 +58,7 @@
 ////////////////////////////////////
 
 static GContext s_ctx;
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 
 KinoReel *kino_reel_morph_square_create(KinoReel *from_reel, bool take_ownership) {
   return from_reel;
@@ -200,6 +175,44 @@ void test_weather_app_layout__render_palo_alto(void) {
     .today_low = 52,
     .current_weather_type = WeatherType_PartlyCloudy,
     .current_weather_phrase = "Partly Cloudy",
+  };
+
+  prv_create_layout_and_render(&today, &next);
+  cl_check(gbitmap_pbi_eq(&s_ctx.dest_bitmap, TEST_PBI_FILE));
+}
+
+void test_weather_app_layout__render_wind_meters_per_second(void) {
+  s_units_distance = UnitsDistance_KM;
+  s_units_wind = UnitsWind_MetersPerSecond;
+  WeatherLocationForecast today = {
+    .location_name = "BARCELONA",
+    .today_wmo = -1,
+    .today_humidity = -1,
+    .today_visibility_m = -1,
+    .today_precip_sum_mm = -1,
+    .current_temp = 21,
+    .today_high = 24,
+    .today_low = 17,
+    .today_uv = 5,
+    .today_uv_now = 5,
+    .today_precip_mm = 20,
+    .today_wind_mph = 22,
+    .today_wind_dir_deg = 135,
+    .today_feels = 21,
+    .current_weather_type = WeatherType_PartlyCloudy,
+    .current_weather_phrase = "Partly Cloudy",
+  };
+  WeatherLocationForecast next = {
+    .location_name = "BARCELONA",
+    .today_wmo = -1,
+    .today_humidity = -1,
+    .today_visibility_m = -1,
+    .today_precip_sum_mm = -1,
+    .current_temp = 19,
+    .today_high = 22,
+    .today_low = 16,
+    .current_weather_type = WeatherType_Sun,
+    .current_weather_phrase = "Sunny",
   };
 
   prv_create_layout_and_render(&today, &next);
@@ -413,7 +426,7 @@ void test_weather_app_layout__render_no_next_forecast(void) {
     .current_weather_phrase = "Sunny",
   };
 
-  prv_create_layout_and_render(&today, NULL);
+  prv_create_layout_and_render(&today, nullptr);
   cl_check(gbitmap_pbi_eq(&s_ctx.dest_bitmap, TEST_PBI_FILE));
 }
 

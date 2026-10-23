@@ -5,7 +5,7 @@
 # the syscall boundary (pebble.auto.c) and the app side (libpebble.a plus
 # the SDK headers), so the firmware build depends on it as well.
 # The rest of the shippable SDK is packaged by the `sdk` target; see
-# cmake/modules/sdk.cmake and docs/development/sdk_export.md.
+# cmake/modules/sdk.cmake and docs/sdk/building.md.
 
 function(pbl_native_sdk)
   set(script ${PBL_BASE}/tools/generate_native_sdk/generate_pebble_native_sdk_files.py)
@@ -31,14 +31,12 @@ for f in files:
   set(PBL_PEBBLE_AUTO_C ${PROJECT_BINARY_DIR}/fw/pebble.auto.c)
   set(outputs
     ${PBL_PEBBLE_AUTO_C}
+    ${PROJECT_BINARY_DIR}/fw/pebble.auto.json
     ${sdk_dir}/include/pebble.h
     ${sdk_dir}/include/pebble_sdk_version.h
     ${sdk_dir}/include/pebble_process_info.h
     ${sdk_dir}/include/pebble_worker.h
     ${sdk_dir}/include/pebble_worker_sdk_version.h
-    ${sdk_dir}/include/pbl/kernel/compiler.h
-    ${sdk_dir}/include/pbl/kernel/compiler/gcc.h
-    ${sdk_dir}/include/pbl/kernel/compiler/clang.h
     ${sdk_dir}/lib/libpebble.a
   )
 

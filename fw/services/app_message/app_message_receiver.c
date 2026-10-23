@@ -54,7 +54,7 @@ static bool prv_fwd_prepare(AppMessageReceiver *rcv, CommSession *session,
     .handler = app_message_app_protocol_system_nack_callback,
     .access_mask = PebbleProtocolAccessAny,
     .receiver_imp = &g_default_kernel_receiver_implementation,
-    .receiver_opt = NULL,
+    .receiver_opt = nullptr,
   };
   Receiver *kernel_receiver = g_default_kernel_receiver_implementation.prepare(
       session, &kernel_nack_endpoint, header_bytes_remaining);
@@ -73,8 +73,6 @@ static void prv_write(const uint8_t *data, size_t length) {
 static Receiver *prv_app_message_receiver_prepare(CommSession *session,
                                                   const PebbleProtocolEndpoint *endpoint,
                                                   size_t total_payload_size) {
-  // FIXME: Find a better solution for this.
-  // https://pebbletechnology.atlassian.net/browse/PBL-21538
   if (total_payload_size > 500) {
     comm_session_set_responsiveness(session, PBL_BT_CONSUMER_PP_APP_MESSAGE,
                                     PBL_BT_RESPONSE_TIME_MIN,
@@ -83,7 +81,7 @@ static Receiver *prv_app_message_receiver_prepare(CommSession *session,
 
   AppMessageReceiver *rcv = (AppMessageReceiver *)kernel_zalloc(sizeof(AppMessageReceiver));
   if (!rcv) {
-    return NULL;
+    return nullptr;
   }
   rcv->session = session;
 
@@ -94,7 +92,7 @@ static Receiver *prv_app_message_receiver_prepare(CommSession *session,
   // message was written successfully to the app inbox.
   if (!prv_fwd_prepare(rcv, session, header_bytes_remaining)) {
     kernel_free(rcv);
-    return NULL;
+    return nullptr;
   }
 
   const size_t total_size = sizeof(AppMessageReceiverHeader) + total_payload_size;
@@ -123,8 +121,6 @@ static Receiver *prv_app_message_receiver_prepare(CommSession *session,
 static void prv_app_message_receiver_write(Receiver *receiver, const uint8_t *data, size_t length) {
   AppMessageReceiver *rcv = (AppMessageReceiver *)receiver;
 
-  // FIXME: Find a better solution for this.
-  // https://pebbletechnology.atlassian.net/browse/PBL-21538
   comm_session_set_responsiveness(rcv->session, PBL_BT_CONSUMER_PP_APP_MESSAGE,
                                   PBL_BT_RESPONSE_TIME_MIN,
                                   PBL_BT_MIN_LATENCY_MODE_TIMEOUT_APP_MESSAGE_SECS);

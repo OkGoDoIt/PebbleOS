@@ -36,26 +36,25 @@ size_t applib_resource_load_byte_range(ResHandle h, uint32_t start_offset, uint8
 void *applib_resource_mmap_or_load(ResAppNum app_num, uint32_t resource_id, size_t offset,
                                    size_t num_bytes, bool used_aligned) {
   if (num_bytes == 0) {
-    return NULL;
+    return nullptr;
   }
 
-  const uint8_t *mapped_data =
-      (app_num == SYSTEM_APP) ? sys_resource_read_only_bytes(SYSTEM_APP, resource_id, NULL) : NULL;
+  const uint8_t *mapped_data = (app_num == SYSTEM_APP)
+                                   ? sys_resource_read_only_bytes(SYSTEM_APP, resource_id, nullptr)
+                                   : nullptr;
 
-  uint8_t *result = NULL;
+  uint8_t *result = nullptr;
 
   if (mapped_data) {
     applib_resource_track_mmapped(mapped_data);
     result = (uint8_t *)(mapped_data + offset);
   } else {
-    // TODO: PBL-40010 clean this up
-    // we are wasting 7 bytes here so that clients of this API have the chance to
-    // align the data
+    // Over-allocate by 7 bytes so that clients of this API can align the data
     result = applib_malloc(num_bytes + (used_aligned ? 7 : 0));
     if (!result ||
         sys_resource_load_range(app_num, resource_id, offset, result, num_bytes) != num_bytes) {
       applib_free(result);
-      return NULL;
+      return nullptr;
     }
   }
 

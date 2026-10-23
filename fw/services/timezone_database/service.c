@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/clock.h>
@@ -13,7 +14,6 @@
 
 #include <resource/resource.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_timezone_database, CONFIG_SERVICE_TIMEZONE_DATABASE_LOG_LEVEL);
 
@@ -97,9 +97,9 @@ bool timezone_database_load_region_info(uint16_t region_id, TimezoneInfo *tz_inf
 
   //! Struct for reading data from a raw database of timezone information
   struct PBL_PACKED {
-    int16_t gmt_offset_minutes; //!< timezone offset from UTC time (in minutes)
-    char tz_abbr[TZ_LEN - 1];   //!< timezone abbreviation (without terminating nul)
-    int8_t dst_id;              //!< daylight savings time index identifier
+    int16_t gmt_offset_minutes;   //!< timezone offset from UTC time (in minutes)
+    char tz_abbr[PBL_TZ_LEN - 1]; //!< timezone abbreviation (without terminating nul)
+    int8_t dst_id;                //!< daylight savings time index identifier
   } tz_data;
 
   // Load the timezone information for the region_id, excluding the country + city_name itself
@@ -200,7 +200,7 @@ static int prv_search_regions_by_name(const char *region_name, int region_name_l
 }
 
 static int prv_search_links_by_name(const char *region_name, int region_name_length) {
-  char name_asciz[256] = {0};
+  char name_asciz[256] = {};
   memcpy(name_asciz, region_name, region_name_length);
 
   const int link_section_offset =

@@ -3,13 +3,12 @@
 
 #include <string.h>
 
+#include <pbl/drivers/vibe.h>
 #include <pbl/services/vibes/vibe_score.h>
 
 #include <clar.h>
 
 // stub
-#include <stubs_logging.h>
-#include <stubs_passert.h>
 
 void sys_vibe_pattern_trigger_start(void) {
 }
@@ -19,10 +18,12 @@ ResAppNum sys_get_current_resource_num(void) {
 
 const uint8_t *sys_resource_read_only_bytes(ResAppNum app_num, uint32_t resource_id,
                                             size_t *num_bytes_out) {
-  return NULL;
+  return nullptr;
 }
 
-int8_t vibe_get_braking_strength(void) {
+const struct pbl_vibe *const VIBE = nullptr;
+
+int8_t pbl_vibe_get_braking_strength(const struct pbl_vibe *vibe) {
   return -100;
 }
 
@@ -246,7 +247,7 @@ void test_vibe_score__repeat_delay_too_long_is_invalid(void) {
   };
   s_resource_buffer = buffer;
   s_resource_buffer_size = sizeof(buffer);
-  cl_assert(vibe_score_create_with_resource_system(0, 0) == NULL);
+  cl_assert(vibe_score_create_with_resource_system(0, 0) == nullptr);
 }
 
 void test_vibe_score__test_get_duration_ms(void) {
@@ -411,9 +412,9 @@ void test_vibe_score__test_bad_attr_size(void) {
 }
 
 void test_vibe_score__get_duration_returns_zero_for_null_score(void) {
-  cl_assert_equal_i(vibe_score_get_duration_ms(NULL), 0);
+  cl_assert_equal_i(vibe_score_get_duration_ms(nullptr), 0);
 }
 
 void test_vibe_score__get_repeat_delay_returns_zero_for_null_score(void) {
-  cl_assert_equal_i(vibe_score_get_repeat_delay_ms(NULL), 0);
+  cl_assert_equal_i(vibe_score_get_repeat_delay_ms(nullptr), 0);
 }

@@ -5,11 +5,11 @@
 
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/util/list.h>
 
 #include <process_management/app_manager.h>
 #include <process_management/pebble_process_md.h>
-#include <system/passert.h>
 
 #define TEST_UUID                                                                              \
   UuidMake(0xF9, 0xC6, 0xEB, 0xE4, 0x06, 0xCD, 0x46, 0xF1, 0xB1, 0x51, 0x24, 0x08, 0x74, 0xD2, \
@@ -63,7 +63,7 @@ typedef struct {
   void *data;
 } CallbackNode;
 
-static ListNode *s_app_task_callback_head = NULL;
+static ListNode *s_app_task_callback_head = nullptr;
 
 void app_task_add_callback(void (*callback)(void *data), void *data) {
   CallbackNode *node = (CallbackNode *)malloc(sizeof(CallbackNode));
@@ -103,23 +103,23 @@ void stub_app_task_callbacks_invoke_pending(void) {
     if (node->callback) {
       node->callback(node->data);
     }
-    list_remove(&node->node, &s_app_task_callback_head, NULL);
+    list_remove(&node->node, &s_app_task_callback_head, nullptr);
     free(node);
     node = prev;
   }
-  PBL_ASSERTN(s_app_task_callback_head == NULL);
+  PBL_ASSERTN(s_app_task_callback_head == nullptr);
 }
 
 void stub_app_task_callbacks_cleanup(void) {
   CallbackNode *node = (CallbackNode *)s_app_task_callback_head;
   while (node) {
     CallbackNode *next = (CallbackNode *)list_get_next(&node->node);
-    list_remove(&node->node, &s_app_task_callback_head, NULL);
+    list_remove(&node->node, &s_app_task_callback_head, nullptr);
     free(node);
     node = next;
   }
   s_app_install_id = INSTALL_ID_INVALID;
-  PBL_ASSERTN(s_app_task_callback_head == NULL);
+  PBL_ASSERTN(s_app_task_callback_head == nullptr);
 }
 
 void stub_app_set_is_running(const bool is_running) {

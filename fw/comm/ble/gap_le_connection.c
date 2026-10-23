@@ -3,14 +3,16 @@
 
 #include "gap_le_connection.h"
 
+#include <string.h>
+
 #include <pbl/btutil/bt_device.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/services/bluetooth/bluetooth_persistent_storage.h>
 #include <pbl/util/list.h>
 
 #include <comm/bt_conn_mgr.h>
 #include <comm/bt_lock.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 //! About this module
 //! -----------------
@@ -96,7 +98,7 @@ void gap_le_connection_set_irk(GAPLEConnection *connection, const struct pbl_bt_
   if (connection->irk) {
     kernel_free(connection->irk);
   }
-  struct pbl_bt_sm_key *irk_copy = NULL;
+  struct pbl_bt_sm_key *irk_copy = nullptr;
   if (irk) {
     irk_copy = kernel_zalloc_check(sizeof(*irk_copy));
     memcpy(irk_copy, irk, sizeof(*irk_copy));
@@ -121,7 +123,7 @@ GAPLEConnection *gap_le_connection_add(const struct pbl_bt_device_internal *devi
     .bonding_id = PBL_BT_BONDING_ID_INVALID,
     .ticks_since_connection = rtc_get_ticks(),
     .is_remote_device_managing_connection_parameters = false,
-    .connection_parameter_sets = NULL,
+    .connection_parameter_sets = nullptr,
   };
   gap_le_connection_set_irk(connection, irk);
 
@@ -142,7 +144,7 @@ void prv_destroy_connection(GAPLEConnection *connection) {
   gatt_client_subscriptions_cleanup_by_connection(connection, false /* should_unsubscribe */);
   gatt_client_cleanup_discovery_jobs(connection);
 
-  list_remove(&connection->node, (ListNode **)&s_connections, NULL);
+  list_remove(&connection->node, (ListNode **)&s_connections, nullptr);
   bt_conn_mgr_info_deinit(&connection->conn_mgr_info);
   kernel_free(connection->connection_parameter_sets);
   kernel_free(connection->pairing_state);
@@ -159,7 +161,7 @@ void gap_le_connection_remove(const struct pbl_bt_device_internal *device) {
     // Verify that:
     //  the reason we can't find a connection is because we have deinitialized everything
     //  we only have connections stored after the module has been initialized
-    PBL_ASSERTN((connection != NULL) == s_le_connection_module_initialized);
+    PBL_ASSERTN((connection != nullptr) == s_le_connection_module_initialized);
 
     if (connection) {
       prv_destroy_connection(connection);
@@ -172,7 +174,7 @@ void gap_le_connection_remove(const struct pbl_bt_device_internal *device) {
 
 bool gap_le_connection_is_connected(const struct pbl_bt_device_internal *device) {
   bt_lock();
-  const bool connected = (prv_find_connection(device) != NULL);
+  const bool connected = (prv_find_connection(device) != nullptr);
   bt_unlock();
   return connected;
 }
@@ -183,7 +185,7 @@ bool gap_le_connection_is_encrypted(const struct pbl_bt_device_internal *device)
   bool encrypted = false;
   bt_lock();
   GAPLEConnection *connection = prv_find_connection(device);
-  if (connection != NULL) {
+  if (connection != nullptr) {
     encrypted = connection->is_encrypted;
   }
   bt_unlock();
@@ -217,7 +219,7 @@ void gap_le_connection_deinit(void) {
       prv_destroy_connection(connection);
       connection = next_connection;
     }
-    s_connections = NULL;
+    s_connections = nullptr;
     s_le_connection_module_initialized = false;
   }
   bt_unlock();
@@ -240,7 +242,7 @@ static bool prv_valid_conn_filter(ListNode *found_node, void *data) {
 }
 
 bool gap_le_connection_is_valid(const GAPLEConnection *conn) {
-  return (list_find(&s_connections->node, prv_valid_conn_filter, (void *)conn) != NULL);
+  return (list_find(&s_connections->node, prv_valid_conn_filter, (void *)conn) != nullptr);
 }
 
 //! @note !!! To access the returned context bt_lock MUST be held!!!
@@ -266,7 +268,12 @@ GAPLEConnection *gap_le_connection_by_gatt_id(unsigned int connection_id) {
 
 //! @note !!! To access the returned context bt_lock MUST be held!!!
 GAPLEConnection *gap_le_connection_find(GAPLEConnectionFindCallback filter, void *data) {
-  return (GAPLEConnection *)list_find(&s_connections->node, (ListFilterCallback)filter, data);
+  for (ListNode *node = &s_connections->node; node != nullptr; node = node->next) {
+    if (filter((GAPLEConnection *)node, data)) {
+      return (GAPLEConnection *)node;
+    }
+  }
+  return nullptr;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -296,7 +303,7 @@ static bool prv_find_gateway(GAPLEConnection *connection, void *data) {
 }
 
 GAPLEConnection *gap_le_connection_get_gateway(void) {
-  return gap_le_connection_find(prv_find_gateway, NULL);
+  return gap_le_connection_find(prv_find_gateway, nullptr);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -327,7 +334,7 @@ void gap_le_connection_copy_device_name(const GAPLEConnection *connection, char 
     if (!gap_le_connection_is_valid(connection)) {
       goto unlock;
     }
-    if (connection->device_name != NULL) {
+    if (connection->device_name != nullptr) {
       strncpy(name_out, connection->device_name, name_out_len);
     }
     name_out[name_out_len - 1] = '\0';

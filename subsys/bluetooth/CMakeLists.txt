@@ -2,9 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(excludes)
-if(NOT CONFIG_BT_GH3X2X_TUNING_SERVICE)
-  list(APPEND excludes gh3x2x_tuning_service.c)
-endif()
 if(NOT CONFIG_BT_AUDIO_COMPANION_SERVICE)
   list(APPEND excludes audio_companion_service.c)
 endif()
@@ -21,3 +18,5 @@ file(GLOB sources CONFIGURE_DEPENDS *.c)
 pbl_filter_sources(sources EXCLUDE ${excludes})
 pbl_library()
 pbl_library_sources(${sources})
+
+add_subdirectory(services)

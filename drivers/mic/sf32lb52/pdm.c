@@ -5,10 +5,11 @@
 
 #include <pbl/drivers/mic.h>
 #include <pbl/drivers/mic/sf32lb52/pdm_definitions.h>
-#include <pbl/drivers/pmic/npm1300.h>
+#include <pbl/drivers/regulator.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mutex.h>
-#include <pbl/kernel/sched.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/mcu/cache.h>
 #include <pbl/services/system_task.h>
@@ -19,14 +20,8 @@
 #include <board/board.h>
 #include <kernel/kernel_heap.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(driver_mic_sf32lb, CONFIG_DRIVER_MIC_LOG_LEVEL);
-
-// HACK alert, we need proper regulator abstraction
-#if defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
-#define PDM_POWER_NPM1300_LDO2 1
-#endif
 
 #define PDM_AUDIO_RECORD_PIPE_SIZE (288)
 // DMA ring for streamed (non-polling) captures that may idle in deep WFI, in samples per channel.
@@ -73,10 +68,6 @@ void mic_init(const MicDevice *this) {
   if (state && state->is_initialized) {
     return;
   }
-
-#if PDM_POWER_NPM1300_LDO2
-  (void)NPM1300_OPS.ldo2_set_enabled(false);
-#endif
 
   pbl_mutex_init(&state->mutex);
   state->volume = PDM_AUDIO_RECORD_GAIN_DEFAULT;
@@ -126,7 +117,7 @@ static bool prv_allocate_buffers(const MicDevice *this, bool polling) {
   const size_t step = PDM_CIRCULAR_BUF_BYTES(PDM_CIRCULAR_BUF_STEP_SAMPLES, channels);
 
   size_t try_size = requested;
-  uint8_t *storage = NULL;
+  uint8_t *storage = nullptr;
 
   while (try_size >= floor) {
     storage = kernel_malloc(try_size);
@@ -160,7 +151,7 @@ static void prv_free_buffers(MicDeviceState *state) {
   // Free circular buffer storage
   if (state->circ_buffer_storage) {
     kernel_free(state->circ_buffer_storage);
-    state->circ_buffer_storage = NULL;
+    state->circ_buffer_storage = nullptr;
   }
 }
 
@@ -177,7 +168,7 @@ static void prv_dispatch_samples(bool polling) {
   }
 
   pbl_mutex_lock(&s_state->mutex, PBL_FOREVER);
-  if (polling != (s_state->ready_handler != NULL)) {
+  if (polling != (s_state->ready_handler != nullptr)) {
     pbl_mutex_unlock(&s_state->mutex);
     return;
   }
@@ -234,7 +225,7 @@ static void prv_dispatch_samples(bool polling) {
       if (more_frames) {
         // Keep ownership of the pending callback; never block on our own queue.
         s_state->main_pending = true;
-        if (!system_task_add_callback_droppable(prv_dispatch_samples_system_task, NULL)) {
+        if (!system_task_add_callback_droppable(prv_dispatch_samples_system_task, nullptr)) {
           s_state->main_pending = false;
         }
       } else {
@@ -321,7 +312,7 @@ static void prv_dma_data_processing(uint8_t *data, uint16_t size) {
     // Dispatch to system task instead of kernel event queue (matches asterix behavior).
     // A drop is retried on the next PDM buffer event; losing samples beats
     // resetting the system over a full queue.
-    if (!system_task_add_callback_from_isr_droppable(prv_dispatch_samples_system_task, NULL)) {
+    if (!system_task_add_callback_from_isr_droppable(prv_dispatch_samples_system_task, nullptr)) {
       s_state->main_pending = false;
     }
   }
@@ -432,15 +423,15 @@ static bool prv_start(const MicDevice *this, MicDataHandlerCB data_handler, void
     pbl_mutex_unlock(&state->mutex);
     return false;
   }
-  hpdm->RxXferSize = this->channels * prv_pipe_size_samples(ready != NULL) * sizeof(int16_t);
+  hpdm->RxXferSize = this->channels * prv_pipe_size_samples(ready != nullptr) * sizeof(int16_t);
   // Over-allocate by one cache line so the DMA buffer can start on a line
   // boundary. dcache_invalidate() in the IRQ path would otherwise risk
   // destroying dirty bytes in lines shared with neighboring allocations.
   const size_t cache_align = dcache_line_size();
   state->raw_dma_buffer = kernel_malloc(hpdm->RxXferSize + cache_align - 1U);
-  if (!state->raw_dma_buffer || !prv_allocate_buffers(this, ready != NULL)) {
+  if (!state->raw_dma_buffer || !prv_allocate_buffers(this, ready != nullptr)) {
     kernel_free(state->raw_dma_buffer);
-    state->raw_dma_buffer = NULL;
+    state->raw_dma_buffer = nullptr;
     pbl_mutex_unlock(&state->mutex);
     return false;
   }
@@ -462,9 +453,9 @@ static bool prv_start(const MicDevice *this, MicDataHandlerCB data_handler, void
   state->dropped_bytes = 0;
   state->peak_backlog = 0;
 
-#if PDM_POWER_NPM1300_LDO2
-  (void)NPM1300_OPS.ldo2_set_enabled(true);
-#endif
+  if (this->vdd != nullptr) {
+    (void)pbl_regulator_enable(this->vdd);
+  }
   // Set is_running to true BEFORE starting PDM, since the event handler will be called immediately
   state->is_running = true;
 
@@ -480,14 +471,14 @@ static bool prv_start(const MicDevice *this, MicDataHandlerCB data_handler, void
     HAL_RCC_DisableModule(RCC_MOD_PDM1);
 
     kernel_free(state->raw_dma_buffer);
-    state->raw_dma_buffer = NULL;
-    hpdm->pRxBuffPtr = NULL;
+    state->raw_dma_buffer = nullptr;
+    hpdm->pRxBuffPtr = nullptr;
 
     prv_sleep_release_after_capture();
     state->is_running = false; // Reset on failure
-#if PDM_POWER_NPM1300_LDO2
-    (void)NPM1300_OPS.ldo2_set_enabled(false);
-#endif
+    if (this->vdd != nullptr) {
+      (void)pbl_regulator_disable(this->vdd);
+    }
     prv_free_buffers(state);
     pbl_mutex_unlock(&state->mutex);
     return false;
@@ -499,7 +490,7 @@ static bool prv_start(const MicDevice *this, MicDataHandlerCB data_handler, void
 
 bool mic_start(const MicDevice *this, MicDataHandlerCB data_handler, void *context,
                int16_t *audio_buffer, size_t audio_buffer_len) {
-  return prv_start(this, data_handler, context, audio_buffer, audio_buffer_len, NULL);
+  return prv_start(this, data_handler, context, audio_buffer, audio_buffer_len, nullptr);
 }
 
 bool mic_start_polling(const MicDevice *this, MicDataHandlerCB data_handler, void *context,
@@ -544,20 +535,20 @@ void mic_stop(const MicDevice *this) {
   prv_free_buffers(state);
 
   kernel_free(state->raw_dma_buffer);
-  state->raw_dma_buffer = NULL;
-  hpdm->pRxBuffPtr = NULL;
+  state->raw_dma_buffer = nullptr;
+  hpdm->pRxBuffPtr = nullptr;
 
   // Clear state
-  state->data_handler = NULL;
-  state->ready_handler = NULL;
-  state->handler_context = NULL;
-  state->audio_buffer = NULL;
+  state->data_handler = nullptr;
+  state->ready_handler = nullptr;
+  state->handler_context = nullptr;
+  state->audio_buffer = nullptr;
   state->audio_buffer_len = 0;
   state->main_pending = false;
 
-#if PDM_POWER_NPM1300_LDO2
-  (void)NPM1300_OPS.ldo2_set_enabled(false);
-#endif
+  if (this->vdd != nullptr) {
+    (void)pbl_regulator_disable(this->vdd);
+  }
 
   // Allow CPU to enter deep sleep again
   prv_sleep_release_after_capture();
@@ -583,7 +574,7 @@ uint32_t mic_get_channels(const MicDevice *this) {
 #include <pbl/shell/shell.h>
 
 static int prv_cmd_mic_read(const struct pbl_shell *sh, size_t argc, char **argv) {
-  if (s_state == NULL) {
+  if (s_state == nullptr) {
     pbl_shell_error(sh, "not initialized");
     return -ENODEV;
   }
@@ -602,9 +593,9 @@ static int prv_cmd_mic_read(const struct pbl_shell *sh, size_t argc, char **argv
 }
 
 static const struct pbl_shell_cmd sub_mic[] = {
-  PBL_SHELL_CMD(read, NULL, "Print the capture statistics", prv_cmd_mic_read),
+  PBL_SHELL_CMD(read, nullptr, "Print the capture statistics", prv_cmd_mic_read),
   PBL_SHELL_SUBCMD_SET_END,
 };
 
-PBL_SHELL_CMD_REGISTER(mic, sub_mic, "Microphone", NULL);
+PBL_SHELL_CMD_REGISTER(mic, sub_mic, "Microphone", nullptr);
 #endif

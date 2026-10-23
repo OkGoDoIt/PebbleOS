@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/kernel/compiler.h>
@@ -152,15 +151,14 @@ typedef struct PBL_PACKED ActivityHRMSettings {
   bool activity_tracking_enabled;
 } ActivityHRMSettings;
 
-/**
- * @brief Blood oxygen (SpO2) preferences, as stored in prefs.
- *
- * The on/off setting is synced from the phone under its own key
- * (@c PREF_KEY_BLOOD_OXYGEN_PREFERENCES); only the watch-local interval lives here.
- */
+/** @brief SpO2 preferences, as stored in prefs. */
 typedef struct PBL_PACKED ActivitySpO2Settings {
+  /** Background SpO2 monitoring enabled. */
+  bool enabled;
   /** @ref HRMonitoringInterval value. */
   uint8_t measurement_interval;
+  /** SpO2 sampling during detected activities and workouts. */
+  bool activity_tracking_enabled;
 } ActivitySpO2Settings;
 
 /** @brief Default user height, in millimeters (5'3.8", CDC average). */
@@ -210,7 +208,9 @@ typedef struct PBL_PACKED ActivitySpO2Settings {
 /** @brief Initializer for the default @ref ActivitySpO2Settings. */
 #define ACTIVITY_SPO2_DEFAULT_PREFERENCES               \
   {                                                     \
+    .enabled = false,                                   \
     .measurement_interval = HRMonitoringInterval_10Min, \
+    .activity_tracking_enabled = false,                 \
   }
 
 /** @brief Lowest heart rate reading accepted as valid, in beats per minute. */
@@ -770,13 +770,13 @@ uint8_t activity_prefs_heart_get_zone3_threshold(void);
 bool activity_prefs_heart_rate_is_enabled(void);
 
 /**
- * @brief Check whether background blood oxygen (SpO2) monitoring is enabled.
+ * @brief Check whether background SpO2 monitoring is enabled.
  *
  * Declared regardless of @c CONFIG_HRM since the HRM manager gates sensor power on it.
  *
  * @return true if enabled.
  */
-bool activity_prefs_blood_oxygen_is_enabled(void);
+bool activity_prefs_spo2_is_enabled(void);
 
 /**
  * @brief Check whether SpO2 sampling during detected activities is enabled.
@@ -786,7 +786,7 @@ bool activity_prefs_blood_oxygen_is_enabled(void);
  *
  * @return true if enabled.
  */
-bool activity_prefs_blood_oxygen_activity_tracking_is_enabled(void);
+bool activity_prefs_spo2_activity_tracking_is_enabled(void);
 
 #ifdef CONFIG_HRM
 /**
@@ -818,20 +818,20 @@ bool activity_prefs_hrm_activity_tracking_is_enabled(void);
 void activity_prefs_set_hrm_activity_tracking_enabled(bool enabled);
 
 /**
- * @brief Enable or disable background blood oxygen (SpO2) monitoring.
+ * @brief Enable or disable background SpO2 monitoring.
  *
  * The setting is synced to the phone.
  *
  * @param enabled If true, enable it.
  */
-void activity_prefs_set_blood_oxygen_enabled(bool enabled);
+void activity_prefs_set_spo2_enabled(bool enabled);
 
 /**
  * @brief Enable or disable SpO2 sampling during detected activities.
  *
  * @param enabled If true, enable it.
  */
-void activity_prefs_set_blood_oxygen_activity_tracking_enabled(bool enabled);
+void activity_prefs_set_spo2_activity_tracking_enabled(bool enabled);
 
 /**
  * @brief Get the background SpO2 measurement interval.
@@ -913,6 +913,26 @@ bool activity_get_sessions(uint32_t *session_entries, ActivitySession *sessions)
  */
 bool activity_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_records,
                                  time_t *utc_start);
+
+/** @brief Most minutes activity_get_minute_heart_rate() fills in: a day, plus the hour repeated
+ * when DST ends. */
+#define ACTIVITY_MINUTE_HEART_RATE_MAX_MINUTES (PBL_MIN_PER_DAY + PBL_MIN_PER_HOUR)
+
+/**
+ * @brief Get the heart rate of each minute in a time range.
+ *
+ * Unlike activity_get_minute_history(), this reads the minute data once for the whole range.
+ * Blocks on KernelBG, so only callable from the app or worker task.
+ *
+ * @param[out] heart_rate_bpm Array of @p num_minutes heart rates, one per minute from
+ * @p utc_start, 0 for minutes without a reading.
+ * @param num_minutes Number of minutes to fill in, at most
+ * @ref ACTIVITY_MINUTE_HEART_RATE_MAX_MINUTES.
+ * @param utc_start UTC time of the first minute, rounded down to the minute.
+ * @return true on success, false on failure.
+ */
+bool activity_get_minute_heart_rate(uint8_t *heart_rate_bpm, uint32_t num_minutes,
+                                    time_t utc_start);
 
 /** @brief Number of step averages per day, one per 15 minute interval. */
 #define ACTIVITY_NUM_METRIC_AVERAGES (4 * 24)

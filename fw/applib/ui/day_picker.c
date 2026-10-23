@@ -13,7 +13,6 @@
 #include <kernel/pbl_malloc.h>
 #include <resource/resource_ids.auto.h>
 #include <shell/prefs.h>
-#include <system/passert.h>
 
 #define DAY_PICKER_CELL_HEIGHT \
   PBL_IF_RECT_ELSE(menu_cell_small_cell_height(), menu_cell_basic_cell_height())
@@ -44,16 +43,16 @@ typedef struct {
 } CustomDayPickerData;
 
 static const char *prv_kind_strings[DayPickerKindNumItems] = {
-  [DayPickerKindEveryday] = "Every Day", [DayPickerKindWeekdays] = "Weekdays",
-  [DayPickerKindWeekends] = "Weekends",  [DayPickerKindCustom] = "Custom",
-  [DayPickerKindJustOnce] = "Just Once",
+  [DayPickerKindEveryday] = i18n_noop("Every Day"), [DayPickerKindWeekdays] = i18n_noop("Weekdays"),
+  [DayPickerKindWeekends] = i18n_noop("Weekends"),  [DayPickerKindCustom] = i18n_noop("Custom"),
+  [DayPickerKindJustOnce] = i18n_noop("Just Once"),
 };
 
 const char *day_picker_kind_get_string(DayPickerKind kind) {
   if (kind >= DayPickerKindNumItems) {
     return "";
   }
-  return i18n_noop(prv_kind_strings[kind]);
+  return prv_kind_strings[kind];
 }
 
 static DayPickerKind prv_row_to_kind(bool allow_once, int row) {
@@ -110,7 +109,7 @@ static void prv_day_picker_draw_row(GContext *ctx, const Layer *cell_layer, Menu
   DayPickerData *data = (DayPickerData *)callback_context;
   DayPickerKind kind = prv_row_to_kind(data->allow_once, cell_index->row);
   const char *cell_text = i18n_get(day_picker_kind_get_string(kind), &data->window);
-  menu_cell_basic_draw(ctx, cell_layer, cell_text, NULL, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, cell_text, nullptr, nullptr);
 }
 
 static void prv_day_picker_handle_selection(MenuLayer *menu_layer, MenuIndex *cell_index,
@@ -234,7 +233,7 @@ static void prv_custom_day_picker_draw_row(GContext *ctx, const Layer *cell_laye
           box.origin = GPoint(0, 4);
           graphics_draw_text(ctx, i18n_get("Check something first.", &data->window),
                              fonts_get_system_font(FONT_KEY_GOTHIC_18), box, GTextOverflowModeFill,
-                             GTextAlignmentCenter, NULL);
+                             GTextAlignmentCenter, nullptr);
           return;
         } else {
           new_resource_id = RESOURCE_ID_CHECKMARK_ICON_DOTTED;
@@ -266,7 +265,7 @@ static void prv_custom_day_picker_draw_row(GContext *ctx, const Layer *cell_laye
       ptr_bitmap = &data->deselected_icon;
     }
     graphics_context_set_compositing_mode(ctx, GCompOpTint);
-    menu_cell_basic_draw_icon_right(ctx, cell_layer, cell_text, NULL, ptr_bitmap);
+    menu_cell_basic_draw_icon_right(ctx, cell_layer, cell_text, nullptr, ptr_bitmap);
   }
 }
 

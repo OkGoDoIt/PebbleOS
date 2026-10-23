@@ -22,9 +22,11 @@
 // Stubs
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
-#include <stubs_applib_resource.h>
 
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
+
+// Checks under CONFIG_SCREEN_COLOR_DEPTH_BITS == 8 render a few pixels off the reference
+// images on 1-bit.
 
 // Setup
 void test_graphics_draw_stroke_${BIT_DEPTH_NAME}__initialize(void) {
@@ -118,7 +120,6 @@ void test_graphics_draw_stroke_${BIT_DEPTH_NAME}__origin_layer(void) {
   GContext ctx;
   test_graphics_context_init(&ctx, fb);
 
-  // TODO: Fix offset calculation and reenable this: - PBL-16509
 #if CONFIG_SCREEN_COLOR_DEPTH_BITS == 8
   setup_test_aa_sw(&ctx, fb, ORIGIN_RECT_NO_CLIP, ORIGIN_RECT_NO_CLIP, true, STROKE_WIDTH);
   graphics_draw_line(&ctx, START_ON_ORIGIN_RECT, END_ON_ORIGIN_RECT);
@@ -146,7 +147,6 @@ void test_graphics_draw_stroke_${BIT_DEPTH_NAME}__offset_layer(void) {
   GContext ctx;
   test_graphics_context_init(&ctx, fb);
 
-  // TODO: Fix offset calculation and reenable this: - PBL-16509
 #if CONFIG_SCREEN_COLOR_DEPTH_BITS == 8
   setup_test_aa_sw(&ctx, fb, OFFSET_RECT_NO_CLIP, OFFSET_RECT_NO_CLIP, true, STROKE_WIDTH);
   graphics_draw_line(&ctx, START_ON_ORIGIN_RECT, END_ON_ORIGIN_RECT);
@@ -164,25 +164,4 @@ void test_graphics_draw_stroke_${BIT_DEPTH_NAME}__offset_layer(void) {
   setup_test_aa_sw(&ctx, fb, OFFSET_RECT_NO_CLIP, OFFSET_RECT_NO_CLIP, true, STROKE_WIDTH);
   graphics_draw_line(&ctx, END_ON_ORIGIN_RECT, END_ON_ORIGIN_RECT);
   cl_check(gbitmap_pbi_eq(&ctx.dest_bitmap, "draw_stroke_same_point_offset_layer.${BIT_DEPTH_NAME}.pbi"));
-}
-
-#define COLOR_START_POINT GPoint(5, 35)
-#define COLOR_END_POINT GPoint(45, 40)
-
-void test_graphics_draw_stroke_${BIT_DEPTH_NAME}__color(void) {
-  // TODO: Fix blending and reenable this - PBL-16509
-/*
-  GContext ctx;
-  test_graphics_context_init(&ctx, fb);
-
-  setup_test_aa_sw(&ctx, fb, OFFSET_RECT_NO_CLIP, OFFSET_RECT_NO_CLIP, true, 10);
-  graphics_context_set_stroke_color(&ctx, GColorBlack);
-  graphics_draw_line(&ctx, COLOR_START_POINT, COLOR_END_POINT);
-  cl_check(gbitmap_pbi_eq(&ctx.dest_bitmap, "draw_stroke_inside_origin_layer.${BIT_DEPTH_NAME}.pbi"));
-
-  setup_test_aa_sw(&ctx, fb, OFFSET_RECT_NO_CLIP, OFFSET_RECT_NO_CLIP, true, 10);
-  graphics_context_set_stroke_color(&ctx, GColorClear);
-  graphics_draw_line(&ctx, COLOR_START_POINT, COLOR_END_POINT);
-  cl_check(gbitmap_pbi_eq(&ctx.dest_bitmap, "draw_stroke_inside_origin_layer.${BIT_DEPTH_NAME}.pbi"));
-*/
 }

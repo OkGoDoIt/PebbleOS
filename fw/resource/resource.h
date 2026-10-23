@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -51,6 +50,10 @@ bool resource_is_valid(ResAppNum app_num, uint32_t resource_id);
 
 //! @internal
 uint32_t resource_get_and_cache(ResAppNum app_num, uint32_t resource_id);
+
+//! @internal
+//! Drops cached system resources in [first_id, last_id], e.g. after the file holding them changed.
+void resource_uncache(uint32_t first_id, uint32_t last_id);
 
 //! @internal
 //! @param buffer[out] a buffer to load the data into. Must be at least max_length in bytes.

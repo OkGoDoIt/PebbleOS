@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <limits.h>
+#include <stdio.h>
 
 #include <pbl/services/blob_db/health_db.h>
 #include <pbl/services/filesystem/pfs.h>
@@ -15,15 +16,6 @@
 #include <pbl/util/time.h>
 #include <pbl/util/units.h>
 
-#include <stubs_app_state.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_worker_state.h>
-
 status_t pfs_remove(const char *name) {
   fake_settings_file_reset();
   return S_SUCCESS;
@@ -31,7 +23,7 @@ status_t pfs_remove(const char *name) {
 
 status_t blob_db_insert(BlobDBId db_id, const uint8_t *key, int key_len, const uint8_t *val,
                         int val_len) {
-  return settings_file_set(NULL, key, key_len, val, val_len);
+  return settings_file_set(nullptr, key, key_len, val, val_len);
 }
 
 RtcTicks rtc_get_ticks(void) {

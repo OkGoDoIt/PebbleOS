@@ -7,7 +7,6 @@
 #include "kernel/pebble_tasks.h"
 
 #include "stubs_logging.h"
-#include "stubs_passert.h"
 
 #include <string.h>
 

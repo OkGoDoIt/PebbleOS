@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/services/i18n/i18n.h>
 #include <pbl/services/weather/weather_types.h>
 #include <pbl/util/size.h>
 
@@ -41,6 +42,31 @@ static size_t prv_get_array_index_of_type(WeatherType type) {
 const char *weather_type_get_name(WeatherType weather_type) {
   return s_weather_type_names[prv_get_array_index_of_type(weather_type)];
 };
+
+const char *weather_type_get_phrase(WeatherType weather_type) {
+  switch (weather_type) {
+    case WeatherType_Sun:
+      return i18n_noop("Sunny");
+    case WeatherType_PartlyCloudy:
+      return i18n_noop("Partly Cloudy");
+    case WeatherType_CloudyDay:
+      return i18n_noop("Cloudy");
+    case WeatherType_LightRain:
+      return i18n_noop("Light Rain");
+    case WeatherType_HeavyRain:
+      return i18n_noop("Rain");
+    case WeatherType_LightSnow:
+      return i18n_noop("Light Snow");
+    case WeatherType_HeavySnow:
+      return i18n_noop("Snow");
+    case WeatherType_RainAndSnow:
+      return i18n_noop("Rain & Snow");
+    case WeatherType_Generic:
+    case WeatherType_Unknown:
+    default:
+      return nullptr;
+  }
+}
 
 GColor weather_type_get_bg_color(WeatherType weather_type) {
 #if PBL_COLOR

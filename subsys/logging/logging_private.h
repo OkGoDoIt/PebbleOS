@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/kernel/compiler.h>
@@ -34,6 +33,10 @@ char pbl_log_get_level_char(const uint8_t log_level);
 //! Log a message to whatever specific channels are appropriate based on context and configuration.
 //! Internally calls kernel_pbl_log_serial and kernel_pbl_log_flash.
 void kernel_pbl_log(LogBinaryMessage *log_message, uint32_t flags);
+
+//! Kill the caller of the syscall in progress unless @p log_message, with its
+//! message and filename terminated, is in its memory.
+void kernel_pbl_log_verify_user(const LogBinaryMessage *log_message);
 
 //! Force a log message out the serial channel.
 void kernel_pbl_log_serial(LogBinaryMessage *log_message, uint32_t flags);

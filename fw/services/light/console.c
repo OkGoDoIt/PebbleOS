@@ -4,11 +4,21 @@
 #ifdef CONFIG_SHELL
 #include <inttypes.h>
 
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/als.h>
+#include <pbl/kernel/delay.h>
 #include <pbl/services/light.h>
 #include <pbl/shell/shell.h>
 
-#include <kernel/util/sleep.h>
+#if defined(CONFIG_BACKLIGHT_SHELL) && defined(CONFIG_BACKLIGHT_HAS_COLOR)
+#include <errno.h>
+#include <string.h>
+
+#include <pbl/drivers/backlight.h>
+#include <pbl/drivers/rtc.h>
+#include <pbl/util/units.h>
+
+#include <shell/prefs.h>
+#endif
 
 #if defined(CONFIG_ALS_SCREEN_COMPENSATION)
 #include <string.h>
@@ -25,38 +35,105 @@
 #endif
 
 PBL_SHELL_SUBCMD_SET_CREATE(sub_als);
-PBL_SHELL_CMD_REGISTER(als, sub_als, "Ambient light sensor", NULL);
+PBL_SHELL_CMD_REGISTER(als, sub_als, "Ambient light sensor", nullptr);
+
+static int prv_cmd_als_read(const struct pbl_shell *sh, size_t argc, char **argv) {
+  uint32_t level;
+  int ret;
+
+  ret = pbl_als_read(ALS, &level);
+  if (ret != 0) {
+    pbl_shell_error(sh, "read failed (%d)", ret);
+    return ret;
+  }
+
+  pbl_shell_print(sh, "%" PRIu32, level);
+  return 0;
+}
+
+PBL_SHELL_SUBCMD_ADD(sub_als, read, nullptr, "Read the raw light level", prv_cmd_als_read, 0, 0);
 
 #ifndef CONFIG_RECOVERY_FW
 // Let the sensor settle after a backlight-off transition before reading.
 #define ALS_LUX_SETTLE_MS (250)
 
+#ifdef CONFIG_BACKLIGHT_SHELL
 static int prv_cmd_backlight_test(const struct pbl_shell *sh, size_t argc, char **argv) {
 #if defined(CONFIG_ALS_SCREEN_COMPENSATION)
   // Print raw, region luminance, and the corrected value to sanity-check the
   // under-display compensation.
-  const uint32_t raw = ambient_light_get_light_level();
+  uint32_t raw = 0U;
+
+  (void)pbl_als_read(ALS, &raw);
   const uint16_t lum_q8 = als_compensation_sample_luminance();
   const uint32_t corr = als_compensation_apply(raw, lum_q8, CONFIG_ALS_BLACK_SCALE_Q8);
   pbl_shell_print(sh, "als raw: %" PRIu32 " lum_q8: %" PRIu16 " corr: %" PRIu32, raw, lum_q8, corr);
 #else
-  pbl_shell_print(sh, "als: %" PRIu32, ambient_light_get_light_level());
+  uint32_t level = 0U;
+
+  (void)pbl_als_read(ALS, &level);
+  pbl_shell_print(sh, "als: %" PRIu32, level);
 #endif
   light_enable_interaction();
   pbl_shell_print(sh, "brightness: %" PRIu8 "%%", light_get_current_brightness_percent());
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_backlight, test, NULL, "Turn the light on and print its state",
+PBL_SHELL_SUBCMD_ADD(sub_backlight, test, nullptr, "Turn the light on and print its state",
                      prv_cmd_backlight_test, 0, 0);
+#endif
+
+#if defined(CONFIG_BACKLIGHT_SHELL) && defined(CONFIG_BACKLIGHT_HAS_COLOR)
+static void prv_day_night_status(const struct pbl_shell *sh) {
+  struct pbl_tm now;
+
+  rtc_get_time_tm(&now);
+  pbl_shell_print(sh, "enabled=%d now=%02d:%02d sunrise=%u sunset=%u",
+                  backlight_day_night_color_is_enabled(), now.tm_hour, now.tm_min,
+                  backlight_get_sunrise_minute(), backlight_get_sunset_minute());
+  pbl_shell_print(sh, "day=%06" PRIx32 " night=%06" PRIx32, backlight_get_default_color(),
+                  backlight_get_night_color());
+}
+
+// Arms a green (day) -> red (night) switch one minute from now.
+static int prv_cmd_backlight_day_night(const struct pbl_shell *sh, size_t argc, char **argv) {
+  if (strcmp(argv[1], "start") == 0) {
+    struct pbl_tm now;
+
+    rtc_get_time_tm(&now);
+    const uint16_t sunrise = now.tm_hour * PBL_MIN_PER_HOUR + now.tm_min;
+    backlight_set_default_color(BACKLIGHT_COLOR_GREEN);
+    backlight_set_night_color(BACKLIGHT_COLOR_RED);
+    backlight_set_sunrise_minute(sunrise);
+    backlight_set_sunset_minute((sunrise + 1) % PBL_MIN_PER_DAY);
+    backlight_day_night_color_set_enabled(true);
+    light_enable(true);
+  } else if (strcmp(argv[1], "off") == 0) {
+    backlight_day_night_color_set_enabled(false);
+    light_enable(false);
+  } else if (strcmp(argv[1], "status") != 0) {
+    pbl_shell_error(sh, "usage: backlight daynight <start|status|off>");
+    return -EINVAL;
+  }
+
+  prv_day_night_status(sh);
+  return 0;
+}
+
+PBL_SHELL_SUBCMD_ADD(sub_backlight, daynight, nullptr,
+                     "Test the day/night color switch <start|status|off>",
+                     prv_cmd_backlight_day_night, 2, 0);
+#endif
 
 // Print raw, compensated, and lux values in one shot. Forces the backlight off
 // for the read: the light service suspends ALS sampling while the LED is on,
 // so a reading taken then would be a stale cached value.
 static int prv_cmd_als_lux(const struct pbl_shell *sh, size_t argc, char **argv) {
   light_allow(false);
-  psleep(ALS_LUX_SETTLE_MS);
-  const uint32_t raw = ambient_light_get_light_level();
+  pbl_sleep_ms(ALS_LUX_SETTLE_MS);
+  uint32_t raw = 0U;
+
+  (void)pbl_als_read(ALS, &raw);
 #if defined(CONFIG_ALS_SCREEN_COMPENSATION)
   const uint32_t corr =
       als_compensation_apply(raw, als_compensation_sample_luminance(), CONFIG_ALS_BLACK_SCALE_Q8);
@@ -64,17 +141,17 @@ static int prv_cmd_als_lux(const struct pbl_shell *sh, size_t argc, char **argv)
   const uint32_t corr = raw;
 #endif
   light_allow(true);
-  if (ambient_light_lux_available()) {
+  if (pbl_als_has_lux(ALS)) {
     pbl_shell_print(sh, "als raw: %" PRIu32 " corr: %" PRIu32 " lux: %" PRIu32, raw, corr,
-                    ambient_light_level_to_lux(corr));
+                    pbl_als_to_lux(ALS, corr));
   } else {
     pbl_shell_print(sh, "als raw: %" PRIu32 " corr: %" PRIu32 " lux: n/a", raw, corr);
   }
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_als, lux, NULL, "Read raw, compensated and lux values", prv_cmd_als_lux, 0,
-                     0);
+PBL_SHELL_SUBCMD_ADD(sub_als, lux, nullptr, "Read raw, compensated and lux values", prv_cmd_als_lux,
+                     0, 0);
 
 #if defined(CONFIG_ALS_SCREEN_COMPENSATION)
 
@@ -98,7 +175,7 @@ static void prv_als_frozen_cb(void *unused) {
 static void prv_als_flush_cb(void *unused) {
   FrameBuffer *fb = compositor_get_framebuffer();
   framebuffer_dirty_all(fb);
-  compositor_display_update(NULL);
+  compositor_display_update(nullptr);
   s_als_flush_done = true;
 }
 
@@ -107,12 +184,12 @@ static void prv_als_fill_solid(uint8_t px) {
   FrameBuffer *fb = compositor_get_framebuffer();
   memset(fb->buffer, px, FRAMEBUFFER_SIZE_BYTES);
   s_als_flush_done = false;
-  launcher_task_add_callback(prv_als_flush_cb, NULL);
+  launcher_task_add_callback(prv_als_flush_cb, nullptr);
   while (!s_als_flush_done) {
-    psleep(2);
+    pbl_sleep_ms(2);
   }
   while (compositor_display_update_in_progress()) {
-    psleep(2);
+    pbl_sleep_ms(2);
   }
 }
 
@@ -120,10 +197,13 @@ static void prv_als_fill_solid(uint8_t px) {
 static uint32_t prv_als_read_raw_avg(uint8_t n) {
   uint32_t sum = 0;
   for (uint8_t i = 0; i < n; i++) {
-    sum += ambient_light_get_light_level();
+    uint32_t level = 0U;
+
+    (void)pbl_als_read(ALS, &level);
+    sum += level;
     watchdog_feed();
     pbl_task_wdt_feed_all();
-    psleep(30);
+    pbl_sleep_ms(30);
   }
   return (n > 0) ? (sum / n) : 0;
 }
@@ -146,15 +226,15 @@ static int prv_cmd_als_curve(const struct pbl_shell *sh, size_t argc, char **arg
 
   animation_private_pause();
   s_als_frozen = false;
-  compositor_freeze(prv_als_frozen_cb, NULL);
+  compositor_freeze(prv_als_frozen_cb, nullptr);
   while (!s_als_frozen) {
-    psleep(2);
+    pbl_sleep_ms(2);
   }
 
   uint32_t raw_white = 1;
   for (uint8_t i = 0; i < (uint8_t)(sizeof(levels) / sizeof(levels[0])); i++) {
     prv_als_fill_solid(levels[i].px);
-    psleep(ALS_MEASURE_SETTLE_MS);
+    pbl_sleep_ms(ALS_MEASURE_SETTLE_MS);
     const uint32_t raw = prv_als_read_raw_avg(4);
     if (i == 0) {
       raw_white = (raw > 0) ? raw : 1;
@@ -171,7 +251,7 @@ static int prv_cmd_als_curve(const struct pbl_shell *sh, size_t argc, char **arg
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_als, curve, NULL, "Measure the screen transmittance curve",
+PBL_SHELL_SUBCMD_ADD(sub_als, curve, nullptr, "Measure the screen transmittance curve",
                      prv_cmd_als_curve, 0, 0);
 #endif // CONFIG_ALS_SCREEN_COMPENSATION
 #endif // CONFIG_RECOVERY_FW

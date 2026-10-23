@@ -6,6 +6,9 @@
 #include "accel_service_private.h"
 #include "event_service_client.h"
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/logging/logging.h>
 #include <pbl/services/accel_manager.h>
 
 #include <applib/applib_malloc.auto.h>
@@ -13,7 +16,6 @@
 #include <process_state/app_state/app_state.h>
 #include <process_state/worker_state/worker_state.h>
 #include <syscall/syscall.h>
-#include <system/passert.h>
 
 static bool prv_is_session_task(void) {
   PebbleTask task = pebble_task_get_current();
@@ -53,16 +55,13 @@ AccelServiceState *accel_service_private_get_session(PebbleTask task) {
   } else if (task == PebbleTask_Worker) {
     return worker_state_get_accel_state();
   } else {
-    WTF;
+    pbl_panic();
   }
 }
 
 void accel_service_cleanup_task_session(PebbleTask task) {
-  AccelServiceState *state = accel_service_private_get_session(task);
-  if (state->manager_state) {
-    sys_accel_manager_data_unsubscribe(state->manager_state);
-    state->manager_state = NULL;
-  }
+  accel_manager_remove_task_subscriptions(task);
+  accel_service_private_get_session(task)->manager_state = nullptr;
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -70,7 +69,7 @@ void accel_service_cleanup_task_session(PebbleTask task) {
 static void prv_do_shake_handle(PebbleEvent *e, void *context) {
   PebbleTask task = pebble_task_get_current();
   AccelServiceState *state = (AccelServiceState *)accel_service_private_get_session(task);
-  PBL_ASSERTN(state->shake_handler != NULL);
+  PBL_ASSERTN(state->shake_handler != nullptr);
 
   state->shake_handler((AccelAxisType)e->accel_tap.axis, e->accel_tap.direction);
 }
@@ -79,7 +78,7 @@ static void prv_do_shake_handle(PebbleEvent *e, void *context) {
 static void prv_do_double_tap_handle(PebbleEvent *e, void *context) {
   PebbleTask task = pebble_task_get_current();
   AccelServiceState *state = (AccelServiceState *)accel_service_private_get_session(task);
-  PBL_ASSERTN(state->double_tap_handler != NULL);
+  PBL_ASSERTN(state->double_tap_handler != nullptr);
   // only kernel clients can subscribe to double tap right now, so just increment double tap count
   // device analytic here
   state->double_tap_handler((AccelAxisType)e->accel_tap.axis, e->accel_tap.direction);
@@ -107,8 +106,8 @@ static bool prv_do_data_handle_chunk(AccelSubscriptionToken *token) {
     return more;
   }
 
-  PBL_ASSERTN(state->data_handler != NULL || state->raw_data_handler != NULL ||
-              state->raw_data_handler_deprecated != NULL);
+  PBL_ASSERTN(state->data_handler != nullptr || state->raw_data_handler != nullptr ||
+              state->raw_data_handler_deprecated != nullptr);
 
   uint16_t time_interval_ms = 1000 / state->sampling_rate;
   uint32_t time_since_last_sample =
@@ -148,7 +147,7 @@ static bool prv_do_data_handle_chunk(AccelSubscriptionToken *token) {
   }
 
   AccelRawData *handed_raw_data = token->handed_raw_data;
-  token->handed_raw_data = NULL;
+  token->handed_raw_data = nullptr;
   // Dropped in the handler, so the state may be gone and the token owns the buffer it handed out
   if (!token->state) {
     applib_free(handed_raw_data);
@@ -194,7 +193,7 @@ static void prv_free_raw_data(AccelServiceState *state) {
   if (state->raw_data != state->token->handed_raw_data) {
     applib_free(state->raw_data);
   }
-  state->raw_data = NULL;
+  state->raw_data = nullptr;
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -202,12 +201,12 @@ static void prv_free_raw_data(AccelServiceState *state) {
 static void prv_drop_subscription(AccelServiceState *state) {
   bool queued = sys_accel_manager_data_unsubscribe(state->manager_state);
   prv_free_raw_data(state);
-  state->token->state = NULL;
+  state->token->state = nullptr;
   if (!queued) {
     applib_free(state->token);
   }
-  state->manager_state = NULL;
-  state->token = NULL;
+  state->manager_state = nullptr;
+  state->token = nullptr;
   state->handler_task = PebbleTask_Unknown;
 }
 
@@ -221,7 +220,7 @@ static bool prv_alloc_raw_data(uint32_t *samples_per_update, AccelRawData **raw_
             (int)*samples_per_update, (int)max_samples_per_update);
     *samples_per_update = max_samples_per_update;
   }
-  *raw_data = NULL;
+  *raw_data = nullptr;
   if (*samples_per_update == 0) {
     return true;
   }
@@ -298,7 +297,7 @@ void accel_raw_data_service_subscribe(uint32_t samples_per_update, AccelRawDataH
 void accel_data_service_subscribe__deprecated(uint32_t samples_per_update,
                                               AccelRawDataHandler__deprecated handler) {
   AccelServiceState *session = accel_service_private_get_session(PebbleTask_Unknown);
-  prv_shared_subscribe(session, ACCEL_SAMPLING_25HZ, samples_per_update, NULL, NULL, handler);
+  prv_shared_subscribe(session, ACCEL_SAMPLING_25HZ, samples_per_update, nullptr, nullptr, handler);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -368,7 +367,7 @@ void accel_service_state_init(AccelServiceState *state) {
 // Event service handler for shake events
 static void prv_session_do_shake_handle(PebbleEvent *e, void *context) {
   AccelServiceState *state = context;
-  if (state->shake_handler != NULL) {
+  if (state->shake_handler != nullptr) {
     state->shake_handler((AccelAxisType)e->accel_tap.axis, e->accel_tap.direction);
   }
 }
@@ -377,7 +376,7 @@ static void prv_session_do_shake_handle(PebbleEvent *e, void *context) {
 // Event service handler for double tap events
 static void prv_session_do_double_tap_handle(PebbleEvent *e, void *context) {
   AccelServiceState *state = context;
-  if (state->double_tap_handler != NULL) {
+  if (state->double_tap_handler != nullptr) {
     state->double_tap_handler((AccelAxisType)e->accel_tap.axis, e->accel_tap.direction);
   }
 }
@@ -410,7 +409,7 @@ void accel_session_delete(AccelServiceState *session) {
   prv_assert_session_task();
 
   // we better have unsubscribed at this point
-  PBL_ASSERTN(session->manager_state == NULL);
+  PBL_ASSERTN(session->manager_state == nullptr);
 
   // A data event still queued for the session only reads its token
   kernel_free(session);
@@ -426,7 +425,7 @@ void accel_session_shake_subscribe(AccelServiceState *session, AccelTapHandler h
 // ----------------------------------------------------------------------------------------------
 void accel_session_shake_unsubscribe(AccelServiceState *state) {
   event_service_client_unsubscribe(&state->accel_shake_info);
-  state->shake_handler = NULL;
+  state->shake_handler = nullptr;
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -438,19 +437,19 @@ void accel_session_double_tap_subscribe(AccelServiceState *state, AccelTapHandle
 // -----------------------------------------------------------------------------------------------
 void accel_session_double_tap_unsubscribe(AccelServiceState *state) {
   event_service_client_unsubscribe(&state->accel_double_tap_info);
-  state->double_tap_handler = NULL;
+  state->double_tap_handler = nullptr;
 }
 
 // -----------------------------------------------------------------------------------------------
 void accel_session_data_subscribe(AccelServiceState *state, uint32_t samples_per_update,
                                   AccelDataHandler handler) {
-  prv_shared_subscribe(state, ACCEL_SAMPLING_25HZ, samples_per_update, handler, NULL, NULL);
+  prv_shared_subscribe(state, ACCEL_SAMPLING_25HZ, samples_per_update, handler, nullptr, nullptr);
 }
 
 // -----------------------------------------------------------------------------------------------
 void accel_session_raw_data_subscribe(AccelServiceState *state, AccelSamplingRate sampling_rate,
                                       uint32_t samples_per_update, AccelRawDataHandler handler) {
-  prv_shared_subscribe(state, sampling_rate, samples_per_update, NULL, handler, NULL);
+  prv_shared_subscribe(state, sampling_rate, samples_per_update, nullptr, handler, nullptr);
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -460,9 +459,9 @@ void accel_session_data_unsubscribe(AccelServiceState *state) {
   }
   prv_assert_handler_task(state);
   prv_drop_subscription(state);
-  state->data_handler = NULL;
-  state->raw_data_handler = NULL;
-  state->raw_data_handler_deprecated = NULL;
+  state->data_handler = nullptr;
+  state->raw_data_handler = nullptr;
+  state->raw_data_handler_deprecated = nullptr;
 }
 
 // -----------------------------------------------------------------------------------------------

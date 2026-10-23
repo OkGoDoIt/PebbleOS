@@ -61,6 +61,8 @@ class PebbleBundle:
         self.has_children = False
         self.has_license = False
         self.has_jstooling = False
+        # Loose files written under their own path in the bundle: arcname -> path on disk
+        self.named_files = {}
 
     def add_firmware(
         self,
@@ -255,8 +257,13 @@ class PebbleBundle:
         self.has_jsapp = True
         return True
 
+    def add_named_file(self, path, arcname):
+        check_paths(path)
+        self.named_files[arcname] = path
+        return True
+
     def write(self, out_path=None, verbose=False):
-        if not (self.has_firmware or self.has_watchapp):
+        if not (self.has_firmware or self.has_watchapp or self.named_files):
             raise RuntimeError("Bundle must contain either a firmware or watchapp")
 
         if not out_path:
@@ -279,7 +286,12 @@ class PebbleBundle:
                 else:
                     z.write(f, os.path.basename(f))
 
-            if not self.has_children:
+            for arcname, path in self.named_files.items():
+                z.write(path, arcname)
+
+            # Without a binary there is nothing for a manifest to describe; a root manifest.json
+            # would read as an aplite build.
+            if not self.has_children and (self.has_firmware or self.has_watchapp):
                 self.bundle_manifest["type"] = self.type
                 z.writestr("manifest.json", json.dumps(self.bundle_manifest))
 
@@ -328,7 +340,9 @@ def make_firmware_bundle(
     bundle.write(outfile, verbose)
 
 
-def make_watchapp_bundle(timestamp, appinfo, binaries, js, outfile=None, verbose=False):
+def make_watchapp_bundle(
+    timestamp, appinfo, binaries, js, outfile=None, verbose=False, named_files=None
+):
     """Makes a pbw for an watch app, which includes a firmware, a resource
     pack and optionally a list of javascript files.
 
@@ -344,6 +358,8 @@ def make_watchapp_bundle(timestamp, appinfo, binaries, js, outfile=None, verbose
         'subfolder' -- path to subfolder in PBW for platform binary
     js -- (optional) a list of paths to javascript files to be included
     outfile -- path to write the pbw to
+    named_files -- (optional) {path in the pbw: path on disk} of loose files, such as a plugin
+        script or a bundled config page. With these, a bundle needs no binaries: a plugin-only pbw.
     """
     bundle = PebbleBundle()
 
@@ -352,7 +368,10 @@ def make_watchapp_bundle(timestamp, appinfo, binaries, js, outfile=None, verbose
 
     bundle.add_jsapp(js)
 
-    if len(binaries) < 1:
+    for arcname, path in (named_files or {}).items():
+        bundle.add_named_file(os.path.expanduser(path), arcname)
+
+    if len(binaries) < 1 and not named_files:
         raise RuntimeError("Cannot bundle watchapp without binaries")
 
     for binary in binaries:

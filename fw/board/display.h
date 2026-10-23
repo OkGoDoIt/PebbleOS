@@ -13,10 +13,9 @@ typedef struct {
   uint16_t max_x;
 } GBitmapDataRowInfoInternal;
 
-// FIXME: PBL-21055 Fix SDK exporter failing to crawl framebuffer headers
+// The SDK exporter can't crawl the framebuffer headers.
 #if !defined(SDK)
 
-// FIXME: PBL-21049 Fix platform abstraction and board definition scheme
 #ifdef UNITTEST
 // Do nothing, a unit-test's wscript specifies platforms=[]
 // used by tools/waf/pebble_test.py to define these includes per test
@@ -31,9 +30,9 @@ typedef struct {
 #include <board/displays/display_getafix.h>
 #elif defined(CONFIG_BOARD_QEMU_EMERY) || defined(CONFIG_BOARD_NATIVE_EMERY)
 #include <board/displays/display_qemu_emery.h>
-#elif defined(CONFIG_BOARD_QEMU_FLINT)
+#elif defined(CONFIG_BOARD_QEMU_FLINT) || defined(CONFIG_BOARD_NATIVE_FLINT)
 #include <board/displays/display_qemu_flint.h>
-#elif defined(CONFIG_BOARD_QEMU_GABBRO)
+#elif defined(CONFIG_BOARD_QEMU_GABBRO) || defined(CONFIG_BOARD_NATIVE_GABBRO)
 #include <board/displays/display_qemu_gabbro.h>
 #else
 #error "Unknown display definition for board"

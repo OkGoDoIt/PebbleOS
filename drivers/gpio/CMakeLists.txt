@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-set(sources)
+set(sources gpio.c)
 if(CONFIG_GPIO_QEMU)
   list(APPEND sources qemu.c)
 elseif(CONFIG_GPIO_NRF5)
@@ -9,5 +9,9 @@ elseif(CONFIG_GPIO_NRF5)
 elseif(CONFIG_GPIO_SF32LB)
   list(APPEND sources sf32lb.c)
 endif()
+if(CONFIG_GPIO_NPM1300)
+  list(APPEND sources npm1300.c)
+endif()
 pbl_library()
 pbl_library_sources(${sources})
+pbl_library_sources_ifdef(CONFIG_GPIO_SHELL shell.c)

@@ -36,9 +36,11 @@
 //! Delay in milliseconds before retrying a failed meta characteristic read
 #define PPOGATT_META_READ_RETRY_DELAY_MS (500)
 
-//! Delay in milliseconds before retrying a send that failed for lack of BT
-//! stack buffers (reversed role: NimBLE has no "buffers freed" event)
+//! Delay in milliseconds before the first retry of a send that failed for lack
+//! of BT stack buffers (NimBLE has no "buffers freed" event)
 #define PPOGATT_SEND_RETRY_DELAY_MS (20)
+//! Each further retry doubles the delay, up to this
+#define PPOGATT_SEND_RETRY_MAX_DELAY_MS (200)
 
 typedef enum {
   //! Watch is the GATT client; phone hosts the PPoG service.
@@ -55,9 +57,9 @@ typedef enum {
   PPoGATTPacketTypeInvalidRangeStart,
 } PPoGATTPacketType;
 
-_Static_assert(PPoGATTPacketTypeAck != 0, "Ack type can't be 0; see ack_packet_byte");
-_Static_assert(PPoGATTPacketTypeResetRequest != 0, "Reset type can't be 0; see reset_packet_byte");
-_Static_assert(PPoGATTPacketTypeResetComplete != 0, "Reset type can't be 0; see reset_packet_byte");
+static_assert(PPoGATTPacketTypeAck != 0, "Ack type can't be 0; see ack_packet_byte");
+static_assert(PPoGATTPacketTypeResetRequest != 0, "Reset type can't be 0; see reset_packet_byte");
+static_assert(PPoGATTPacketTypeResetComplete != 0, "Reset type can't be 0; see reset_packet_byte");
 
 typedef struct PBL_PACKED {
   PPoGATTPacketType type : 3;
@@ -71,10 +73,10 @@ typedef struct PBL_PACKED {
   uint8_t sn : PPOGATT_SN_BITS;
 } PPoGATTPacketHeader;
 
-_Static_assert(sizeof(PPoGATTPacketHeader) == sizeof(PPoGATTPacket), "");
+static_assert(sizeof(PPoGATTPacketHeader) == sizeof(PPoGATTPacket), "");
 
-_Static_assert(sizeof(PPoGATTPacket) == 1,
-               "You can't increase the size of PPoGATTPacket. It's set in stone now!");
+static_assert(sizeof(PPoGATTPacket) == 1,
+              "You can't increase the size of PPoGATTPacket. It's set in stone now!");
 
 //! Client identification payload that is attached to the client's Reset Request messages
 typedef struct PBL_PACKED {

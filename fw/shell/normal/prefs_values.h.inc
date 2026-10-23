@@ -11,6 +11,10 @@
   PREFS_MACRO(PREF_KEY_BACKLIGHT_INTENSITY, s_backlight_intensity)
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
   PREFS_MACRO(PREF_KEY_BACKLIGHT_COLOR, s_backlight_color)
+  PREFS_MACRO(PREF_KEY_BACKLIGHT_COLOR_DAY_NIGHT_ENABLED, s_backlight_color_day_night_enabled)
+  PREFS_MACRO(PREF_KEY_BACKLIGHT_COLOR_NIGHT, s_backlight_color_night)
+  PREFS_MACRO(PREF_KEY_BACKLIGHT_COLOR_SUNRISE_MINUTE, s_backlight_color_sunrise_minute)
+  PREFS_MACRO(PREF_KEY_BACKLIGHT_COLOR_SUNSET_MINUTE, s_backlight_color_sunset_minute)
 #endif
   PREFS_MACRO(PREF_KEY_BACKLIGHT_MOTION, s_backlight_motion_enabled)
   PREFS_MACRO(PREF_KEY_BACKLIGHT_TOUCH, s_backlight_touch_wake)
@@ -50,8 +54,6 @@
   PREFS_MACRO(PREF_KEY_ALARMS_APP_OPENED, s_alarms_app_opened)
   PREFS_MACRO(PREF_KEY_ACTIVITY_HRM_PREFERENCES, s_activity_hrm_preferences)
   PREFS_MACRO(PREF_KEY_ACTIVITY_SPO2_PREFERENCES, s_activity_spo2_preferences)
-  PREFS_MACRO(PREF_KEY_BLOOD_OXYGEN_PREFERENCES, s_blood_oxygen_enabled)
-  PREFS_MACRO(PREF_KEY_BLOOD_OXYGEN_ACTIVITY_PREFERENCES, s_blood_oxygen_activity_enabled)
   PREFS_MACRO(PREF_KEY_ACTIVITY_HEART_RATE_PREFERENCES, s_activity_hr_preferences)
   PREFS_MACRO(PREF_KEY_TIMELINE_SETTINGS_OPENED, s_timeline_settings_opened)
   PREFS_MACRO(PREF_KEY_TIMELINE_PEEK_ENABLED, s_timeline_peek_enabled)

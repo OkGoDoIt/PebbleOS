@@ -3,17 +3,48 @@
 
 #include "resource_storage_file.h"
 
+#include "language_pack.h"
 #include "resource_storage_impl.h"
 
 #include <stdint.h>
 
+#include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/filesystem/pfs.h>
+#include <pbl/util/math.h>
 
-#include <kernel/util/sleep.h>
+#include <resource/resource_ids.auto.h>
 
 extern const FileResourceData g_file_resource_stores[];
 extern const uint32_t g_num_file_resource_stores;
+
+static_assert(RESOURCE_ID_LECO_60_BOLD_NUMBERS_AM_PM_EXTENDED - RESOURCE_ID_STRINGS <
+                  LANGUAGE_PACK_RESOURCE_STRIDE,
+              "language pack resources must fit in a slot");
+
+// Each extra slot owns its whole ID window; the file says which entries it carries.
+static const FileResourceData s_language_resource_stores[LANGUAGE_PACK_COUNT - 1] = {
+#define LANGUAGE_STORE(slot)                                                   \
+  {LANGUAGE_PACK_RESOURCE_BASE + (slot) * LANGUAGE_PACK_RESOURCE_STRIDE + 1,   \
+   LANGUAGE_PACK_RESOURCE_BASE + ((slot) + 1) * LANGUAGE_PACK_RESOURCE_STRIDE, \
+   LANGUAGE_PACK_RESOURCE_BASE + (slot) * LANGUAGE_PACK_RESOURCE_STRIDE, "lang" #slot}
+  LANGUAGE_STORE(1),
+  LANGUAGE_STORE(2),
+  LANGUAGE_STORE(3),
+#undef LANGUAGE_STORE
+};
+
+bool language_pack_is_installed(uint8_t slot) {
+  const char *filename = language_pack_filename(slot);
+  if (!filename) {
+    return false;
+  }
+  const int fd = pfs_open(filename, OP_FLAG_READ | OP_FLAG_SKIP_HDR_CRC_CHECK, FILE_TYPE_STATIC, 0);
+  if (fd >= 0) {
+    pfs_close(fd);
+  }
+  return fd != E_DOES_NOT_EXIST;
+}
 
 // Common helpers functions
 //
@@ -95,13 +126,21 @@ static uint32_t resource_storage_file_read(ResourceStoreEntry *entry, uint32_t o
 
 static const uint8_t *resource_storage_file_readonly_bytes_unsupported(ResourceStoreEntry *entry,
                                                                        bool has_privileged_access) {
-  return NULL;
+  return nullptr;
 }
 
 static bool resource_storage_file_find_resource(ResourceStoreEntry *entry, ResAppNum app_num,
                                                 uint32_t resource_id) {
   if (app_num != SYSTEM_APP) {
     return false;
+  }
+  for (unsigned int i = 0; i < LANGUAGE_PACK_COUNT - 1; ++i) {
+    const FileResourceData *file = &s_language_resource_stores[i];
+    if (resource_id >= file->first_resource_id && resource_id <= file->last_resource_id) {
+      entry->store_data = file;
+      entry->id -= file->resource_id_offset;
+      return true;
+    }
   }
   for (unsigned int i = 0; i < g_num_file_resource_stores; ++i) {
     if (g_file_resource_stores[i].first_resource_id > resource_id) {
@@ -122,7 +161,7 @@ static ResourceCallbackHandle resource_storage_file_watch(ResourceStoreEntry *en
                                                           void *data) {
   const FileResourceData *file = entry->store_data;
   if (!file) {
-    return NULL;
+    return nullptr;
   }
   PFSCallbackHandle cb_handle = pfs_watch_file(file->name, callback, FILE_CHANGED_EVENT_ALL, data);
   return cb_handle;
@@ -146,20 +185,23 @@ static void resource_storage_file_init(void) {
 
     const uint32_t file_length = prv_file_common_get_length_and_close(fd);
 
+    // Files written for older firmware may carry fewer entries
+    const uint32_t first_resource_id = g_file_resource_stores[i].first_resource_id;
+    const uint32_t num_entries = resource_storage_get_num_entries(SYSTEM_APP, first_resource_id);
+    const uint32_t last_resource_id =
+        MIN(g_file_resource_stores[i].last_resource_id, first_resource_id + num_entries - 1);
+
     // Now check each entry in the file
-    for (uint32_t resource_id = g_file_resource_stores[i].first_resource_id;
-         resource_id <= g_file_resource_stores[i].last_resource_id; resource_id++) {
-      // TODO PBL-21402
-      if (!resource_storage_check(SYSTEM_APP, resource_id, NULL)) {
+    for (uint32_t resource_id = first_resource_id; resource_id <= last_resource_id; resource_id++) {
+      if (!resource_storage_check(SYSTEM_APP, resource_id, nullptr)) {
         PBL_LOG_ERR("System resource file %" PRIu32 " corrupt!!!", resource_id);
       }
 
       const uint32_t large_file_size_threshold = 200 * 1024;
       if (file_length > large_file_size_threshold) {
         // If this file is over 200KB, it's going to take a while to CRC. Let's sleep a bit
-        // between entries so we don't starve out our background task. See PBL-24560 for a real
-        // long term fix.
-        psleep(5);
+        // between entries so we don't starve out our background task.
+        pbl_sleep_ms(5);
       }
     }
   }

@@ -4,18 +4,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <applib/app_logging.h>
-
-// FIXME PBL-1629: move needed declarations into applib
 #include <pbl/logging/logging.h>
 
+#include <applib/app_logging.h>
 #include <syscall/syscall.h>
 
 void app_log_vargs(uint8_t log_level, const char *src_filename, int src_line_number,
                    const char *fmt, va_list args) {
   char log_buffer[LOG_BUFFER_LENGTH];
-  _Static_assert(sizeof(log_buffer) > sizeof(AppLogBinaryMessage),
-                 "log_buffer too small for AppLogBinaryMessage");
+  static_assert(sizeof(log_buffer) > sizeof(AppLogBinaryMessage),
+                "log_buffer too small for AppLogBinaryMessage");
 
   AppLogBinaryMessage *msg = (AppLogBinaryMessage *)log_buffer;
   sys_get_app_uuid(&msg->uuid);

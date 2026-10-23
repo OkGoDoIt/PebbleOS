@@ -1,19 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Pebble Protocol over GATT, as the watch runs it: windows sized to the
-link, transfers larger than a window, resets from either side, lost
-packets, and the versions it agrees on with a phone hosting the service."""
+"""The Pebble Protocol over GATT, as the watch runs it: the windows it agrees
+on, transfers larger than a window, dictation with late Acks, resets from
+either side, lost packets, and the versions it agrees on with a phone
+hosting the service."""
 
 import re
 import time
 import uuid
 
 import pytest
-from harness.ble import FORWARD, PPOG_FORWARD_META
-from harness.ble.ppogatt import SN_MOD
+from harness.ble import FORWARD, PPOG_FORWARD_META, REVERSED
+from harness.ble.ppogatt import SN_MOD, LateAcks
 from harness.errors import Unsupported, WatchTimeout
 from harness.helpers.ui import Ui
+from harness.helpers.voice import VoicePhone
 
 pytestmark = pytest.mark.integration_boards("qemu_emery", "getafix@dvt2")
 BOTH = pytest.mark.variants("normal", "prf")
@@ -31,6 +33,13 @@ V0_WINDOW = 4
 PINGS = 100
 SETTLE_S = 5.0
 APP_UUID = uuid.UUID("3b0b7c4f-0e1a-4d3a-9c47-6a0c3d1e2f50")
+# An idle link: 45 ms, peripheral latency 30. With Acks 6 events late,
+# about 14 audio frames are in flight: more than a window of 4, fewer than
+# 25. A watch quiet for 3 events, longer than the emulator stalls, sleeps.
+IDLE_LINK = LateAcks(interval_s=0.045, latency=30, events=6, quiet_events=3)
+DICTATION_S = 3.0
+FRAME_S = 0.02
+DROPPED_FRAMES = r"Dropped \d+ frames during audio transfer"
 
 
 def _meta(min_version, max_version, app=None, session_type=True):
@@ -80,15 +89,15 @@ def _ping_all(pebble, count, timeout=60.0):
 
 @BOTH
 @pytest.mark.parametrize("mtu", [MIN_MTU, LARGE_MTU], ids=["mtu23", "mtu_large"])
-def test_window_follows_mtu(dut, watch, phones, mtu):
-    """With the minimum MTU the watch sends a full window, with a large one
-    the version 0 window; either way it takes the phone's."""
+def test_window_is_phones(dut, watch, phones, mtu):
+    """Whatever the MTU, the watch offers its largest window and takes the
+    phone's."""
     since = dut.logs.mark()
     phone = phones(mtu=mtu).connect()
     role, version, tx, rx = _opened(dut, since)
     assert (role, version) == ("reversed", 1)
     assert phone.link.att_mtu == min(mtu, 256)
-    assert tx == (PHONE_WINDOW if mtu == MIN_MTU else V0_WINDOW)
+    assert tx == PHONE_WINDOW
     assert 0 < rx <= PHONE_WINDOW
 
 
@@ -116,6 +125,30 @@ def test_large_transfer(dut, watch, phones, mtu):
         if b"".join(bytes(r) for r in rows) == image.tobytes():
             return
     pytest.fail("the screenshot differs from the screen")
+
+
+@pytest.mark.requires_config(
+    "CONFIG_SHELL", "CONFIG_SERVICE_VOICE", "CONFIG_SERVICE_VOICE_ENDPOINT"
+)
+@pytest.mark.parametrize("ppogatt", [REVERSED, FORWARD])
+def test_dictation_with_late_acks(dut, prompt, watch, phones, ppogatt):
+    """Dictation started on an idle link sends every audio frame: the
+    window covers the Acks' round trip, so the watch always has a packet to
+    send and never skips the events that bring them."""
+    phone = _settled(phones(ppogatt=ppogatt, late_acks=IDLE_LINK).connect())
+    voice = VoicePhone(phone.pebble)
+    since = dut.logs.mark()
+    prompt("voice start dictation")
+    session = voice.wait_session()
+    voice.wait_frames(session, 1)
+    time.sleep(DICTATION_S)
+    prompt("voice stop")
+    # The watch logs its drops before the stop it queues behind the frames.
+    voice.wait_stopped(session)
+    voice.send_result(session, ["hello"])
+    dropped = dut.logs.find(DROPPED_FRAMES, since)
+    assert dropped is None, str(dropped)
+    assert len(session.frames) >= 0.9 * DICTATION_S / FRAME_S
 
 
 @BOTH
@@ -174,22 +207,24 @@ def test_watch_resends_lost_data(dut, watch, phones):
 
 @BOTH
 @pytest.mark.parametrize(
-    "meta,version,window",
+    "meta,version,tx_window",
     [
         (_meta(0, 0, session_type=False), 0, V0_WINDOW),
-        (PPOG_FORWARD_META, 1, None),
-        (_meta(0, 5), 1, None),
+        (PPOG_FORWARD_META, 1, PHONE_WINDOW),
+        (_meta(0, 5), 1, PHONE_WINDOW),
     ],
     ids=["v0", "v1", "newer"],
 )
-def test_forward_version(dut, watch, phones, meta, version, window):
-    """A phone hosting the service gets the highest version both support."""
+def test_forward_version(dut, watch, phones, meta, version, tx_window):
+    """A phone hosting the service gets the highest version both support,
+    and from version 1 on the watch takes the phone's TX window."""
     since = dut.logs.mark()
     phone = phones(ppogatt=FORWARD, forward_meta=meta).connect()
     role, agreed, tx, rx = _opened(dut, since)
     assert (role, agreed) == ("forward", version)
-    if window is not None:
-        assert (tx, rx) == (window, window)
+    assert tx == tx_window
+    if version == 0:
+        assert rx == V0_WINDOW
     assert phone.watch_version() is not None
 
 

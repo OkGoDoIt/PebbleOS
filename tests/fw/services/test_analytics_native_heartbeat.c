@@ -23,9 +23,6 @@
 #include "fake_rtc.h"
 
 #include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_serial.h"
 
 #include <stdint.h>
 #include <string.h>

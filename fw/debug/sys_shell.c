@@ -8,25 +8,20 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <pbl/kernel/delay.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/kernel/irq.h>
+#include <pbl/kernel/time.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/shell/shell.h>
+#include <pbl/util/size.h>
 
 #include <kernel/event_loop.h>
-#include <kernel/util/delay.h>
 #include <kernel/util/factory_reset.h>
-#include <kernel/util/sleep.h>
 #include <process_management/worker_manager.h>
 #include <system/bootbits.h>
-#include <system/passert.h>
 #include <system/reboot_reason.h>
 #include <system/reset.h>
-
-// The delay audit counts Cortex-M cycles.
-#if !defined(CONFIG_RELEASE) && defined(CONFIG_CPU_CORTEX_M)
-#define AUDIT_DELAY 1
-#include <cmsis_core.h>
-#include <system/profiler.h>
-#endif
 
 static int prv_cmd_reset(const struct pbl_shell *sh, size_t argc, char **argv) {
   RebootReason reason = {RebootReasonCode_Serial, 0};
@@ -49,8 +44,8 @@ static int prv_cmd_crash_hard(const struct pbl_shell *sh, size_t argc, char **ar
   system_hard_reset();
 }
 
-static int prv_cmd_croak(const struct pbl_shell *sh, size_t argc, char **argv) {
-  PBL_CROAK("You asked for this!");
+static int prv_cmd_panic(const struct pbl_shell *sh, size_t argc, char **argv) {
+  pbl_panic("You asked for this!");
 }
 
 static int prv_cmd_factory_reset(const struct pbl_shell *sh, size_t argc, char **argv) {
@@ -64,10 +59,10 @@ static int prv_cmd_factory_reset(const struct pbl_shell *sh, size_t argc, char *
     worker_manager_disable();
 
     while (worker_manager_get_current_worker_md()) {
-      psleep(3);
+      pbl_sleep_ms(3);
     }
 
-    launcher_task_add_callback(factory_reset_fast, NULL);
+    launcher_task_add_callback(factory_reset_fast, nullptr);
     return 0;
   }
 #endif
@@ -105,14 +100,14 @@ struct WasteTimerData {
   uint16_t count;
   uint16_t delay;
 };
-_Static_assert(sizeof(struct WasteTimerData) <= sizeof(uintptr_t), "struct WasteTimerData too big");
+static_assert(sizeof(struct WasteTimerData) <= sizeof(uintptr_t), "struct WasteTimerData too big");
 
 static void prv_waste_time_cb(void *context) {
   struct WasteTimerData data;
   memcpy(&data, &context, sizeof data);
 
   for (int i = 0; i < data.delay; ++i) {
-    delay_us(1000);
+    pbl_busy_wait_us(1000);
   }
   if (--data.count > 0) {
     memcpy(&context, &data, sizeof context);
@@ -149,50 +144,80 @@ static int prv_cmd_waste_time(const struct pbl_shell *sh, size_t argc, char **ar
   return 0;
 }
 
-#ifdef AUDIT_DELAY
+#ifndef CONFIG_RELEASE
+static uint64_t prv_next_tick(void) {
+  uint64_t t = pbl_uptime_ticks();
+  while (pbl_uptime_ticks() == t) {
+  }
+  return t + 1;
+}
+
 static int prv_cmd_audit_delay(const struct pbl_shell *sh, size_t argc, char **argv) {
-  profiler_init();
+  // Cycle counter rate against the tick, over one second.
+  uint64_t t0 = prv_next_tick();
+  uint32_t c0 = pbl_cycle_get_32();
+  while (pbl_uptime_ticks() < t0 + PBL_TICK_HZ) {
+  }
+  uint32_t measured = pbl_cycle_get_32() - c0;
+  uint32_t nominal = pbl_cycles_per_sec();
+  int32_t ppm = (int32_t)(((int64_t)measured - nominal) * 1000000 / nominal);
+  pbl_shell_print(sh, "cycles/s: nominal %" PRIu32 ", measured %" PRIu32 " (%" PRId32 " ppm)",
+                  nominal, measured, ppm);
 
-  // don't let context switches skew our results
-  __disable_irq();
+  // A long busy wait against the tick.
+  t0 = prv_next_tick();
+  pbl_busy_wait_us(1000000);
+  uint32_t elapsed_ms = pbl_ticks_to_ms((pbl_tick_t)(pbl_uptime_ticks() - t0));
+  pbl_shell_print(sh, "busy wait 1000000 us: %" PRIu32 " ms", elapsed_ms);
 
-  // test short delays because we should really be using psleep() for longer stalls!
-  for (uint32_t i = 1; i <= 1000; i += 2) {
-    profiler_start();
-    delay_us(i);
-    profiler_stop();
-    uint32_t duration_us = profiler_get_total_duration(true);
+  // Short busy waits against the cycle counter, without interruptions.
+  static uint32_t s_took_ns[500];
+  pbl_irq_lock();
+  pbl_busy_wait_us(1); // warm the cache
+  for (uint32_t i = 0; i < ARRAY_LENGTH(s_took_ns); i++) {
+    uint32_t start = pbl_cycle_get_32();
+    pbl_busy_wait_us(2 * i + 1);
+    s_took_ns[i] =
+        (uint32_t)(((uint64_t)(pbl_cycle_get_32() - start) * 1000000000U) / pbl_cycles_per_sec());
+  }
+  pbl_irq_unlock();
 
-    // at least the requested time, and no more than 5% over it
-    bool passed = ((duration_us >= i) && (duration_us <= ((i * 105) / 100)));
-    if (!passed) {
-      pbl_shell_print(sh, "audit failed: expected %" PRIu32 ", got %" PRIu32, i, duration_us);
+  uint32_t short_waits = 0;
+  uint32_t max_over_ns = 0;
+  for (uint32_t i = 0; i < ARRAY_LENGTH(s_took_ns); i++) {
+    uint32_t ns = (2 * i + 1) * 1000U;
+    if (s_took_ns[i] < ns) {
+      pbl_shell_print(sh, "busy wait %" PRIu32 " us: took %" PRIu32 " ns", ns / 1000U,
+                      s_took_ns[i]);
+      short_waits++;
+    } else if (s_took_ns[i] - ns > max_over_ns) {
+      max_over_ns = s_took_ns[i] - ns;
     }
   }
-
-  __enable_irq();
-  pbl_shell_print(sh, "delay_us audit complete");
+  pbl_shell_print(sh, "busy wait 1..999 us: %" PRIu32 " short, at most %" PRIu32 " ns over",
+                  short_waits, max_over_ns);
   return 0;
 }
 #endif
 
-PBL_SHELL_SUBCMD_ADD(sub_sys, reset, NULL, "Reset the system", prv_cmd_reset, 0, 0);
-PBL_SHELL_SUBCMD_ADD(sub_sys, crash, NULL, "Reset as if the launcher panicked", prv_cmd_crash, 0,
+PBL_SHELL_SUBCMD_ADD(sub_sys, reset, nullptr, "Reset the system", prv_cmd_reset, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys, crash, nullptr, "Reset as if the launcher panicked", prv_cmd_crash, 0,
                      0);
-PBL_SHELL_SUBCMD_ADD(sub_sys, crash_hard, NULL, "Hard reset as if the firmware failed to start",
+PBL_SHELL_SUBCMD_ADD(sub_sys, crash_hard, nullptr, "Hard reset as if the firmware failed to start",
                      prv_cmd_crash_hard, 0, 0);
-PBL_SHELL_SUBCMD_ADD(sub_sys, croak, NULL, "Trigger a croak", prv_cmd_croak, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys, panic, nullptr, "Trigger a panic", prv_cmd_panic, 0, 0);
 #ifdef CONFIG_RECOVERY_FW
-PBL_SHELL_SUBCMD_ADD(sub_sys, factory_reset, NULL, "Factory reset", prv_cmd_factory_reset, 1, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys, factory_reset, nullptr, "Factory reset", prv_cmd_factory_reset, 1, 0);
 #else
-PBL_SHELL_SUBCMD_ADD(sub_sys, factory_reset, NULL, "Factory reset [fast]", prv_cmd_factory_reset, 1,
-                     1);
+PBL_SHELL_SUBCMD_ADD(sub_sys, factory_reset, nullptr, "Factory reset [fast]", prv_cmd_factory_reset,
+                     1, 1);
 #endif
-PBL_SHELL_SUBCMD_ADD(sub_sys, bootbit, NULL, "Set a boot bit <bit> <0|1>", prv_cmd_bootbit, 3, 0);
-PBL_SHELL_SUBCMD_ADD(sub_sys, waste_time, NULL, "Busy-wait on the timer task <count> <delay_ms>",
+PBL_SHELL_SUBCMD_ADD(sub_sys, bootbit, nullptr, "Set a boot bit <bit> <0|1>", prv_cmd_bootbit, 3,
+                     0);
+PBL_SHELL_SUBCMD_ADD(sub_sys, waste_time, nullptr, "Busy-wait on the timer task <count> <delay_ms>",
                      prv_cmd_waste_time, 3, 0);
-#ifdef AUDIT_DELAY
-PBL_SHELL_SUBCMD_ADD(sub_sys, audit_delay, NULL, "Audit the accuracy of delay_us",
+#ifndef CONFIG_RELEASE
+PBL_SHELL_SUBCMD_ADD(sub_sys, audit_delay, nullptr, "Audit the cycle counter and busy waits",
                      prv_cmd_audit_delay, 0, 0);
 #endif
 

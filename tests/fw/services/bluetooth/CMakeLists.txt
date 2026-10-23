@@ -20,23 +20,17 @@ pbl_clar_test(test_bluetooth_persistent_storage_prf
     tests/fakes/fake_flash_region.c
     tests/fakes/fake_spi_flash.c
     tests/fakes/fake_events.c
-  PLATFORMS obelix
+  PLATFORMS emery
   OVERRIDES shared_prf_storage_v3
 )
 
 pbl_clar_test(test_bluetooth_persistent_storage
+  MODULES settings
   SOURCES
     fw/services/bluetooth/bluetooth_persistent_storage_normal.c
-    fw/services/settings/settings_file.c
-    fw/services/settings/settings_raw_iter.c
-    fw/services/filesystem/pfs.c
-    fw/services/filesystem/flash_translation.c
-    fw/flash_region/flash_region.c
-    fw/flash_region/filesystem_regions.c
     fw/system/hexdump.c
     tests/fakes/fake_shared_prf_storage.c
     tests/fakes/fake_events.c
-    tests/fakes/fake_spi_flash.c
     tests/fakes/fake_rtc.c
   OVERRIDES dummy_board bluetooth_persistent_storage_v2
 )

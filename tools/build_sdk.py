@@ -25,7 +25,7 @@ REPO_ROOT = path.dirname(path.dirname(path.abspath(__file__)))
 sys.path.insert(0, path.join(REPO_ROOT, "tools", "generate_native_sdk"))
 sys.path.insert(0, path.join(REPO_ROOT, "tools"))
 
-from generate_pebble_native_sdk_files import copy_compiler_headers, generate_shim_files
+from generate_pebble_native_sdk_files import expand_compiler_macros, generate_shim_files
 from pebble_sdk_platform import pebble_platforms
 
 SHIM_DEF = path.join(REPO_ROOT, "tools", "generate_native_sdk", "exported_symbols.json")
@@ -107,7 +107,6 @@ def build_sdk_for_platform(platform_name, output_dir, internal_sdk_build, autoco
         path.join(REPO_ROOT, "fw", "applib", "pebble_warn_unsupported_functions.h"),
         path.join(sdk_include_dir, "pebble_warn_unsupported_functions.h"),
     )
-    copy_compiler_headers(REPO_ROOT, sdk_include_dir)
 
     # Generate pebble_fonts.h from the font whitelist in exported_symbols.json
     with open(SHIM_DEF) as f:
@@ -141,6 +140,7 @@ def build_sdk_for_platform(platform_name, output_dir, internal_sdk_build, autoco
         build_shim_lib=not is_frozen,
         autoconf=autoconf,
     )
+    expand_compiler_macros(REPO_ROOT, sdk_include_dir)
 
     if is_frozen:
         print("    Skipped libpebble.a (frozen SDK, use pre-built library)")

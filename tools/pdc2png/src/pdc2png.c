@@ -13,14 +13,6 @@
 #include <applib/graphics/graphics_private_raw.h>
 #include <applib/graphics/gtypes.h>
 #include <libgen.h>
-#include <stubs_app_state.h>
-#include <stubs_applib_resource.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_resources.h>
-#include <stubs_syscalls.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <util_pbi.h>
@@ -28,20 +20,19 @@
 static char *s_pbi2png_path;
 
 // Stubs
-void passert_failed(const char *filename, int line_number, const char *message, ...) {
+void pbl_panic_at(const char *filename, int line_number, const char *message, ...) {
   exit(EXIT_FAILURE);
 }
 
-void passert_failed_no_message(const char *filename, int line_number) {
-  exit(EXIT_FAILURE);
-}
-
-void wtf(void) {
+void pbl_panic_bare_at(const char *filename, int line_number) {
   exit(EXIT_FAILURE);
 }
 
 bool process_manager_compiled_with_legacy2_sdk(void) {
   return false;
+}
+
+void text_resources_reset_cache(FontCache *font_cache) {
 }
 
 const uint8_t *resource_get_builtin_bytes(ResAppNum app_num, uint32_t resource_id,

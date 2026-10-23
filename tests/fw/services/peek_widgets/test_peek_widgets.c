@@ -31,12 +31,7 @@
 ////////////////////////////////////////////////////////////////
 // Note: the music/alerts/DND/app-install/pin-db/notification-storage functions the arbiter
 // consumes are implemented below as controllable fakes instead of including their stub headers.
-#include "stubs_hexdump.h"
 #include "stubs_logging.h"
-#include "stubs_mutex.h"
-#include "stubs_passert.h"
-#include "stubs_pebble_tasks.h"
-#include "stubs_rand_ptr.h"
 
 // Fakes
 ////////////////////////////////////////////////////////////////

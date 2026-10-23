@@ -12,8 +12,6 @@
 //!
 //! Shared functionality that all the different ResourceStoreImplementation's need.
 
-// TODO PBL-21382: Abstract these details out of the resource storage implementation.
-
 //  Apart from builtins which do not have a header at all, the resource stores
 //  are structured as follow:
 //
@@ -23,9 +21,6 @@
 //
 //  Each ResTableEntry contains metadata about resources, and an offset in the
 //  raw resource data blob.
-//
-//  More info at:
-//  https://pebbletechnology.atlassian.net/wiki/display/DEV/Pebble+Resource+Pack+Format
 
 //! Actually baked into the flash storage format.
 //! Do not change this without changing the associated tooling!

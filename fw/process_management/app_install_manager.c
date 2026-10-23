@@ -8,6 +8,7 @@
 #include "app_manager.h"
 #include "worker_manager.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
@@ -30,9 +31,7 @@
 #include <kernel/event_loop.h>
 #include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
-#include <kernel/util/sleep.h>
 #include <resource/resource.h>
-#include <system/passert.h>
 
 typedef struct PBL_PACKED RecentApp {
   AppInstallId id;
@@ -64,7 +63,6 @@ static bool prv_app_install_entry_from_app_db_entry(AppInstallId id, AppDBEntry 
 static AppInstallId s_pending_app_deletion;
 static AppInstallId s_pending_worker_deletion;
 
-// PBL-31769: This should be moved to send_text.c
 #if defined(APP_ID_SEND_TEXT)
 static EventServiceInfo s_capabilities_event_info;
 #endif
@@ -76,7 +74,7 @@ static EventServiceInfo s_capabilities_event_info;
 static const AppRegistryEntry *prv_get_registry_list_entry(AppInstallId id,
                                                            unsigned int *record_order_out) {
   if (app_install_id_from_app_db(id)) {
-    return NULL;
+    return nullptr;
   }
 
   for (int i = 0; i < (int)ARRAY_LENGTH(APP_RECORDS); i++) {
@@ -87,7 +85,7 @@ static const AppRegistryEntry *prv_get_registry_list_entry(AppInstallId id,
       return &APP_RECORDS[i];
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 // optimization: sort the UUID's and then search more quickly. This will most likely
@@ -211,13 +209,13 @@ bool app_install_entry_is_SDK_compatible(const AppInstallEntry *entry) {
           entry->sdk_version.minor <= PROCESS_INFO_CURRENT_SDK_VERSION_MINOR);
 }
 
-PBL_T_STATIC ListNode *s_head_callback_node_list = NULL;
+PBL_T_STATIC ListNode *s_head_callback_node_list = nullptr;
 
 void app_install_register_callback(struct AppInstallCallbackNode *callback_node) {
-  PBL_ASSERTN(callback_node->node.next == NULL);
-  PBL_ASSERTN(callback_node->node.prev == NULL);
+  PBL_ASSERTN(callback_node->node.next == nullptr);
+  PBL_ASSERTN(callback_node->node.prev == nullptr);
   PBL_ASSERTN(s_head_callback_node_list != &callback_node->node);
-  PBL_ASSERTN(callback_node->callbacks != NULL);
+  PBL_ASSERTN(callback_node->callbacks != nullptr);
 
   callback_node->registered_by = pebble_task_get_current();
 
@@ -225,16 +223,16 @@ void app_install_register_callback(struct AppInstallCallbackNode *callback_node)
 }
 
 void app_install_deregister_callback(struct AppInstallCallbackNode *callback_node) {
-  PBL_ASSERTN(callback_node->node.next != NULL || callback_node->node.prev != NULL ||
+  PBL_ASSERTN(callback_node->node.next != nullptr || callback_node->node.prev != nullptr ||
               s_head_callback_node_list == &callback_node->node);
-  list_remove(&callback_node->node, &(s_head_callback_node_list), NULL);
+  list_remove(&callback_node->node, &(s_head_callback_node_list), nullptr);
 }
 
 void app_install_cleanup_registered_app_callbacks(void) {
   struct AppInstallCallbackNode *iter = (struct AppInstallCallbackNode *)s_head_callback_node_list;
   while (iter) {
     if (iter->registered_by == PebbleTask_App) {
-      list_remove((ListNode *)&iter->node, &s_head_callback_node_list, NULL);
+      list_remove((ListNode *)&iter->node, &s_head_callback_node_list, nullptr);
     }
     iter = (struct AppInstallCallbackNode *)list_get_next(&iter->node);
   }
@@ -427,7 +425,7 @@ static void app_install_launcher_task_callback(void *context) {
   switch (s_install_callback_data.install_type) {
     case APP_UPGRADED:
       app_upgrade = true;
-      /* fallthrough */
+      [[fallthrough]];
     case APP_REMOVED:
       prv_app_install_delete(s_install_callback_data.install_id, s_install_callback_data.uuid,
                              app_upgrade, true /* delete cache entry */);
@@ -474,7 +472,7 @@ bool app_install_do_callbacks(InstallEventType event_type, AppInstallId install_
     .callback_data = callback_data
   };
 
-  launcher_task_add_callback(app_install_launcher_task_callback, NULL);
+  launcher_task_add_callback(app_install_launcher_task_callback, nullptr);
 
   return true;
 }
@@ -485,7 +483,7 @@ const char *app_install_get_custom_app_name(AppInstallId install_id) {
     return name;
   }
 
-  return NULL;
+  return nullptr;
 }
 
 uint32_t app_install_entry_get_icon_resource_id(const AppInstallEntry *entry) {
@@ -514,7 +512,7 @@ void app_install_notify_app_closed(void) {
   // now if the worker is also done
   if (s_install_callback_data.callback_paused_for_app) {
     if (!s_install_callback_data.callback_paused_for_worker) {
-      app_install_launcher_task_callback(NULL);
+      app_install_launcher_task_callback(nullptr);
     } else {
       s_install_callback_data.callback_paused_for_app = false;
     }
@@ -527,7 +525,7 @@ void app_install_notify_worker_closed(void) {
   // now if the worker is also done
   if (s_install_callback_data.callback_paused_for_worker) {
     if (!s_install_callback_data.callback_paused_for_app) {
-      app_install_launcher_task_callback(NULL);
+      app_install_launcher_task_callback(nullptr);
     } else {
       s_install_callback_data.callback_paused_for_worker = false;
     }
@@ -545,7 +543,6 @@ static int prv_cmp_recent_apps(void *a, void *b) {
   return !(app_a->id == app_b->id);
 }
 
-// PBL-31769: This should be moved to send_text.c
 #if defined(APP_ID_SEND_TEXT)
 static void prv_capabilities_changed_event_handler(PebbleEvent *event, void *context) {
   // We only care if send text support changed right now
@@ -565,7 +562,6 @@ void app_install_manager_init(void) {
                       NUM_RECENT_APPS, prv_cmp_recent_apps);
   pbl_mutex_init(&s_recent_apps.mutex);
 
-  // PBL-31769: This should be moved to send_text.c
 #if defined(APP_ID_SEND_TEXT)
   s_capabilities_event_info = (EventServiceInfo){
     .type = PEBBLE_CAPABILITIES_CHANGED_EVENT,
@@ -587,8 +583,6 @@ static GColor prv_hard_coded_color_for_3rd_party_apps(Uuid *uuid) {
   // Remove this from Recovery FW for code size savings.
 #if !defined(CONFIG_RECOVERY_FW)
 
-  // this is a temporary solution to enable custom colors for 3rd-party apps
-  // please replace this, once PBL-19673 landed
   typedef struct {
     Uuid uuid;
     uint8_t color_argb;
@@ -610,7 +604,7 @@ static GColor prv_hard_coded_color_for_3rd_party_apps(Uuid *uuid) {
 }
 
 static GColor prv_valid_color_from_uuid(GColor color, Uuid *uuid) {
-#ifdef CONFIG_BOARD_ASTERIX
+#ifdef CONFIG_PLATFORM_FLINT
   return GColorClear;
 #endif
 
@@ -714,7 +708,7 @@ bool prv_app_install_entry_from_fw_registry_entry(const AppRegistryEntry *reg_en
 }
 
 bool app_install_get_entry_for_install_id(AppInstallId install_id, AppInstallEntry *entry) {
-  if ((install_id == INSTALL_ID_INVALID) || (entry == NULL)) {
+  if ((install_id == INSTALL_ID_INVALID) || (entry == nullptr)) {
     return false;
   }
 
@@ -786,7 +780,7 @@ static const PebbleProcessMd *prv_get_md_for_reg_entry(const AppRegistryEntry *r
                                           sizeof(app_header)) != sizeof(app_header)) {
         PBL_LOG_WRN("Stored app with resource id %d not found in resources",
                     reg_entry->bin_resource_id);
-        return NULL;
+        return nullptr;
       }
 
       // Convert to PebbleProcessMd. Set the correct icon_id from the passed in argument
@@ -799,13 +793,13 @@ static const PebbleProcessMd *prv_get_md_for_reg_entry(const AppRegistryEntry *r
       return const_md;
     }
     default:
-      return NULL;
+      return nullptr;
   }
 }
 
 static const PebbleProcessMd *prv_get_md_for_flash_id(AppInstallId id, bool worker) {
 #ifdef CONFIG_RECOVERY_FW
-  return NULL;
+  return nullptr;
 #endif
 
   PebbleProcessInfo app_header;
@@ -814,7 +808,7 @@ static const PebbleProcessMd *prv_get_md_for_flash_id(AppInstallId id, bool work
   if (GET_APP_INFO_SUCCESS !=
       app_storage_get_process_info(&app_header, build_id_buffer, id, task)) {
     PBL_LOG_WRN("Failed to get app from flash with id %" PRIu32, id);
-    return NULL;
+    return nullptr;
   }
 
   // freed in process_manager.c
@@ -826,7 +820,7 @@ static const PebbleProcessMd *prv_get_md_for_flash_id(AppInstallId id, bool work
 
 // PebbleProcessMd is freed in process_manager.c when the application quits
 const PebbleProcessMd *app_install_get_md(AppInstallId id, bool worker) {
-  const AppRegistryEntry *reg_entry = prv_get_registry_list_entry(id, NULL /* record_order */);
+  const AppRegistryEntry *reg_entry = prv_get_registry_list_entry(id, nullptr /* record_order */);
   if (reg_entry) {
     return prv_get_md_for_reg_entry(reg_entry);
   } else if (app_db_exists_install_id(id)) {
@@ -835,7 +829,7 @@ const PebbleProcessMd *app_install_get_md(AppInstallId id, bool worker) {
 
   // Not a registered app, fail.
   PBL_LOG_ERR("Can't get PebbleProcessMd for app id %" PRId32, id);
-  return NULL;
+  return nullptr;
 }
 
 void app_install_release_md(const PebbleProcessMd *md) {
@@ -873,6 +867,6 @@ static void prv_enumerate_app_db_delete(AppInstallId install_id, AppDBEntry *db_
 }
 
 void app_install_clear_app_db(void) {
-  app_db_enumerate_entries(prv_enumerate_app_db_delete, NULL);
+  app_db_enumerate_entries(prv_enumerate_app_db_delete, nullptr);
   app_cache_flush();
 }

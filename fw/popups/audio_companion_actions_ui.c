@@ -30,7 +30,6 @@
 #include "resource/timeline_resource_ids.auto.h"
 #include "services/audio_companion/assistant_view.h"
 #include "services/audio_companion/watch_actions.h"
-#include "system/passert.h"
 
 #include <stdio.h>
 #include <string.h>

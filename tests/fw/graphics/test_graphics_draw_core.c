@@ -22,13 +22,11 @@
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
 
-#include <stubs_applib_resource.h>
-
 // Fakes
 ////////////////////////////////////
 #include <fake_gbitmap_get_data_row.h>
 
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 
 #define CLIP_RECT_DRAW_BOX GRect(0, 0, DISP_COLS, DISP_ROWS)
 #define CLIP_RECT_CLIP_BOX GRect(0, 0, DISP_COLS, DISP_ROWS)

@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include <pbl/kernel/syscall.h>
 #include <pbl/services/alarms/alarm.h>
 #include <pbl/services/music.h>
 #include <pbl/services/peek_widgets.h>
@@ -13,19 +14,15 @@
 #include <process_management/app_manager.h>
 #include <process_management/worker_manager.h>
 #include <shell/prefs.h>
-#include <syscall/syscall_internal.h>
 
-_Static_assert(MUSIC_SERVICE_BUFFER_LENGTH == MUSIC_BUFFER_LENGTH,
-               "Music service buffer lengths must match");
+static_assert(MUSIC_SERVICE_BUFFER_LENGTH == MUSIC_BUFFER_LENGTH,
+              "Music service buffer lengths must match");
 
-DEFINE_SYSCALL(bool, sys_alarm_get_next_enabled, time_t *timestamp_out) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(timestamp_out, sizeof(*timestamp_out));
-  }
+PBL_SYSCALL(bool, sys_alarm_get_next_enabled, (OUT, time_t *, timestamp_out)) {
   return alarm_get_next_enabled_alarm(timestamp_out);
 }
 
-DEFINE_SYSCALL(bool, sys_hrm_manager_is_hrm_present) {
+PBL_SYSCALL(bool, sys_hrm_manager_is_hrm_present) {
 #ifdef CONFIG_SERVICE_HRM
   return true;
 #else
@@ -33,7 +30,7 @@ DEFINE_SYSCALL(bool, sys_hrm_manager_is_hrm_present) {
 #endif
 }
 
-DEFINE_SYSCALL(bool, sys_music_has_now_playing) {
+PBL_SYSCALL(bool, sys_music_has_now_playing) {
 #ifdef CONFIG_SERVICE_MUSIC
   return music_has_now_playing();
 #else
@@ -41,12 +38,9 @@ DEFINE_SYSCALL(bool, sys_music_has_now_playing) {
 #endif
 }
 
-DEFINE_SYSCALL(void, sys_music_get_now_playing, char *title, char *artist, char *album) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(title, MUSIC_SERVICE_BUFFER_LENGTH);
-    syscall_assert_userspace_buffer(artist, MUSIC_SERVICE_BUFFER_LENGTH);
-    syscall_assert_userspace_buffer(album, MUSIC_SERVICE_BUFFER_LENGTH);
-  }
+PBL_SYSCALL(void, sys_music_get_now_playing, (OUT_BUF, char *, title, MUSIC_SERVICE_BUFFER_LENGTH),
+            (OUT_BUF, char *, artist, MUSIC_SERVICE_BUFFER_LENGTH),
+            (OUT_BUF, char *, album, MUSIC_SERVICE_BUFFER_LENGTH)) {
 #ifdef CONFIG_SERVICE_MUSIC
   music_get_now_playing(title, artist, album);
 #else
@@ -56,7 +50,7 @@ DEFINE_SYSCALL(void, sys_music_get_now_playing, char *title, char *artist, char 
 #endif
 }
 
-DEFINE_SYSCALL(MusicPlayState, sys_music_get_playback_state) {
+PBL_SYSCALL(MusicPlayState, sys_music_get_playback_state) {
 #ifdef CONFIG_SERVICE_MUSIC
   return music_get_playback_state();
 #else
@@ -83,10 +77,8 @@ static MusicServicePlaybackState prv_public_playback_state(MusicPlayState state)
 }
 #endif
 
-DEFINE_SYSCALL(bool, sys_music_get_player_name, char *player_name) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(player_name, MUSIC_SERVICE_BUFFER_LENGTH);
-  }
+PBL_SYSCALL(bool, sys_music_get_player_name,
+            (OUT_BUF, char *, player_name, MUSIC_SERVICE_BUFFER_LENGTH)) {
 #ifdef CONFIG_SERVICE_MUSIC
   return music_get_player_name(player_name);
 #else
@@ -95,11 +87,7 @@ DEFINE_SYSCALL(bool, sys_music_get_player_name, char *player_name) {
 #endif
 }
 
-DEFINE_SYSCALL(void, sys_music_get_playback_info, MusicServicePlaybackInfo *playback_info) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(playback_info, sizeof(*playback_info));
-  }
-
+PBL_SYSCALL(void, sys_music_get_playback_info, (OUT, MusicServicePlaybackInfo *, playback_info)) {
   *playback_info = (MusicServicePlaybackInfo){
     .playback_state = MusicServicePlaybackStateUnknown,
   };
@@ -158,7 +146,7 @@ static MusicCommand prv_private_music_command(MusicServiceCommand command) {
 }
 #endif
 
-DEFINE_SYSCALL(bool, sys_music_is_command_supported, MusicServiceCommand command) {
+PBL_SYSCALL(bool, sys_music_is_command_supported, (VAL, MusicServiceCommand, command)) {
 #ifdef CONFIG_SERVICE_MUSIC
   const MusicCommand private_command = prv_private_music_command(command);
   return private_command != NumMusicCommand && music_is_command_supported(private_command);
@@ -167,7 +155,7 @@ DEFINE_SYSCALL(bool, sys_music_is_command_supported, MusicServiceCommand command
 #endif
 }
 
-DEFINE_SYSCALL(bool, sys_music_send_command, MusicServiceCommand command) {
+PBL_SYSCALL(bool, sys_music_send_command, (VAL, MusicServiceCommand, command)) {
 #ifdef CONFIG_SERVICE_MUSIC
   const MusicCommand private_command = prv_private_music_command(command);
   if (private_command == NumMusicCommand || !music_is_command_supported(private_command)) {
@@ -181,10 +169,10 @@ DEFINE_SYSCALL(bool, sys_music_send_command, MusicServiceCommand command) {
 }
 
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
-_Static_assert(PEEK_WIDGET_TITLE_MAX_LEN == PEEK_WIDGET_APP_TITLE_MAX_LEN,
-               "SDK and service title limits must agree");
-_Static_assert(PEEK_WIDGET_SUBTITLE_MAX_LEN == PEEK_WIDGET_APP_SUBTITLE_MAX_LEN,
-               "SDK and service subtitle limits must agree");
+static_assert(PEEK_WIDGET_TITLE_MAX_LEN == PEEK_WIDGET_APP_TITLE_MAX_LEN,
+              "SDK and service title limits must agree");
+static_assert(PEEK_WIDGET_SUBTITLE_MAX_LEN == PEEK_WIDGET_APP_SUBTITLE_MAX_LEN,
+              "SDK and service subtitle limits must agree");
 
 //! The calling process's UUID, resolved kernel-side so an app can only touch its own widget.
 static bool prv_get_calling_process_uuid(Uuid *uuid_out) {
@@ -199,10 +187,7 @@ static bool prv_get_calling_process_uuid(Uuid *uuid_out) {
 }
 #endif
 
-DEFINE_SYSCALL(PeekWidgetResult, sys_peek_widget_publish, const PeekWidgetPublishArgs *args) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(args, sizeof(*args));
-  }
+PBL_SYSCALL(PeekWidgetResult, sys_peek_widget_publish, (IN, const PeekWidgetPublishArgs *, args)) {
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
   PeekWidgetPublishArgs args_copy = *args;
   args_copy.title[PEEK_WIDGET_TITLE_MAX_LEN] = '\0';
@@ -230,7 +215,7 @@ DEFINE_SYSCALL(PeekWidgetResult, sys_peek_widget_publish, const PeekWidgetPublis
 #endif
 }
 
-DEFINE_SYSCALL(void, sys_peek_widget_withdraw, void) {
+PBL_SYSCALL(void, sys_peek_widget_withdraw) {
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
   Uuid uuid;
   if (prv_get_calling_process_uuid(&uuid)) {

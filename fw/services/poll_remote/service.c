@@ -1,14 +1,13 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/protocol.h>
 #include <pbl/services/comm_session/session.h>
 #include <pbl/services/poll_remote.h>
 #include <pbl/services/system_task.h>
-
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_poll_remote, CONFIG_SERVICE_POLL_REMOTE_LOG_LEVEL);
 
@@ -70,7 +69,7 @@ static void poll_service_timer_callback(void *data);
 
 static RegularTimerInfo s_poll_timer = {
   .cb = poll_service_timer_callback,
-  .cb_data = NULL,
+  .cb_data = nullptr,
 };
 
 static PollRemoteContext s_poll_remote_contexts[NUM_POLL_REMOTE_SERVICES];

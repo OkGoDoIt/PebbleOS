@@ -1,10 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/util/byteorder.h>
@@ -14,8 +15,6 @@
 #include <console/control_protocol_impl.h>
 #include <console/pulse2_transport_impl.h>
 #include <kernel/events.h>
-#include <kernel/util/sleep.h>
-#include <system/passert.h>
 
 #define MAX_CONFIGURE      (10)
 #define MAX_TERMINATE      (2)
@@ -194,10 +193,10 @@ static void prv_on_configure_request(PPPControlProtocol *this, struct LCPPacket 
       break;
     case LinkState_Stopped:
       this->state->restart_count = MAX_CONFIGURE;
-      // fallthrough
+      [[fallthrough]];
     case LinkState_Opened:
       prv_send_configure_request(this);
-      // fallthrough
+      [[fallthrough]];
     case LinkState_RequestSent:
     case LinkState_AckSent:
       if (prv_handle_configure_request(this, packet)) {
@@ -283,7 +282,7 @@ static void prv_on_configure_nak_or_reject(PPPControlProtocol *this, struct LCPP
       break;
     case LinkState_RequestSent:
       this->state->restart_count = MAX_CONFIGURE;
-      // fallthrough
+      [[fallthrough]];
     case LinkState_AckReceived:
     case LinkState_Opened:
       PBL_LOG_WRN("Unexpected Configure-Nak/Rej received after Ack");
@@ -404,7 +403,7 @@ void ppp_control_protocol_close(PPPControlProtocol *this, PPPCPCloseWait wait) {
     case LinkState_Opened:
       this->state->restart_count = MAX_TERMINATE;
       prv_send_terminate_request(this);
-      // fallthrough
+      [[fallthrough]];
     case LinkState_Stopping:
       prv_transition_to(this, LinkState_Closing);
       break;
@@ -422,7 +421,7 @@ void ppp_control_protocol_close(PPPControlProtocol *this, PPPCPCloseWait wait) {
       if (state == LinkState_Initial || state == LinkState_Closed) {
         return;
       }
-      psleep(2);
+      pbl_sleep_ms(2);
     }
   }
 }

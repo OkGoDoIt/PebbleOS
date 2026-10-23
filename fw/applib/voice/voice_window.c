@@ -7,6 +7,16 @@
 #include "transcription_dialog.h"
 #include "voice_window_private.h"
 
+#include <string.h>
+
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/kernel/syscall.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/event_service.h>
+#include <pbl/services/voice/voice.h>
+#include <pbl/util/size.h>
+
 #include <applib/app_timer.h>
 #include <applib/applib_malloc.auto.h>
 #include <applib/event_service_client.h>
@@ -29,31 +39,13 @@
 #include <applib/ui/scroll_layer.h>
 #include <applib/ui/status_bar_layer.h>
 #include <applib/ui/text_layer.h>
-#include <applib/ui/window_stack.h>
-#if (0) // https://pebbletechnology.atlassian.net/browse/PBL-20406
 #include <applib/ui/vibes.h>
-#endif
-#include <string.h>
-
-#include <pbl/logging/logging.h>
-#include <pbl/services/event_service.h>
-#include <pbl/services/voice/voice.h>
-#include <pbl/util/size.h>
-
+#include <applib/ui/window_stack.h>
 #include <kernel/ui/kernel_ui.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
-
-// TODO:
-// mic hot before showing screen - needs robust beginning-of-speech detection -
-// https://pebbletechnology.atlassian.net/browse/PBL-16474 animated microphone icon -
-// https://pebbletechnology.atlassian.net/browse/PBL-16481 handle line wrapping -
-// https://pebbletechnology.atlassian.net/browse/PBL-16475 Brief vibration just before microphone is
-// turned on https://pebbletechnology.atlassian.net/browse/PBL-20406
 
 #define DICTATION_TIMEOUT        (15 * 1000) // 15s timeout for each dictation
 #define SPEECH_DETECTION_TIMEOUT (3 * 1000)
@@ -83,8 +75,8 @@ static PropertyAnimation *prv_create_int16_prop_anim(int16_t from, int16_t to, u
                                                      void *subject);
 static void prv_handle_stop_transition(VoiceUiData *data);
 static void prv_voice_window_push(VoiceUiData *data);
-char *sys_voice_get_transcription_from_event(PebbleVoiceServiceEvent *e, char *buffer,
-                                             size_t buffer_size, size_t *sentence_len);
+size_t sys_voice_get_transcription_from_event(PebbleVoiceServiceEvent *e, char *buffer,
+                                              size_t buffer_size);
 
 static WindowStack *prv_get_window_stack(void) {
   if (pebble_task_get_current() == PebbleTask_App) {
@@ -123,7 +115,7 @@ static void prv_exit_and_send_result_event(VoiceUiData *data, DictationSessionSt
     .type = PEBBLE_DICTATION_EVENT,
     .dictation = {
       .result = result,
-      .text = (result == DictationSessionStatusSuccess) ? data->message : NULL,
+      .text = (result == DictationSessionStatusSuccess) ? data->message : nullptr,
       .timestamp = (result == DictationSessionStatusSuccess) ? data->timestamp : 0,
     }
   };
@@ -162,6 +154,9 @@ static void prv_init_dialog(VoiceUiData *data, Dialog *dialog, const char *text,
   dialog_set_background_color(dialog, color);
   dialog_set_timeout(dialog, has_timeout ? ERROR_DIALOG_TIMEOUT : DIALOG_TIMEOUT_INFINITE);
   dialog_set_destroy_on_pop(dialog, false /* free_on_pop */);
+
+  // Alert users who aren't looking at the watch that dictation failed
+  vibes_double_pulse();
 }
 
 static void prv_push_error_dialog(VoiceUiData *data, const char *text, uint32_t resource_id,
@@ -226,7 +221,7 @@ static void prv_show_connectivity_error_and_exit(VoiceUiData *data) {
 static void prv_show_disabled_error_and_exit(VoiceUiData *data) {
   data->error_count = MAX_ERROR_COUNT; // exit UI after the dialog is shown
   if (data->show_error_dialog) {
-    prv_push_long_error_dialog(data, NULL,
+    prv_push_long_error_dialog(data, nullptr,
                                i18n_noop("Enable voice in the settings page of the Pebble app."),
                                RESOURCE_ID_GENERIC_WARNING_TINY);
     data->error_exit_status = DictationSessionStatusFailureDisabled;
@@ -257,6 +252,7 @@ static void prv_push_bt_dialog(VoiceUiData *data) {
   Dialog *dialog = &bt_dialog->dialog.dialog;
   dialog_set_destroy_on_pop(dialog, false /* free_on_pop */);
 
+  vibes_double_pulse();
   bt_conn_dialog_push(bt_dialog, prv_handle_bt_conn_result, data);
 }
 
@@ -327,21 +323,47 @@ static void prv_handle_ready_event(VoiceUiData *data, PebbleVoiceServiceEvent *e
       prv_handle_ready_error(data);
       break;
     default:
-      WTF;
+      pbl_panic();
   }
   if (event->status != VoiceStatusSuccess) {
     data->last_session_successful = false;
   }
 }
 
+static char *prv_get_transcription(PebbleVoiceServiceEvent *event, char *buffer, size_t buffer_size,
+                                   size_t *sentence_len) {
+  char *allocated = nullptr;
+  if (!buffer) {
+    const size_t len = sys_voice_get_transcription_from_event(event, nullptr, 0);
+    if (len == 0) {
+      return nullptr;
+    }
+    allocated = applib_malloc(len + 1);
+    if (!allocated) {
+      return nullptr;
+    }
+    buffer = allocated;
+    buffer_size = len + 1;
+  }
+
+  const size_t len = sys_voice_get_transcription_from_event(event, buffer, buffer_size);
+  if (len == 0) {
+    applib_free(allocated);
+    return nullptr;
+  }
+
+  *sentence_len = len;
+  return buffer;
+}
+
 static bool prv_handle_dictation_success(VoiceUiData *data, PebbleVoiceServiceEvent *event) {
   if (data->buffer_size == 0) {
     // If buffer size is set to 0, the buffer was allocated when the last transcription was received
     applib_free(data->message);
-    data->message = NULL;
+    data->message = nullptr;
   }
-  data->message = sys_voice_get_transcription_from_event(event, data->message, data->buffer_size,
-                                                         &data->message_len);
+  data->message =
+      prv_get_transcription(event, data->message, data->buffer_size, &data->message_len);
   if (data->session_type == VoiceEndpointSessionTypeNLP) {
     data->timestamp = event->data->timestamp;
   }
@@ -432,7 +454,7 @@ static void prv_handle_dictation_result(VoiceUiData *data, PebbleVoiceServiceEve
       break;
 
     default:
-      WTF;
+      pbl_panic();
   }
   data->last_session_successful = success;
 }
@@ -452,9 +474,9 @@ static VoiceUiState prv_get_simple_state(VoiceUiState state) {
     StateFinished,
     StateExiting,
   };
-  _Static_assert(StateExiting < ARRAY_LENGTH(state_map),
-                 "The number of states has grown, but state"
-                 "the simple state mapping has not been updated");
+  static_assert(StateExiting < ARRAY_LENGTH(state_map),
+                "The number of states has grown, but state"
+                "the simple state mapping has not been updated");
   PBL_ASSERTN(state < ARRAY_LENGTH(state_map));
 
   return state_map[state];
@@ -505,7 +527,7 @@ static void prv_voice_event_handler(PebbleEvent *e, void *context) {
       PBL_LOG_DBG("Ignoring event");
       break;
     default:
-      WTF;
+      pbl_panic();
   }
 }
 
@@ -547,17 +569,6 @@ static void prv_cancel_dictation(VoiceUiData *data) {
 // Microphone Window
 ///////////////////////////////////////////////////////////////////////////
 
-#if (0) // https://pebbletechnology.atlassian.net/browse/PBL-20406
-static void prv_short_vibe(void) {
-  static const uint32_t VIBE_DURATIONS[] = {50};
-  VibePattern pattern = {
-    .durations = VIBE_DURATIONS,
-    .num_segments = ARRAY_LENGTH(VIBE_DURATIONS),
-  };
-  vibes_enqueue_custom_pattern(pattern);
-}
-#endif
-
 ///////////// CREATE DOT ANIMATIONS
 static void prv_dot_layer_update_proc(Layer *layer, GContext *ctx) {
   VoiceUiData *data = window_get_user_data(layer_get_window(layer));
@@ -575,9 +586,9 @@ static void prv_set_dot_width(void *subject, int16_t radius) {
 static PropertyAnimation *prv_create_int16_prop_anim(int16_t from, int16_t to, uint32_t duration,
                                                      const PropertyAnimationImplementation *impl,
                                                      void *subject) {
-  PropertyAnimation *anim = property_animation_create(impl, subject, NULL, NULL);
+  PropertyAnimation *anim = property_animation_create(impl, subject, nullptr, nullptr);
   if (!anim) {
-    return NULL;
+    return nullptr;
   }
   property_animation_set_from_int16(anim, &from);
   property_animation_set_to_int16(anim, &to);
@@ -606,9 +617,9 @@ static Animation *prv_create_pulse_dot_anim(VoiceUiData *data, int16_t min, int1
   uint32_t stage_duration = (pulse_duration / 3);
 
   // Declare these here so that if we goto cleanup, then the variables are initialized
-  PropertyAnimation *expand = NULL;
-  PropertyAnimation *shrink = NULL;
-  PropertyAnimation *revert = NULL;
+  PropertyAnimation *expand = nullptr;
+  PropertyAnimation *shrink = nullptr;
+  PropertyAnimation *revert = nullptr;
 
   // Do the overshoot animation first
   expand =
@@ -632,7 +643,7 @@ static Animation *prv_create_pulse_dot_anim(VoiceUiData *data, int16_t min, int1
   }
 
   Animation *sequence = animation_sequence_create((Animation *)expand, (Animation *)shrink,
-                                                  (Animation *)revert, NULL);
+                                                  (Animation *)revert, nullptr);
 
   if (!sequence) {
     goto cleanup;
@@ -645,7 +656,7 @@ cleanup:
   property_animation_destroy(shrink);
   property_animation_destroy(expand);
   property_animation_destroy(revert);
-  return NULL;
+  return nullptr;
 }
 ///////////// END - CREATE DOT ANIMATIONS
 
@@ -966,7 +977,7 @@ static void prv_handle_stop_transition(VoiceUiData *data) {
       break;
     }
     default:
-      WTF;
+      pbl_panic();
   }
 }
 
@@ -1067,12 +1078,12 @@ static VoiceUiState prv_get_next_state(VoiceUiState current_state, VoiceUiState 
       break;
 
     default:
-      WTF;
+      pbl_panic();
   }
 
   // No valid transition found!
 
-  PBL_CROAK("Cannot transition from state %" PRIu16 " to state %" PRIu16, current_state,
+  pbl_panic("Cannot transition from state %" PRIu16 " to state %" PRIu16, current_state,
             next_state);
 }
 
@@ -1095,11 +1106,7 @@ static void prv_do_transition(VoiceUiData *data, VoiceUiState state) {
     // turning the mic on - dependent on separating the setup session and recording stages of
     // voice state machine
     case StateRecording:
-      // vibe briefly, enable clicking to end the transcription, unfold the mic from a dot
-      // and show text
-#if (0) // https://pebbletechnology.atlassian.net/browse/PBL-20406
-      prv_short_vibe();
-#endif
+      // enable clicking to end the transcription, unfold the mic from a dot and show text
       prv_enable_select_click(data);
       prv_stop_fly_dot(data);
       prv_hide_mic_dot(data);
@@ -1149,7 +1156,7 @@ static void prv_do_transition(VoiceUiData *data, VoiceUiState state) {
       break;
 
     default:
-      WTF;
+      pbl_panic();
   }
 }
 
@@ -1191,7 +1198,7 @@ static void prv_mic_window_load(Window *window) {
   text_layer_init_with_parameters(
       text_layer,
       &GRect(0, dot_frame.origin.y + TEXT_LAYER_Y_OFFSET, root_frame->size.w, font_height * 2),
-      NULL, font, GColorBlack, window_bg_color, GTextAlignmentCenter,
+      nullptr, font, GColorBlack, window_bg_color, GTextAlignmentCenter,
       GTextOverflowModeTrailingEllipsis);
   layer_add_child(root_layer, (Layer *)text_layer);
   layer_set_hidden((Layer *)text_layer, true);
@@ -1324,11 +1331,11 @@ static void prv_voice_window_push(VoiceUiData *data) {
 VoiceWindow *voice_window_create(char *buffer, size_t buffer_size,
                                  VoiceEndpointSessionType session_type) {
   // if buffer is NULL, buffer_size must be 0 and if it is not NULL, buffer_size must be non-zero
-  PBL_ASSERTN((buffer != NULL) == (buffer_size > 0));
+  PBL_ASSERTN((buffer != nullptr) == (buffer_size > 0));
 
   VoiceUiData *data = applib_type_malloc(VoiceWindow);
   if (!data) {
-    return NULL;
+    return nullptr;
   }
   *data = (VoiceUiData){
     .state = StateStart,
@@ -1408,7 +1415,7 @@ void voice_window_reset(VoiceWindow *voice_window) {
       // If buffer size is set to 0, the buffer was allocated when the last transcription was
       // received
       applib_free(voice_window->message);
-      voice_window->message = NULL;
+      voice_window->message = nullptr;
     } else {
       voice_window->message[0] = '\0';
     }
@@ -1428,51 +1435,30 @@ void voice_window_reset(VoiceWindow *voice_window) {
 // Syscalls
 /////////////////////////////////////////////////////////////////////////////////
 
-DEFINE_SYSCALL(char *, sys_voice_get_transcription_from_event, PebbleVoiceServiceEvent *e,
-               char *buffer, size_t buffer_size, size_t *sentence_len) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(e, sizeof(*e));
+PBL_SYSCALL(size_t, sys_voice_get_transcription_from_event, (IN, PebbleVoiceServiceEvent *, e),
+            (VAL, char *, buffer), (VAL, size_t, buffer_size)) {
+  if (from_user) {
     if (buffer && (buffer_size > 0)) {
-      syscall_assert_userspace_buffer(buffer, buffer_size);
+      pbl_syscall_verify_user(buffer, buffer_size);
     }
-    syscall_assert_userspace_buffer(sentence_len, sizeof(*sentence_len));
     // `e->data` is a kernel pointer the event service handed to the app along
     // with the event. The app can rewrite the field in its copy before calling
     // us, so confirm it still references a buffer the kernel actually allocated
     // — otherwise an app could aim it at kernel memory and turn the strlen/memcpy
     // below into an arbitrary kernel read primitive.
-    if (!event_service_is_known_buffer(e->data)) {
+    if (!event_service_is_known_buffer(e->data, PEBBLE_VOICE_SERVICE_EVENT)) {
       PBL_LOG_ERR("Rejecting voice event with unknown data pointer %p", e->data);
-      syscall_failed();
+      pbl_syscall_fail();
     }
   }
 
-  size_t len;
-  if (!buffer) {
-    // if the is not allocated, allocate enough to contain the string
-    len = strlen(e->data->sentence);
-  } else {
-    // if the buffer is allocated, truncate sentence to buffer size
-    len = utf8_get_size_truncate(e->data->sentence, buffer_size);
+  if (!buffer || (buffer_size == 0)) {
+    return strlen(e->data->sentence);
   }
 
-  if (len == 0) {
-    return NULL;
-  }
+  const size_t len = utf8_get_size_truncate(e->data->sentence, buffer_size);
+  memcpy(buffer, e->data->sentence, len);
+  buffer[len] = '\0';
 
-  char *sentence;
-  if (buffer) {
-    // do not allocate a buffer is one is allocated already
-    sentence = buffer;
-  } else {
-    // allocate a buffer if one is not yet allocated
-    sentence = applib_malloc(len + 1);
-  }
-
-  memcpy(sentence, e->data->sentence, len);
-  sentence[len] = '\0'; // Ensure that string is NULL-terminated
-
-  *sentence_len = len;
-
-  return sentence;
+  return len;
 }

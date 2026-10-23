@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <pbl/cron/cron.h>
@@ -26,23 +27,6 @@
 #include <resource/timeline_resource_ids.auto.h>
 
 // Stubs
-#include <stubs_analytics.h>
-#include <stubs_app_cache.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_blob_db.h>
-#include <stubs_calendar.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_layout_layer.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_regular_timer.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
-#include <stubs_timeline_event.h>
 
 // Fakes
 #include <pbl/util/units.h>
@@ -116,7 +100,7 @@ static const int s_tuesday = 1426550400;
 // Wednesday, March 18, 2015, 00:00 UTC
 static const int s_wednesday = 1426636800;
 
-static TimelineItem *s_last_timeline_item_added = NULL;
+static TimelineItem *s_last_timeline_item_added = nullptr;
 static Uuid s_last_timeline_item_removed_uuid = {};
 
 typedef struct {
@@ -173,7 +157,16 @@ static int s_num_alarms_fired = 0;
 
 void prv_timer_kernel_bg_callback(void *data);
 
+static bool s_defer_system_task_callbacks;
+static SystemTaskEventCallback s_pending_system_task_callback;
+static void *s_pending_system_task_data;
+
 bool system_task_add_callback(SystemTaskEventCallback cb, void *data) {
+  if (s_defer_system_task_callbacks) {
+    s_pending_system_task_callback = cb;
+    s_pending_system_task_data = data;
+    return true;
+  }
   cb(data);
   if (cb == prv_timer_kernel_bg_callback) {
     s_num_alarms_fired++;
@@ -186,7 +179,7 @@ int prv_hours_and_minutes_to_seconds(int hour, int minute) {
 }
 
 const char *timeline_get_private_data_source(Uuid *parent_id) {
-  return NULL;
+  return nullptr;
 }
 
 status_t pin_db_insert_item_without_event(TimelineItem *item) {
@@ -219,11 +212,11 @@ status_t pin_db_each(TimelineItemStorageEachCallback each, void *data) {
       .get_val = prv_fake_pin_get_val,
       .val_len = sizeof(SerializedTimelineItemHeader),
     };
-    if (!each(NULL, &info, data)) {
+    if (!each(nullptr, &info, data)) {
       break;
     }
   }
-  s_current_fake_pin_record = NULL;
+  s_current_fake_pin_record = nullptr;
   return S_SUCCESS;
 }
 

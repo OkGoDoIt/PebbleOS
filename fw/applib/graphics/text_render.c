@@ -6,13 +6,13 @@
 #include "gcontext.h"
 #include "text_resources.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/util/bitops.h>
 #include <pbl/util/math.h>
 #include <pbl/util/testing.h>
 
 #include <process_state/app_state/app_state.h>
 #include <syscall/syscall.h>
-#include <system/passert.h>
 
 typedef uint32_t GlyphBlock PBL_ALIGNED(1);
 
@@ -166,7 +166,7 @@ static void prv_render_color_glyph(GContext *ctx, const GlyphData *glyph,
     }
     const bool row_visible = (dest_y >= clipped->origin.y);
     const GBitmapDataRowInfo row =
-        row_visible ? gbitmap_get_data_row_info(dest_bitmap, dest_y) : (GBitmapDataRowInfo){0};
+        row_visible ? gbitmap_get_data_row_info(dest_bitmap, dest_y) : (GBitmapDataRowInfo){};
 
     // Raw rows are byte-aligned
     d.bits_left = 0;

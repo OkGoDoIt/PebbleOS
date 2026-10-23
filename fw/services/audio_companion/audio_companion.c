@@ -34,7 +34,7 @@
 #include "pbl/services/voice/voice_speex.h"
 #include "shell/prefs.h"
 #include "pbl/logging/logging.h"
-#include "system/passert.h"
+#include "pbl/kernel/assert.h"
 #include "system/reboot_reason.h"
 #include "system/version.h"
 #include <pbl/util/rand32.h>

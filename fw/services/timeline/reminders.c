@@ -84,7 +84,7 @@ static status_t prv_set_timer(Reminder *item) {
   s_next_reminder_timestamp = item->header.timestamp;
   s_reminder_armed = true;
   pbl_cron_job_schedule_at(&s_reminder_job, s_next_reminder_timestamp);
-  PBL_LOG_DBG("Set reminder for %ld", s_next_reminder_timestamp);
+  PBL_LOG_DBG("Set reminder for %ld", (long)s_next_reminder_timestamp);
   return S_SUCCESS;
 }
 
@@ -93,7 +93,7 @@ status_t reminders_update_timer(void) {
   s_reminder_armed = false;
   pbl_cron_job_unschedule(&s_reminder_job);
 
-  TimelineItem item = {{{0}}};
+  TimelineItem item = {};
   status_t rv = reminder_db_next_item_header(&item);
   if (rv == S_NO_MORE_ITEMS) {
     PBL_LOG_DBG("No more reminders to add to queue.");

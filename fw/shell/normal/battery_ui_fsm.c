@@ -37,7 +37,6 @@ typedef enum BatteryUIStateID {
   BatteryCritical,
   BatteryCharging,
   BatteryFullyCharged, // plugged but not charging (aka 100%)
-  BatteryShutdownCharging
 } BatteryUIStateID;
 
 typedef struct BatteryUIState {
@@ -56,7 +55,6 @@ static void prv_display_plugged(void *data);
 static void prv_dismiss_plugged(void);
 static void prv_display_fully_charged(void *data);
 static void prv_dismiss_fully_charged(void);
-static void prv_shutdown(void *ignored);
 
 static const BatteryUIState ui_states[] = {
   [BatteryGood] =
@@ -79,15 +77,12 @@ static const BatteryUIState ui_states[] = {
       {.enter = prv_display_plugged,
        .exit = prv_dismiss_plugged,
        .next_state =
-           {BatteryGood, BatteryWarning, BatteryLowPower, BatteryCritical, BatteryFullyCharged,
-            BatteryShutdownCharging}},
-  [BatteryFullyCharged] =
-      {.enter = prv_display_fully_charged,
-       .exit = prv_dismiss_fully_charged,
-       .next_state =
-           {BatteryGood, BatteryWarning, BatteryLowPower, BatteryCritical,
-            BatteryShutdownCharging}},
-  [BatteryShutdownCharging] = {.enter = prv_shutdown}
+           {BatteryGood, BatteryWarning, BatteryLowPower, BatteryCritical, BatteryFullyCharged}},
+  [BatteryFullyCharged] = {
+    .enter = prv_display_fully_charged,
+    .exit = prv_dismiss_fully_charged,
+    .next_state = {BatteryGood, BatteryWarning, BatteryLowPower, BatteryCritical}
+  }
 };
 
 static BatteryUIStateID s_state = BatteryGood;
@@ -165,7 +160,7 @@ static void prv_enter_low_power(void *ignored) {
 static void prv_exit_low_power(void) {
 #ifndef CONFIG_RECOVERY_FW
   modal_manager_set_min_priority(ModalPriorityMin);
-  watchface_launch_default(NULL);
+  watchface_launch_default(nullptr);
   vibe_intensity_set(vibe_intensity_get());
 #else
   app_manager_close_current_app(true);
@@ -190,10 +185,11 @@ static void prv_exit_critical(void) {
 }
 
 static void prv_display_plugged(void *data) {
+  const PreciseBatteryChargeState *charge_state = data;
   if (!do_not_disturb_is_active()) {
     vibes_short_pulse();
   }
-  battery_ui_display_plugged();
+  battery_ui_display_plugged(charge_state->pct);
 }
 
 static void prv_dismiss_plugged(void) {
@@ -206,10 +202,6 @@ static void prv_display_fully_charged(void *data) {
 
 static void prv_dismiss_fully_charged(void) {
   battery_ui_dismiss_modal();
-}
-
-static void prv_shutdown(void *ignored) {
-  battery_ui_handle_shut_down();
 }
 
 // Internals
@@ -265,15 +257,13 @@ void battery_ui_handle_state_change_event(PreciseBatteryChargeState charge_state
   BatteryUIStateID next_state = prv_get_state(&charge_state);
   if (prv_is_valid_transition(next_state)) {
     prv_transition(next_state, &charge_state);
+  } else if (next_state == BatteryCharging && s_state == BatteryCharging) {
+    battery_ui_update_charge_level(charge_state.pct);
   }
 }
 
-void battery_ui_handle_shut_down(void) {
-  if (s_state != BatteryCharging) {
-    enter_standby(RebootReasonCode_ShutdownMenuItem);
-  } else {
-    prv_transition(BatteryShutdownCharging, NULL);
-  }
+int battery_ui_handle_shut_down(void) {
+  return enter_standby(RebootReasonCode_ShutdownMenuItem);
 }
 
 void battery_ui_reset_fsm_for_tests(void) {

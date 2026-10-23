@@ -79,7 +79,10 @@ struct pbl_thread_attr {
   void *arg;
   /** Priority, @ref PBL_PRIO_IDLE to @ref PBL_PRIO_MAX. */
   pbl_prio_t prio;
-  /** Run in privileged mode; unprivileged threads are confined by the MPU. */
+  /**
+   * Run in privileged mode; unprivileged threads are confined by the MPU. Without
+   * @c CONFIG_USERSPACE every thread runs privileged.
+   */
   bool privileged;
   /** Lowest address of the stack; the caller owns the memory. */
   void *stack;
@@ -87,6 +90,19 @@ struct pbl_thread_attr {
   size_t stack_size;
   /** MPU regions switched in with the thread. NULL entries are ignored. */
   const MpuRegion *regions[PBL_THREAD_MAX_MEM_REGIONS];
+#ifdef CONFIG_USERSPACE
+  /**
+   * Memory the thread's syscalls may read and write, [user_start, user_end); empty for none. The
+   * thread's stack must sit at its bottom.
+   */
+  uintptr_t user_start;
+  /** End of the thread's syscall-accessible memory. */
+  uintptr_t user_end;
+  /** Privileged stack the thread's syscalls run on, or NULL to run them on its own stack. */
+  void *syscall_stack;
+  /** Size of @ref syscall_stack in bytes. */
+  size_t syscall_stack_size;
+#endif
 };
 
 /**
@@ -111,6 +127,16 @@ struct pbl_thread {
   size_t stack_size;
   /** Thread-local pointer slots, see pbl_thread_tls_get(). */
   void *tls[CONFIG_KERNEL_THREAD_TLS_SLOTS];
+#ifdef CONFIG_USERSPACE
+  /** Start of the syscall-accessible memory. */
+  uintptr_t user_start;
+  /** End of the syscall-accessible memory. */
+  uintptr_t user_end;
+  /** Privileged syscall stack, or NULL. */
+  void *syscall_stack;
+  /** Size of the syscall stack in bytes. */
+  size_t syscall_stack_size;
+#endif
 };
 
 /**
@@ -271,39 +297,5 @@ static inline void pbl_thread_tls_set(struct pbl_thread *t, unsigned int slot, v
  * @param name Its name.
  */
 void pbl_thread_stack_overflow(struct pbl_thread *t, const char *name);
-
-/**
- * @brief Decide whether code may raise privilege through the kernel's supervisor call.
- *
- * Implemented by the application. Called from the SVC handler on every privilege-raise request.
- *
- * @param caller_pc Address of the instruction after the SVC.
- * @return true to grant privileged mode to the caller.
- */
-bool pbl_kernel_privilege_raise_allowed(uint32_t caller_pc);
-
-/**
- * @brief Provide a dedicated privileged stack for the current thread's syscalls.
- *
- * Implemented by the application; the kernel's weak default returns NULL. Called from the SVC
- * handler once a privilege raise is allowed: the exception frame and the caller's stacked
- * arguments are copied onto the returned stack, so the syscall body runs there.
- *
- * @param[out] base_out Lowest address of the stack, used as the stack limit where supported.
- * @return Top of the stack, or NULL to run syscalls on the caller's stack.
- */
-uint32_t *pbl_kernel_syscall_stack(uintptr_t *base_out);
-
-/**
- * @brief Notify the application that privilege is being raised for a syscall.
- *
- * Implemented by the application. Called from the SVC handler just before the thread is made
- * privileged.
- *
- * @param orig_sp Caller's stack pointer before the SVC.
- * @param[in,out] lr_slot Stacked return address of the syscall; may be rewritten to redirect the
- * return, e.g. through code that drops privilege again.
- */
-void pbl_kernel_syscall_entered(uintptr_t orig_sp, uintptr_t *lr_slot);
 
 /** @} */

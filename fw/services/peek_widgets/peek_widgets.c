@@ -30,7 +30,7 @@
 #include "shell/normal/watchface.h"
 #include "shell/prefs.h"
 #include <pbl/logging/logging.h>
-#include "system/passert.h"
+#include "kernel/pebble_tasks.h"
 #include "pbl/util/hash.h"
 #include "pbl/util/math.h"
 #include <pbl/util/units.h>

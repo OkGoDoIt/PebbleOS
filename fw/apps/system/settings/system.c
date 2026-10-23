@@ -9,10 +9,13 @@
 #include "option_menu.h"
 #include "window.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/als.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/services/blob_db/api.h>
 #include <pbl/services/bluetooth/local_id.h>
 #include <pbl/services/i18n/i18n.h>
@@ -30,13 +33,13 @@
 #include <applib/ui/dialogs/confirmation_dialog.h>
 #include <applib/ui/dialogs/dialog.h>
 #include <applib/ui/dialogs/expandable_dialog.h>
+#include <applib/ui/dialogs/simple_dialog.h>
 #include <applib/ui/option_menu_window.h>
 #include <applib/ui/ui.h>
 #include <kernel/core_dump.h>
 #include <kernel/event_loop.h>
 #include <kernel/pbl_malloc.h>
 #include <kernel/ui/modals/modal_manager.h>
-#include <kernel/util/sleep.h>
 #include <mfg/mfg_info.h>
 #include <mfg/mfg_serials.h>
 #include <process_management/app_manager.h>
@@ -44,8 +47,8 @@
 #include <shell/normal/battery_ui.h>
 #include <shell/prefs.h>
 #include <shell/system_app_ids.auto.h>
+#include <syscall/syscall.h>
 #include <system/bootbits.h>
-#include <system/passert.h>
 #include <system/version.h>
 
 enum {
@@ -234,7 +237,7 @@ static void prv_information_draw_row_callback(GContext *ctx, const Layer *cell_l
   SystemInformationData *info = &data->information_data;
 
   const char *title = i18n_get(s_information_titles[cell_index->row], data);
-  menu_cell_basic_draw(ctx, cell_layer, title, info->subtitle_text[cell_index->row], NULL);
+  menu_cell_basic_draw(ctx, cell_layer, title, info->subtitle_text[cell_index->row], nullptr);
 }
 
 int16_t prv_information_get_cell_height_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
@@ -360,7 +363,7 @@ static void prv_maybe_trigger_core_dump() {
 /////////////////////////////
 
 static void prv_update_als_threshold_label(NumberWindow *number_window, SettingsSystemData *data) {
-  uint32_t current_reading = light_get_ambient_lux();
+  uint32_t current_reading = light_get_ambient_gate_lux();
   uint32_t current_threshold = (uint32_t)number_window_get_value(number_window);
   bool would_backlight_be_on = current_reading <= current_threshold;
 
@@ -397,10 +400,10 @@ static void prv_als_threshold_menu_push(SettingsSystemData *data) {
   // Give time for backlight to turn off
   // If we don't do this, the text may say the false result
   // until the user changes the value
-  psleep(200);
+  sys_psleep(200);
 
   // Get current ambient light reading to show backlight status
-  uint32_t current_reading = light_get_ambient_lux();
+  uint32_t current_reading = light_get_ambient_gate_lux();
   uint32_t current_threshold = backlight_get_ambient_threshold();
   bool would_backlight_be_on = current_reading <= current_threshold;
 
@@ -425,7 +428,7 @@ static void prv_als_threshold_menu_push(SettingsSystemData *data) {
 
   // Set reasonable min/max values for ALS threshold (lux domain)
   number_window_set_min(number_window, 0);
-  number_window_set_max(number_window, ambient_light_level_to_lux(AMBIENT_LIGHT_LEVEL_MAX));
+  number_window_set_max(number_window, pbl_als_to_lux(ALS, AMBIENT_LIGHT_LEVEL_MAX));
   number_window_set_step_size(number_window, 1);
   number_window_set_value(number_window, (int32_t)current_threshold);
 
@@ -481,7 +484,7 @@ static void prv_compact_settings_dbs_task_cb(void *data) {
 }
 
 static void prv_compact_settings_dbs(void) {
-  system_task_add_callback(prv_compact_settings_dbs_task_cb, NULL);
+  system_task_add_callback(prv_compact_settings_dbs_task_cb, nullptr);
 }
 
 // Debug options window
@@ -516,7 +519,7 @@ static void prv_debugging_draw_row_callback(GContext *ctx, const Layer *cell_lay
   }
 
   const char *title = i18n_get(s_debugging_titles[cell_index->row], data);
-  const char *subtitle_text = NULL;
+  const char *subtitle_text = nullptr;
   if (cell_index->row == DebuggingItemCoreDumpShortcut) {
     subtitle_text = shell_prefs_can_coredump_on_request() ? i18n_get("10 back-button presses", data)
                                                           : i18n_get("Disabled", data);
@@ -540,7 +543,7 @@ static void prv_debugging_draw_row_callback(GContext *ctx, const Layer *cell_lay
     subtitle_text = shell_prefs_get_vibe_log_info_enabled() ? i18n_get("Enabled", data)
                                                             : i18n_get("Disabled", data);
   }
-  menu_cell_basic_draw(ctx, cell_layer, title, subtitle_text, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, title, subtitle_text, nullptr);
 }
 
 int16_t prv_debugging_get_cell_height_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
@@ -593,7 +596,7 @@ static void prv_debugging_select_callback(MenuLayer *menu_layer, MenuIndex *cell
       break;
 #endif
     default:
-      WTF;
+      pbl_panic();
   }
   menu_layer_reload_data(menu_layer);
 }
@@ -713,7 +716,7 @@ static int16_t prv_draw_generic_mark(GContext *ctx, GBitmap *mark, GPoint origin
 
 #if PBL_RECT
 static void prv_draw_rt_cell_rect(GContext *ctx, const Layer *cell_layer, GBitmap *mark,
-                                  const char *text, PBL_UNUSED bool is_selected) {
+                                  const char *text, [[maybe_unused]] bool is_selected) {
   int16_t x = (MARK_PADDING / 2);
   GRect box = cell_layer->bounds;
   const bool highlight = menu_cell_layer_is_highlighted(cell_layer);
@@ -725,7 +728,7 @@ static void prv_draw_rt_cell_rect(GContext *ctx, const Layer *cell_layer, GBitma
   box.size.w -= x;
   box.size.h -= 8;
   const GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_18);
-  graphics_draw_text(ctx, text, font, box, GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, text, font, box, GTextOverflowModeFill, GTextAlignmentLeft, nullptr);
 }
 #endif
 
@@ -755,7 +758,7 @@ static void prv_draw_rt_cell_round(GContext *ctx, const Layer *cell_layer, GBitm
     text_rect.size.h = fonts_get_font_height(font);
     grect_align(&text_rect, &rt_rect, GAlignBottom, true /* clip */);
     graphics_draw_text(ctx, text, font, text_rect, GTextOverflowModeFill, GTextAlignmentCenter,
-                       NULL);
+                       nullptr);
   }
 }
 #endif
@@ -799,7 +802,7 @@ static void prv_draw_fcc_cell_round(GContext *ctx, const GRect *cell_layer_bound
   grect_align(&box, &container_rect, GAlignTopLeft, true /* clip */);
   box.origin.y -= fcc_title_font_cap_padding;
   graphics_draw_text(ctx, fcc_title, fcc_title_font, box, text_overflow_mode, GTextAlignmentLeft,
-                     NULL);
+                     nullptr);
 
   // If the cell is selected, draw the FCC # subtitle centered at the bottom of the container
   if (cell_is_selected) {
@@ -809,7 +812,7 @@ static void prv_draw_fcc_cell_round(GContext *ctx, const GRect *cell_layer_bound
     // combined width of the title and icon
     grect_align(&box, &container_rect, GAlignBottom, false /* clip */);
     graphics_draw_text(ctx, fcc_number_subtitle, fcc_number_subtitle_font, box, text_overflow_mode,
-                       GTextAlignmentCenter, NULL);
+                       GTextAlignmentCenter, nullptr);
   }
 
   // Align the FCC mark icon to be drawn in the top right of the container
@@ -826,7 +829,7 @@ static void prv_draw_fcc_cell(GContext *ctx, const Layer *cell_layer, SystemCert
   const bool highlight = menu_cell_layer_is_highlighted(cell_layer);
   GBitmap *mark = &cd->fcc_mark;
 #if PBL_RECT
-  menu_cell_basic_draw(ctx, cell_layer, title, subtitle, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, title, subtitle, nullptr);
   // FCC has a mark in the top right of its cell
   const GPoint mark_origin = GPoint(119, 7);
   const GRect box = (GRect){.origin = mark_origin, .size = mark->bounds.size};
@@ -916,7 +919,7 @@ static void prv_draw_regulatory_id_cell(GContext *ctx, const Layer *cell_layer,
                                         const void *arg1, const void *arg2) {
   const char *title = arg1;
   const char *subtitle = arg2;
-  menu_cell_basic_draw(ctx, cell_layer, title, subtitle, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, title, subtitle, nullptr);
 }
 
 static void prv_draw_korea_regulatory_cell(GContext *ctx, const Layer *cell_layer,
@@ -924,7 +927,7 @@ static void prv_draw_korea_regulatory_cell(GContext *ctx, const Layer *cell_laye
                                            const void *arg1, const void *arg2) {
   const char *title = arg1;
   const char *subtitle = i18n_get("See details...", title);
-  menu_cell_basic_draw(ctx, cell_layer, title, subtitle, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, title, subtitle, nullptr);
   i18n_free(subtitle, title);
 }
 
@@ -1248,9 +1251,24 @@ static void prv_push_kcc_window(SystemCertificationData *data) {
 // Callbacks for the main settings filter list menu.
 ////////////////////////////////////////////////////
 
+static void prv_push_unplug_to_shut_down_dialog(void) {
+  SimpleDialog *simple_dialog = simple_dialog_create("Shutdown Unplug");
+  Dialog *dialog = simple_dialog_get_dialog(simple_dialog);
+
+  dialog_set_text(dialog, i18n_get("Disconnect the charger to shut down.", simple_dialog));
+  dialog_set_icon(dialog, RESOURCE_ID_GENERIC_WARNING_LARGE);
+  dialog_set_timeout(dialog, DIALOG_TIMEOUT_INFINITE);
+
+  i18n_free_all(simple_dialog);
+
+  simple_dialog_push(simple_dialog, modal_manager_get_window_stack(ModalPriorityGeneric));
+}
+
 static void prv_shutdown_confirm_cb(ClickRecognizerRef recognizer, void *context) {
   actionable_dialog_pop((ActionableDialog *)context);
-  battery_ui_handle_shut_down();
+  if (battery_ui_handle_shut_down() == -EBUSY) {
+    prv_push_unplug_to_shut_down_dialog();
+  }
 }
 
 static void prv_shutdown_back_cb(ClickRecognizerRef recognizer, void *context) {
@@ -1266,7 +1284,7 @@ static void prv_shutdown_cb(void *data) {
   ActionableDialog *a_dialog = actionable_dialog_create("Shutdown");
   Dialog *dialog = actionable_dialog_get_dialog(a_dialog);
 
-  actionable_dialog_set_action_bar_type(a_dialog, DialogActionBarConfirm, NULL);
+  actionable_dialog_set_action_bar_type(a_dialog, DialogActionBarConfirm, nullptr);
   actionable_dialog_set_click_config_provider(a_dialog, prv_shutdown_click_provider);
 
   dialog_set_text_color(dialog, GColorWhite);
@@ -1287,7 +1305,7 @@ static void prv_deinit_cb(SettingsCallbacks *context) {
 static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Layer *cell_layer,
                             uint16_t row, bool selected) {
   SettingsSystemData *data = (SettingsSystemData *)context;
-  const char *subtitle = NULL;
+  const char *subtitle = nullptr;
   PBL_ASSERTN(row < SystemMenuItem_Count);
   switch (row) {
     case SystemMenuItemStationaryToggle:
@@ -1301,9 +1319,9 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
     case SystemMenuItem_Count:
       break;
     default:
-      WTF;
+      pbl_panic();
   }
-  menu_cell_basic_draw(ctx, cell_layer, i18n_get(s_item_titles[row], data), subtitle, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, i18n_get(s_item_titles[row], data), subtitle, nullptr);
 }
 
 void factory_reset_select_callback(int index, void *context) {
@@ -1333,7 +1351,7 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       settings_factory_reset_window_push();
       break;
     default:
-      WTF;
+      pbl_panic();
   }
   settings_menu_reload_data(SettingsMenuItemSystem);
 }

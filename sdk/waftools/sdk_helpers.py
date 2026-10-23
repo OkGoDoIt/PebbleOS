@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import struct
 
 from pebble_package import LibraryPackage
@@ -414,3 +415,85 @@ def wrap_task_name_with_platform(self):
         name = self.env.PLATFORM_NAME + " | " + name
 
     return f"{name}: {src_str}{sep}{tgt_str}"
+
+
+# Must match the phone app's PermissionKind and PluginDefinedPermissions.
+PLUGIN_PERMISSION_KINDS = ("exfiltrating", "read", "write")
+RESERVED_PLUGIN_PERMISSION_NAMES = ("InvokeAction",)
+
+
+def bundled_file_paths(project_info):
+    """
+    The project files the phone app reads out of the pbw by name: the plugin script, and a config
+    page shipped in the pbw rather than hosted at an http(s) URL.
+    :param project_info: the project info appinfo.json is written from
+    :return: their paths relative to the project root, as appinfo.json names them
+    """
+    paths = []
+    plugin = project_info.get("plugin")
+    if isinstance(plugin, dict):
+        paths.append(plugin.get("script", "plugin.js"))
+    config_page = project_info.get("configPage")
+    if isinstance(config_page, str) and not config_page.startswith(
+        ("http://", "https://")
+    ):
+        paths.append(config_page)
+    return paths
+
+
+# appinfo.json features the phone app only knows from a manifestVersion 2 pbw.
+MANIFEST_V2_KEYS = ("plugin", "usesPermissions", "configPage")
+
+
+def validate_manifest_version(ctx, project_info):
+    """
+    Check the project's manifestVersion, which defaults to 2. The phone app treats a version 1 pbw
+    as a legacy app and ignores the newer appinfo features.
+    :param ctx: the ConfigureContext object
+    :param project_info: the project info appinfo.json is written from
+    :return: N/A
+    """
+    version = project_info.get("manifestVersion", 2)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        ctx.fatal("'manifestVersion' must be 1 or 2")
+    if version < 2:
+        used = [key for key in MANIFEST_V2_KEYS if key in project_info]
+        if used:
+            ctx.fatal(
+                f"{', '.join(repr(key) for key in used)} {'needs' if len(used) == 1 else 'need'} "
+                "manifestVersion 2, the default: "
+                "remove '\"manifestVersion\": 1' from package.json"
+            )
+
+
+def validate_plugin(ctx, project_info):
+    """
+    Check the project's `plugin` block (and that the files appinfo.json names exist) the way the
+    phone app will when it loads the pbw.
+    :param ctx: the ConfigureContext object
+    :param project_info: the project info appinfo.json is written from
+    :return: N/A
+    """
+    plugin = project_info.get("plugin")
+    if plugin is not None and not isinstance(plugin, dict):
+        ctx.fatal("'plugin' must be an object")
+    if project_info.get("projectType") == "plugin" and plugin is None:
+        ctx.fatal("A plugin project needs a 'plugin' block in package.json")
+
+    for permission in (plugin or {}).get("definesPermissions", []):
+        name = permission.get("name", "")
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name):
+            ctx.fatal(f"Plugin permission name '{name}' must be alphanumeric")
+        if name in RESERVED_PLUGIN_PERMISSION_NAMES:
+            ctx.fatal(f"Plugin permission name '{name}' is reserved")
+        if not str(permission.get("label", "")).strip():
+            ctx.fatal(f"Plugin permission '{name}' has no label")
+        if permission.get("kind") not in PLUGIN_PERMISSION_KINDS:
+            ctx.fatal(
+                f"Plugin permission '{name}' needs a kind: one of "
+                f"{', '.join(PLUGIN_PERMISSION_KINDS)}"
+            )
+
+    for path in bundled_file_paths(project_info):
+        if ctx.path.find_node(path) is None:
+            ctx.fatal(f"'{path}', named in package.json, does not exist")

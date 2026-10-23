@@ -16,11 +16,6 @@
 #include <fake_system_task.h>
 
 // Stubs
-#include <stubs_bluetopia_interface.h>
-#include <stubs_bt_lock.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
 
 extern void conn_mgr_handle_desired_state_granted(GAPLEConnection *hdl,
                                                   enum pbl_bt_response_time_state granted_state);
@@ -28,11 +23,11 @@ extern void conn_mgr_handle_desired_state_granted(GAPLEConnection *hdl,
 // Stubs
 /////
 bool gap_le_connection_is_valid(const GAPLEConnection *conn) {
-  return (conn != NULL);
+  return (conn != nullptr);
 }
 
 GAPLEConnection *gap_le_connection_any(void) {
-  return NULL;
+  return nullptr;
 }
 
 void prv_regular_timer_spend_seconds(uint32_t seconds) {

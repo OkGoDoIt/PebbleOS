@@ -3,12 +3,13 @@
 
 #include "dialog.h"
 
+#include <pbl/kernel/assert.h>
+
 #include <applib/applib_malloc.auto.h>
 #include <applib/graphics/gtypes.h>
 #include <applib/ui/dialogs/dialog_private.h>
 #include <kernel/ui/kernel_ui.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 #define TEXT_FLOW_INSET_PX (PBL_IF_RECT_ELSE(0, 8))
 
@@ -55,7 +56,7 @@ static void prv_workout_dialog_load(Window *window) {
   x = left_margin_px;
   w = bounds->size.w - left_margin_px - right_margin_px;
 
-  GTextAttributes *text_attributes = NULL;
+  GTextAttributes *text_attributes = nullptr;
 #if PBL_ROUND
   // Create a GTextAttributes for the TextLayer. Note that the matching
   // graphics_text_attributes_destroy() will not need to be called here, as the ownership
@@ -212,7 +213,7 @@ ActionBarLayer *workout_dialog_get_action_bar(WorkoutDialog *workout_dialog) {
 
 void workout_dialog_set_click_config_provider(WorkoutDialog *workout_dialog,
                                               ClickConfigProvider click_config_provider) {
-  if (workout_dialog == NULL) {
+  if (workout_dialog == nullptr) {
     return;
   }
   ActionBarLayer *action_bar = &workout_dialog->action_bar;
@@ -220,7 +221,7 @@ void workout_dialog_set_click_config_provider(WorkoutDialog *workout_dialog,
 }
 
 void workout_dialog_set_click_config_context(WorkoutDialog *workout_dialog, void *context) {
-  if (workout_dialog == NULL) {
+  if (workout_dialog == nullptr) {
     return;
   }
   ActionBarLayer *action_bar = &workout_dialog->action_bar;

@@ -13,7 +13,6 @@
 
 #include <stubs_logging.h>
 #include <stubs_nimble_npl.h>
-#include <stubs_passert.h>
 
 // Fakes: up to two links. NimBLE's ble_gap_conn_find_by_addr() returns the newest link to an
 // address, so with the same iPhone on the phone link and the Muse setup window's private link,

@@ -6,6 +6,8 @@
 
 #include <pbl/drivers/flash.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/delay.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/session.h>
@@ -22,11 +24,10 @@
 #include <applib/data_logging.h>
 #include <comm/bt_lock.h>
 #include <kernel/pbl_malloc.h>
-#include <kernel/util/sleep.h>
+#include <kernel/pebble_tasks.h>
 #include <process_management/pebble_process_md.h>
 #include <process_management/process_manager.h>
 #include <syscall/syscall.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_data_logging, CONFIG_SERVICE_DATA_LOGGING_LOG_LEVEL);
 
@@ -128,7 +129,7 @@ static void prv_send_all_sessions_system_task_cb(void *empty_all_data) {
   }
 
   DataLoggingSendBuildCtx ctx = {
-    .head = NULL,
+    .head = nullptr,
     .empty = (bool)(uintptr_t)empty_all_data,
   };
   dls_list_for_each_session(prv_add_send_entry_cb, &ctx);
@@ -158,7 +159,7 @@ static void prv_check_all_sessions_timer_cb(void *data) {
 
   PBL_LOG_DBG("send all sessions: empty %s connected %s counter %u",
               bool_to_str(check_counter == 0),
-              bool_to_str(comm_session_get_system_session() != NULL), check_counter);
+              bool_to_str(comm_session_get_system_session() != nullptr), check_counter);
 
   system_task_add_callback(prv_send_all_sessions_system_task_cb,
                            (void *)(uintptr_t)(check_counter == 0));
@@ -196,7 +197,7 @@ bool dls_private_send_session(DataLoggingSession *logging_session, bool empty) {
   }
 
   // Only attempt to send data out if we can communicate with the phone
-  if (comm_session_get_system_session() == NULL) {
+  if (comm_session_get_system_session() == nullptr) {
     return true;
   }
 
@@ -331,7 +332,7 @@ static bool prv_inactivate_sessions_each_cb(DataLoggingSession *session, void *d
       // Free up the data and mutex for this session
       pbl_mutex_deinit(&session->data->mutex);
       kernel_free(session->data);
-      session->data = NULL;
+      session->data = nullptr;
     }
   }
 
@@ -363,27 +364,27 @@ static DataLoggingSession *prv_dls_create(uint32_t tag, DataLoggingItemType item
   if (item_size == 0 || (buffered && item_size > DLS_SESSION_MAX_BUFFERED_ITEM_SIZE) ||
       (!buffered && item_size > DLS_ENDPOINT_MAX_PAYLOAD)) {
     PBL_LOG_ERR("invalid logging_session item size, %d", item_size);
-    return (NULL);
+    return (nullptr);
   } else if (item_type == DATA_LOGGING_UINT || item_type == DATA_LOGGING_INT) {
     if (item_size > 4 || item_size == 3) {
       PBL_LOG_ERR("Invalid data width: integer types can be 1, 2, or 4 bytes");
-      return (NULL);
+      return (nullptr);
     }
   }
 
   DataLoggingSession *logging_session = dls_list_find_active_session(tag, uuid);
 
-  if (!resume && logging_session != NULL) {
+  if (!resume && logging_session != nullptr) {
     dls_finish(logging_session);
-    logging_session = NULL;
+    logging_session = nullptr;
   }
 
-  if (logging_session == NULL) {
+  if (logging_session == nullptr) {
     logging_session = dls_list_create_session(tag, item_type, item_size, uuid, rtc_get_time(),
                                               DataLoggingStatusActive);
-    if (logging_session == NULL) {
+    if (logging_session == nullptr) {
       // No need to log again here, dls_list_create_session will log on our behalf
-      return NULL;
+      return nullptr;
     }
 
     // Add to the linked list of logging_sessions. This assigns a new unique session_id to this
@@ -423,7 +424,7 @@ static DataLoggingSession *prv_dls_create(uint32_t tag, DataLoggingItemType item
 // ----------------------------------------------------------------------------------------
 DataLoggingSession *dls_create(uint32_t tag, DataLoggingItemType item_type, uint16_t item_size,
                                bool buffered, bool resume, const Uuid *uuid) {
-  return prv_dls_create(tag, item_type, item_size, buffered, NULL /*buffer*/, resume, uuid);
+  return prv_dls_create(tag, item_type, item_size, buffered, nullptr /*buffer*/, resume, uuid);
 }
 
 // ----------------------------------------------------------------------------------------
@@ -435,7 +436,7 @@ DataLoggingSession *dls_create_current_process(uint32_t tag, DataLoggingItemType
 
 // ----------------------------------------------------------------------------------------
 void dls_finish(DataLoggingSession *logging_session) {
-  PBL_ASSERTN(logging_session != NULL);
+  PBL_ASSERTN(logging_session != nullptr);
   if (uuid_is_system(&logging_session->app_uuid)) {
     PBL_LOG_WRN("Finishing the system data logging session at %p", logging_session);
   }
@@ -448,7 +449,7 @@ void dls_finish(DataLoggingSession *logging_session) {
 
   // Wait for write buffer to empty
   int timeout = 1000; // 1 second
-  while (logging_session->data->buffer_storage != NULL && timeout) {
+  while (logging_session->data->buffer_storage != nullptr && timeout) {
     int bytes_pending = pbl_shared_cbuf_get_read_space_remaining(
         &logging_session->data->buffer, &logging_session->data->buffer_client);
     if (bytes_pending == 0) {
@@ -459,7 +460,7 @@ void dls_finish(DataLoggingSession *logging_session) {
     // unlock and wait a little bit, since the system task should be busy writing these to flash.
     dls_unlock_session(logging_session, false /*inactivate*/);
     timeout -= 10;
-    psleep(10);
+    pbl_sleep_ms(10);
     if (!dls_lock_session(logging_session)) {
       // Someone snuck in and marked it inactive on us
       goto exit;
@@ -481,14 +482,12 @@ static bool prv_write_session_to_flash(DataLoggingSession *session, void *data) 
 }
 
 static void prv_write_all_sessions_to_flash(void *data) {
-  dls_list_for_each_session(prv_write_session_to_flash, NULL);
+  dls_list_for_each_session(prv_write_session_to_flash, nullptr);
 }
 
 // ----------------------------------------------------------------------------------------
 DataLoggingResult dls_log(DataLoggingSession *session, const void *data, uint32_t num_items) {
 #ifndef CONFIG_RELEASE
-  // TODO: We should be able to remove this requirement once PBL-23925 is fixed
-  //
   // Some datalogging code holds the dls_list.c:s_list_mutex while taking the
   // bt_lock. Since we are locking the list and then trying to get the bt_lock,
   // any other thread which holds the bt_lock and then trys to call a log could
@@ -497,21 +496,23 @@ DataLoggingResult dls_log(DataLoggingSession *session, const void *data, uint32_
   bt_lock_assert_held(false);
 #endif
 
-  PBL_ASSERTN(session != NULL && data != NULL);
+  PBL_ASSERTN(session != nullptr && data != nullptr);
   DataLoggingResult result = DATA_LOGGING_SUCCESS;
 
-  if (num_items == 0 || data == NULL) {
+  if (num_items == 0 || data == nullptr) {
     return (DATA_LOGGING_INVALID_PARAMS);
   }
 
   uint32_t num_bytes = num_items * session->item_size;
-  if (session->data->buffer_storage && num_bytes > DLS_SESSION_MAX_BUFFERED_ITEM_SIZE) {
-    return (DATA_LOGGING_INVALID_PARAMS);
-  }
 
   bool active = dls_lock_session(session);
   if (!active) {
     return (DATA_LOGGING_CLOSED);
+  }
+
+  if (session->data->buffer_storage && num_bytes > DLS_SESSION_MAX_BUFFERED_ITEM_SIZE) {
+    result = DATA_LOGGING_INVALID_PARAMS;
+    goto unlock_and_exit;
   }
 
   PBL_LOG_DBG("logging %d items of size %d to session %d", (int)num_items, (int)session->item_size,
@@ -538,7 +539,7 @@ DataLoggingResult dls_log(DataLoggingSession *session, const void *data, uint32_
   // previously enqueued work for this session.
   if (!session->data->write_request_pending) {
     session->data->write_request_pending = true;
-    system_task_add_callback(prv_write_all_sessions_to_flash, NULL);
+    system_task_add_callback(prv_write_all_sessions_to_flash, nullptr);
   }
 
 unlock_and_exit:

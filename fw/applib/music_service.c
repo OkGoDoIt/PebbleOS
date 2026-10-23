@@ -7,29 +7,29 @@
 #include "event_service_client.h"
 #include "kernel/events.h"
 #include "syscall/syscall.h"
-#include "system/passert.h"
+#include "pbl/kernel/assert.h"
+#include "pbl/kernel/fatal.h"
 
 #include "process_state/app_state/app_state.h"
-#include "process_state/worker_state/worker_state.h"
+#include "kernel/pebble_tasks.h"
 
 // ----------------------------------------------------------------------------------------------------
-static MusicServiceState *prv_get_state(PebbleTask task) {
-  if (task == PebbleTask_Unknown) {
-    task = pebble_task_get_current();
-  }
-
+//! Events are delivered to apps only: WorkerState must fit CONFIG_WORKER_RAM_RUNTIME_SIZE and has no
+//! room left. Workers can still read the state through the getters.
+static MusicServiceState *prv_get_state(void) {
+  const PebbleTask task = pebble_task_get_current();
   if (task == PebbleTask_App) {
     return app_state_get_music_service_state();
-  } else if (task == PebbleTask_Worker) {
-    return worker_state_get_music_service_state();
-  } else {
-    WTF;
   }
+  if (task != PebbleTask_Worker) {
+    pbl_panic();
+  }
+  return nullptr;
 }
 
 static void do_handle(PebbleEvent *e, void *context) {
-  MusicServiceState *state = prv_get_state(PebbleTask_Unknown);
-  PBL_ASSERTN(state->handler != NULL);
+  MusicServiceState *state = prv_get_state();
+  PBL_ASSERTN(state && state->handler != nullptr);
   switch (e->media.type) {
     case PebbleMediaEventTypeNowPlayingChanged:
       state->handler(MusicServiceEventNowPlayingChanged);
@@ -98,15 +98,21 @@ bool music_service_send_command(MusicServiceCommand command) {
 }
 
 void music_service_subscribe(MusicServiceEventHandler handler) {
-  MusicServiceState *state = prv_get_state(PebbleTask_Unknown);
+  MusicServiceState *state = prv_get_state();
+  if (!state) {
+    return;
+  }
   state->handler = handler;
   event_service_client_subscribe(&state->mss_info);
 }
 
 void music_service_unsubscribe(void) {
-  MusicServiceState *state = prv_get_state(PebbleTask_Unknown);
+  MusicServiceState *state = prv_get_state();
+  if (!state) {
+    return;
+  }
   event_service_client_unsubscribe(&state->mss_info);
-  state->handler = NULL;
+  state->handler = nullptr;
 }
 
 void music_service_state_init(MusicServiceState *state) {

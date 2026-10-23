@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/app_message/app_message_sender.h>
 #include <pbl/services/app_outbox_service.h>
@@ -11,8 +13,6 @@
 #include <kernel/pbl_malloc.h>
 #include <process_management/process_manager.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_app_outbox_service, CONFIG_SERVICE_APP_OUTBOX_SERVICE_LOG_LEVEL);
 
@@ -77,30 +77,26 @@ static const AppOutboxSenderDef *prv_find_def_and_tag_by_handler(AppOutboxSentHa
   if (tag_out) {
     *tag_out = AppOutboxServiceTagInvalid;
   }
-  return NULL;
+  return nullptr;
 }
 
 static void app_outbox_service_send(const uint8_t *data, size_t length,
                                     AppOutboxSentHandler sent_handler, void *cb_ctx);
 
-DEFINE_SYSCALL(void, sys_app_outbox_send, const uint8_t *data, size_t length,
-               AppOutboxSentHandler sent_handler, void *cb_ctx) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    // Check that data is in app space:
-    syscall_assert_userspace_buffer(data, length);
-  }
-
-  const AppOutboxSenderDef *def = prv_find_def_and_tag_by_handler(sent_handler, NULL);
+PBL_SYSCALL(void, sys_app_outbox_send, (IN_BUF, const uint8_t *, data, length),
+            (VAL, size_t, length), (VAL, AppOutboxSentHandler, sent_handler),
+            (VAL, void *, cb_ctx)) {
+  const AppOutboxSenderDef *def = prv_find_def_and_tag_by_handler(sent_handler, nullptr);
   if (!def) {
     PBL_LOG_ERR("AppOutbox sent_handler not allowed <%p>", sent_handler);
-    syscall_failed();
+    pbl_syscall_fail();
   }
 
   const size_t max_length = def->max_length;
   if (length > max_length) {
     PBL_LOG_ERR("AppOutbox max_length exceeded %" PRIu32 " vs %" PRIu32, (uint32_t)length,
                 (uint32_t)max_length);
-    syscall_failed();
+    pbl_syscall_fail();
   }
   app_outbox_service_send(data, length, sent_handler, cb_ctx);
 }
@@ -120,11 +116,11 @@ static void prv_unlock(void) {
 
 static AppOutboxConsumer *prv_consumer_for_tag(AppOutboxServiceTag tag) {
   if (tag == AppOutboxServiceTagInvalid) {
-    return NULL;
+    return nullptr;
   }
   AppOutboxConsumer *consumer = &s_app_outbox_consumer[tag];
-  if (consumer->message_handler == NULL) {
-    return NULL;
+  if (consumer->message_handler == nullptr) {
+    return nullptr;
   }
   return consumer;
 }
@@ -148,7 +144,7 @@ static void prv_schedule_sent_handler(AppOutboxSentHandler sent_handler, void *c
 //! @note This executes on App Task
 static void prv_schedule_consumer_message_handler(AppOutboxConsumer *consumer,
                                                   AppOutboxMessage *message) {
-  void (*callback)(void *) = (__typeof__(callback))consumer->message_handler;
+  void (*callback)(void *) = (typeof(callback))consumer->message_handler;
   PebbleEvent event = {
     .type = PEBBLE_APP_OUTBOX_MSG_EVENT,
     .app_outbox_msg = {
@@ -170,12 +166,12 @@ static AppOutboxConsumer *prv_find_consumer_with_message(const AppOutboxMessage 
       return &s_app_outbox_consumer[tag];
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 void prv_cleanup_pending_messages(AppOutboxConsumer *consumer, bool should_call_sent_handler) {
   AppOutboxMessage *message = consumer->head;
-  consumer->head = NULL;
+  consumer->head = nullptr;
   while (message) {
     if (should_call_sent_handler) {
       prv_schedule_sent_handler(message->sent_handler, message->cb_ctx,
@@ -211,7 +207,7 @@ void app_outbox_service_unregister(AppOutboxServiceTag service_tag) {
   {
     prv_cleanup_pending_messages(&s_app_outbox_consumer[service_tag],
                                  true /* should_call_sent_handler */);
-    s_app_outbox_consumer[service_tag].message_handler = NULL;
+    s_app_outbox_consumer[service_tag].message_handler = nullptr;
   }
   prv_unlock();
 }
@@ -279,7 +275,7 @@ void app_outbox_service_consume_message(AppOutboxMessage *message, AppOutboxStat
     }
     AppOutboxConsumer *consumer = prv_find_consumer_with_message(message);
     PBL_ASSERTN(consumer);
-    list_remove(&message->node, (ListNode **)&consumer->head, NULL);
+    list_remove(&message->node, (ListNode **)&consumer->head, nullptr);
     prv_schedule_sent_handler(message->sent_handler, message->cb_ctx, status);
   }
 finally:

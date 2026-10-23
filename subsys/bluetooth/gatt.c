@@ -23,7 +23,7 @@ void pbl_bt_gatt_respond_read_subscription(uint32_t transaction_id, uint16_t res
 static int prv_find_service_changed_val_handle(uint16_t *val_handle) {
   const ble_uuid16_t svc_uuid = BLE_UUID16_INIT(PBL_BT_GATT_SERVICE_UUID);
   const ble_uuid16_t chr_uuid = BLE_UUID16_INIT(BLE_SVC_GATT_CHR_SERVICE_CHANGED_UUID16);
-  return ble_gatts_find_chr(&svc_uuid.u, &chr_uuid.u, NULL, val_handle);
+  return ble_gatts_find_chr(&svc_uuid.u, &chr_uuid.u, nullptr, val_handle);
 }
 
 void nimble_gatt_handle_subscribe_event(const struct ble_gap_event *event) {

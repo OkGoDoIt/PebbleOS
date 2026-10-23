@@ -16,17 +16,6 @@
 #include <fake_gatt_client_subscriptions.h>
 #include <fake_pebble_tasks.h>
 #include <fake_rtc.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_manager.h>
-#include <stubs_bt_lock.h>
-#include <stubs_hexdump.h>
-#include <stubs_imaging.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_serial.h>
-#include <stubs_tick.h>
 
 struct {
   enum pbl_bt_response_time_state state;
@@ -41,7 +30,7 @@ void conn_mgr_set_ble_conn_response_time(GAPLEConnection *hdl, enum pbl_bt_consu
 }
 
 GAPLEConnection *gap_le_connection_by_device(const struct pbl_bt_device_internal *device) {
-  return NULL;
+  return nullptr;
 }
 
 struct pbl_bt_device_internal gatt_client_characteristic_get_device(
@@ -63,7 +52,7 @@ static void *s_launcher_task_callback_data;
 
 void launcher_task_add_callback(void (*callback)(void *data), void *data) {
   // Simple fake, can only handle one call
-  cl_assert_equal_p(s_launcher_task_callback, NULL);
+  cl_assert_equal_p(s_launcher_task_callback, nullptr);
 
   s_launcher_task_callback = callback;
   s_launcher_task_callback_data = data;
@@ -131,14 +120,13 @@ void test_ams__discover_of_ams_should_subscribe_to_entity_update_characteristic(
 
   // The first instance is expected to be used.
   pbl_bt_characteristic_t entity_update = s_characteristics[0][AMSCharacteristicEntityUpdate];
-  fake_gatt_client_subscriptions_assert_subscribe(entity_update, BLESubscriptionNotifications,
-                                                  GAPLEClientKernel);
+  fake_gatt_client_subscriptions_assert_subscribe(entity_update, BLESubscriptionNotifications);
 }
 
 void test_ams__connect_to_music_service_upon_subscribing_entity_update_characteristic(void) {
   prv_discover_ams(1 /* num_instances */);
   // Not connected yet (still need to subscribe):
-  cl_assert_equal_s(music_get_connected_server_debug_name(), NULL);
+  cl_assert_equal_s(music_get_connected_server_debug_name(), nullptr);
 
   // Simulate successful subscription:
   pbl_bt_characteristic_t entity_update = s_characteristics[0][AMSCharacteristicEntityUpdate];
@@ -150,7 +138,7 @@ void test_ams__connect_to_music_service_upon_subscribing_entity_update_character
   // Rediscovery will disconnect music service (until resubscribed):
   ams_invalidate_all_references();
   prv_discover_ams(1 /* num_instances */);
-  cl_assert_equal_s(music_get_connected_server_debug_name(), NULL);
+  cl_assert_equal_s(music_get_connected_server_debug_name(), nullptr);
 }
 
 void test_ams__dont_connect_music_service_if_subscribe_entity_update_characteristic_fails(void) {
@@ -162,7 +150,7 @@ void test_ams__dont_connect_music_service_if_subscribe_entity_update_characteris
                        PBL_BT_GATT_ERROR_UNLIKELY_ERROR);
 
   // Not connected because subscription failed:
-  cl_assert_equal_s(music_get_connected_server_debug_name(), NULL);
+  cl_assert_equal_s(music_get_connected_server_debug_name(), nullptr);
 }
 
 void test_ams__update_characteristics_ams_not_found(void) {
@@ -200,7 +188,7 @@ void test_ams__register_for_entity_updates(void) {
 
   // Expect to have written the command to register for the Player entity:
   fake_gatt_client_op_assert_write(entity_update, s_register_player_entity,
-                                   sizeof(s_register_player_entity), GAPLEClientKernel,
+                                   sizeof(s_register_player_entity),
                                    true /* is_response_required */);
   ams_handle_write_response(entity_update, PBL_BT_GATT_ERROR_SUCCESS);
 
@@ -208,7 +196,7 @@ void test_ams__register_for_entity_updates(void) {
 
   // Expect to have written the command to register for the Queue entity:
   fake_gatt_client_op_assert_write(entity_update, s_register_queue_entity,
-                                   sizeof(s_register_queue_entity), GAPLEClientKernel,
+                                   sizeof(s_register_queue_entity),
                                    true /* is_response_required */);
   ams_handle_write_response(entity_update, PBL_BT_GATT_ERROR_SUCCESS);
 
@@ -216,7 +204,7 @@ void test_ams__register_for_entity_updates(void) {
 
   // Expect to have written the command to register for the Track entity:
   fake_gatt_client_op_assert_write(entity_update, s_register_track_entity,
-                                   sizeof(s_register_track_entity), GAPLEClientKernel,
+                                   sizeof(s_register_track_entity),
                                    true /* is_response_required */);
   ams_handle_write_response(entity_update, PBL_BT_GATT_ERROR_SUCCESS);
 
@@ -245,12 +233,12 @@ void test_ams__register_for_entity_updates_retry_if_out_of_resources(void) {
   fake_gatt_client_op_set_write_return_value(PBL_BT_ERRNO_OK);
 
   // Simulate processing the callback to retry:
-  cl_assert(s_launcher_task_callback != NULL);
+  cl_assert(s_launcher_task_callback != nullptr);
   s_launcher_task_callback(s_launcher_task_callback_data);
 
   // Expect to have written the command to register for the Player entity:
   fake_gatt_client_op_assert_write(entity_update, s_register_player_entity,
-                                   sizeof(s_register_player_entity), GAPLEClientKernel,
+                                   sizeof(s_register_player_entity),
                                    true /* is_response_required */);
   ams_handle_write_response(entity_update, PBL_BT_GATT_ERROR_SUCCESS);
 }
@@ -263,7 +251,7 @@ static void prv_set_dummy_server_connected(bool connected) {
 void test_ams__dont_register_if_another_music_server_is_already_connected(void) {
   prv_discover_ams(1 /* num_instances */);
   // Not connected yet (still need to subscribe):
-  cl_assert_equal_s(music_get_connected_server_debug_name(), NULL);
+  cl_assert_equal_s(music_get_connected_server_debug_name(), nullptr);
 
   prv_set_dummy_server_connected(true /* connected */);
 
@@ -343,7 +331,7 @@ void test_ams__send_remote_command(void) {
 
     pbl_bt_characteristic_t remote_command = s_characteristics[0][AMSCharacteristicRemoteCommand];
     const uint8_t ams_cmd = prv_ams_command_for_music_command(music_cmd);
-    fake_gatt_client_op_assert_write(remote_command, &ams_cmd, sizeof(ams_cmd), GAPLEClientKernel,
+    fake_gatt_client_op_assert_write(remote_command, &ams_cmd, sizeof(ams_cmd),
                                      true /* is_response_required */);
 
     // Simulate receiving the response:
@@ -363,13 +351,13 @@ void test_ams__send_remote_command_non_kernel_main_task(void) {
   music_command_send(MusicCommandPlay);
 
   // Process the KernelMain callback:
-  cl_assert(s_launcher_task_callback != NULL);
+  cl_assert(s_launcher_task_callback != nullptr);
   stub_pebble_tasks_set_current(PebbleTask_KernelMain);
   s_launcher_task_callback(s_launcher_task_callback_data);
 
   pbl_bt_characteristic_t remote_command = s_characteristics[0][AMSCharacteristicRemoteCommand];
   const uint8_t ams_cmd = prv_ams_command_for_music_command(MusicCommandPlay);
-  fake_gatt_client_op_assert_write(remote_command, &ams_cmd, sizeof(ams_cmd), GAPLEClientKernel,
+  fake_gatt_client_op_assert_write(remote_command, &ams_cmd, sizeof(ams_cmd),
                                    true /* is_response_required */);
 }
 
@@ -384,7 +372,7 @@ void test_ams__send_remote_command_non_kernel_main_task_then_disconnect(void) {
   ams_destroy();
 
   // Process the KernelMain callback:
-  cl_assert(s_launcher_task_callback != NULL);
+  cl_assert(s_launcher_task_callback != nullptr);
   stub_pebble_tasks_set_current(PebbleTask_KernelMain);
   s_launcher_task_callback(s_launcher_task_callback_data);
 
@@ -647,7 +635,7 @@ void test_ams__receive_track_artist_update(void) {
   prv_receive_entity_update(track_artist_update, sizeof(track_artist_update));
 
   char artist[MUSIC_BUFFER_LENGTH];
-  music_get_now_playing(NULL, artist, NULL);
+  music_get_now_playing(nullptr, artist, nullptr);
 
   cl_assert_equal_s(artist, "Miles Davis");
 }
@@ -662,7 +650,7 @@ void test_ams__receive_track_title_update(void) {
   prv_receive_entity_update(track_title_update, sizeof(track_title_update));
 
   char title[MUSIC_BUFFER_LENGTH];
-  music_get_now_playing(title, NULL, NULL);
+  music_get_now_playing(title, nullptr, nullptr);
 
   cl_assert_equal_s(title, "So What");
 }
@@ -679,7 +667,7 @@ void test_ams__receive_track_album_update(void) {
   prv_receive_entity_update(track_album_update, sizeof(track_album_update));
 
   char album[MUSIC_BUFFER_LENGTH];
-  music_get_now_playing(NULL, NULL, album);
+  music_get_now_playing(nullptr, nullptr, album);
 
   cl_assert_equal_s(album, "Kind Of Blue (Legacy Edition)");
 }
@@ -711,7 +699,7 @@ void test_ams__supported_capabilities(void) {
 ///////////////////////////////////////////////////////////
 
 void test_ams__create_again_trips_assert(void) {
-  cl_assert_passert(ams_create());
+  cl_assert_panic(ams_create());
 }
 
 void test_ams__create_works_again_after_destroy(void) {
@@ -734,14 +722,14 @@ void test_ams__destroy_disconnects_from_music_service(void) {
   ams_handle_subscribe(entity_update, BLESubscriptionNotifications, PBL_BT_GATT_ERROR_SUCCESS);
 
   ams_destroy();
-  cl_assert_equal_s(music_get_connected_server_debug_name(), NULL);
+  cl_assert_equal_s(music_get_connected_server_debug_name(), nullptr);
 }
 
 // Test setup
 ///////////////////////////////////////////////////////////
 
 void test_ams__initialize(void) {
-  s_launcher_task_callback = NULL;
+  s_launcher_task_callback = nullptr;
   memset(s_conn_mgr_states, 0, sizeof(s_conn_mgr_states));
   fake_rtc_init(1234, 5678);
   fake_event_init();
@@ -749,7 +737,7 @@ void test_ams__initialize(void) {
   fake_gatt_client_op_init();
   stub_pebble_tasks_set_current(PebbleTask_KernelMain);
   ams_create();
-  cl_assert_equal_s(music_get_connected_server_debug_name(), NULL);
+  cl_assert_equal_s(music_get_connected_server_debug_name(), nullptr);
 }
 
 void test_ams__cleanup(void) {

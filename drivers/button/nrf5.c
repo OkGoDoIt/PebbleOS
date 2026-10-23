@@ -1,8 +1,8 @@
 #include <pbl/drivers/button.h>
+#include <pbl/drivers/gpio.h>
 
 #include <board/board.h>
 #include <kernel/events.h>
-#include <system/passert.h>
 
 // watch rotation
 static bool s_rotated_180 = false;
@@ -18,10 +18,7 @@ bool button_is_pressed(ButtonId id) {
     id = BUTTON_ID_UP;
   }
 
-  const ButtonConfig *button_config = &BOARD_CONFIG_BUTTON.buttons[id];
-
-  uint32_t bit = nrf_gpio_pin_read(button_config->gpiote.gpio_pin);
-  return (BOARD_CONFIG_BUTTON.active_high) ? bit : !bit;
+  return pbl_gpio_get(&BOARD_CONFIG_BUTTON.buttons[id].gpio) > 0;
 }
 
 uint8_t button_get_state_bits(void) {
@@ -33,12 +30,8 @@ uint8_t button_get_state_bits(void) {
 }
 
 void button_init(void) {
-  if (BOARD_CONFIG_BUTTON.button_com.gpio_pin)
-    WTF; // NYI
-
   for (int i = 0; i < NUM_BUTTONS; ++i) {
-    nrf_gpio_cfg_input(BOARD_CONFIG_BUTTON.buttons[i].gpiote.gpio_pin,
-                       BOARD_CONFIG_BUTTON.buttons[i].pull);
+    pbl_gpio_configure(&BOARD_CONFIG_BUTTON.buttons[i].gpio, PBL_GPIO_INPUT);
   }
 }
 
@@ -59,6 +52,6 @@ static int prv_cmd_button_read(const struct pbl_shell *sh, size_t argc, char **a
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_button, read, NULL, "Read the state of button <id>", prv_cmd_button_read,
-                     2, 0);
+PBL_SHELL_SUBCMD_ADD(sub_button, read, nullptr, "Read the state of button <id>",
+                     prv_cmd_button_read, 2, 0);
 #endif

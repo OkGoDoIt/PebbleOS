@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/services/time.h>
@@ -35,10 +34,10 @@ typedef uint64_t RtcTicks;
 #if defined(CONFIG_QEMU)
 /** @brief Tick frequency in Hz (QEMU 1000 Hz counter). */
 #define RTC_TICKS_HZ (1000u)
-#elif defined(CONFIG_SOC_POSIX)
+#elifdef CONFIG_SOC_POSIX
 /** @brief Tick frequency in Hz (host monotonic clock). */
 #define RTC_TICKS_HZ (1000u)
-#elif defined(CONFIG_SOC_SF32LB52)
+#elifdef CONFIG_SOC_SF32LB52
 /** @brief Tick frequency in Hz (SF32LB52 LPTIM clocked by RC10K). */
 #define RTC_TICKS_HZ (1000u)
 #else
@@ -77,7 +76,7 @@ void rtc_init_timers(void);
  * @param[in,out] t Time to clamp.
  * @return true if @p t was changed.
  */
-bool rtc_sanitize_struct_tm(struct tm *t);
+bool rtc_sanitize_struct_tm(struct pbl_tm *t);
 
 /**
  * @brief Clamp the year of a time to 2000-2037, as rtc_sanitize_struct_tm().
@@ -108,14 +107,14 @@ time_t rtc_get_time(void);
  *
  * @param time_tm Time to set.
  */
-void rtc_set_time_tm(struct tm *time_tm);
+void rtc_set_time_tm(struct pbl_tm *time_tm);
 
 /**
  * @brief Get the current time as a broken-down local time.
  *
  * @param[out] time_tm Current time.
  */
-void rtc_get_time_tm(struct tm *time_tm);
+void rtc_get_time_tm(struct pbl_tm *time_tm);
 
 /**
  * @brief Get the current time with millisecond resolution.

@@ -8,20 +8,9 @@
 
 // Stubs
 ////////////////////////////////////
-#include <stubs_app_state.h>
-#include <stubs_bitblt.h>
-#include <stubs_gbitmap.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_resources.h>
-#include <stubs_syscalls.h>
-#include <stubs_unobstructed_area.h>
 
 GDrawState graphics_context_get_drawing_state(GContext *ctx) {
-  return (GDrawState){0};
+  return (GDrawState){};
 }
 
 bool graphics_release_frame_buffer(GContext *ctx, GBitmap *buffer) {

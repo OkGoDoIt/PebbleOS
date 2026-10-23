@@ -10,16 +10,16 @@ void pbl_mutex_init(struct pbl_mutex *m) {
 }
 
 void pbl_mutex_deinit(struct pbl_mutex *m) {
-  KERNEL_ASSERT(m->count == 0);
+  PBL_ASSERTN(m->count == 0);
 }
 
 int pbl_mutex_lock_lr(struct pbl_mutex *m, pbl_timeout_t timeout, uintptr_t lr) {
-  KERNEL_ASSERT(!arch_in_isr());
+  PBL_ASSERTN(!arch_in_isr());
   int rc = 0;
 
   pbl_irq_lock();
   struct pbl_thread *me = pbl_cur;
-  if (m->owner == NULL) {
+  if (m->owner == nullptr) {
     m->owner = me;
     m->count = 1;
     me->backend.mutexes_held++;
@@ -45,7 +45,7 @@ int pbl_mutex_lock_lr(struct pbl_mutex *m, pbl_timeout_t timeout, uintptr_t lr) 
 
 void pbl_mutex_unlock(struct pbl_mutex *m) {
   pbl_irq_lock();
-  KERNEL_ASSERT(m->owner == pbl_cur && m->count > 0);
+  PBL_ASSERTN(m->owner == pbl_cur && m->count > 0);
   if (--m->count == 0) {
     struct pbl_thread *prev = m->owner;
     prev->backend.mutexes_held--;
@@ -58,7 +58,7 @@ void pbl_mutex_unlock(struct pbl_mutex *m) {
       next->backend.mutexes_held++;
       sched_wake(next, 0);
     } else {
-      m->owner = NULL;
+      m->owner = nullptr;
     }
     sched_disinherit(prev);
   }
@@ -70,5 +70,5 @@ bool pbl_mutex_is_owner(const struct pbl_mutex *m) {
 }
 
 void pbl_mutex_assert_held(const struct pbl_mutex *m, bool held) {
-  KERNEL_ASSERT(pbl_mutex_is_owner(m) == held);
+  PBL_ASSERTN(pbl_mutex_is_owner(m) == held);
 }

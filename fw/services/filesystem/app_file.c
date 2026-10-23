@@ -3,10 +3,10 @@
 
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/filesystem/app_file.h>
 
 #include <resource/resource_storage.h>
-#include <system/passert.h>
 
 void app_file_name_make(char *restrict buffer, size_t buffer_len, AppInstallId app_id,
                         const char *restrict suffix, size_t suffix_len) {
@@ -52,7 +52,7 @@ bool is_app_resource_file_name(const char *filename) {
 //! Parses an app-file name to get the AppInstallId.
 //! Assumes the file is indeed an app-file
 AppInstallId app_file_parse_app_id(const char *filename) {
-  return (AppInstallId)strtol(filename + 1, NULL, 16); // + 1 to skip the initial '@'
+  return (AppInstallId)strtol(filename + 1, nullptr, 16); // + 1 to skip the initial '@'
 }
 
 //! Parses an app-file name to get the AppInstallId.

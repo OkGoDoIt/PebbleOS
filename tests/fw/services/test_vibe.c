@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/drivers/vibe.h>
 #include <pbl/services/vibe_pattern.h>
 #include <pbl/util/size.h>
 
@@ -11,10 +12,36 @@
 #include <fake_pbl_malloc.h>
 #include <fake_pebble_tasks.h>
 #include <fake_rtc.h>
-#include <stubs_analytics.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
+
+static struct pbl_mutex *s_last_locked_mutex;
+static struct pbl_mutex *s_history_mutex;
+static void (*s_before_history_lock)(void);
+
+void pbl_mutex_init(struct pbl_mutex *mutex) {
+}
+
+void pbl_mutex_deinit(struct pbl_mutex *mutex) {
+}
+
+int pbl_mutex_lock_lr(struct pbl_mutex *mutex, pbl_timeout_t timeout, uintptr_t lr) {
+  if (mutex == s_history_mutex && s_before_history_lock) {
+    void (*callback)(void) = s_before_history_lock;
+    s_before_history_lock = NULL;
+    callback();
+  }
+  s_last_locked_mutex = mutex;
+  return 0;
+}
+
+void pbl_mutex_unlock(struct pbl_mutex *mutex) {
+}
+
+bool pbl_mutex_is_owner(const struct pbl_mutex *mutex) {
+  return true;
+}
+
+void pbl_mutex_assert_held(const struct pbl_mutex *mutex, bool held) {
+}
 
 // declarations
 bool sys_vibe_pattern_enqueue_step_raw(uint32_t step_duration_ms, int32_t strength);
@@ -29,19 +56,28 @@ int32_t sys_vibe_get_vibe_strength(void);
 // stub
 static bool s_vibe_on = false;
 static int s_vibe_ctl_count = 0;
-void vibe_ctl(bool on) {
-  s_vibe_on = on;
-  s_vibe_ctl_count++;
-}
-
 static int8_t s_last_strength_set = 0;
 static int s_strength_set_count = 0;
-void vibe_set_strength(int8_t strength) {
+
+const struct pbl_vibe *const VIBE = nullptr;
+
+int pbl_vibe_start(const struct pbl_vibe *vibe, int8_t strength) {
   s_last_strength_set = strength;
   s_strength_set_count++;
+  s_vibe_on = true;
+  s_vibe_ctl_count++;
+  return 0;
 }
 
-uint32_t accel_get_max_num_samples(void) {
+int pbl_vibe_stop(const struct pbl_vibe *vibe) {
+  s_vibe_on = false;
+  s_vibe_ctl_count++;
+  return 0;
+}
+
+const struct pbl_accel *const ACCEL = nullptr;
+
+uint32_t pbl_accel_get_max_num_samples(const struct pbl_accel *accel) {
   return 32;
 }
 
@@ -91,6 +127,8 @@ static bool prv_confirm_history(const VibePattern pattern, int64_t start_time) {
 
 // unit test code
 void test_vibe__initialize(void) {
+  s_history_mutex = NULL;
+  s_before_history_lock = NULL;
   vibes_init();
   fake_rtc_init(0, 100);
   prv_snap_ticks_to_wall();
@@ -149,6 +187,113 @@ void test_vibe__check_vibe_history_multiple(void) {
   sys_vibe_history_stop_collecting();
 }
 
+void test_vibe__history_stop_during_active_pulse_reclaims_history(void) {
+  sys_vibe_history_stop_collecting();
+  sys_vibe_pattern_clear();
+  const int baseline = fake_pbl_malloc_num_net_allocs();
+
+  sys_vibe_history_start_collecting();
+  vibes_long_pulse();
+  cl_assert(s_vibe_on);
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 2);
+
+  sys_vibe_history_stop_collecting();
+  cl_assert(s_vibe_on);
+  cl_assert(!sys_vibe_history_was_vibrating(prv_get_current_time()));
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 1);
+
+  sys_vibe_pattern_clear();
+  cl_assert(!s_vibe_on);
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline);
+}
+
+void test_vibe__history_restart_after_active_stop_stays_bounded(void) {
+  sys_vibe_history_stop_collecting();
+  sys_vibe_pattern_clear();
+  const int baseline = fake_pbl_malloc_num_net_allocs();
+
+  sys_vibe_history_start_collecting();
+  vibes_long_pulse();
+  sys_vibe_history_stop_collecting();
+  sys_vibe_pattern_clear();
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline);
+
+  sys_vibe_history_start_collecting();
+  for (unsigned int i = 0; i < 100; i++) {
+    fake_rtc_increment_time_ms(30000);
+    prv_snap_ticks_to_wall();
+    vibes_long_pulse();
+    prv_run_vibes();
+    cl_assert(!s_vibe_on);
+    cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 1);
+  }
+  sys_vibe_history_stop_collecting();
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline);
+}
+
+void test_vibe__history_prunes_old_entries_and_preserves_active_pulse(void) {
+  sys_vibe_history_stop_collecting();
+  sys_vibe_pattern_clear();
+  const int baseline = fake_pbl_malloc_num_net_allocs();
+
+  sys_vibe_history_start_collecting();
+  const uint64_t old_time = prv_get_current_time();
+  vibes_long_pulse();
+  prv_run_vibes();
+  cl_assert(sys_vibe_history_was_vibrating(old_time));
+
+  fake_rtc_increment_time_ms(30000);
+  prv_snap_ticks_to_wall();
+  const uint64_t active_time = prv_get_current_time();
+  vibes_long_pulse();
+  cl_assert(s_vibe_on);
+  cl_assert(!sys_vibe_history_was_vibrating(old_time));
+  cl_assert(sys_vibe_history_was_vibrating(active_time));
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 2);
+
+  prv_run_vibes();
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 1);
+  sys_vibe_history_stop_collecting();
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline);
+}
+
+void test_vibe__history_stop_before_start_event_lock_does_not_append(void) {
+  sys_vibe_history_stop_collecting();
+  s_history_mutex = s_last_locked_mutex;
+  sys_vibe_pattern_clear();
+  const int baseline = fake_pbl_malloc_num_net_allocs();
+
+  sys_vibe_history_start_collecting();
+  // Collection stops on another task before this event acquires its lock.
+  s_before_history_lock = sys_vibe_history_stop_collecting;
+  vibes_long_pulse();
+  cl_assert(s_before_history_lock == NULL);
+  cl_assert(s_vibe_on);
+  cl_assert(!sys_vibe_history_was_vibrating(prv_get_current_time()));
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 1);
+
+  sys_vibe_pattern_clear();
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline);
+}
+
+void test_vibe__history_stop_before_end_event_lock_does_not_use_freed_entry(void) {
+  sys_vibe_history_stop_collecting();
+  s_history_mutex = s_last_locked_mutex;
+  sys_vibe_pattern_clear();
+  const int baseline = fake_pbl_malloc_num_net_allocs();
+
+  sys_vibe_history_start_collecting();
+  vibes_long_pulse();
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline + 2);
+
+  s_before_history_lock = sys_vibe_history_stop_collecting;
+  sys_vibe_pattern_clear();
+  cl_assert(s_before_history_lock == NULL);
+  cl_assert(!s_vibe_on);
+  cl_assert(!sys_vibe_history_was_vibrating(prv_get_current_time()));
+  cl_assert_equal_i(fake_pbl_malloc_num_net_allocs(), baseline);
+}
+
 void test_vibe__custom_pattern_with_amplitudes(void) {
   const uint32_t durations[] = {200, 100, 400};
   const uint32_t amplitudes[] = {80, 50, 20};
@@ -184,7 +329,7 @@ void test_vibe__custom_pattern_with_null_amplitudes(void) {
   const uint32_t durations[] = {100};
   const VibePatternWithAmplitudes pattern = {
     .durations = durations,
-    .amplitudes = NULL,
+    .amplitudes = nullptr,
     .num_segments = ARRAY_LENGTH(durations),
   };
   // Should return without crashing (early return on null amplitudes)
@@ -196,7 +341,7 @@ void test_vibe__custom_pattern_with_null_amplitudes(void) {
 void test_vibe__custom_pattern_with_amplitudes_null_durations(void) {
   const uint32_t amplitudes[] = {80};
   const VibePatternWithAmplitudes pattern = {
-    .durations = NULL,
+    .durations = nullptr,
     .amplitudes = amplitudes,
     .num_segments = 1,
   };

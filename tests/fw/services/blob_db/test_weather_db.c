@@ -22,14 +22,6 @@
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
 
 bool weather_service_supported_by_phone(void) {
   return true;
@@ -56,7 +48,7 @@ static void prv_db_iterator_cb(WeatherDBKey *key, WeatherDBEntry *entry, void *u
 }
 
 void test_weather_db__get_entries(void) {
-  cl_assert_equal_i(S_SUCCESS, weather_db_for_each(prv_db_iterator_cb, NULL));
+  cl_assert_equal_i(S_SUCCESS, weather_db_for_each(prv_db_iterator_cb, nullptr));
 }
 
 void test_weather_db__check_records_in_db(void) {

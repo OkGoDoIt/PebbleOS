@@ -36,7 +36,7 @@ static CompositorModalTransitionData s_data;
 static void prv_modal_transition_animation_teardown_rect(Animation *animation);
 
 static void prv_modal_transition_animation_init_sequence(const uint32_t resource_id) {
-  prv_modal_transition_animation_teardown_rect(NULL);
+  prv_modal_transition_animation_teardown_rect(nullptr);
   s_data.animation_sequence = gdraw_command_sequence_create_with_resource(resource_id);
 }
 
@@ -44,9 +44,9 @@ static void prv_modal_transition_fill_update(GContext *ctx, uint32_t distance_no
                                              bool inner) {
   const GColor replace_color = GColorGreen;
   const GColor stroke_color = TIMELINE_DOT_COLOR;
-  compositor_transition_pdcs_animation_update(ctx, s_data.animation_sequence, distance_normalized,
-                                              replace_color, stroke_color,
-                                              s_data.outer_color /* overdraw color */, inner, NULL);
+  compositor_transition_pdcs_animation_update(
+      ctx, s_data.animation_sequence, distance_normalized, replace_color, stroke_color,
+      s_data.outer_color /* overdraw color */, inner, nullptr);
 }
 
 void prv_render_modal_if_necessary(void) {
@@ -159,7 +159,7 @@ static void prv_modal_push_transition_animation_init_round(Animation *animation)
 static void prv_modal_transition_animation_teardown_rect(Animation *animation) {
   if (s_data.animation_sequence) {
     gdraw_command_sequence_destroy(s_data.animation_sequence);
-    s_data.animation_sequence = NULL;
+    s_data.animation_sequence = nullptr;
   }
 }
 
@@ -167,9 +167,6 @@ const CompositorTransition *prv_modal_transition_get_rect(bool modal_is_destinat
   // NOTE: This initialization will set .expanding to false so we default to contracting to a dot
   s_data = (CompositorModalTransitionData){
     .modal_is_destination = modal_is_destination,
-    // TODO: PBL-19849
-    // Decide on the logistics of the background color of the modal pop animation, including
-    // providing a setter for it that apps can use
     .outer_color = GColorLightGray,
   };
 

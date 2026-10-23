@@ -16,9 +16,6 @@ extern uint32_t app_outbox_service_max_message_length(AppOutboxServiceTag tag);
 
 #include <fake_kernel_malloc.h>
 #include <fake_pebble_tasks.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
 #include <stubs_syscall_internal.h>
 
 static EventServiceInfo s_app_state_app_outbox_subscription_info;
@@ -85,7 +82,7 @@ void test_app_outbox__initialize(void) {
   s_num_sent_handler_called = 0;
   s_num_app_outbox_events_sent = 0;
   s_num_message_handler_calls = 0;
-  s_last_message = NULL;
+  s_last_message = nullptr;
 
   stubs_syscall_init();
   s_app_state_app_outbox_subscription_info = (EventServiceInfo){};
@@ -111,14 +108,14 @@ static void prv_register(void) {
 
 void test_app_outbox__register_twice_asserts(void) {
   prv_register();
-  cl_assert_passert(prv_register());
+  cl_assert_panic(prv_register());
 }
 
 void test_app_outbox__send_not_user_space_buffer(void) {
-  // TODO: really implement privilege escalation in unit tests. See PBL-9688
+  // TODO: implement privilege escalation in unit tests
   return;
-  cl_assert_passert(
-      app_outbox_send(NULL, s_test_data_length, test_app_outbox_sent_handler, s_expected_cb_ctx));
+  cl_assert_panic(app_outbox_send(nullptr, s_test_data_length, test_app_outbox_sent_handler,
+                                  s_expected_cb_ctx));
   assert_syscall_failed();
 }
 
@@ -128,15 +125,15 @@ static void prv_disallowed_sent_handler(AppOutboxStatus status, void *cb_ctx) {
 
 void test_app_outbox__send_disallowed_sent_handler(void) {
   prv_register();
-  cl_assert_passert(app_outbox_send(s_test_data, s_test_data_length, prv_disallowed_sent_handler,
-                                    s_expected_cb_ctx));
+  cl_assert_panic(app_outbox_send(s_test_data, s_test_data_length, prv_disallowed_sent_handler,
+                                  s_expected_cb_ctx));
   assert_syscall_failed();
 }
 
 void test_app_outbox__send_max_length_exceeded(void) {
   prv_register();
-  cl_assert_passert(app_outbox_send(s_test_data, s_test_data_length + 1,
-                                    test_app_outbox_sent_handler, s_expected_cb_ctx));
+  cl_assert_panic(app_outbox_send(s_test_data, s_test_data_length + 1, test_app_outbox_sent_handler,
+                                  s_expected_cb_ctx));
   assert_syscall_failed();
 }
 
@@ -175,7 +172,7 @@ void test_app_outbox__send_but_null_sent_handler(void) {
   prv_register();
   // Invalid data, so normally an event would get put to invoke the sent_handler,
   // but sent handler is NULL. Expect no events to be put.
-  cl_assert_passert(app_outbox_send(NULL, 0, NULL, s_expected_cb_ctx));
+  cl_assert_panic(app_outbox_send(nullptr, 0, nullptr, s_expected_cb_ctx));
   cl_assert_equal_i(s_num_app_outbox_events_sent, 0);
 }
 

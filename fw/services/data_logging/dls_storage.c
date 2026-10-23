@@ -5,19 +5,20 @@
 #include <stddef.h>
 
 #include <pbl/drivers/flash.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/data_logging/data_logging_service.h>
 #include <pbl/services/data_logging/dls_list.h>
 #include <pbl/services/data_logging/dls_storage.h>
 #include <pbl/services/filesystem/pfs.h>
+#include <pbl/task_wdt/task_wdt.h>
 #include <pbl/util/math.h>
 #include <pbl/util/string.h>
 
 #include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
-#include <kernel/util/sleep.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_data_logging, CONFIG_SERVICE_DATA_LOGGING_LOG_LEVEL);
 
@@ -59,8 +60,8 @@ typedef struct PBL_PACKED {
 // The most we try to fit into a data chunk. This value must be small enough to fit within the 7
 // bytes reserved for it within the DLSChunkHeader.
 #define DLS_MAX_CHUNK_SIZE_BYTES 100
-_Static_assert(DLS_MAX_CHUNK_SIZE_BYTES < DLS_CHUNK_HDR_NUM_BYTES_UNINITIALIZED,
-               "DLS_MAX_CHUNK_SIZE_BYTES must be less than DLS_CHUNK_HDR_NUM_BYTES_UNINITIALIZED");
+static_assert(DLS_MAX_CHUNK_SIZE_BYTES < DLS_CHUNK_HDR_NUM_BYTES_UNINITIALIZED,
+              "DLS_MAX_CHUNK_SIZE_BYTES must be less than DLS_CHUNK_HDR_NUM_BYTES_UNINITIALIZED");
 
 // Forward declarations
 static bool prv_realloc_storage(DataLoggingSession *session, uint32_t new_size);
@@ -212,7 +213,7 @@ static bool prv_make_file_system_space(uint32_t needed) {
   // Make sure we have at least 'needed' bytes free in the file system
   uint32_t used_space = prv_get_total_file_system_bytes();
   if (used_space + needed >= DLS_MAX_DATA_BYTES) {
-    dls_list_for_each_session(prv_compact_session_cb, NULL);
+    dls_list_for_each_session(prv_compact_session_cb, nullptr);
 
     used_space = prv_get_total_file_system_bytes();
     if (used_space + needed >= DLS_MAX_DATA_BYTES) {
@@ -427,10 +428,36 @@ static bool prv_write_data(DataLoggingSessionStorage *storage, const void *data,
 }
 
 // -----------------------------------------------------------------------------------------
+static bool prv_copy_unread_data(DataLoggingSession *session, int dst_fd, uint8_t *buf,
+                                 uint32_t buf_size) {
+  uint32_t offset = session->storage.read_offset;
+  const uint32_t end = session->storage.write_offset;
+
+  if (!prv_pfs_seek(session->storage.fd, offset, FSeekSet)) {
+    return false;
+  }
+
+  while (offset < end) {
+    const uint32_t len = MIN(buf_size, end - offset);
+    if (!prv_pfs_read(session->storage.fd, buf, len)) {
+      return false;
+    }
+    if (!prv_pfs_write(dst_fd, buf, len)) {
+      return false;
+    }
+    offset += len;
+
+    pbl_task_wdt_feed_self();
+  }
+
+  return true;
+}
+
+// -----------------------------------------------------------------------------------------
 // Migrate a session's data to a new file, removing already consumed bytes from the front
 static bool prv_realloc_storage(DataLoggingSession *session, uint32_t new_size) {
   bool success;
-  uint8_t *tmp_buf = NULL;
+  uint8_t *tmp_buf = nullptr;
 
   // Must be called with the file closed
   PBL_ASSERTN(session->storage.fd == DLS_INVALID_FILE);
@@ -438,6 +465,10 @@ static bool prv_realloc_storage(DataLoggingSession *session, uint32_t new_size) 
   PBL_LOG_INFO("Compacting storage for session %d", session->comm.session_id);
   PBL_LOG_DBG("Before compaction: num_bytes: %" PRIu32 ", write_offset:%" PRIu32,
               session->storage.num_bytes, session->storage.write_offset);
+
+  // The unread data is copied verbatim, so make room for its chunk headers too
+  const uint32_t data_size = session->storage.write_offset - session->storage.read_offset;
+  new_size += data_size - session->storage.num_bytes;
 
   // Init a storage struct and create a new file for the compacted data
   DataLoggingSessionStorage new_storage = {
@@ -449,52 +480,34 @@ static bool prv_realloc_storage(DataLoggingSession *session, uint32_t new_size) 
     goto exit;
   }
 
-  // Copy data in chunks from the old file to the new one. Things go faster with a bigger buffer.
   success = false;
-  // We have to make sure we have at least 1 delineated item within each DLS_ENDPOINT_MAX_PAYLOAD
-  // bytes and clipping max_chunk_size to DLS_ENDPOINT_MAX_PAYLOAD insures that. If we didn't clip
-  // it and the item size was 645 for example, we might pack 2 items back to back in storage
-  // using DLS_MAX_CHUNK_SIZE_BYTES (100) byte chunks and dls_private_send_session() wouldn't be
-  // able to get a complete single item because we wrote 1290 bytes using DLS_MAX_CHUNK_SIZE_BYTES
-  // byte chunks and there is no chunk boundary at the 645 byte offset.
-  int32_t max_chunk_size = DLS_ENDPOINT_MAX_PAYLOAD;
+  int32_t buf_size = DLS_ENDPOINT_MAX_PAYLOAD;
   while (true) {
-    tmp_buf = kernel_malloc(max_chunk_size);
+    tmp_buf = kernel_malloc(buf_size);
     if (tmp_buf) {
       break;
     }
-    if (max_chunk_size < 256) {
+    if (buf_size < 256) {
       PBL_LOG_ERR("Not enough memory for reallocation");
       goto exit;
     }
-    max_chunk_size /= 2;
+    buf_size /= 2;
   }
 
-  int32_t bytes_to_copy = session->storage.num_bytes;
-  while (bytes_to_copy) {
-    uint32_t new_read_offset;
-    int32_t bytes_read =
-        dls_storage_read(session, tmp_buf, MIN(max_chunk_size, bytes_to_copy), &new_read_offset);
-    if (bytes_read <= 0) {
-      goto exit;
-    }
-
-    // Write to new file
-    if (!prv_write_data(&new_storage, tmp_buf, bytes_read)) {
-      goto exit;
-    }
-
-    // Consume out of old one now.
-    if (dls_storage_consume(session, bytes_read) < 0) {
-      goto exit;
-    }
-
-    bytes_to_copy -= bytes_read;
+  if (!prv_get_session_file(session, 0)) {
+    goto exit;
   }
 
-  // We successfully transferred the unread data to the new storage, place it into the session
-  // info
-  pfs_close(session->storage.fd);
+  // Only chunks before the read offset are ever consumed, so the unread data is copied verbatim,
+  // chunk headers included. The old file stays valid until the new one is committed.
+  const bool copied = prv_copy_unread_data(session, new_storage.fd, tmp_buf, buf_size);
+  prv_release_session_file(session);
+  if (!copied) {
+    goto exit;
+  }
+
+  new_storage.write_offset += data_size;
+  new_storage.num_bytes = session->storage.num_bytes;
 
   // Close the new file now. That will finish up the swap for us
   pfs_close(new_storage.fd);
@@ -840,7 +853,7 @@ void dls_storage_rebuild(void) {
   PFSFileListEntry *head = dir_list;
   int num_sessions_restored = 0;
   while (head) {
-    DataLoggingSession *session = NULL;
+    DataLoggingSession *session = nullptr;
 
     int fd = pfs_open(head->name, OP_FLAG_READ | OP_FLAG_WRITE, FILE_TYPE_STATIC,
                       DLS_FILE_INIT_SIZE_BYTES);
@@ -883,7 +896,7 @@ void dls_storage_rebuild(void) {
     // last byte of data (which becomes the write offset). We pass NULL into the buffer argument
     // of dls_storage_read() to tell it to compute these for us.
     uint32_t write_offset;
-    int32_t num_bytes = dls_storage_read(session, NULL, 0 /*numbytes*/, &write_offset);
+    int32_t num_bytes = dls_storage_read(session, nullptr, 0 /*numbytes*/, &write_offset);
     if (num_bytes < 0) {
       goto bad_session;
     }
@@ -909,9 +922,8 @@ void dls_storage_rebuild(void) {
       // It typically takes 100-200ms to restore a session, so if you have a lot of sessions you
       // can take 2-4 seconds to do. The KernelMain task_watchdog isn't a problem at this time
       // because we haven't started monitoring it yet, but if we starve KernelBG we'll hit false
-      // watchdog reboots. Sleep a bit here so the background task has a chance to run. See
-      // PBL-24560 for a long term fix.
-      psleep(10);
+      // watchdog reboots. Sleep a bit here so the background task has a chance to run.
+      pbl_sleep_ms(10);
     }
 
     num_sessions_restored++;

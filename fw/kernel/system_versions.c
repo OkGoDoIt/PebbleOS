@@ -56,7 +56,7 @@ struct PBL_PACKED VersionsMessage {
 };
 
 static void fixup_string(char *str, unsigned int length) {
-  if (memchr(str, 0, length) == NULL) {
+  if (memchr(str, 0, length) == nullptr) {
     memset(str, 0, length);
   }
 }
@@ -65,19 +65,6 @@ static void prv_fixup_firmware_metadata(FirmwareMetadata *fw_metadata) {
   fw_metadata->version_timestamp = pbl_cpu_to_be32(fw_metadata->version_timestamp);
   fixup_string(fw_metadata->version_tag, sizeof(fw_metadata->version_tag));
   fixup_string(fw_metadata->version_short, sizeof(fw_metadata->version_short));
-}
-
-static void prv_fixup_running_firmware_metadata(FirmwareMetadata *fw_metadata) {
-  prv_fixup_firmware_metadata(fw_metadata);
-
-#ifdef CONFIG_MFG
-  // Lie to the phone and force this to say we're not a MFG firmware. If we tell the phone app
-  // that we're a MFG firmware it will get mad at us and try to update us out of this mode. We
-  // want to stay in this mode to collect logs and core dumps at the factory.
-  // FIXME: Long term the phone should probably just be able to collect logs and core dumps
-  // regardless of the state of the watch, but for now just lie.
-  fw_metadata->is_recovery_firmware = false;
-#endif
 }
 
 static void resource_version_to_network_endian(ResourceVersion *resources_version) {
@@ -91,13 +78,13 @@ static void prv_send_watch_versions(CommSession *session) {
     .boot_version = pbl_cpu_to_be32(boot_version_read()),
   };
 
-  _Static_assert(sizeof(struct VersionsMessage) >=
-                     126 /* pre-v1.5 version info */ +
-                         24 /* v1.5 version info or later, added system_resources_version */,
-                 "");
+  static_assert(sizeof(struct VersionsMessage) >=
+                    126 /* pre-v1.5 version info */ +
+                        24 /* v1.5 version info or later, added system_resources_version */,
+                "");
 
   version_copy_running_fw_metadata(&versions_msg.running_fw_metadata);
-  prv_fixup_running_firmware_metadata(&versions_msg.running_fw_metadata);
+  prv_fixup_firmware_metadata(&versions_msg.running_fw_metadata);
 
   version_copy_recovery_fw_metadata(&versions_msg.recovery_fw_metadata);
   prv_fixup_firmware_metadata(&versions_msg.recovery_fw_metadata);
@@ -124,7 +111,6 @@ static void prv_send_watch_versions(CommSession *session) {
   versions_msg.capabilities.activity_insights_support = 1;
   versions_msg.capabilities.voice_api_support = 1;
   versions_msg.capabilities.unread_coredump_support = 1;
-  // FIXME: PBL-31627 In PRF, APP_ID_SEND_TEXT isn't defined - requiring the #ifdef and ternary op.
 #ifdef APP_ID_SEND_TEXT
   versions_msg.capabilities.send_text_support = (APP_ID_SEND_TEXT != INSTALL_ID_INVALID) ? 1 : 0;
 #endif
@@ -147,6 +133,9 @@ static void prv_send_watch_versions(CommSession *session) {
   versions_msg.capabilities.unknown_attributes_support = 1;
   versions_msg.capabilities.notification_image_support = NOTIFICATION_IMAGE_SUPPORTED;
   versions_msg.capabilities.notification_window_state_support = 1;
+#ifndef CONFIG_RECOVERY_FW
+  versions_msg.capabilities.multiple_language_packs_support = 1;
+#endif
   bt_local_id_copy_address(&versions_msg.device_address);
 
   versions_msg.system_resources_version = resource_get_system_version();
@@ -238,5 +227,5 @@ static int prv_cmd_version(const struct pbl_shell *sh, size_t argc, char **argv)
   return 0;
 }
 
-PBL_SHELL_CMD_REGISTER(version, NULL, "Show firmware and hardware versions", prv_cmd_version);
+PBL_SHELL_CMD_REGISTER(version, nullptr, "Show firmware and hardware versions", prv_cmd_version);
 #endif

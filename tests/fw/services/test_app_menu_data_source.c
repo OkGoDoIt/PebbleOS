@@ -27,47 +27,7 @@
 
 // Stub Includes
 ////////////////////////////////////
-#include <stubs_activity.h>
-#include <stubs_analytics.h>
-#include <stubs_app_custom_icon.h>
-#include <stubs_app_fetch_endpoint.h>
-#include <stubs_app_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_bootbits.h>
 #include <stubs_build_id.h>
-#include <stubs_comm_session.h>
-#include <stubs_event_loop.h>
-#include <stubs_event_service_client.h>
-#include <stubs_events.h>
-#include <stubs_fonts.h>
-#include <stubs_gbitmap.h>
-#include <stubs_graphics.h>
-#include <stubs_graphics_context.h>
-#include <stubs_heap.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_kino_reel.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_menu_layer.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_persist.h>
-#include <stubs_pin_db.h>
-#include <stubs_process_loader.h>
-#include <stubs_process_manager.h>
-#include <stubs_put_bytes.h>
-#include <stubs_quick_launch.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
-#include <stubs_system_task.h>
-#include <stubs_task_wdt.h>
-#include <stubs_watchface.h>
-#include <stubs_worker_manager.h>
 
 // Fake Includes
 ////////////////////////////////////
@@ -109,7 +69,7 @@ static const AppDBEntry bg_counter_app = {
         .major = 5,
         .minor = 13,
       },
-  .app_face_bg_color = {0},
+  .app_face_bg_color = {},
   .template_id = 0,
 };
 
@@ -131,7 +91,7 @@ static const AppDBEntry menu_layer_app = {
         .major = 5,
         .minor = 13,
       },
-  .app_face_bg_color = {0},
+  .app_face_bg_color = {},
   .template_id = 0,
 };
 
@@ -153,7 +113,7 @@ static const AppDBEntry big_time_app = {
         .major = 5,
         .minor = 17,
       },
-  .app_face_bg_color = {0},
+  .app_face_bg_color = {},
   .template_id = 0,
 };
 
@@ -242,7 +202,7 @@ void test_app_menu_data_source__initialize(void) {
 extern ListNode *s_head_callback_node_list;
 
 void test_app_menu_data_source__cleanup(void) {
-  s_head_callback_node_list = NULL;
+  s_head_callback_node_list = nullptr;
   app_install_manager_flush_recent_communication_timestamps();
 }
 
@@ -531,8 +491,8 @@ void test_app_menu_data_source__complete_sorted_order(void) {
     BIG_TIME_APP_ID,
   };
 
-  _Static_assert(MENU_LAYER_APP_ID < BIG_TIME_APP_ID,
-                 "MENU_LAYER_APP_ID is unexpectedly >= BIG_TIME_APP_ID.");
+  static_assert(MENU_LAYER_APP_ID < BIG_TIME_APP_ID,
+                "MENU_LAYER_APP_ID is unexpectedly >= BIG_TIME_APP_ID.");
 
   const uint8_t num_entries = ARRAY_LENGTH(storage_order);
   prv_write_order_to_file(storage_order, num_entries);
@@ -635,7 +595,7 @@ void test_app_menu_data_source__app_node_comparator_equality_cases(void) {
     APP_ID_ALARMS,        APP_ID_WATCHFACES, APP_ID_WORKOUT,
   };
 
-  AppMenuNode *app_list = NULL;
+  AppMenuNode *app_list = nullptr;
   const uint16_t num_apps = ARRAY_LENGTH(app_menu_nodes);
   for (uint16_t i = 0; i < num_apps; i++) {
     app_list = (AppMenuNode *)list_sorted_add(&app_list->node, &app_menu_nodes[i].node,

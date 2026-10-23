@@ -5,22 +5,17 @@
 
 #include <errno.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/debug.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/sched.h>
 #include <pbl/kernel/thread.h>
+#include <pbl/kernel/time.h>
 
 #include <arch.h>
 
 //! Internal interface between the objects, the scheduler and the arch code.
 //! Everything here is called with interrupts locked unless noted.
-
-#define KERNEL_ASSERT(x)                                 \
-  do {                                                   \
-    if (PBL_UNLIKELY(!(x))) {                            \
-      pbl_kernel_assert_failed(__FILE_NAME__, __LINE__); \
-    }                                                    \
-  } while (0)
 
 //! Woken by resume after being suspended while blocked.
 #define KWAKE_INTERRUPTED (-EINTR)
@@ -51,7 +46,7 @@ void sched_inherit(struct pbl_thread *owner, pbl_prio_t prio);
 void sched_disinherit(struct pbl_thread *owner);
 
 //! C entry from the reset vector: sets up RAM, then the SoC, then main().
-PBL_NORETURN void kernel_prep_c(void);
+[[noreturn]] void kernel_prep_c(void);
 
 //! Resets the interrupt lock nesting when the first thread starts.
 void irq_reset(void);

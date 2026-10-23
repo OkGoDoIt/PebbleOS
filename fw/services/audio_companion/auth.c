@@ -6,7 +6,7 @@
 #include <pbl/drivers/rtc.h>
 #include "pbl/logging/logging.h"
 #include <pbl/kernel/compiler.h>
-#include "system/passert.h"
+#include "pbl/kernel/assert.h"
 
 #include <mbedtls/sha256.h>
 

@@ -17,6 +17,7 @@
 #include <applib/ui/dialogs/dialog.h>
 #include <applib/ui/dialogs/expandable_dialog.h>
 #include <applib/ui/dialogs/simple_dialog.h>
+#include <applib/ui/preferred_durations.h>
 #include <applib/ui/window.h>
 #include <applib/voice/transcription_dialog.h>
 #include <kernel/pbl_malloc.h>
@@ -24,7 +25,6 @@
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
 #include <shell/normal/watchface.h>
-#include <system/passert.h>
 
 typedef struct DialogsData {
   Window window;
@@ -44,7 +44,7 @@ static void prv_show_simple_dialog(DialogsData *data) {
   dialog_set_text(dialog, "Mama");
   dialog_set_background_color(dialog, GColorRajah);
   dialog_set_icon(dialog, data->resource_id_80);
-  dialog_set_timeout(dialog, DIALOG_TIMEOUT_DEFAULT);
+  dialog_set_timeout(dialog, preferred_result_display_duration());
 
   app_simple_dialog_push(simple_dialog);
 }
@@ -83,7 +83,7 @@ static void prv_show_confirm_dialog(DialogsData *data) {
   dialog_set_icon(dialog, data->resource_id_80);
   dialog_show_status_bar_layer(dialog, true);
 
-  actionable_dialog_set_action_bar_type(actionable_dialog, DialogActionBarConfirm, NULL);
+  actionable_dialog_set_action_bar_type(actionable_dialog, DialogActionBarConfirm, nullptr);
   actionable_dialog_set_click_config_provider(actionable_dialog, prv_confirm_config_provider);
   app_actionable_dialog_push(actionable_dialog);
 }
@@ -106,7 +106,7 @@ static void prv_show_decline_dialog(DialogsData *data) {
   dialog_set_background_color(dialog, GColorRed);
   dialog_set_icon(dialog, data->resource_id_80);
 
-  actionable_dialog_set_action_bar_type(actionable_dialog, DialogActionBarDecline, NULL);
+  actionable_dialog_set_action_bar_type(actionable_dialog, DialogActionBarDecline, nullptr);
   actionable_dialog_set_click_config_provider(actionable_dialog, prv_decline_config_provider);
   app_actionable_dialog_push(actionable_dialog);
 }
@@ -263,14 +263,14 @@ static void prv_transcription_dialog_cb(void *context) {
   dialog_set_text(dialog, "Pop!");
   dialog_set_background_color(dialog, GColorRed);
   dialog_set_icon(dialog, data->resource_id_80);
-  dialog_set_timeout(dialog, DIALOG_TIMEOUT_DEFAULT);
+  dialog_set_timeout(dialog, preferred_result_display_duration());
 
   app_simple_dialog_push(simple_dialog);
 }
 
 static void prv_show_transcription_dialog(DialogsData *data) {
   TranscriptionDialog *transcription_dialog = transcription_dialog_create();
-  static char transcription[500] = {0};
+  static char transcription[500] = {};
   uint16_t len = strlen(data->long_message);
   strncpy(transcription, data->long_message, len);
   transcription_dialog_update_text(transcription_dialog, transcription, len);
@@ -345,7 +345,7 @@ static const uint16_t NUM_ITEMS = ARRAY_LENGTH(nodes);
 
 static void prv_draw_row_callback(GContext *ctx, Layer *cell_layer, MenuIndex *cell_index,
                                   DialogsData *data) {
-  menu_cell_basic_draw(ctx, cell_layer, nodes[cell_index->row].label, NULL, NULL);
+  menu_cell_basic_draw(ctx, cell_layer, nodes[cell_index->row].label, nullptr, nullptr);
 }
 
 static void prv_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, DialogsData *data) {

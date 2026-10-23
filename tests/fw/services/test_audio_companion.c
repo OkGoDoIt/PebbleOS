@@ -23,7 +23,6 @@
 #include "fake_system_task.h"
 
 #include "stubs_logging.h"
-#include "stubs_passert.h"
 
 #include <string.h>
 #include <time.h>

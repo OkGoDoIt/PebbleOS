@@ -1,8 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
-
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/battery/battery_monitor.h>
@@ -14,7 +13,6 @@
 #include <kernel/system_message.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <process_management/app_manager.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_firmware_update, CONFIG_SERVICE_FIRMWARE_UPDATE_LOG_LEVEL);
 
@@ -24,7 +22,7 @@ PBL_LOG_MODULE_DEFINE(service_firmware_update, CONFIG_SERVICE_FIRMWARE_UPDATE_LO
 //
 // The new UI allows the phone to give us more info up front about how much data will be
 // transmitted and also cleanly drive a re-start of the UI to a non-0 percentage if the FW update
-// is being resumed. Newer implementations should this! (See PBL-42130)
+// is being resumed. Newer implementations should use it.
 
 static PBL_SEM_DEFINE(s_firmware_update_semaphore, 1, 1);
 static bool s_is_recovery_fw = false;
@@ -49,7 +47,7 @@ typedef struct {
   };
 } FwUpdateCurrentCompletionStatus;
 
-static FwUpdateCurrentCompletionStatus s_current_completion_status = {0};
+static FwUpdateCurrentCompletionStatus s_current_completion_status = {};
 
 //
 // Start handlers for legacy percentage status handling. Someday, we can hopefully

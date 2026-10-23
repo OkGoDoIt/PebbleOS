@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/bluetooth/pairability.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/bluetooth/bluetooth_ctl.h>
 #include <pbl/services/bluetooth/bluetooth_persistent_storage.h>
@@ -12,7 +13,6 @@
 
 #include <comm/ble/gap_le_slave_discovery.h>
 #include <kernel/pebble_tasks.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_bluetooth, CONFIG_SERVICE_BLUETOOTH_LOG_LEVEL);
 
@@ -49,11 +49,9 @@ static void evaluate_pairing_refcount(void *data) {
 }
 
 static void prv_schedule_evaluation(void) {
-  // We used to sparingly schedule the evaluation and had a bug because of this:
-  // https://pebbletechnology.atlassian.net/browse/PBL-22884
-  // Because this pretty much only happens in response to user input, don't bother limiting this,
-  // and always evaluate, even though the state might not have changed:
-  system_task_add_callback(evaluate_pairing_refcount, NULL);
+  // Always evaluate, even if the state might not have changed: this pretty much only happens in
+  // response to user input, and skipping evaluations has caused bugs before.
+  system_task_add_callback(evaluate_pairing_refcount, nullptr);
 }
 
 void bt_pairability_use(void) {

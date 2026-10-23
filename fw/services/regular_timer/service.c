@@ -4,13 +4,12 @@
 #include <time.h>
 
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/services/regular_timer.h>
 #include <pbl/util/math.h>
-
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_regular_timer, CONFIG_SERVICE_REGULAR_TIMER_LOG_LEVEL);
 
@@ -78,7 +77,7 @@ static void do_callbacks(ListNode *list, uint16_t elapsed) {
       // NOTE: We do not support callers that free the memory for the regular timer structure
       // from their callback procedure!
       if (reg_timer->pending_delete) {
-        list_remove(&reg_timer->list_node, NULL, NULL);
+        list_remove(&reg_timer->list_node, nullptr, nullptr);
       }
 
     } else {
@@ -97,7 +96,7 @@ static void prv_arm_locked(time_t now, uint16_t ms, time_t next) {
   uint32_t timeout_ms = (uint32_t)(next - now - 1) * 1000 + (1000 - MIN(ms, 999));
   // The timer runs on the system tick, which drifts from the RTC in deep sleep.
   timeout_ms += SECOND_BOUNDARY_MARGIN_MS + timeout_ms / 1024;
-  bool success = new_timer_start(s_timer_id, timeout_ms, timer_callback, NULL, 0 /*flags*/);
+  bool success = new_timer_start(s_timer_id, timeout_ms, timer_callback, nullptr, 0 /*flags*/);
   PBL_ASSERTN(success);
   s_next_fire = next;
   s_armed = true;
@@ -145,8 +144,8 @@ static void timer_callback(void *data) {
 
   do_callbacks(&s_seconds_callbacks, elapsed);
 
-  struct tm time;
-  localtime_r(&t, &time);
+  struct pbl_tm time;
+  pbl_localtime_r(&t, &time);
 
   // Fire minute callbacks when the minute changes (not just when tm_sec == 0)
   // This prevents missing callbacks when RTC adjusts
@@ -164,8 +163,8 @@ static void timer_callback(void *data) {
     // Keep the logging to detect large time jumps (multiple minutes skipped)
     const time_t now_ts = rtc_get_ticks() / PBL_TICK_HZ;
     if ((now_ts - s_last_minute_fire_ts) > MISSING_MINUTE_CB_LOG_THRESHOLD_S) {
-      PBL_LOG_WRN("Large time jump detected. Previous ts: %lu, Now ts: %lu", s_last_minute_fire_ts,
-                  now_ts);
+      PBL_LOG_WRN("Large time jump detected. Previous ts: %lu, Now ts: %lu",
+                  (long)s_last_minute_fire_ts, (long)now_ts);
     }
     s_last_minute_fire_ts = now_ts;
 
@@ -292,7 +291,7 @@ bool regular_timer_remove_callback(RegularTimerInfo *cb) {
     if (cb->is_executing) {
       cb->pending_delete = true;
     } else {
-      list_remove(&cb->list_node, NULL, NULL);
+      list_remove(&cb->list_node, nullptr, nullptr);
       timer_removed = true;
     }
   }

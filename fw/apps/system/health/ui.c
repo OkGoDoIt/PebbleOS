@@ -47,7 +47,7 @@ void health_ui_draw_text_in_box(GContext *ctx, const char *text, const GRect dra
 
   if (!gcolor_equal(text_color, GColorClear)) {
     graphics_context_set_text_color(ctx, text_color);
-    graphics_draw_text(ctx, text, small_font, text_box, overflow_mode, alignment, NULL);
+    graphics_draw_text(ctx, text, small_font, text_box, overflow_mode, alignment, nullptr);
   }
 }
 
@@ -57,10 +57,10 @@ void health_ui_draw_text_in_box(GContext *ctx, const char *text, const GRect dra
 // callers can position their body rows relative to it.
 static GRect prv_render_typical_pill(GContext *ctx, Layer *layer, int pill_height) {
   time_t now = rtc_get_time();
-  struct tm time_tm;
-  localtime_r(&now, &time_tm);
+  struct pbl_tm time_tm;
+  pbl_localtime_r(&now, &time_tm);
   char weekday[8];
-  strftime(weekday, sizeof(weekday), "%a", &time_tm);
+  pbl_strftime_r(weekday, sizeof(weekday), "%a", &time_tm);
   toupper_str(weekday);
 
   char typical_text[32];
@@ -95,7 +95,7 @@ static GRect prv_render_typical_pill(GContext *ctx, Layer *layer, int pill_heigh
   GRect header_rect = rect;
   header_rect.size.h = 16;
   graphics_draw_text(ctx, typical_text, font, header_rect, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 
   return rect;
 }
@@ -110,7 +110,7 @@ void health_ui_render_typical_text_box(GContext *ctx, Layer *layer, const char *
   value_rect.size.h = 16;
   value_rect.origin.y += 16;
   graphics_draw_text(ctx, value_text, font, value_rect, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 }
 
 void health_ui_render_split_typical_text_box(GContext *ctx, Layer *layer, const char *left_value,
@@ -131,9 +131,9 @@ void health_ui_render_split_typical_text_box(GContext *ctx, Layer *layer, const 
   GRect val_right = val_left;
   val_right.origin.x += val_left.size.w;
   graphics_draw_text(ctx, left_value, font, val_left, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
   graphics_draw_text(ctx, right_value, font, val_right, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 
   // Row 3: labels below the numbers, in black.
   const GColor label_color = GColorArmyGreen;
@@ -144,9 +144,9 @@ void health_ui_render_split_typical_text_box(GContext *ctx, Layer *layer, const 
   sub_right.origin.x += sub_left.size.w;
   graphics_context_set_text_color(ctx, label_color);
   graphics_draw_text(ctx, left_label, small_font, sub_left, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
   graphics_draw_text(ctx, right_label, small_font, sub_right, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 
   // Vertical divider between the two columns, 1px wide black.
   graphics_context_set_stroke_color(ctx, label_color);

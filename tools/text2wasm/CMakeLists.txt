@@ -50,6 +50,14 @@ add_executable(pebble_renderer
   "${PEBBLEOS_ROOT}/lib/util/trig.c"
   "${PEBBLEOS_ROOT}/lib/util/iterator.c"
   "${PEBBLEOS_ROOT}/lib/util/utf8.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/app_state.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/applib_resource.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/compiled_with_legacy2_sdk.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/heap.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/logging.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/memory_layout.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/pbl_malloc.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/pebble_tasks.c"
 )
 set_target_properties(pebble_renderer PROPERTIES
   OUTPUT_NAME renderer
@@ -58,7 +66,6 @@ set_target_properties(pebble_renderer PROPERTIES
 )
 target_include_directories(pebble_renderer PRIVATE
   "${OVERRIDES}"
-  "${PEBBLEOS_ROOT}/lib/c/include"
   "${PEBBLEOS_ROOT}/tests/overrides/dummy_board"
   "${PEBBLEOS_ROOT}/tests/overrides/default"
   "${PEBBLEOS_ROOT}/tests/stubs"

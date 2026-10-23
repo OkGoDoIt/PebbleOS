@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 //! @file voice/dictation_session.h
@@ -30,7 +29,6 @@
 typedef struct DictationSession DictationSession;
 
 // convenient macros to distinguish between mic and no mic.
-// TODO: PBL-21978 remove redundant comments as a workaround around for SDK generator
 #if defined(PBL_MICROPHONE)
 
 //! Convenience macro to switch between two expressions depending on mic support.

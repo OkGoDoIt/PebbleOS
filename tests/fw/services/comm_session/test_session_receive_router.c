@@ -14,16 +14,6 @@
 // Stubs
 ///////////////////////////////////////////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_bt_lock.h>
-#include <stubs_bt_stack.h>
-#include <stubs_events.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_syscall_internal.h>
-
 void app_launch_trigger(void) {
 }
 
@@ -158,7 +148,7 @@ static Receiver *prv_system_test_receiver_prepare(CommSession *session,
                                                   size_t total_msg_length) {
   ++s_prepare_count;
   if (s_prepare_return_null) {
-    return NULL;
+    return nullptr;
   }
   return (Receiver *)&s_test_receiver_ctx;
 }
@@ -204,7 +194,7 @@ void test_session_receive_router__initialize(void) {
 void test_session_receive_router__cleanup(void) {
   if (s_session) {
     comm_session_close(s_session, CommSessionCloseReason_UnderlyingDisconnection);
-    s_session = NULL;
+    s_session = nullptr;
   }
 }
 
@@ -318,7 +308,7 @@ void test_session_receive_router__cleanup_receiver_if_session_is_closed(void) {
   cl_assert_equal_i(s_prepare_count, 1);
 
   comm_session_close(s_session, CommSessionCloseReason_UnderlyingDisconnection);
-  s_session = NULL;
+  s_session = nullptr;
 
   cl_assert_equal_i(s_cleanup_count, 1);
 }

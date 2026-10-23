@@ -1,10 +1,9 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
-
 #include <pbl/cron/cron.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/services/notifications/alerts_preferences.h>
@@ -27,8 +26,6 @@
 #include <kernel/ui/modals/modal_manager.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_notifications, CONFIG_SERVICE_NOTIFICATIONS_LOG_LEVEL);
 
@@ -148,7 +145,7 @@ static void prv_schedule_cron_callback(struct pbl_cron_job *job, void *data) {
 }
 
 static DoNotDisturbScheduleType prv_current_schedule_type(void) {
-  struct tm time;
+  struct pbl_tm time;
   rtc_get_time_tm(&time);
   return ((time.tm_wday == PBL_SATURDAY || time.tm_wday == PBL_SUNDAY) ? WeekendSchedule
                                                                        : WeekdaySchedule);
@@ -165,7 +162,7 @@ static bool prv_is_in_schedule_period(void) {
   const int from = schedule.from_hour * PBL_MIN_PER_HOUR + schedule.from_minute;
   const int to = schedule.to_hour * PBL_MIN_PER_HOUR + schedule.to_minute;
 
-  struct tm time;
+  struct pbl_tm time;
   rtc_get_time_tm(&time);
   const int now = time.tm_hour * PBL_MIN_PER_HOUR + time.tm_min;
 
@@ -243,7 +240,7 @@ static bool prv_is_smart_dnd_active(void) {
 //! Public Functions
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-DEFINE_SYSCALL(bool, sys_do_not_disturb_is_active, void) {
+PBL_SYSCALL(bool, sys_do_not_disturb_is_active) {
   return do_not_disturb_is_active();
 }
 
@@ -278,9 +275,9 @@ void do_not_disturb_toggle_manually_enabled(ManualDNDFirstUseSource source) {
     prv_push_manual_dnd_first_use_dialog(source);
   } else {
     if (source == ManualDNDFirstUseSourceSettingsMenu) {
-      prv_toggle_manual_dnd_from_settings_menu(NULL);
+      prv_toggle_manual_dnd_from_settings_menu(nullptr);
     } else {
-      prv_toggle_manual_dnd_from_action_menu(NULL);
+      prv_toggle_manual_dnd_from_action_menu(nullptr);
     }
   }
 }
@@ -293,7 +290,7 @@ void do_not_disturb_toggle_smart_dnd(void) {
   if (!alerts_preferences_check_and_set_first_use_complete(FirstUseSourceSmartDND)) {
     prv_push_smart_dnd_first_use_dialog();
   } else {
-    prv_toggle_smart_dnd(NULL);
+    prv_toggle_smart_dnd(nullptr);
   }
 }
 

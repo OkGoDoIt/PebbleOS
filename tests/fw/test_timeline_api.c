@@ -16,32 +16,10 @@
 // Fakes
 ////////////////////////////////////////////////////////////////
 #include <fake_rtc.h>
+#include <stubs_app_install_manager.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_app_cache.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_manager.h>
-#include <stubs_blob_db_sync.h>
-#include <stubs_blob_db_sync_util.h>
-#include <stubs_event_service_client.h>
-#include <stubs_events.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_layout_layer.h>
-#include <stubs_logging.h>
-#include <stubs_modal_manager.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_regular_timer.h>
-#include <stubs_session.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
-#include <stubs_window_stack.h>
 
 // Fakes
 ////////////////////////////////////////////////////////////////
@@ -68,7 +46,7 @@ void timeline_action_endpoint_invoke_action(const Uuid *id, uint8_t action_id,
 }
 
 const PebbleProcessMd *timeline_get_app_info(void) {
-  return NULL;
+  return nullptr;
 }
 
 void launcher_task_add_callback(void *data) {
@@ -78,7 +56,7 @@ void timeline_pin_window_push_modal(TimelineItem *item) {
 }
 
 PebblePhoneCaller *phone_call_util_create_caller(const char *number, const char *name) {
-  return NULL;
+  return nullptr;
 }
 
 void ancs_perform_action(uint32_t notification_uid, uint8_t action_id) {
@@ -114,8 +92,8 @@ void test_timeline_api__initialize(void) {
 // Tests
 ///////////////////////////
 void test_timeline_api__item(void) {
-  TimelineItem *item =
-      timeline_item_create_with_attributes(30, 0, TimelineItemTypePin, LayoutIdTest, NULL, NULL);
+  TimelineItem *item = timeline_item_create_with_attributes(30, 0, TimelineItemTypePin,
+                                                            LayoutIdTest, nullptr, nullptr);
 
   cl_assert_equal_i(item->header.layout, LayoutIdTest);
   cl_assert_equal_i(item->header.timestamp, 30);
@@ -123,18 +101,18 @@ void test_timeline_api__item(void) {
 }
 
 void test_timeline_api__pin_two_items(void) {
-  TimelineItem *item1 =
-      timeline_item_create_with_attributes(30, 0, TimelineItemTypePin, LayoutIdTest, NULL, NULL);
+  TimelineItem *item1 = timeline_item_create_with_attributes(30, 0, TimelineItemTypePin,
+                                                             LayoutIdTest, nullptr, nullptr);
   fake_rtc_increment_ticks(1);
-  TimelineItem *item2 =
-      timeline_item_create_with_attributes(40, 0, TimelineItemTypePin, LayoutIdTest, NULL, NULL);
+  TimelineItem *item2 = timeline_item_create_with_attributes(40, 0, TimelineItemTypePin,
+                                                             LayoutIdTest, nullptr, nullptr);
   Uuid id1 = item1->header.id;
   Uuid id2 = item2->header.id;
 
   cl_assert(timeline_add(item1));
   cl_assert(timeline_add(item2));
 
-  TimelineItem item_temp = {0};
+  TimelineItem item_temp = {};
   cl_assert_equal_i(pin_db_get(&id1, &item_temp), 0);
   cl_assert(uuid_equal(&item1->header.id, &item_temp.header.id));
   cl_assert_equal_i(pin_db_get(&id2, &item_temp), 0);
@@ -145,11 +123,11 @@ void test_timeline_api__pin_two_items(void) {
 }
 
 void test_timeline_api__item_attributes(void) {
-  AttributeList list = {0};
+  AttributeList list = {};
   attribute_list_add_cstring(&list, AttributeIdTitle, "title");
   attribute_list_add_cstring(&list, AttributeIdSubtitle, "subtitle");
   TimelineItem *item =
-      timeline_item_create_with_attributes(0, 0, TimelineItemTypePin, LayoutIdTest, &list, NULL);
+      timeline_item_create_with_attributes(0, 0, TimelineItemTypePin, LayoutIdTest, &list, nullptr);
   attribute_list_destroy_list(&list);
 
   cl_assert_equal_s(attribute_get_string(&item->attr_list, AttributeIdTitle, "none"), "title");
@@ -159,8 +137,8 @@ void test_timeline_api__item_attributes(void) {
 }
 
 void test_timeline_api__item_pin_to_timeline(void) {
-  TimelineItem *item =
-      timeline_item_create_with_attributes(0, 0, TimelineItemTypePin, LayoutIdTest, NULL, NULL);
+  TimelineItem *item = timeline_item_create_with_attributes(0, 0, TimelineItemTypePin, LayoutIdTest,
+                                                            nullptr, nullptr);
   Uuid id = item->header.id;
   cl_assert(!timeline_exists(&id));
 
@@ -178,11 +156,11 @@ void test_timeline_api__item_pin_to_timeline(void) {
 }
 
 void test_timeline_api__item_attributes_pin_to_timeline(void) {
-  AttributeList list = {0};
+  AttributeList list = {};
   attribute_list_add_cstring(&list, AttributeIdTitle, "title");
   attribute_list_add_cstring(&list, AttributeIdSubtitle, "subtitle");
   TimelineItem *item =
-      timeline_item_create_with_attributes(0, 0, TimelineItemTypePin, LayoutIdTest, &list, NULL);
+      timeline_item_create_with_attributes(0, 0, TimelineItemTypePin, LayoutIdTest, &list, nullptr);
   attribute_list_destroy_list(&list);
   Uuid id = item->header.id;
   cl_assert(!timeline_exists(&id));

@@ -3,9 +3,7 @@
 
 #include "segment.h"
 
-#include <stdalign.h>
-
-#include <system/passert.h>
+#include <pbl/kernel/assert.h>
 
 // Remove once the Bamboo build agents build unit tests with a more
 // C11-compliant compiler (i.e. clang >= 3.5)
@@ -40,12 +38,12 @@ void *memory_segment_split(MemorySegment *restrict parent, MemorySegment *restri
   void *child_end = child_start + size;
   if (child_end > parent->end) {
     // Requested size is too big to fit in the parent segment.
-    return NULL;
+    return nullptr;
   }
   void *adjusted_parent_start = prv_align(child_end);
   if (adjusted_parent_start > parent->end) {
     // The child has left no room for the adjusted parent.
-    return NULL;
+    return nullptr;
   }
   parent->start = adjusted_parent_start;
 

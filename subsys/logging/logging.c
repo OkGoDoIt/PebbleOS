@@ -6,14 +6,15 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include <pbl/drivers/rtc.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/sched.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/mcu/interrupts.h>
-#include <pbl/mcu/privilege.h>
 #include <pbl/util/byteorder.h>
 #include <pbl/util/string.h>
 
@@ -50,8 +51,8 @@ static void prv_log_timestamp(void) {
   time_t time_seconds;
   uint16_t time_ms;
   rtc_get_time_ms(&time_seconds, &time_ms);
-  struct tm time_seconds_calendar;
-  gmtime_r(&time_seconds, &time_seconds_calendar);
+  struct pbl_tm time_seconds_calendar;
+  pbl_gmtime_r(&time_seconds, &time_seconds_calendar);
 
   sniprintf(buffer, TIMESTAMP_BUFFER_SIZE, "%02u:%02u:%02u.%03u ", time_seconds_calendar.tm_hour,
             time_seconds_calendar.tm_min, time_seconds_calendar.tm_sec, time_ms);
@@ -69,7 +70,7 @@ static void prv_log_serial(uint8_t log_level, const char *src_filename, int src_
   {
 #ifdef CONFIG_LOG_TASK_PREFIX
     unsigned char task_char = pebble_task_get_char(pebble_task_get_current());
-    if (mcu_state_is_privileged()) {
+    if (!pbl_is_user_context()) {
       task_char = toupper(task_char);
     }
 #else
@@ -133,6 +134,25 @@ void kernel_pbl_log_flash(LogBinaryMessage *log_message, uint32_t flags) {
   }
 }
 
+void kernel_pbl_log_verify_user(const LogBinaryMessage *log_message) {
+  pbl_syscall_verify_user(log_message, sizeof(*log_message));
+
+  const size_t message_length = log_message->message_length;
+  pbl_syscall_verify_user(log_message, sizeof(*log_message) + message_length);
+
+  if (strnlen(log_message->filename, sizeof(log_message->filename)) ==
+      sizeof(log_message->filename)) {
+    pbl_syscall_fail();
+  }
+
+  if (strnlen(log_message->message, message_length) == message_length) {
+    pbl_syscall_verify_user(log_message, sizeof(*log_message) + message_length + 1);
+    if (log_message->message[message_length] != '\0') {
+      pbl_syscall_fail();
+    }
+  }
+}
+
 void kernel_pbl_log(LogBinaryMessage *log_message, uint32_t flags) {
   kernel_pbl_log_serial(log_message, flags);
 
@@ -182,6 +202,7 @@ static int prv_cmd_level(const struct pbl_shell *sh, size_t argc, char **argv) {
 }
 
 PBL_SHELL_SUBCMD_SET_CREATE(sub_log);
-PBL_SHELL_CMD_REGISTER(log, sub_log, "Logging", NULL);
-PBL_SHELL_SUBCMD_ADD(sub_log, level, NULL, "Get or set the log level [level]", prv_cmd_level, 1, 1);
+PBL_SHELL_CMD_REGISTER(log, sub_log, "Logging", nullptr);
+PBL_SHELL_SUBCMD_ADD(sub_log, level, nullptr, "Get or set the log level [level]", prv_cmd_level, 1,
+                     1);
 #endif

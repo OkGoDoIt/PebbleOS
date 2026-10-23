@@ -10,13 +10,13 @@
 
 #include "quick_launch_setup_menu.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/i18n/i18n.h>
 
 #include <applib/app.h>
 #include <applib/ui/dialogs/dialog.h>
 #include <applib/ui/dialogs/expandable_dialog.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 typedef enum QuickLaunchSetupVersion {
   //! Initial version or never opened
@@ -51,7 +51,7 @@ static void prv_push_first_use_dialog(void) {
       i18n_owner);
   ExpandableDialog *expandable_dialog = expandable_dialog_create_with_params(
       WINDOW_NAME("Quick Launch First Use"), RESOURCE_ID_SUNNY_DAY_TINY, text, GColorBlack,
-      GColorWhite, NULL, RESOURCE_ID_ACTION_BAR_ICON_CHECK, prv_handle_quick_launch_confirm);
+      GColorWhite, nullptr, RESOURCE_ID_ACTION_BAR_ICON_CHECK, prv_handle_quick_launch_confirm);
   expandable_dialog_set_header(expandable_dialog, header);
 #if PBL_ROUND
   expandable_dialog_set_header_font(expandable_dialog,

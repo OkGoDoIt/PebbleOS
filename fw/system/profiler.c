@@ -6,22 +6,12 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#include <pbl/kernel/time.h>
+#include <pbl/logging/logging.h>
 #include <pbl/util/size.h>
-
-#include <cmsis_core.h>
-#include <system/passert.h>
 
 #if defined(CONFIG_SHELL) && defined(CONFIG_PROFILER)
 #include <pbl/shell/shell.h>
-#endif
-
-#ifdef CONFIG_SOC_NRF52
-#include <drivers/nrfx_common.h>
-#include <soc/nrfx_coredep.h>
-#endif
-
-#ifdef CONFIG_SOC_SF32LB52
-#include <bf0_hal.h>
 #endif
 
 #ifdef CONFIG_PULSE_EVERYWHERE
@@ -66,7 +56,7 @@ void prv_node_reset(ProfilerNode *node) {
 void profiler_init(void) {
   g_profiler.end = 0;
   g_profiler.start = 0;
-  g_profiler.nodes = NULL;
+  g_profiler.nodes = nullptr;
   for (uint32_t i = 0; i < ARRAY_LENGTH(s_profiler_nodes); i++) {
     prv_node_reset(s_profiler_nodes[i]);
     prv_profiler_node_add(s_profiler_nodes[i]);
@@ -74,14 +64,11 @@ void profiler_init(void) {
 }
 
 void profiler_start(void) {
-  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-  DWT->CYCCNT = 0;
-  DWT->CTRL |= 0x01;
-  g_profiler.start = DWT->CYCCNT;
+  g_profiler.start = pbl_cycle_get_32();
 }
 
 void profiler_stop(void) {
-  g_profiler.end = DWT->CYCCNT;
+  g_profiler.end = pbl_cycle_get_32();
 }
 
 uint32_t profiler_node_get_last_cycles(ProfilerNode *node) {
@@ -102,18 +89,7 @@ void profiler_node_stop(ProfilerNode *node, uint32_t dwt_cyc_cnt) {
 }
 
 uint32_t profiler_cycles_to_us(uint32_t cycles) {
-#if defined(CONFIG_SOC_NRF52)
-  uint32_t mhz = NRFX_DELAY_CPU_FREQ_MHZ;
-#elif defined(CONFIG_SOC_SF32LB52)
-  uint32_t mhz = HAL_RCC_GetHCLKFreq(CORE_ID_HCPU);
-#elif defined(CONFIG_QEMU)
-  uint32_t mhz = SystemCoreClock / 1000000;
-#else
-  RCC_ClocksTypeDef clocks;
-  RCC_GetClocksFreq(&clocks);
-  uint32_t mhz = clocks.HCLK_Frequency / 1000000;
-#endif
-  return cycles / mhz;
+  return (uint32_t)(((uint64_t)cycles * 1000000U) / pbl_cycles_per_sec());
 }
 
 uint32_t profiler_node_get_total_us(ProfilerNode *node) {
@@ -133,18 +109,7 @@ uint32_t profiler_get_total_duration(bool in_us) {
   }
 
   if (in_us) {
-#if defined(CONFIG_SOC_NRF52)
-    uint32_t mhz = NRFX_DELAY_CPU_FREQ_MHZ;
-#elif defined(CONFIG_SOC_SF32LB52)
-    uint32_t mhz = HAL_RCC_GetHCLKFreq(CORE_ID_HCPU);
-#elif defined(CONFIG_QEMU)
-    uint32_t mhz = SystemCoreClock / 1000000;
-#else
-    RCC_ClocksTypeDef clocks;
-    RCC_GetClocksFreq(&clocks);
-    uint32_t mhz = clocks.HCLK_Frequency / 1000000;
-#endif
-    total /= mhz;
+    total = profiler_cycles_to_us(total);
   }
 
   return total;
@@ -154,56 +119,38 @@ void profiler_print_stats(void) {
   PROFILER_STOP; // Make sure the profiler has been stopped.
   uint32_t total = profiler_get_total_duration(false);
 
-#if defined(CONFIG_SOC_NRF52)
-  uint32_t mhz = NRFX_DELAY_CPU_FREQ_MHZ;
   char buf[80];
-  PROF_LOG(buf, sizeof(buf), "CPU Frequency: %" PRIu32 "MHz", mhz);
-#elif defined(CONFIG_SOC_SF32LB52)
-  uint32_t mhz = HAL_RCC_GetHCLKFreq(CORE_ID_HCPU);
-  char buf[80];
-  PROF_LOG(buf, sizeof(buf), "CPU Frequency: %" PRIu32 "MHz", mhz);
-#elif defined(CONFIG_QEMU)
-  uint32_t mhz = SystemCoreClock / 1000000;
-  char buf[80];
-  PROF_LOG(buf, sizeof(buf), "CPU Frequency: %" PRIu32 "MHz", mhz);
-#else
-  RCC_ClocksTypeDef clocks;
-  RCC_GetClocksFreq(&clocks);
-  uint32_t mhz = clocks.HCLK_Frequency / 1000000;
-
-  char buf[80];
-  PROF_LOG(buf, sizeof(buf), "CPU Frequency: %" PRIu32 "Hz", clocks.HCLK_Frequency);
-#endif
+  PROF_LOG(buf, sizeof(buf), "CPU Frequency: %" PRIu32 "Hz", pbl_cycles_per_sec());
   PROF_LOG(buf, sizeof(buf),
            "Profiler ran for %" PRIu32 " ticks (%" PRIu32 " us) (start: %" PRIu32 "; stop:%" PRIu32
            ")",
-           total, total / mhz, g_profiler.start, g_profiler.end);
+           total, profiler_cycles_to_us(total), g_profiler.start, g_profiler.end);
 
-  ListNode *sorted = NULL;
+  ListNode *sorted = nullptr;
   ListNode *tail = list_get_tail(g_profiler.nodes);
-  while (tail != NULL) {
+  while (tail != nullptr) {
     ListNode *new_tail = list_pop_tail(tail);
     sorted = list_sorted_add(sorted, tail, &prv_node_compare, false);
     tail = new_tail;
   }
 
-  if (sorted != NULL) {
+  if (sorted != nullptr) {
     PROF_LOG(buf, sizeof(buf), "%-24s %-8s %-11s %-15s %-8s %-7s", "Name", "Count", "Cycles",
              "Time (us)", "Avg (us)", "% CPU");
-    while (sorted != NULL) {
+    while (sorted != nullptr) {
       ProfilerNode *node = (ProfilerNode *)sorted;
       uint32_t percent = (((int64_t)node->total) * 100) / total;
 
       PROF_LOG(buf, sizeof(buf),
                "%-24s %-8" PRIu32 " %-11" PRIu32 " %-15" PRIu32 " %-8" PRIu32 " %-7" PRIu32,
-               node->module_name, node->count, node->total, node->total / mhz,
-               (node->total / node->count) / mhz, percent);
+               node->module_name, node->count, node->total, profiler_cycles_to_us(node->total),
+               profiler_cycles_to_us(node->total / node->count), percent);
 
       sorted = sorted->next;
     }
   }
 
-  while (sorted != NULL) {
+  while (sorted != nullptr) {
     ListNode *new_head = list_pop_head(sorted);
     list_append(g_profiler.nodes, sorted);
     sorted = new_head;
@@ -229,11 +176,11 @@ static int prv_cmd_stats(const struct pbl_shell *sh, size_t argc, char **argv) {
 }
 
 static const struct pbl_shell_cmd sub_profiler[] = {
-  PBL_SHELL_CMD(start, NULL, "Reset and start profiling", prv_cmd_start),
-  PBL_SHELL_CMD(stop, NULL, "Stop profiling and log the stats", prv_cmd_stop),
-  PBL_SHELL_CMD(stats, NULL, "Log the stats", prv_cmd_stats),
+  PBL_SHELL_CMD(start, nullptr, "Reset and start profiling", prv_cmd_start),
+  PBL_SHELL_CMD(stop, nullptr, "Stop profiling and log the stats", prv_cmd_stop),
+  PBL_SHELL_CMD(stats, nullptr, "Log the stats", prv_cmd_stats),
   PBL_SHELL_SUBCMD_SET_END,
 };
 
-PBL_SHELL_CMD_REGISTER(profiler, sub_profiler, "Profiler", NULL);
+PBL_SHELL_CMD_REGISTER(profiler, sub_profiler, "Profiler", nullptr);
 #endif

@@ -10,46 +10,46 @@
 #include <applib/ui/app_window_stack.h>
 #include <kernel/ui/modals/modal_manager.h>
 
-extern void text_layer_update_proc(TextLayer *text_layer, GContext *ctx);
-extern void action_bar_update_proc(ActionBarLayer *action_bar, GContext *ctx);
-extern void bitmap_layer_update_proc(BitmapLayer *image, GContext *ctx);
-extern void inverter_layer_update_proc(InverterLayer *inverter, GContext *ctx);
+extern void text_layer_update_proc(Layer *layer, GContext *ctx);
+extern void action_bar_update_proc(Layer *layer, GContext *ctx);
+extern void bitmap_layer_update_proc(Layer *layer, GContext *ctx);
+extern void inverter_layer_update_proc(Layer *layer, GContext *ctx);
 extern void menu_layer_update_proc(Layer *scroll_content_layer, GContext *ctx);
-extern void path_layer_update_proc(PathLayer *path_layer, GContext *ctx);
-extern void progress_layer_update_proc(ProgressLayer *progress_layer, GContext *ctx);
-extern void rot_bitmap_layer_update_proc(RotBitmapLayer *image, GContext *ctx);
+extern void path_layer_update_proc(Layer *layer, GContext *ctx);
+extern void progress_layer_update_proc(Layer *layer, GContext *ctx);
+extern void rot_bitmap_layer_update_proc(Layer *layer, GContext *ctx);
 extern void scroll_layer_draw_shadow_sublayer(Layer *shadow_sublayer, GContext *ctx);
 extern void window_do_layer_update_proc(Layer *layer, GContext *ctx);
 
 static const char *prv_guess_type(Layer *layer) {
-  if (layer == NULL) {
+  if (layer == nullptr) {
     return "NULL";
   };
 
-  if (layer->update_proc == (LayerUpdateProc)text_layer_update_proc) {
+  if (layer->update_proc == text_layer_update_proc) {
     return "TextLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)action_bar_update_proc) {
+  } else if (layer->update_proc == action_bar_update_proc) {
     return "ActionBarLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)bitmap_layer_update_proc) {
+  } else if (layer->update_proc == bitmap_layer_update_proc) {
     return "BitmapLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)inverter_layer_update_proc) {
+  } else if (layer->update_proc == inverter_layer_update_proc) {
     return "InverterLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)menu_layer_update_proc) {
+  } else if (layer->update_proc == menu_layer_update_proc) {
     return "MenuLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)path_layer_update_proc) {
+  } else if (layer->update_proc == path_layer_update_proc) {
     return "PathLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)progress_layer_update_proc) {
+  } else if (layer->update_proc == progress_layer_update_proc) {
     return "ProgressLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)rot_bitmap_layer_update_proc) {
+  } else if (layer->update_proc == rot_bitmap_layer_update_proc) {
     return "RotBitmapLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)scroll_layer_draw_shadow_sublayer) {
+  } else if (layer->update_proc == scroll_layer_draw_shadow_sublayer) {
     return "(ScrollLayer's shadow) Layer";
   } else if (((ScrollLayer *)layer)->shadow_sublayer.update_proc ==
              scroll_layer_draw_shadow_sublayer) {
     return "ScrollLayer";
-  } else if (layer->update_proc == (LayerUpdateProc)window_do_layer_update_proc) {
+  } else if (layer->update_proc == window_do_layer_update_proc) {
     return "Window";
-  } else if (layer->update_proc == NULL) {
+  } else if (layer->update_proc == nullptr) {
     return "Layer";
   } else {
     return "Custom Layer";
@@ -80,7 +80,7 @@ static int prv_cmd_dump(const struct pbl_shell *sh, size_t argc, char **argv) {
   Window *window = modal_manager_get_top_window();
   if (!window) {
     window = app_window_stack_get_top_window();
-    if (window == NULL) {
+    if (window == nullptr) {
       return 0;
     }
   }
@@ -92,6 +92,6 @@ static int prv_cmd_dump(const struct pbl_shell *sh, size_t argc, char **argv) {
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_ui, dump, NULL, "Dump the layer tree of the top window", prv_cmd_dump, 0,
-                     0);
+PBL_SHELL_SUBCMD_ADD(sub_ui, dump, nullptr, "Dump the layer tree of the top window", prv_cmd_dump,
+                     0, 0);
 #endif

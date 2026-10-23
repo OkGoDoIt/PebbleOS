@@ -4,6 +4,7 @@
 #include <inttypes.h>
 
 #include <pbl/crc/crc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/protocol.h>
@@ -18,7 +19,6 @@
 #include <pbl/util/math.h>
 
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_data_logging, CONFIG_SERVICE_DATA_LOGGING_LOG_LEVEL);
 
@@ -184,13 +184,13 @@ static void reschedule_ack_timeout(void) {
   RtcTicks ticks_until_timeout = soonest_ack_timeout - current_ticks;
   uint32_t ms_until_timeout = ((uint64_t)ticks_until_timeout * 1000) / RTC_TICKS_HZ;
 
-  bool success =
-      new_timer_start(s_endpoint_data.ack_timer, ms_until_timeout, ack_timer_cb, NULL, 0 /*flags*/);
+  bool success = new_timer_start(s_endpoint_data.ack_timer, ms_until_timeout, ack_timer_cb, nullptr,
+                                 0 /*flags*/);
   PBL_ASSERTN(success);
 }
 
 static void dls_endpoint_print_message(uint8_t *message, int num_bytes) {
-  PBL_ASSERTN(message != NULL);
+  PBL_ASSERTN(message != nullptr);
 
   switch (message[0]) {
     case DataLoggingEndpointCmdClose: {
@@ -280,8 +280,8 @@ bool dls_endpoint_send_data(DataLoggingSession *logging_session, const uint8_t *
 
   const uint32_t total_length = sizeof(DataLoggingSendDataMessage) + num_bytes;
   const uint32_t timeout_ms = 500;
-  SendBuffer *sb = comm_session_send_buffer_begin_write(session, ENDPOINT_ID_DATA_LOGGING,
-                                                        total_length, timeout_ms);
+  SendBuffer *sb = comm_session_send_buffer_begin_write_bulk(session, ENDPOINT_ID_DATA_LOGGING,
+                                                             total_length, timeout_ms);
   if (!sb) {
     pbl_mutex_unlock(&s_endpoint_data.mutex);
     return false;
@@ -311,7 +311,7 @@ bool dls_endpoint_send_data(DataLoggingSession *logging_session, const uint8_t *
 
 static void prv_dls_endpoint_handle_ack(uint8_t session_id) {
   DataLoggingSession *session = dls_list_find_by_session_id(session_id);
-  if (session == NULL) {
+  if (session == nullptr) {
     PBL_LOG_WRN("Received ack for non-existent session id: %" PRIu8, session_id);
     return;
   }
@@ -412,8 +412,7 @@ static void prv_reopen_next_session_system_task_cb(void *data) {
                dls_private_send_session(entry->session, false));
   } else {
     // Session has disappeared between the time that the reopen list was
-    // created and now. This ideally shouldn't happen, but there's a lot
-    // that's broken about datalogging. See PBL-37078.
+    // created and now. This ideally shouldn't happen.
     success = true;
   }
   kernel_free(entry);
@@ -464,7 +463,7 @@ static void prv_handle_report_cmd(const uint8_t *session_ids, size_t num_session
     PBL_LOG_DBG("Phone reported session %u opened", session_id);
 
     // If the phone thinks we're open and we're not, send a close message.
-    if (logging_session == NULL) {
+    if (logging_session == nullptr) {
       dls_endpoint_close_session(session_id);
     }
   }
@@ -472,7 +471,7 @@ static void prv_handle_report_cmd(const uint8_t *session_ids, size_t num_session
   // If the bluetooth connection is flaky, a session reopen could take a few seconds, so we will
   // chain them and only do 1 re-open per system callback so that we don't trigger a watchdog
   // timeout.
-  DataLoggingReopenEntry *head = NULL;
+  DataLoggingReopenEntry *head = nullptr;
   dls_list_for_each_session(dls_endpoint_add_reopen_sessions_cb, (void *)&head);
 
   // Re-open the first one and reschedule the next one

@@ -42,9 +42,6 @@ typedef struct PBL_PACKED {
   AppMessageHeader header;
 } AppMessageAck;
 
-// For a diagram of the state machine:
-// https://pebbletechnology.atlassian.net/wiki/pages/editpage.action?pageId=91914242
-
 typedef enum AppMessagePhaseOut {
   //! The App Message Outbox is not enabled.  To enable it, call app_message_open().
   OUT_CLOSED = 0,
@@ -98,7 +95,7 @@ typedef struct AppMessageCtx {
   AppMessageCtxOutbox outbox;
 } AppMessageCtx;
 
-_Static_assert(sizeof(AppMessageCtx) <= 112, "AppMessageCtx must not exceed 112 bytes!");
+static_assert(sizeof(AppMessageCtx) <= 112, "AppMessageCtx must not exceed 112 bytes!");
 
 typedef struct {
   CommSession *session;
@@ -109,8 +106,8 @@ typedef struct {
 } AppMessageReceiverHeader;
 
 #if !UNITTEST && __SIZEOF_POINTER__ == 4
-_Static_assert(sizeof(AppMessageReceiverHeader) == 12,
-               "The size of AppMessageReceiverHeader cannot grow beyond 12 bytes!");
+static_assert(sizeof(AppMessageReceiverHeader) == 12,
+              "The size of AppMessageReceiverHeader cannot grow beyond 12 bytes!");
 #endif
 
 void app_message_init(void);

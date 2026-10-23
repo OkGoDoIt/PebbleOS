@@ -4,6 +4,7 @@
 #include <pbl/bluetooth/bonding_sync.h>
 #include <pbl/btutil/bt_device.h>
 #include <pbl/btutil/sm_util.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
@@ -21,7 +22,6 @@
 #include <comm/ble/kernel_le_client/kernel_le_client.h>
 #include <kernel/event_loop.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_bluetooth, CONFIG_SERVICE_BLUETOOTH_LOG_LEVEL);
 
@@ -102,8 +102,6 @@ static const char SYSTEM_CAPABILITIES_KEY[] = "SYSTEM_CAPABILITIES";
 //! This key is used to access the BLE address that can be used for address pinning.
 static const char BLE_PINNED_ADDRESS_KEY[] = "BLE_PINNED_ADDRESS";
 
-static uint8_t s_bt_persistent_storage_updates = 0;
-
 static PBL_MUTEX_DEFINE(s_db_mutex);
 
 //! Cache of the last connected system session capabilities. Updated in flash when we get new flags
@@ -135,7 +133,7 @@ static void prv_update_bondings(pbl_bt_bonding_id_t id, BtPersistBondingType typ
     if (prv_bt_persistent_storage_get_ble_smpairinginfo_by_id(id, &pairing_info, ble_name,
                                                               &requires_address_pinning, &flags)) {
       // only send the ble_name if we have a name to send!
-      char *ble_name_ptr = (strlen(ble_name) == 0) ? NULL : &ble_name[0];
+      char *ble_name_ptr = (strlen(ble_name) == 0) ? nullptr : &ble_name[0];
       shared_prf_storage_store_ble_pairing_data(&pairing_info, ble_name_ptr,
                                                 requires_address_pinning, flags);
     }
@@ -217,7 +215,6 @@ static GapBondingFileSetStatus prv_file_set(const void *key, size_t key_len, con
       }
 
       if (do_perform_update) {
-        s_bt_persistent_storage_updates++;
         PBL_LOG_DBG("Updating GAP bonding record");
         rv = settings_file_set(&fd, key, key_len, (uint8_t *)data_in, data_len);
       }
@@ -257,7 +254,7 @@ cleanup:
 
 //! Get the next available BondingID
 //! This function re-uses bonding ids as they are freed. This could be a problem with 3rd party
-//! apps. https://pebbletechnology.atlassian.net/browse/PBL-8391
+//! apps.
 static pbl_bt_bonding_id_t prv_get_free_key() {
   pbl_bt_bonding_id_t free_key = PBL_BT_BONDING_ID_INVALID;
 
@@ -437,7 +434,7 @@ bool prv_delete_pairing_with_type_by_id(pbl_bt_bonding_id_t bonding, BtPersistBo
     return false;
   }
 
-  if (prv_file_set(&bonding, sizeof(bonding), NULL, 0) == GapBondingFileSetFail) {
+  if (prv_file_set(&bonding, sizeof(bonding), nullptr, 0) == GapBondingFileSetFail) {
     return false;
   }
 
@@ -466,7 +463,7 @@ static void prv_update_active_gateway_if_needed(pbl_bt_bonding_id_t bonding,
     // get_active_gateway leaves the out param untouched when there is no active
     // gateway, so only compare when it reports success.
     pbl_bt_bonding_id_t current_active_gateway;
-    if (bt_persistent_storage_get_active_gateway(&current_active_gateway, NULL) &&
+    if (bt_persistent_storage_get_active_gateway(&current_active_gateway, nullptr) &&
         current_active_gateway == bonding) {
       bt_persistent_storage_set_active_gateway(PBL_BT_BONDING_ID_INVALID);
     }
@@ -730,7 +727,6 @@ pbl_bt_bonding_id_t bt_persistent_storage_store_ble_pairing(
     // for the pairing that we want to reconnect/connect to. If this isn't set then
     // we don't register an intent for the device and thus don't connect.
     // Currently only 1 ble pairing is really supported so this works for now
-    // FIXME: https://pebbletechnology.atlassian.net/browse/PBL-15277
     .ble_data.supports_ancs = is_gateway,
     .ble_data.requires_address_pinning = requires_address_pinning,
   };
@@ -986,7 +982,7 @@ static bool prv_bt_persistent_storage_get_ble_smpairinginfo_by_id(
   *requires_address_pinning = data.ble_data.requires_address_pinning;
   *flags = data.ble_data.flags;
 
-  prv_fill_ble_data(NULL, NULL, data.ble_data.name, NULL, NULL, name_out);
+  prv_fill_ble_data(nullptr, nullptr, data.ble_data.name, nullptr, nullptr, name_out);
   return true;
 }
 
@@ -1003,7 +999,7 @@ bool bt_persistent_storage_get_ble_pairing_by_addr(const struct pbl_bt_device_in
     return false;
   }
 
-  prv_fill_ble_data(&itr_data.irk_out, NULL, itr_data.name_out, irk_out, NULL, name_out);
+  prv_fill_ble_data(&itr_data.irk_out, nullptr, itr_data.name_out, irk_out, nullptr, name_out);
 
   return true;
 }
@@ -1215,7 +1211,7 @@ static bool prv_find_cccd_itr(SettingsFile *file, SettingsRecordInfo *info, void
 }
 
 pbl_bt_cccd_id_t bt_persistent_storage_store_cccd(const struct pbl_bt_cccd *cccd) {
-  PBL_ASSERTN(cccd != NULL);
+  PBL_ASSERTN(cccd != nullptr);
 
   FindCCCDItrData itr_data = {
     .peer = &cccd->peer,
@@ -1269,7 +1265,7 @@ bool bt_persistent_storage_delete_cccd(const struct pbl_bt_device_internal *peer
   }
 
   cccd_id = itr_data.id;
-  if (prv_file_set(&cccd_id, sizeof(cccd_id), NULL, 0) == GapBondingFileSetFail) {
+  if (prv_file_set(&cccd_id, sizeof(cccd_id), nullptr, 0) == GapBondingFileSetFail) {
     return false;
   }
 
@@ -1287,7 +1283,7 @@ void bt_persistent_storage_set_active_gateway(pbl_bt_bonding_id_t bonding) {
   if (!read_size || old_active_gateway != bonding) {
     prv_file_set(&ACTIVE_GATEWAY_KEY, sizeof(ACTIVE_GATEWAY_KEY), &bonding, sizeof(bonding));
     bt_persistent_storage_set_unfaithful(true);
-    bt_persistent_storage_set_cached_system_capabilities(NULL);
+    bt_persistent_storage_set_cached_system_capabilities(nullptr);
   }
 }
 
@@ -1482,7 +1478,7 @@ void bt_persistent_storage_delete_all_pairings(void) {
     status_t rv =
         settings_file_open(&fd, BT_PERSISTENT_STORAGE_FILE_NAME, BT_PERSISTENT_STORAGE_FILE_SIZE);
     if (rv == S_SUCCESS) {
-      settings_file_rewrite(&fd, prv_delete_all_pairings_itr, NULL);
+      settings_file_rewrite(&fd, prv_delete_all_pairings_itr, nullptr);
       settings_file_close(&fd);
     }
   }
@@ -1515,7 +1511,7 @@ static void prv_dump_bonding_db_data(const struct pbl_shell *sh, pbl_bt_bonding_
     struct pbl_bt_sm_pairing_info sprf_info = {};
     bool requires_address_pinning;
     uint8_t flags;
-    shared_prf_storage_get_ble_pairing_data(&sprf_info, NULL, &requires_address_pinning, &flags);
+    shared_prf_storage_get_ble_pairing_data(&sprf_info, nullptr, &requires_address_pinning, &flags);
     matches_prf = (memcmp(&sprf_info, &info, sizeof(sprf_info)) == 0);
     matches_prf &= (requires_address_pinning == data->ble_data.requires_address_pinning);
     matches_prf &= (flags == data->ble_data.flags);

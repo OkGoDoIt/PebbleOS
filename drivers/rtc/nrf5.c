@@ -3,8 +3,8 @@
 
 #include <inttypes.h>
 
-#include <pbl/drivers/exti.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/types.h>
 #include <pbl/logging/logging.h>
@@ -12,8 +12,8 @@
 #include <pbl/services/regular_timer.h>
 #include <pbl/services/time.h>
 
+#include <board/board.h>
 #include <hal/nrf_rtc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(driver_rtc_nrf5, CONFIG_DRIVER_RTC_LOG_LEVEL);
 
@@ -189,7 +189,7 @@ static void prv_save_rtc_time_state(RtcIntervalTicks current_rtc_ticks) {
 
 /*** Logic that ought be refactored into rtc_common, were it not stm32-only. ***/
 
-bool rtc_sanitize_struct_tm(struct tm *t) {
+bool rtc_sanitize_struct_tm(struct pbl_tm *t) {
   // These values come from time_t (which suffers from the 2038 problem) and our hardware which
   // only stores a 2 digit year, so we only represent values after 2000.
 
@@ -206,18 +206,18 @@ bool rtc_sanitize_struct_tm(struct tm *t) {
 }
 
 bool rtc_sanitize_time_t(time_t *t) {
-  struct tm time_struct;
-  gmtime_r(t, &time_struct);
+  struct pbl_tm time_struct;
+  pbl_gmtime_r(t, &time_struct);
 
   const bool result = rtc_sanitize_struct_tm(&time_struct);
-  *t = mktime(&time_struct);
+  *t = pbl_mktime(&time_struct);
 
   return result;
 }
 
-void rtc_get_time_tm(struct tm *time_tm) {
+void rtc_get_time_tm(struct pbl_tm *time_tm) {
   time_t t = rtc_get_time();
-  localtime_r(&t, time_tm);
+  pbl_localtime_r(&t, time_tm);
 }
 
 const char *rtc_get_time_string(char *buffer) {
@@ -225,10 +225,10 @@ const char *rtc_get_time_string(char *buffer) {
 }
 
 const char *time_t_to_string(char *buffer, time_t t) {
-  struct tm time;
-  localtime_r(&t, &time);
+  struct pbl_tm time;
+  pbl_localtime_r(&t, &time);
 
-  strftime(buffer, TIME_STRING_BUFFER_SIZE, "%c", &time);
+  pbl_strftime_r(buffer, TIME_STRING_BUFFER_SIZE, "%c", &time);
 
   return buffer;
 }
@@ -237,8 +237,7 @@ const char *time_t_to_string(char *buffer, time_t t) {
 //! timezone index and the daylight_savings_time into the same register set
 void rtc_set_timezone(TimezoneInfo *tzinfo) {
   uint32_t *raw = (uint32_t *)tzinfo;
-  _Static_assert(sizeof(TimezoneInfo) <= 5 * sizeof(uint32_t),
-                 "RTC Set Timezone invalid data size");
+  static_assert(sizeof(TimezoneInfo) <= 5 * sizeof(uint32_t), "RTC Set Timezone invalid data size");
 
   retained_write(RTC_TIMEZONE_ABBR_START, raw[0]);
   retained_write(RTC_TIMEZONE_ABBR_END_TZID_DSTID, raw[1]);
@@ -329,7 +328,7 @@ void rtc_enable_synthetic_systick(void) {
   // Now that the RTC is awake, we can switch from SysTick to RTC interrupt
   // ticks.  We need to do this so that we actually get ticks in wfi, since
   // nRF5 stops SysTick in sleep.
-  _Static_assert(RTC_TICKS_HZ == PBL_TICK_HZ);
+  static_assert(RTC_TICKS_HZ == PBL_TICK_HZ);
   if (!s_did_init_rtc) {
     rtc_init();
   }

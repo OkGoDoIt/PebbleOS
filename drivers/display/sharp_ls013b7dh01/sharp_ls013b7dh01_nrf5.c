@@ -1,12 +1,13 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <pbl/drivers/display/sharp_ls013b7dh01/sharp_ls013b7dh01.h>
 #include <pbl/drivers/gpio.h>
+#include <pbl/drivers/gpio/nrf5.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/util/bitops.h>
 
@@ -16,7 +17,6 @@
 #include <kernel/events.h>
 #include <nrfx_gppi.h>
 #include <nrfx_spim.h>
-#include <system/passert.h>
 
 #define DISP_MODE_WRITE 0x01U
 #define DISP_MODE_CLEAR 0x04U
@@ -34,8 +34,10 @@ static void prv_extcomin_init(void) {
   const NrfLowPowerPWM *extcomin = &BOARD_CONFIG_DISPLAY.extcomin;
   uint32_t evt_addr, task_addr;
   uint8_t ppi_ch[2];
+  uint8_t te_ch;
 
-  nrf_gpiote_te_default(extcomin->gpiote, extcomin->gpiote_ch);
+  PBL_ASSERTN(pbl_gpio_nrf5_gpiote_alloc(&te_ch) == 0);
+  nrf_gpiote_te_default(extcomin->gpiote, te_ch);
 
   nrf_gpio_pin_write(extcomin->psel, 0);
   nrf_gpio_cfg_output(extcomin->psel);
@@ -50,9 +52,9 @@ static void prv_extcomin_init(void) {
   nrf_rtc_cc_set(extcomin->rtc, 0, (32768 * extcomin->period_us) / 1000000 - 1);
   nrf_rtc_cc_set(extcomin->rtc, 1, (32768 * extcomin->pulse_us) / 1000000 - 1);
 
-  nrf_gpiote_task_configure(extcomin->gpiote, extcomin->gpiote_ch, extcomin->psel,
-                            NRF_GPIOTE_POLARITY_NONE, NRF_GPIOTE_INITIAL_VALUE_LOW);
-  nrf_gpiote_task_enable(extcomin->gpiote, extcomin->gpiote_ch);
+  nrf_gpiote_task_configure(extcomin->gpiote, te_ch, extcomin->psel, NRF_GPIOTE_POLARITY_NONE,
+                            NRF_GPIOTE_INITIAL_VALUE_LOW);
+  nrf_gpiote_task_enable(extcomin->gpiote, te_ch);
 
   err = nrfx_gppi_channel_alloc(&ppi_ch[0]);
   PBL_ASSERTN(err == NRFX_SUCCESS);
@@ -62,8 +64,7 @@ static void prv_extcomin_init(void) {
 
   // Period end (CC0) sets GPIO, clears RTC
   evt_addr = nrf_rtc_event_address_get(extcomin->rtc, nrf_rtc_compare_event_get(0));
-  task_addr =
-      nrf_gpiote_task_address_get(extcomin->gpiote, nrf_gpiote_set_task_get(extcomin->gpiote_ch));
+  task_addr = nrf_gpiote_task_address_get(extcomin->gpiote, nrf_gpiote_set_task_get(te_ch));
   nrfx_gppi_channel_endpoints_setup(ppi_ch[0], evt_addr, task_addr);
 
   task_addr = nrf_rtc_task_address_get(extcomin->rtc, NRF_RTC_TASK_CLEAR);
@@ -71,8 +72,7 @@ static void prv_extcomin_init(void) {
 
   // Pulse end (CC1) clears GPIO
   evt_addr = nrf_rtc_event_address_get(extcomin->rtc, nrf_rtc_compare_event_get(1));
-  task_addr =
-      nrf_gpiote_task_address_get(extcomin->gpiote, nrf_gpiote_clr_task_get(extcomin->gpiote_ch));
+  task_addr = nrf_gpiote_task_address_get(extcomin->gpiote, nrf_gpiote_clr_task_get(te_ch));
   nrfx_gppi_channel_endpoints_setup(ppi_ch[1], evt_addr, task_addr);
 
   nrfx_gppi_channels_enable((1UL << ppi_ch[0]) | (1UL << ppi_ch[1]));
@@ -94,11 +94,11 @@ static inline void prv_disable_spim(void) {
 }
 
 static inline void prv_enable_chip_select(void) {
-  gpio_output_set(&BOARD_CONFIG_DISPLAY.cs, true);
+  pbl_gpio_set(&BOARD_CONFIG_DISPLAY.cs, true);
 }
 
 static inline void prv_disable_chip_select(void) {
-  gpio_output_set(&BOARD_CONFIG_DISPLAY.cs, false);
+  pbl_gpio_set(&BOARD_CONFIG_DISPLAY.cs, false);
 }
 
 static void prv_terminate_transfer(void *data) {
@@ -107,7 +107,7 @@ static void prv_terminate_transfer(void *data) {
   prv_disable_chip_select();
   prv_disable_spim();
 
-  s_uccb();
+  s_uccb(true);
 }
 
 static void prv_spim_evt_handler(nrfx_spim_evt_t const *evt, void *ctx) {
@@ -127,19 +127,17 @@ static void prv_spim_evt_handler(nrfx_spim_evt_t const *evt, void *ctx) {
 
 void display_init(void) {
   nrfx_spim_config_t config = NRFX_SPIM_DEFAULT_CONFIG(
-      BOARD_CONFIG_DISPLAY.clk.gpio_pin, BOARD_CONFIG_DISPLAY.mosi.gpio_pin,
+      pbl_gpio_nrf5_pin(&BOARD_CONFIG_DISPLAY.clk), pbl_gpio_nrf5_pin(&BOARD_CONFIG_DISPLAY.mosi),
       NRF_SPIM_PIN_NOT_CONNECTED, NRF_SPIM_PIN_NOT_CONNECTED);
   config.frequency = NRFX_MHZ_TO_HZ(1);
   config.bit_order = NRF_SPIM_BIT_ORDER_LSB_FIRST;
 
-  nrfx_err_t err = nrfx_spim_init(&BOARD_CONFIG_DISPLAY.spi, &config, prv_spim_evt_handler, NULL);
+  nrfx_err_t err =
+      nrfx_spim_init(&BOARD_CONFIG_DISPLAY.spi, &config, prv_spim_evt_handler, nullptr);
   PBL_ASSERTN(err == NRFX_SUCCESS);
 
-  gpio_output_init(&BOARD_CONFIG_DISPLAY.cs, GPIO_OType_PP);
-
-  gpio_output_init(&BOARD_CONFIG_DISPLAY.on_ctrl,
-                   (GPIOOType_TypeDef)BOARD_CONFIG_DISPLAY.on_ctrl_otype);
-  gpio_output_set(&BOARD_CONFIG_DISPLAY.on_ctrl, true);
+  pbl_gpio_configure(&BOARD_CONFIG_DISPLAY.cs, PBL_GPIO_OUTPUT);
+  pbl_gpio_configure(&BOARD_CONFIG_DISPLAY.on_ctrl, PBL_GPIO_OUTPUT_ACTIVE);
 
   prv_extcomin_init();
 }
@@ -162,7 +160,7 @@ void display_clear(void) {
 }
 
 void display_set_enabled(bool enabled) {
-  gpio_output_set(&BOARD_CONFIG_DISPLAY.on_ctrl, enabled);
+  pbl_gpio_set(&BOARD_CONFIG_DISPLAY.on_ctrl, enabled);
 }
 
 void display_set_rotated(bool rotated) {

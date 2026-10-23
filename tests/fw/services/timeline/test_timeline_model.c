@@ -28,33 +28,6 @@ static TimezoneInfo tz = {
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_app_cache.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_manager.h>
-#include <stubs_blob_db.h>
-#include <stubs_blob_db_sync.h>
-#include <stubs_blob_db_sync_util.h>
-#include <stubs_calendar.h>
-#include <stubs_event_service_client.h>
-#include <stubs_events.h>
-#include <stubs_fonts.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_layout_layer.h>
-#include <stubs_logging.h>
-#include <stubs_modal_manager.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_regular_timer.h>
-#include <stubs_resources.h>
-#include <stubs_session.h>
-#include <stubs_sleep.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_window_stack.h>
 
 void ancs_notifications_enable_bulk_action_mode(bool enable) {
   return;
@@ -79,11 +52,11 @@ void timeline_pin_window_push_modal(TimelineItem *item) {
 }
 
 const PebbleProcessMd *timeline_get_app_info(void) {
-  return NULL;
+  return nullptr;
 }
 
 PebblePhoneCaller *phone_call_util_create_caller(const char *number, const char *name) {
-  return NULL;
+  return nullptr;
 }
 
 void ancs_perform_action(uint32_t notification_uid, uint8_t action_id) {
@@ -116,7 +89,7 @@ static TimelineItem
                   .id =
                       {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65,
                        0x72, 0x22, 0xb1},
-                  .parent_id = {0},
+                  .parent_id = {},
                   .timestamp = 1421178061, // Tue Jan 13 11:41:01 2015 PST
                   .duration = 1,
                   .type = TimelineItemTypePin,
@@ -126,14 +99,14 @@ static TimelineItem
             .attr_list =
                 {
                   .num_attributes = 0,
-                  .attributes = NULL,
+                  .attributes = nullptr,
                 },
             .action_group =
                 {
                   .num_actions = 0,
-                  .actions = NULL,
+                  .actions = nullptr,
                 },
-            .allocated_buffer = NULL,
+            .allocated_buffer = nullptr,
           },
           {
             .header =
@@ -142,7 +115,7 @@ static TimelineItem
                   .id =
                       {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65,
                        0x72, 0x22, 0xb2},
-                  .parent_id = {0},
+                  .parent_id = {},
                   .timestamp = 1421183642, // Tue Jan 13 13:14:02 2015 PST
                   .duration = 10,
                   .type = TimelineItemTypePin,
@@ -152,14 +125,14 @@ static TimelineItem
             .attr_list =
                 {
                   .num_attributes = 0,
-                  .attributes = NULL,
+                  .attributes = nullptr,
                 },
             .action_group =
                 {
                   .num_actions = 0,
-                  .actions = NULL,
+                  .actions = nullptr,
                 },
-            .allocated_buffer = NULL,
+            .allocated_buffer = nullptr,
           },
           {
             .header =
@@ -170,7 +143,7 @@ static TimelineItem
                         0x6b,
                         0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65, 0x72, 0x22, 0xb3
                       },
-                  .parent_id = {0},
+                  .parent_id = {},
                   .timestamp = 1421183642, // Tue Jan 13 13:14:02 2015 PST
                   .duration = 2,
                   .type = TimelineItemTypePin,
@@ -180,14 +153,14 @@ static TimelineItem
             .attr_list =
                 {
                   .num_attributes = 0,
-                  .attributes = NULL,
+                  .attributes = nullptr,
                 },
             .action_group =
                 {
                   .num_actions = 0,
-                  .actions = NULL,
+                  .actions = nullptr,
                 },
-            .allocated_buffer = NULL,
+            .allocated_buffer = nullptr,
           },
           {
             .header =
@@ -196,7 +169,7 @@ static TimelineItem
                   .id =
                       {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65,
                        0x72, 0x22, 0xb4},
-                  .parent_id = {0},
+                  .parent_id = {},
                   .timestamp = 1421183642, // Tue Jan 13 13:14:02 2015 PST
                   .duration = 30,
                   .type = TimelineItemTypePin,
@@ -206,14 +179,14 @@ static TimelineItem
             .attr_list =
                 {
                   .num_attributes = 0,
-                  .attributes = NULL,
+                  .attributes = nullptr,
                 },
             .action_group =
                 {
                   .num_actions = 0,
-                  .actions = NULL,
+                  .actions = nullptr,
                 },
-            .allocated_buffer = NULL,
+            .allocated_buffer = nullptr,
           },
           {
             .header =
@@ -222,7 +195,7 @@ static TimelineItem
                   .id =
                       {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65,
                        0x72, 0x22, 0xb5},
-                  .parent_id = {0},
+                  .parent_id = {},
                   .timestamp = 1421178061, // Tue Jan 13 11:41:01 2015 PST
                   .duration = 5,
                   .type = TimelineItemTypePin,
@@ -232,14 +205,14 @@ static TimelineItem
             .attr_list =
                 {
                   .num_attributes = 0,
-                  .attributes = NULL,
+                  .attributes = nullptr,
                 },
             .action_group =
                 {
                   .num_actions = 0,
-                  .actions = NULL,
+                  .actions = nullptr,
                 },
-            .allocated_buffer = NULL,
+            .allocated_buffer = nullptr,
           },
           {
             .header =
@@ -248,7 +221,7 @@ static TimelineItem
                   .id =
                       {0x6b, 0xf6, 0x21, 0x5b, 0xc9, 0x7f, 0x40, 0x9e, 0x8c, 0x31, 0x4f, 0x55, 0x65,
                        0x72, 0x22, 0xb6},
-                  .parent_id = {0},
+                  .parent_id = {},
                   .timestamp = 1421183462, // Tue Jan 13 13:11:02 PST 2015
                   .duration = 4,
                   .type = TimelineItemTypePin,
@@ -258,14 +231,14 @@ static TimelineItem
             .attr_list =
                 {
                   .num_attributes = 0,
-                  .attributes = NULL,
+                  .attributes = nullptr,
                 },
             .action_group =
                 {
                   .num_actions = 0,
-                  .actions = NULL,
+                  .actions = nullptr,
                 },
-            .allocated_buffer = NULL,
+            .allocated_buffer = nullptr,
           }
 };
 
@@ -295,7 +268,7 @@ void test_timeline_model__cleanup(void) {
 static int s_correct_order[] = {0, 4, 5, 2, 1, 3};
 
 void test_timeline_model__future(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015
@@ -375,21 +348,21 @@ void test_timeline_model__future(void) {
 }
 
 void test_timeline_model__and_back(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015
   timeline_model_init(first_time, &model);
 
-  cl_assert(timeline_model_iter_next(NULL, NULL));
-  cl_assert(timeline_model_iter_next(NULL, NULL));
-  cl_assert(timeline_model_iter_next(NULL, NULL));
-  cl_assert(timeline_model_iter_next(NULL, NULL));
-  cl_assert(timeline_model_iter_next(NULL, NULL));
-  cl_assert(!timeline_model_iter_next(NULL, NULL));
+  cl_assert(timeline_model_iter_next(nullptr, nullptr));
+  cl_assert(timeline_model_iter_next(nullptr, nullptr));
+  cl_assert(timeline_model_iter_next(nullptr, nullptr));
+  cl_assert(timeline_model_iter_next(nullptr, nullptr));
+  cl_assert(timeline_model_iter_next(nullptr, nullptr));
+  cl_assert(!timeline_model_iter_next(nullptr, nullptr));
 
   int new_idx;
-  cl_assert(timeline_model_iter_prev(&new_idx, NULL));
+  cl_assert(timeline_model_iter_prev(&new_idx, nullptr));
   cl_assert_equal_i(new_idx, 4);
   cl_assert_equal_i(timeline_model_get_num_items(), 2);
   cl_assert(uuid_equal(&s_items[s_correct_order[4]].header.id,
@@ -398,7 +371,7 @@ void test_timeline_model__and_back(void) {
                        &timeline_model_get_iter_state(1)->pin.header.id));
   cl_assert(timeline_model_get_iter_state(0) == timeline_model_get_iter_state_with_timeline_idx(4));
 
-  cl_assert(timeline_model_iter_prev(&new_idx, NULL));
+  cl_assert(timeline_model_iter_prev(&new_idx, nullptr));
   cl_assert_equal_i(new_idx, 3);
   cl_assert_equal_i(timeline_model_get_num_items(), 2);
   cl_assert(uuid_equal(&s_items[s_correct_order[3]].header.id,
@@ -411,7 +384,7 @@ void test_timeline_model__and_back(void) {
   cl_assert(timeline_model_get_iter_state(1) == timeline_model_get_iter_state_with_timeline_idx(4));
   cl_assert(timeline_model_get_iter_state(2) == timeline_model_get_iter_state_with_timeline_idx(5));
 
-  cl_assert(timeline_model_iter_prev(&new_idx, NULL));
+  cl_assert(timeline_model_iter_prev(&new_idx, nullptr));
   cl_assert_equal_i(new_idx, 2);
   cl_assert_equal_i(timeline_model_get_num_items(), 2);
   cl_assert(uuid_equal(&s_items[s_correct_order[2]].header.id,
@@ -424,7 +397,7 @@ void test_timeline_model__and_back(void) {
   cl_assert(timeline_model_get_iter_state(1) == timeline_model_get_iter_state_with_timeline_idx(3));
   cl_assert(timeline_model_get_iter_state(2) == timeline_model_get_iter_state_with_timeline_idx(4));
 
-  cl_assert(timeline_model_iter_prev(&new_idx, NULL));
+  cl_assert(timeline_model_iter_prev(&new_idx, nullptr));
   cl_assert_equal_i(new_idx, 1);
   cl_assert_equal_i(timeline_model_get_num_items(), 2);
   cl_assert(uuid_equal(&s_items[s_correct_order[1]].header.id,
@@ -437,7 +410,7 @@ void test_timeline_model__and_back(void) {
   cl_assert(timeline_model_get_iter_state(1) == timeline_model_get_iter_state_with_timeline_idx(2));
   cl_assert(timeline_model_get_iter_state(2) == timeline_model_get_iter_state_with_timeline_idx(3));
 
-  cl_assert(timeline_model_iter_prev(&new_idx, NULL));
+  cl_assert(timeline_model_iter_prev(&new_idx, nullptr));
   cl_assert_equal_i(new_idx, 0);
   cl_assert_equal_i(timeline_model_get_num_items(), 2);
   cl_assert(uuid_equal(&s_items[s_correct_order[0]].header.id,
@@ -450,11 +423,11 @@ void test_timeline_model__and_back(void) {
   cl_assert(timeline_model_get_iter_state(1) == timeline_model_get_iter_state_with_timeline_idx(1));
   cl_assert(timeline_model_get_iter_state(2) == timeline_model_get_iter_state_with_timeline_idx(2));
 
-  cl_assert(!timeline_model_iter_prev(&new_idx, NULL));
+  cl_assert(!timeline_model_iter_prev(&new_idx, nullptr));
 }
 
 void test_timeline_model__graceful_delete_middle(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015
@@ -471,7 +444,7 @@ void test_timeline_model__graceful_delete_middle(void) {
 }
 
 void test_timeline_model__graceful_delete_first(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015
@@ -488,7 +461,7 @@ void test_timeline_model__graceful_delete_first(void) {
 }
 
 void test_timeline_model__graceful_delete_all(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015
@@ -498,12 +471,12 @@ void test_timeline_model__graceful_delete_all(void) {
     timeline_model_remove(&s_items[i].header.id);
   }
   cl_assert_equal_i(timeline_model_get_num_items(), 0);
-  cl_assert(!timeline_model_iter_next(NULL, NULL));
-  cl_assert(!timeline_model_iter_prev(NULL, NULL));
+  cl_assert(!timeline_model_iter_next(nullptr, nullptr));
+  cl_assert(!timeline_model_iter_prev(nullptr, nullptr));
 }
 
 void test_timeline_model__is_empty(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015
@@ -519,7 +492,7 @@ void test_timeline_model__is_empty(void) {
 }
 
 void test_timeline_model__is_empty_immediate(void) {
-  TimelineModel model = {0};
+  TimelineModel model = {};
   model.direction = TimelineIterDirectionFuture;
   time_t first_time = 1421178000;
   // Note: 1421178000 = Tue Jan 13 11:40:00 PST 2015

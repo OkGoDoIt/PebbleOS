@@ -8,7 +8,10 @@
 #include "pebble_process_md.h"
 #include "worker_manager.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/debug.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/kernel/types.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
@@ -20,6 +23,7 @@
 #include <pbl/services/evented_timer.h>
 #include <pbl/services/hrm/hrm_manager.h>
 #include <pbl/services/persist.h>
+#include <pbl/services/touch/touch.h>
 #include <pbl/services/voice/voice.h>
 #include <pbl/util/heap.h>
 
@@ -37,8 +41,6 @@
 #include <resource/resource_ids.auto.h>
 #include <shell/normal/watchface.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 static TimerID s_deinit_timer_id = TIMER_INVALID_ID;
 
@@ -89,13 +91,15 @@ static void prv_force_close_timer_callback(void *data) {
   ProcessContext *context = prv_get_context_for_task(task);
 
   if (!prv_force_stop_task_if_unprivileged(context)) {
-    PBL_CROAK("task stuck inside privileged code!");
+    pbl_panic("task stuck inside privileged code!");
   }
   process_manager_put_kill_process_event(task, false /*graceful*/);
 }
 
 // ---------------------------------------------------------------------------------------------
-PBL_EXTERNALLY_VISIBLE void process_manager_handle_syscall_exit(void) {
+// Right before a syscall drops privilege: a safe point to suspend a process the
+// kernel is trying to kill.
+void pbl_kernel_syscall_exit(void) {
   PebbleTask task = pebble_task_get_current();
   ProcessContext *context = prv_get_context_for_task(task);
 
@@ -104,7 +108,7 @@ PBL_EXTERNALLY_VISIBLE void process_manager_handle_syscall_exit(void) {
     context->safe_to_kill = true;
     process_manager_put_kill_process_event(task, false);
 
-    pbl_thread_suspend(NULL);
+    pbl_thread_suspend(nullptr);
   }
 }
 
@@ -145,8 +149,8 @@ void process_manager_init_context(ProcessContext *context, const PebbleProcessMd
                                   const void *args) {
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
 
-  PBL_ASSERTN(context->task_handle == NULL);
-  PBL_ASSERTN(context->to_process_event_queue == NULL);
+  PBL_ASSERTN(context->task_handle == nullptr);
+  PBL_ASSERTN(context->to_process_event_queue == nullptr);
 
   context->app_md = app_md;
 
@@ -227,7 +231,7 @@ static bool prv_needs_fetch(AppInstallId id, const PebbleProcessMd **md, bool is
     PBL_LOG_WRN("Stale app cache entry for id %" PRId32 ": cached %s, expected %s. Refetching.", id,
                 cached_uuid, expected_uuid);
     app_install_release_md(*md);
-    *md = NULL;
+    *md = nullptr;
     app_cache_remove_entry(id);
     return true;
   }
@@ -247,7 +251,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
     return;
   }
 
-  const PebbleProcessMd *md = NULL;
+  const PebbleProcessMd *md = nullptr;
 #if !defined(CONFIG_RECOVERY_FW)
   if (app_install_id_from_app_db(id)) {
     if (!process_manager_check_SDK_compatible(id)) {
@@ -267,7 +271,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
       fetch_args->kill_requested = config->kill_requested;
 
       // if the data is wakeup info, then copy out that information.
-      if ((config->common.reason == APP_LAUNCH_WAKEUP) && (config->common.args != NULL)) {
+      if ((config->common.reason == APP_LAUNCH_WAKEUP) && (config->common.args != nullptr)) {
         fetch_args->wakeup_info = *(WakeupInfo *)config->common.args;
         fetch_args->common.args = &fetch_args->wakeup_info;
       }
@@ -312,7 +316,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
         // If the watchface is for an unsupported SDK version, we need to switch the default
         // watchface back to tictoc. Otherwise, we will be stuck in the launcher forever.
         watchface_set_default_install_id(INSTALL_ID_INVALID);
-        watchface_launch_default(NULL);
+        watchface_launch_default(nullptr);
       }
 
       // Not going to launch this, release the allocated memory
@@ -329,7 +333,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
       if (app_install_get_entry_for_install_id(id, &entry) &&
           app_install_entry_is_watchface(&entry)) {
         watchface_set_default_install_id(INSTALL_ID_INVALID);
-        watchface_launch_default(NULL);
+        watchface_launch_default(nullptr);
       }
 
       ExpandableDialog *expandable_dialog = expandable_dialog_create("Unsupported App");
@@ -349,7 +353,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
 #endif
 
   if (is_worker) {
-    worker_manager_launch_new_worker_with_args(md, NULL);
+    worker_manager_launch_new_worker_with_args(md, nullptr);
   } else {
     app_manager_launch_new_app(&(AppLaunchConfig){
       .md = md,
@@ -382,7 +386,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
 //! If however, the task is in privilege mode, we tell the syscall machinery to set the safe to kill
 //! boolean as soon as the current syscall returns and set another timer. Once that timer expires,
 //! if the task is no longer in privilege mode we post another KILL event (graceful = false). If the
-//! task is still in privilege mode then, we croak.
+//! task is still in privilege mode then, we panic.
 bool process_manager_make_process_safe_to_kill(PebbleTask task, bool gracefully) {
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
   ProcessContext *context = prv_get_context_for_task(task);
@@ -454,7 +458,7 @@ bool process_manager_make_process_safe_to_kill(PebbleTask task, bool gracefully)
 
       // Send a DEINIT event to wake up the app if it's blocked waiting for events
       // (e.g., in sys_get_pebble_event). This allows the syscall to return and
-      // trigger process_manager_handle_syscall_exit() which will mark the process
+      // trigger pbl_kernel_syscall_exit() which will mark the process
       // as safe to kill.
       PBL_LOG_DBG("Sending DEINIT event to wake %s from syscall", pebble_task_get_name(task));
       PebbleEvent deinit_event = {
@@ -473,7 +477,7 @@ bool process_manager_make_process_safe_to_kill(PebbleTask task, bool gracefully)
 // -----------------------------------------------------------------------------------------------------------
 // This is designed to be called from the task itself, in privilege mode, after it exits. It is
 // called from app_task_exit for app tasks and worker_task_exit from worker tasks
-PBL_NORETURN void process_manager_task_exit(void) {
+[[noreturn]] void process_manager_task_exit(void) {
   PebbleTask task = pebble_task_get_current();
   ProcessContext *context = prv_get_context_for_task(task);
 
@@ -485,7 +489,7 @@ PBL_NORETURN void process_manager_task_exit(void) {
     } else if (task == PebbleTask_Worker) {
       heap = worker_state_get_heap();
     } else {
-      WTF;
+      pbl_panic();
     }
 
     // FIXME: We cast heap_size's size_t result to int because for some reason our printf doesn't
@@ -505,10 +509,10 @@ PBL_NORETURN void process_manager_task_exit(void) {
   process_manager_put_kill_process_event(task, true);
 
   // Better to die in our sleep ...
-  pbl_thread_suspend(NULL /* self */);
+  pbl_thread_suspend(nullptr /* self */);
 
   // We don't expect someone to resume us.
-  PBL_CROAK("");
+  pbl_panic("");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -551,6 +555,10 @@ void process_manager_process_cleanup(PebbleTask task) {
   hrm_manager_process_cleanup(task, context->install_id);
 #endif
 
+#ifdef CONFIG_SERVICE_TOUCH
+  touch_process_cleanup(task);
+#endif
+
 #ifndef CONFIG_RECOVERY_FW
 #ifdef CONFIG_MIC
   voice_kill_app_session(task);
@@ -568,7 +576,7 @@ void process_manager_process_cleanup(PebbleTask task) {
 
   if (context->task_handle) {
     pbl_thread_abort(context->task_handle);
-    context->task_handle = NULL;
+    context->task_handle = nullptr;
   }
 
   // cleanup memory that was used to store the Md, but only if it isn't a system application
@@ -581,7 +589,7 @@ void process_manager_process_cleanup(PebbleTask task) {
   if (context->to_process_event_queue) {
     event_queue_cleanup_and_reset(context->to_process_event_queue);
   }
-  context->to_process_event_queue = NULL;
+  context->to_process_event_queue = nullptr;
 }
 
 // -----------------------------------------------------------------------------------------------------------
@@ -594,7 +602,7 @@ void process_manager_close_process(PebbleTask task, bool gracefully) {
     worker_manager_close_current_worker(gracefully);
 
   } else {
-    WTF;
+    pbl_panic();
   }
 }
 
@@ -634,7 +642,7 @@ uint32_t process_manager_process_events_waiting(PebbleTask task) {
 // ----------------------------------------------------------------------------------------------
 void process_manager_send_callback_event_to_process(PebbleTask task, void (*callback)(void *data),
                                                     void *data) {
-  PBL_ASSERTN(callback != NULL);
+  PBL_ASSERTN(callback != nullptr);
   PebbleEvent event = {
     .type = PEBBLE_CALLBACK_EVENT,
     .callback = {
@@ -662,9 +670,8 @@ extern char __APP_RAM_end__[];
 extern char __WORKER_RAM__[];
 extern char __WORKER_RAM_end__[];
 
-bool process_manager_is_address_in_region(PebbleTask task, const void *address,
-                                          const void *lower_bound) {
-  void *ram_start = NULL, *ram_end = NULL;
+static uintptr_t prv_get_region_end(PebbleTask task, const void *lower_bound) {
+  void *ram_start = nullptr, *ram_end = nullptr;
   if (task == PebbleTask_App) {
     ram_start = __APP_RAM__;
     ram_end = __APP_RAM_end__;
@@ -672,21 +679,35 @@ bool process_manager_is_address_in_region(PebbleTask task, const void *address,
     ram_start = __WORKER_RAM__;
     ram_end = __WORKER_RAM_end__;
   } else {
-    WTF;
+    pbl_panic();
   }
 
-  // check for vulnerability: lower_bound outside of task's region
-  PBL_ASSERTN(lower_bound >= ram_start);
+  if (lower_bound < ram_start) {
+    return false;
+  }
 
-  return (address >= lower_bound && address < ram_end);
+  return (uintptr_t)ram_end;
+}
+
+bool process_manager_is_range_in_region(PebbleTask task, const void *buf, size_t num_bytes,
+                                        const void *lower_bound) {
+  const uintptr_t start = (uintptr_t)buf;
+  const uintptr_t end = prv_get_region_end(task, lower_bound);
+  return (start >= (uintptr_t)lower_bound) && (start <= end) && (num_bytes <= end - start);
+}
+
+size_t process_manager_region_bytes_from(PebbleTask task, const void *buf,
+                                         const void *lower_bound) {
+  const uintptr_t start = (uintptr_t)buf;
+  const uintptr_t end = prv_get_region_end(task, lower_bound);
+  if (start < (uintptr_t)lower_bound || start > end) {
+    return 0;
+  }
+  return end - start;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(void, sys_get_pebble_event, PebbleEvent *event) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(event, sizeof(*event));
-  }
-
+PBL_SYSCALL(void, sys_get_pebble_event, (OUT, PebbleEvent *, event)) {
   // A forced close suspends the task to read its registers. Resuming it ends this wait with
   // -EINTR and no event, so wait again rather than hand the process an empty event.
   while (pbl_msgq_get(prv_get_context()->to_process_event_queue, event, PBL_FOREVER) != 0) {
@@ -694,17 +715,17 @@ DEFINE_SYSCALL(void, sys_get_pebble_event, PebbleEvent *event) {
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(AppLaunchReason, sys_process_get_launch_reason, void) {
+PBL_SYSCALL(AppLaunchReason, sys_process_get_launch_reason) {
   return prv_get_context()->launch_reason;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(ButtonId, sys_process_get_launch_button, void) {
+PBL_SYSCALL(ButtonId, sys_process_get_launch_button) {
   return prv_get_context()->launch_button;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(uint32_t, sys_process_get_launch_args, void) {
+PBL_SYSCALL(uint32_t, sys_process_get_launch_args) {
   const AppLaunchReason reason = sys_process_get_launch_reason();
   if ((reason != APP_LAUNCH_TIMELINE_ACTION) && (reason != APP_LAUNCH_PEEK_WIDGET)) {
     return 0;
@@ -714,7 +735,7 @@ DEFINE_SYSCALL(uint32_t, sys_process_get_launch_args, void) {
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(AppQuickLaunchAction, sys_process_get_quick_launch_action, void) {
+PBL_SYSCALL(AppQuickLaunchAction, sys_process_get_quick_launch_action) {
   if (sys_process_get_launch_reason() != APP_LAUNCH_QUICK_LAUNCH) {
     return APP_QUICK_LAUNCH_ACTION_NONE;
   }
@@ -722,12 +743,12 @@ DEFINE_SYSCALL(AppQuickLaunchAction, sys_process_get_quick_launch_action, void) 
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(AppExitReason, sys_process_get_exit_reason, void) {
+PBL_SYSCALL(AppExitReason, sys_process_get_exit_reason) {
   return prv_get_context()->exit_reason;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(void, sys_process_set_exit_reason, AppExitReason exit_reason) {
+PBL_SYSCALL(void, sys_process_set_exit_reason, (VAL, AppExitReason, exit_reason)) {
   // Just return if exit_reason is invalid
   if (exit_reason >= NUM_EXIT_REASONS) {
     return;
@@ -736,24 +757,17 @@ DEFINE_SYSCALL(void, sys_process_set_exit_reason, AppExitReason exit_reason) {
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(void, sys_process_get_wakeup_info, WakeupInfo *info) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(info, sizeof(*info));
-  }
+PBL_SYSCALL(void, sys_process_get_wakeup_info, (OUT, WakeupInfo *, info)) {
   *info = prv_get_context()->wakeup_info;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(const PebbleProcessMd *, sys_process_manager_get_current_process_md, void) {
+PBL_SYSCALL(const PebbleProcessMd *, sys_process_manager_get_current_process_md) {
   return prv_get_context()->app_md;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, sys_process_manager_get_current_process_uuid, Uuid *uuid_out) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(uuid_out, sizeof(*uuid_out));
-  }
-
+PBL_SYSCALL(bool, sys_process_manager_get_current_process_uuid, (OUT, Uuid *, uuid_out)) {
   const PebbleProcessMd *app_md = prv_get_context()->app_md;
   if (!app_md) {
     return false;
@@ -763,12 +777,12 @@ DEFINE_SYSCALL(bool, sys_process_manager_get_current_process_uuid, Uuid *uuid_ou
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(AppInstallId, sys_process_manager_get_current_process_id, void) {
+PBL_SYSCALL(AppInstallId, sys_process_manager_get_current_process_id) {
   return prv_get_context()->install_id;
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, process_manager_compiled_with_legacy2_sdk, void) {
+PBL_SYSCALL(bool, process_manager_compiled_with_legacy2_sdk) {
   PebbleTask task = pebble_task_get_current();
   if (task != PebbleTask_App && task != PebbleTask_Worker) {
     return false;
@@ -781,7 +795,7 @@ DEFINE_SYSCALL(bool, process_manager_compiled_with_legacy2_sdk, void) {
 }
 
 // -------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, process_manager_compiled_with_legacy3_sdk, void) {
+PBL_SYSCALL(bool, process_manager_compiled_with_legacy3_sdk) {
   PebbleTask task = pebble_task_get_current();
   if (task != PebbleTask_App && task != PebbleTask_Worker) {
     return false;
@@ -793,11 +807,11 @@ DEFINE_SYSCALL(bool, process_manager_compiled_with_legacy3_sdk, void) {
   return sdk_type == ProcessAppSDKType_Legacy3x;
 }
 
-DEFINE_SYSCALL(Version, sys_get_current_process_sdk_version, void) {
+PBL_SYSCALL(Version, sys_get_current_process_sdk_version) {
   return process_metadata_get_sdk_version(sys_process_manager_get_current_process_md());
 }
 
-DEFINE_SYSCALL(PlatformType, process_manager_current_platform, void) {
+PBL_SYSCALL(PlatformType, process_manager_current_platform) {
   PebbleTask task = pebble_task_get_current();
   if (task != PebbleTask_App && task != PebbleTask_Worker) {
     return PBL_PLATFORM_TYPE_CURRENT;

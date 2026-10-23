@@ -12,7 +12,6 @@
 #include <flash_region/flash_region.h>
 #include <kernel/pbl_malloc.h>
 #include <process_management/pebble_process_md.h>
-#include <system/passert.h>
 
 static NumberWindow number_window;
 
@@ -45,7 +44,7 @@ static void handle_init(void) {
                      (NumberWindowCallbacks){
                        .selected = (NumberWindowCallback)do_timed_read,
                      },
-                     NULL);
+                     nullptr);
   number_window_set_min(&number_window, 1000);
   number_window_set_max(&number_window, 1000000);
   number_window_set_step_size(&number_window, 1000);

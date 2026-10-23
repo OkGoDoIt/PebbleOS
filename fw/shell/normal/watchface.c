@@ -6,6 +6,7 @@
 #include <pbl/services/audio_companion.h>
 #endif
 
+#include <pbl/kernel/fatal.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/compositor/compositor_transitions.h>
 #include <pbl/services/notifications/do_not_disturb.h>
@@ -25,7 +26,6 @@
 #include <process_management/app_manager.h>
 #include <process_management/pebble_process_md.h>
 #include <shell/prefs.h>
-#include <system/passert.h>
 
 #define QUICK_LAUNCH_HOLD_MS (400)
 #define BIT_SET              (1)
@@ -37,7 +37,7 @@
 
 static ClickManager s_click_manager;
 static uint8_t s_buttons_pressed = BIT_CLEAR;
-static AppTimer *s_combo_back_hold_timer = NULL;
+static AppTimer *s_combo_back_hold_timer = nullptr;
 static uint8_t s_active_combo_buttons = BIT_CLEAR;
 
 static void prv_launch_quick_launch_app(AppInstallId app_id, ButtonId button,
@@ -84,12 +84,12 @@ static AppInstallId prv_combo_get_app(uint8_t combo_buttons) {
 }
 
 static bool prv_is_any_combo_active(void) {
-  return (s_combo_back_hold_timer != NULL) || prv_is_combo_pressed(COMBO_BACK_UP_BUTTONS) ||
+  return (s_combo_back_hold_timer != nullptr) || prv_is_combo_pressed(COMBO_BACK_UP_BUTTONS) ||
          prv_is_combo_pressed(COMBO_UP_DOWN_BUTTONS);
 }
 
 static void prv_combo_back_timer_callback(void *data) {
-  s_combo_back_hold_timer = NULL;
+  s_combo_back_hold_timer = nullptr;
   if (!prv_is_combo_pressed(s_active_combo_buttons)) {
     s_active_combo_buttons = BIT_CLEAR;
     return;
@@ -122,7 +122,7 @@ static void prv_check_combo_back_hold(void) {
   }
 
   if (combo_buttons != BIT_CLEAR) {
-    if (s_combo_back_hold_timer == NULL) {
+    if (s_combo_back_hold_timer == nullptr) {
       s_active_combo_buttons = combo_buttons;
       // Cancel individual button timers to prevent them from firing.
       // This ensures only the combo executes, not individual hold handlers.
@@ -134,12 +134,12 @@ static void prv_check_combo_back_hold(void) {
         click_recognizer_reset(&s_click_manager.recognizers[BUTTON_ID_DOWN]);
       }
       s_combo_back_hold_timer =
-          app_timer_register(QUICK_LAUNCH_HOLD_MS, prv_combo_back_timer_callback, NULL);
+          app_timer_register(QUICK_LAUNCH_HOLD_MS, prv_combo_back_timer_callback, nullptr);
     }
   } else {
-    if (s_combo_back_hold_timer != NULL) {
+    if (s_combo_back_hold_timer != nullptr) {
       app_timer_cancel(s_combo_back_hold_timer);
-      s_combo_back_hold_timer = NULL;
+      s_combo_back_hold_timer = nullptr;
       s_active_combo_buttons = BIT_CLEAR;
     }
   }
@@ -152,7 +152,7 @@ static void prv_launch_timeline_app(AppInstallId app_id, ButtonId button, AppLau
   s_timeline_args.stay_in_list_view = true;
   timeline_peek_get_item_id(&s_timeline_args.pin_id);
 
-  const CompositorTransition *animation = NULL;
+  const CompositorTransition *animation = nullptr;
   // A combo gesture carries no up/down intent, so its representative button
   // must not pick the timeline direction.
   const bool is_up = (action != APP_QUICK_LAUNCH_ACTION_COMBO) && (button == BUTTON_ID_UP);
@@ -397,7 +397,7 @@ void watchface_handle_button_event(PebbleEvent *e) {
       click_recognizer_handle_button_up(&s_click_manager.recognizers[e->button.button_id]);
       break;
     default:
-      PBL_CROAK("Invalid event type: %u", e->type);
+      pbl_panic("Invalid event type: %u", e->type);
       break;
   }
 }
@@ -417,11 +417,11 @@ void watchface_launch_default(const CompositorTransition *animation) {
 }
 
 static void kernel_callback_watchface_launch(void *data) {
-  watchface_launch_default(NULL);
+  watchface_launch_default(nullptr);
 }
 
 void command_watch(void) {
-  launcher_task_add_callback(kernel_callback_watchface_launch, NULL);
+  launcher_task_add_callback(kernel_callback_watchface_launch, nullptr);
 }
 
 void watchface_start_low_power(void) {

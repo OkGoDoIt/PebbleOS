@@ -24,25 +24,6 @@
 #include <fake_pbl_malloc.h>
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
-#include <stubs_alerts.h>
-#include <stubs_analytics.h>
-#include <stubs_app_state.h>
-#include <stubs_dialog.h>
-#include <stubs_event_service_client.h>
-#include <stubs_expandable_dialog.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_logging.h>
-#include <stubs_modal_manager.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_simple_dialog.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
-#include <stubs_vibe_score_info.h>
-#include <stubs_vibes.h>
-#include <stubs_window_manager.h>
 
 #define PREF_KEY_DND_MANUALLY_ENABLED "dndManuallyEnabled"
 
@@ -273,9 +254,10 @@ void test_do_not_disturb__is_active(void) {
 
   do_not_disturb_set_manually_enabled(false);
   cl_assert(do_not_disturb_is_active() == false);
-  do_not_disturb_toggle_scheduled(WeekdaySchedule); // see PBL-22011
+  // Disabling manual DND overrides the active schedule; toggling it off and on clears that
+  do_not_disturb_toggle_scheduled(WeekdaySchedule);
   cl_assert(do_not_disturb_is_active() == false);
-  do_not_disturb_toggle_scheduled(WeekdaySchedule); // see PBL-22011
+  do_not_disturb_toggle_scheduled(WeekdaySchedule);
   cl_assert(do_not_disturb_is_active() == true);
   cl_assert(do_not_disturb_is_manually_enabled() == false);
   cl_assert(do_not_disturb_is_schedule_enabled(WeekdaySchedule) == true);

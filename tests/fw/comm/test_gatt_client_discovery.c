@@ -5,7 +5,6 @@
 
 #include <clar.h>
 #include <comm/ble/gap_le_connection.h>
-#include <comm/ble/gap_le_task.h>
 #include <comm/ble/gatt_client_discovery.h>
 #include <comm/ble/gatt_service_changed.h>
 #include <kernel/events.h>
@@ -22,14 +21,6 @@
 
 // Stubs
 ///////////////////////////////////////////////////////////
-
-#include <stubs_bt_lock.h>
-#include <stubs_gatt_client_subscriptions.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_regular_timer.h>
 
 void core_dump_reset(bool is_forced) {
 }
@@ -64,7 +55,7 @@ static struct pbl_bt_device_internal prv_dummy_device(uint8_t octet) {
 
 static struct pbl_bt_device_internal prv_connected_dummy_device(uint8_t octet) {
   struct pbl_bt_device_internal device = prv_dummy_device(octet);
-  gap_le_connection_add(&device, NULL, true /* local_is_master */, TIMER_INVALID_ID);
+  gap_le_connection_add(&device, nullptr, true /* local_is_master */, TIMER_INVALID_ID);
   GAPLEConnection *connection = gap_le_connection_by_device(&device);
   connection->gatt_connection_id = TEST_GATT_CONNECTION_ID;
   return device;

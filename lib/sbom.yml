@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Third-party code kept in the library tree, see docs/development/sbom.md.
+# Third-party code kept in the library tree, see docs/third_party/sbom.md.
 
 components:
   - name: egnite-mktime
-    path: c/time/mktime.c
+    paths: [util/mktime.c, util/mktime.LICENSE]
     supplier: egnite Software GmbH
     description: mktime() from Nut/OS
     license: BSD-3-Clause

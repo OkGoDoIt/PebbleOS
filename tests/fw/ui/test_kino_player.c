@@ -16,28 +16,13 @@
 
 // Stubs
 ////////////////////////////////////
-#include <stubs_app_state.h>
-#include <stubs_applib_resource.h>
-#include <stubs_compiled_with_legacy2_sdk.h>
-#include <stubs_gpath.h>
-#include <stubs_graphics.h>
-#include <stubs_graphics_context.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_resources.h>
-#include <stubs_ui_window.h>
-#include <stubs_unobstructed_area.h>
 
 void graphics_context_move_draw_box(GContext *ctx, GPoint offset) {
 }
 typedef uint16_t ResourceId;
 const uint8_t *resource_get_builtin_bytes(ResAppNum app_num, uint32_t resource_id,
                                           uint32_t *num_bytes_out) {
-  return NULL;
+  return nullptr;
 }
 
 typedef struct TestReelData {
@@ -66,9 +51,9 @@ static uint32_t prv_duration_getter(KinoReel *reel) {
 }
 
 static struct TestReelData *test_reel_data;
-static KinoReelImpl *test_reel_impl = NULL;
-static KinoReel *test_reel = NULL;
-static KinoPlayer *test_player = NULL;
+static KinoReelImpl *test_reel_impl = nullptr;
+static KinoReel *test_reel = nullptr;
+static KinoPlayer *test_player = nullptr;
 
 // Setup
 void test_kino_player__initialize(void) {
@@ -86,7 +71,7 @@ void test_kino_player__initialize(void) {
   };
 
   test_reel = kino_reel_custom_create(test_reel_impl, test_reel_data);
-  cl_assert(test_reel != NULL);
+  cl_assert(test_reel != nullptr);
 
   test_player = malloc(sizeof(KinoPlayer));
   memset(test_player, 0, sizeof(KinoPlayer));
@@ -377,15 +362,15 @@ void test_kino_player__set_reel_calls_destructor(void) {
   cl_assert_equal_p(test_player->reel, test_reel);
   cl_assert_equal_i(s_num_destructor_calls, 0);
 
-  kino_player_set_reel(test_player, NULL, true);
-  cl_assert_equal_p(test_player->reel, NULL);
+  kino_player_set_reel(test_player, nullptr, true);
+  cl_assert_equal_p(test_player->reel, nullptr);
   cl_assert_equal_i(s_num_destructor_calls, 1);
 
-  kino_player_set_reel(test_player, NULL, true);
-  cl_assert_equal_p(test_player->reel, NULL);
+  kino_player_set_reel(test_player, nullptr, true);
+  cl_assert_equal_p(test_player->reel, nullptr);
   cl_assert_equal_i(s_num_destructor_calls, 1);
 
-  test_reel = NULL;
+  test_reel = nullptr;
 }
 
 void test_kino_player__set_reel_does_not_call_destructor(void) {
@@ -395,7 +380,7 @@ void test_kino_player__set_reel_does_not_call_destructor(void) {
   cl_assert_equal_p(test_player->reel, test_reel);
   cl_assert_equal_i(s_num_destructor_calls, 0);
 
-  kino_player_set_reel(test_player, NULL, true);
-  cl_assert_equal_p(test_player->reel, NULL);
+  kino_player_set_reel(test_player, nullptr, true);
+  cl_assert_equal_p(test_player->reel, nullptr);
   cl_assert_equal_i(s_num_destructor_calls, 0);
 }

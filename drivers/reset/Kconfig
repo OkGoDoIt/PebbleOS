@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config RESET
+    bool
+    help
+      Reset controller class (pbl/drivers/reset.h), selected by the drivers
+      that provide reset lines.
+
+config RESET_SF32LB
+    bool "SiFli SF32LB RCC"
+    default y if SOC_SF32LB52
+    select RESET
+    help
+      Reset controller of the SiFli SF32LB52 HPSYS RCC.

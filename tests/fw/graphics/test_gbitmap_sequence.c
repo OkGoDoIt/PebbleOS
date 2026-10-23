@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include <pbl/util/size.h>
+#include <pbl/util/string.h>
 
 #include <applib/app_logging.h>
 #include <applib/graphics/gbitmap_sequence.h>
@@ -37,23 +38,12 @@
 
 // Stubs
 ////////////////////////////////////
-#include <stubs_app_state.h>
-#include <stubs_applib_resource.h>
-#define CUSTOM_LOG_INTERNAL
-#include <stubs_heap.h>
 #include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_resources.h>
-#include <stubs_serial.h>
-#include <stubs_ui_window.h>
 
 static int s_dispose_previous_warnings;
 
-static void log_internal(uint8_t log_level, const char *src_filename, int src_line_number,
-                         const char *fmt, va_list args) {
+void stub_log_internal(uint8_t log_level, const char *src_filename, int src_line_number,
+                       const char *fmt, va_list args) {
   if ((log_level == APP_LOG_LEVEL_WARNING) && strstr(fmt, "PREVIOUS")) {
     s_dispose_previous_warnings++;
   }
@@ -88,7 +78,6 @@ static const char *prv_get_image_name(const char *func_name, int index, const ch
 // Result:
 //   - gbitmaps matches platform decoded APNG
 void test_gbitmap_sequence__color_2bit_bouncing_ball(void) {
-#if PLATFROM_SPALDING
   uint32_t resource_id = sys_resource_load_file_as_resource(TEST_IMAGES_PATH, GET_APNG_NAME);
   cl_assert(resource_id != UINT32_MAX);
 
@@ -99,28 +88,27 @@ void test_gbitmap_sequence__color_2bit_bouncing_ball(void) {
       gbitmap_create_blank(gbitmap_sequence_get_bitmap_size(bitmap_sequence), GBitmapFormat8Bit);
   cl_assert(bitmap);
 
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(1)));
 
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(2)));
 
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(3)));
 
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(4)));
 
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(5)));
 
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(6)));
 
   // Test loop around
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(1)));
-#endif
 }
 
 // Tests APNG file with 8-bit color, 88 frames of delay 100ms each and loop = 2
@@ -128,7 +116,6 @@ void test_gbitmap_sequence__color_2bit_bouncing_ball(void) {
 // Result:
 //   - gbitmaps matches platform decoded APNG
 void test_gbitmap_sequence__color_8bit_fight(void) {
-#ifdef CONFIG_BOARD_QEMU_GABBRO
   bool status = false;
   uint32_t resource_id = sys_resource_load_file_as_resource(TEST_IMAGES_PATH, GET_APNG_NAME);
   cl_assert(resource_id != UINT32_MAX);
@@ -164,7 +151,6 @@ void test_gbitmap_sequence__color_8bit_fight(void) {
   status = gbitmap_sequence_update_bitmap_by_elapsed(bitmap_sequence, bitmap, 12345 * 100);
   cl_assert_equal_b(status, true);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(88)));
-#endif
 }
 
 // Tests APNG file with 8-bit color, 5 frames and loop = 1
@@ -173,7 +159,6 @@ void test_gbitmap_sequence__color_8bit_fight(void) {
 // Result:
 //   - gbitmaps matches platform decoded APNG
 void test_gbitmap_sequence__color_8bit_coin(void) {
-#ifdef CONFIG_BOARD_QEMU_GABBRO
   uint32_t resource_id = sys_resource_load_file_as_resource(TEST_IMAGES_PATH, GET_APNG_NAME);
   cl_assert(resource_id != UINT32_MAX);
 
@@ -199,7 +184,6 @@ void test_gbitmap_sequence__color_8bit_coin(void) {
   // Since loop only equals 1, make sure that huge elapsed time leaves us at final frame
   gbitmap_sequence_update_bitmap_by_elapsed(bitmap_sequence, bitmap, 12345 * 1000);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(5)));
-#endif
 }
 
 // Tests APNG file with 8-bit color, 5 frames and loop = 1
@@ -208,7 +192,6 @@ void test_gbitmap_sequence__color_8bit_coin(void) {
 // Result:
 //   - gbitmaps matches platform decoded APNG
 void test_gbitmap_sequence__color_8bit_coin_round(void) {
-#ifdef CONFIG_BOARD_QEMU_GABBRO
   uint32_t resource_id = sys_resource_load_file_as_resource(
       TEST_IMAGES_PATH, "test_gbitmap_sequence__color_8bit_coin.apng");
   cl_assert(resource_id != UINT32_MAX);
@@ -216,7 +199,7 @@ void test_gbitmap_sequence__color_8bit_coin_round(void) {
   GBitmapSequence *bitmap_sequence = gbitmap_sequence_create_with_resource(resource_id);
   cl_assert(bitmap_sequence);
 
-  GBitmap *bitmap = gbitmap_create_blank(GSize(180, 180), GBitmapFormat8BitCircular);
+  GBitmap *bitmap = gbitmap_create_blank(GSize(DISP_COLS, DISP_ROWS), GBitmapFormat8BitCircular);
   cl_assert(bitmap);
 
   // Since frame 1 has 0 delay, it renders then immediately we render frame 2
@@ -234,7 +217,6 @@ void test_gbitmap_sequence__color_8bit_coin_round(void) {
   // Since loop only equals 1, make sure that huge elapsed time leaves us at final frame
   gbitmap_sequence_update_bitmap_by_elapsed(bitmap_sequence, bitmap, 12345 * 1000);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(5)));
-#endif
 }
 
 // Tests APNG file with 8-bit color, 5 frames and loop infinite, size 64x64
@@ -242,11 +224,10 @@ void test_gbitmap_sequence__color_8bit_coin_round(void) {
 // Result:
 //   - gbitmaps matches platform decoded APNG
 void test_gbitmap_sequence__color_8bit_bounds(void) {
-#ifdef CONFIG_BOARD_QEMU_GABBRO
   uint32_t resource_id = sys_resource_load_file_as_resource(TEST_IMAGES_PATH, GET_APNG_NAME);
   cl_assert(resource_id != UINT32_MAX);
 
-  GRect orig_bounds = GRect(0, 0, 180, 180);
+  GRect orig_bounds = GRect(0, 0, DISP_COLS, DISP_ROWS);
   int xshift = 71;
   int yshift = 39;
   GRect shift_bounds =
@@ -260,38 +241,36 @@ void test_gbitmap_sequence__color_8bit_bounds(void) {
 
   // Shift the bounds when updating
   gbitmap_set_bounds(bitmap, shift_bounds);
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   // set the original bounds to do whole-image comparison
   gbitmap_set_bounds(bitmap, orig_bounds);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(1)));
 
   gbitmap_set_bounds(bitmap, shift_bounds);
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   gbitmap_set_bounds(bitmap, orig_bounds);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(2)));
 
   gbitmap_set_bounds(bitmap, shift_bounds);
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   gbitmap_set_bounds(bitmap, orig_bounds);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(3)));
 
   gbitmap_set_bounds(bitmap, shift_bounds);
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   gbitmap_set_bounds(bitmap, orig_bounds);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(4)));
 
   gbitmap_set_bounds(bitmap, shift_bounds);
-  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   gbitmap_set_bounds(bitmap, orig_bounds);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(5)));
-#endif
 }
 
 // Tests APNG file with 8-bit color, originally broke the updated upng+tinflate code
 // Result:
 //   - gbitmaps matches platform decoded APNG
 void test_gbitmap_sequence__color_8bit_yoshi(void) {
-#ifdef CONFIG_BOARD_QEMU_GABBRO
   bool status = false;
   uint32_t resource_id = sys_resource_load_file_as_resource(TEST_IMAGES_PATH, GET_APNG_NAME);
   cl_assert(resource_id != UINT32_MAX);
@@ -299,18 +278,17 @@ void test_gbitmap_sequence__color_8bit_yoshi(void) {
   GBitmap *bitmap =
       gbitmap_create_blank(gbitmap_sequence_get_bitmap_size(bitmap_sequence), GBitmapFormat8Bit);
 
-  status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_assert_equal_b(status, true);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(1)));
 
-  status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_assert_equal_b(status, true);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(2)));
 
-  status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+  status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
   cl_assert_equal_b(status, true);
   cl_check(gbitmap_pbi_eq(bitmap, GET_PBI_NAME(3)));
-#endif
 }
 
 void test_gbitmap_sequence__1bit_to_1bit_notification(void) {
@@ -327,7 +305,7 @@ void test_gbitmap_sequence__1bit_to_1bit_notification(void) {
   for (int i = 0; i < ARRAY_LENGTH(check_frames); ++i) {
     // Advance to the next frame we're interested in.
     for (; current_frame < check_frames[i]; ++current_frame) {
-      bool status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL);
+      bool status = gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr);
       cl_assert_equal_b(status, true);
     }
 
@@ -383,13 +361,13 @@ void test_gbitmap_sequence__dispose_op_previous(void) {
 
   for (int loop = 0; loop < 2; loop++) {
     for (int i = 0; i < ARRAY_LENGTH(frames); i++) {
-      cl_assert(gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL));
+      cl_assert(gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr));
       prv_check_pixels(bitmap, frames[i]);
     }
   }
 
   cl_assert(gbitmap_sequence_restart(bitmap_sequence));
-  cl_assert(gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, NULL));
+  cl_assert(gbitmap_sequence_update_bitmap_next_frame(bitmap_sequence, bitmap, nullptr));
   prv_check_pixels(bitmap, frames[0]);
 
   cl_assert_equal_i(s_dispose_previous_warnings, 1);

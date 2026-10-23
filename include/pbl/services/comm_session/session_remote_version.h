@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/kernel/compiler.h>
@@ -80,6 +79,10 @@ typedef struct PBL_PACKED {
       bool unknown_attributes_support : 1;
       /** Notification window reports the notification it displays. */
       bool notification_window_state_support : 1;
+      /** Reserved. */
+      bool reserved_bit_27 : 1;
+      /** Multiple packs, phone management, and active-language selection. */
+      bool multiple_language_packs_support : 1;
     };
     /** All flags as a bitset. */
     uint64_t flags;

@@ -9,14 +9,16 @@
 #include "recognizer_private.h"
 
 #include <stddef.h>
+#include <string.h>
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/util/list.h>
 
 #include <applib/applib_malloc.auto.h>
-#include <system/passert.h>
 
-_Static_assert(RECOGNIZER_INSTANCE_SIZE >= sizeof(Recognizer),
-               "RECOGNIZER_INSTANCE_SIZE too small for Recognizer");
+static_assert(RECOGNIZER_INSTANCE_SIZE >= sizeof(Recognizer),
+              "RECOGNIZER_INSTANCE_SIZE too small for Recognizer");
 
 static void prv_set_state(Recognizer *recognizer, RecognizerState new_state) {
   switch (recognizer->state) {
@@ -45,7 +47,7 @@ static void prv_set_state(Recognizer *recognizer, RecognizerState new_state) {
       break;
 
     default:
-      WTF;
+      pbl_panic();
   }
   recognizer->state = new_state;
 }
@@ -81,7 +83,7 @@ static void prv_send_subscriber_event(Recognizer *recognizer) {
       break;
 
     default:
-      WTF;
+      pbl_panic();
   }
   recognizer->subscriber.event(recognizer, event);
 }
@@ -89,9 +91,8 @@ static void prv_send_subscriber_event(Recognizer *recognizer) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation interface
 
-// TODO: we may need to make wrap these calls for the SDK access so that the asserts on invalid
-// data/transitions are not triggered. I'd like to preserve them for internal use to quickly catch
-// errors (https://pebbletechnology.atlassian.net/browse/PBL-31359)
+// TODO: wrap these for SDK access so invalid data/transitions don't trigger the asserts, which
+// are kept to catch internal errors
 
 static void prv_init_recognizer(Recognizer *recognizer, const RecognizerImpl *impl,
                                 const void *data, size_t data_size, RecognizerEventCb event_cb,
@@ -117,14 +118,14 @@ Recognizer *recognizer_create_with_data(const RecognizerImpl *impl, const void *
 
   // This might be passed from the public interface, so just return NULL
   if (!event_cb) {
-    return NULL;
+    return nullptr;
   }
 
   // TODO: Use applib_malloc_size to get the size of Recognizer when we have an implementation for
   // 4.x and an API for recognizers
   Recognizer *recognizer = applib_malloc(sizeof(Recognizer) + data_size);
   if (!recognizer) {
-    return NULL;
+    return nullptr;
   }
   prv_init_recognizer(recognizer, impl, data, data_size, event_cb, user_data);
 
@@ -140,7 +141,7 @@ Recognizer *recognizer_init_static_with_data(void *storage, const RecognizerImpl
   PBL_ASSERTN(data && (data_size > 0));
 
   if (!event_cb) {
-    return NULL;
+    return nullptr;
   }
 
   Recognizer *recognizer = storage;
@@ -154,7 +155,7 @@ void *recognizer_get_impl_data(Recognizer *recognizer, const RecognizerImpl *imp
   // NULL-safe: this is reached from SDK-exported typed getters with app-supplied pointers, which
   // must reject bad input rather than assert or crash.
   if (!recognizer || (recognizer->impl != impl)) {
-    return NULL;
+    return nullptr;
   }
   return recognizer->impl_data;
 }
@@ -268,7 +269,7 @@ void recognizer_set_fail_after(Recognizer *recognizer, Recognizer *fail_after) {
 
 Recognizer *recognizer_get_fail_after(const Recognizer *recognizer) {
   if (!recognizer) {
-    return NULL;
+    return nullptr;
   }
   return recognizer->fail_after;
 }
@@ -314,7 +315,7 @@ void recognizer_set_user_data(Recognizer *recognizer, void *data) {
 
 void *recognizer_get_user_data(const Recognizer *recognizer) {
   if (!recognizer) {
-    return NULL;
+    return nullptr;
   }
   return recognizer->subscriber.data;
 }
@@ -371,7 +372,7 @@ void recognizer_remove_from_list(Recognizer *recognizer, RecognizerList *list) {
   }
 
   recognizer->is_owned = false;
-  list_remove(&recognizer->node, &list->node, NULL);
+  list_remove(&recognizer->node, &list->node, nullptr);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

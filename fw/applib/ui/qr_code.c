@@ -5,10 +5,11 @@
 
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
+
 #include <applib/applib_malloc.auto.h>
 #include <applib/graphics/graphics.h>
 #include <qrcodegen_ext.h>
-#include <system/passert.h>
 
 static inline enum qrcodegen_Ecc prv_ecc_to_qrcodegen(QRCodeECC ecc) {
   switch (ecc) {
@@ -25,7 +26,8 @@ static inline enum qrcodegen_Ecc prv_ecc_to_qrcodegen(QRCodeECC ecc) {
   }
 }
 
-static void prv_qr_code_update_proc(QRCode *qr_code, GContext *ctx) {
+static void prv_qr_code_update_proc(Layer *layer, GContext *ctx) {
+  QRCode *qr_code = (QRCode *)layer;
   uint8_t *qr_code_buf;
   uint8_t *tmp_buf;
   enum qrcodegen_Ecc ecc;
@@ -39,8 +41,8 @@ static void prv_qr_code_update_proc(QRCode *qr_code, GContext *ctx) {
   GColor old_fill_color;
   bool ret;
 
-  if ((qr_code->data == NULL) || (qr_code->data_len == 0U) || (qr_code->layer.bounds.size.w <= 0) ||
-      (qr_code->layer.bounds.size.h <= 0)) {
+  if ((qr_code->data == nullptr) || (qr_code->data_len == 0U) ||
+      (qr_code->layer.bounds.size.w <= 0) || (qr_code->layer.bounds.size.h <= 0)) {
     return;
   }
 
@@ -53,12 +55,12 @@ static void prv_qr_code_update_proc(QRCode *qr_code, GContext *ctx) {
   buf_len = qrcodegen_BUFFER_LEN_FOR_VERSION(version);
 
   qr_code_buf = applib_malloc(buf_len);
-  if (qr_code_buf == NULL) {
+  if (qr_code_buf == nullptr) {
     return;
   }
 
   tmp_buf = applib_malloc(buf_len);
-  if (tmp_buf == NULL) {
+  if (tmp_buf == nullptr) {
     applib_free(qr_code_buf);
     return;
   }
@@ -126,7 +128,7 @@ void qr_code_init_with_parameters(QRCode *qr_code, const GRect *frame, const voi
   *qr_code = (QRCode){};
   qr_code->layer.frame = *frame;
   qr_code->layer.bounds = (GRect){{0, 0}, frame->size};
-  qr_code->layer.update_proc = (LayerUpdateProc)prv_qr_code_update_proc;
+  qr_code->layer.update_proc = prv_qr_code_update_proc;
   qr_code->data = data;
   qr_code->data_len = data_len;
   qr_code->ecc = ecc;
@@ -138,7 +140,8 @@ void qr_code_init_with_parameters(QRCode *qr_code, const GRect *frame, const voi
 }
 
 void qr_code_init(QRCode *qr_code, const GRect *frame) {
-  qr_code_init_with_parameters(qr_code, frame, NULL, 0, QRCodeECCMedium, GColorBlack, GColorWhite);
+  qr_code_init_with_parameters(qr_code, frame, nullptr, 0, QRCodeECCMedium, GColorBlack,
+                               GColorWhite);
 }
 
 QRCode *qr_code_create(GRect frame) {

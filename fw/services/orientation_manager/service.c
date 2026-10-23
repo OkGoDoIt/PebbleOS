@@ -5,22 +5,26 @@
 #include <pbl/drivers/accel.h>
 #include <pbl/drivers/button.h>
 #include <pbl/drivers/display/display.h>
-#include <pbl/drivers/imu/mmc5603nj/mmc5603nj.h>
+#include <pbl/drivers/mag.h>
+#include <pbl/services/compositor/compositor_private.h>
 #include <pbl/services/orientation_manager.h>
 
 #include <kernel/events.h>
 #include <process_management/process_manager.h>
 #include <shell/prefs.h>
-#include <system/passert.h>
 #ifdef CONFIG_SERVICE_TOUCH
 #include <pbl/services/touch/touch.h>
 #endif
 
 void prv_change_orientation(bool rotated) {
   display_set_rotated(rotated);
+  // The panel now shows the frame the other way up, so the next app frame must be sent whole
+  compositor_app_framebuffer_mirror_invalidate();
   button_set_rotated(rotated);
-  accel_set_rotated(rotated);
-  mag_set_rotated(rotated);
+  (void)pbl_accel_set_rotated(ACCEL, rotated);
+#ifdef CONFIG_MAG
+  (void)pbl_mag_set_rotated(MAG, rotated);
+#endif
 #ifdef CONFIG_SERVICE_TOUCH
   touch_set_rotated(rotated);
 #endif

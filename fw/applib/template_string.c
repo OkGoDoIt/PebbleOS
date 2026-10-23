@@ -7,7 +7,6 @@
 
 #include <ctype.h>
 #include <limits.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +14,7 @@
 #include <time.h>
 
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/util/math.h>
 #include <pbl/util/size.h>
@@ -22,7 +22,6 @@
 #include <pbl/util/units.h>
 
 #include <syscall/syscall.h>
-#include <system/passert.h>
 
 #define MAX_FILTER_NAME_LENGTH 16
 
@@ -117,13 +116,12 @@ PBL_T_STATIC intmax_t prv_template_predicate_time(TemplateStringState *state) {
     state->position = endpos;
     int multiplier = 1;
     switch (*state->position) {
-      // NOTE: This number of seconds is a hack! See PBL-39903
+      // Years and months are approximated as 365 and 30 days.
 #if SUPPORT_YEAR
       case 'y':
         multiplier = 365 * PBL_SEC_PER_DAY;
         break;
 #endif
-        // NOTE: This number of seconds is a hack! See PBL-39903
 #if SUPPORT_MONTH
       case 'm':
         multiplier = 30 * PBL_SEC_PER_DAY;
@@ -164,7 +162,7 @@ PBL_T_STATIC bool prv_template_predicate_match(TemplateStringState *state, Predi
   } else if (*state->position == '>') {
     *cond = PredicateCondition_G;
   } else {
-    WTF;
+    pbl_panic();
   }
   state->position++;
 
@@ -191,7 +189,7 @@ PBL_T_STATIC bool prv_template_predicate_match(TemplateStringState *state, Predi
     case PredicateCondition_LE:
       return (state->filter_state <= *value);
     default:
-      WTF;
+      pbl_panic();
   }
 }
 
@@ -277,7 +275,7 @@ static void prv_append_string_i18n(TemplateStringState *state, const char *str) 
 }
 
 static void prv_append_number(TemplateStringState *state, const char *fmt, int value) {
-  size_t len = snprintf(NULL, 0, fmt, value);
+  size_t len = snprintf(nullptr, 0, fmt, value);
   if (state->output_remaining < len) {
     len = state->output_remaining;
   }
@@ -486,21 +484,19 @@ PBL_T_STATIC const char *prv_template_format_specifier(TemplateStringState *stat
   // conversion specifiers
   switch (*input) {
 #if SUPPORT_YEAR
+    // Years and months are approximated as 365 and 30 days.
     case 'y': // year
-      // NOTE: This number of seconds to divide by is a hack! See PBL-39903
       prv_do_conversion(state, value, 365 * PBL_SEC_PER_DAY, 100, s_year_strings, add_units,
                         zero_pad, modulus);
       break;
 #endif
 #if SUPPORT_MONTH
     case 'm': // month
-      // NOTE: This number of seconds to divide by is a hack! See PBL-39903
       prv_do_conversion(state, value, 30 * PBL_SEC_PER_DAY, 12, s_month_strings, add_units,
                         zero_pad, modulus);
       break;
 #endif
     case 'd': // day
-              // NOTE: This number of modulus is a hack! See PBL-39903
 #if SUPPORT_MONTH
       prv_do_conversion(state, value, PBL_SEC_PER_DAY, 30, s_day_strings, add_units, zero_pad,
                         modulus);
@@ -572,7 +568,7 @@ static bool prv_format_predicate(TemplateStringState *state, bool previously_mat
   }
   // Predicate matcher will only leave on :,) or error, so this should never trip.
   if (!prv_predicate_valid_splitter(*state->position)) {
-    WTF;
+    pbl_panic();
   }
 
   int wait_time;
@@ -849,7 +845,7 @@ bool template_string_evaluate(const char *input_template_string, char *output, s
   // We have no output space, so don't bother trying to write anything.
   // By unifying these states, we can just check `output_remaining` against zero for writing.
   if (!state.output || !state.output_remaining) {
-    state.output = NULL;
+    state.output = nullptr;
     state.output_remaining = 0;
   } else {
     // Subtract 1 for the null terminator.

@@ -24,11 +24,6 @@
 #include <applib/data_logging.h>
 #include <clar.h>
 #include <fake_rtc.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_serial.h>
 
 #define WRITE_TO_FILE 0
 
@@ -38,7 +33,7 @@ extern uint32_t prv_hr_quality_int(HRMQuality quality);
 
 // ---------------------------------------------------------------------------------------------
 // We start time out at 5pm on Jan 1, 2015 for all of these tests
-static const struct tm s_init_time_tm = {
+static const struct pbl_tm s_init_time_tm = {
   // Thursday, Jan 1, 2015, 5:pm
   .tm_hour = 17,
   .tm_mday = 1,
@@ -83,7 +78,7 @@ DataLoggingSession *dls_create(uint32_t tag, DataLoggingItemType item_type, uint
     cl_assert_equal_i(item_size, sizeof(TestPLDLSRecord));
     return (DataLoggingSession *)TEST_PL_DLS_SESSION_ID;
   } else {
-    return NULL;
+    return nullptr;
   }
 }
 
@@ -118,12 +113,12 @@ void version_get_major_minor_patch(unsigned int *major, unsigned int *minor,
 // The transport callback we pass to protobuf_log_create that captures the encoded message
 static uint8_t *s_saved_encoded_msg;
 static bool prv_protobuf_log_transport(uint8_t *buffer, size_t buf_size) {
-  if (s_saved_encoded_msg != NULL) {
+  if (s_saved_encoded_msg != nullptr) {
     free(s_saved_encoded_msg);
-    s_saved_encoded_msg = NULL;
+    s_saved_encoded_msg = nullptr;
   }
   s_saved_encoded_msg = malloc(buf_size);
-  cl_assert(s_saved_encoded_msg != NULL);
+  cl_assert(s_saved_encoded_msg != nullptr);
   memcpy(s_saved_encoded_msg, buffer, buf_size);
   return true;
 }
@@ -365,7 +360,7 @@ static ProtobufLogRef prv_log_create_measurement(TestPLParsedMsg *input, bool us
   // Create a session
   ProtobufLogTransportCB transport_cb = prv_protobuf_log_transport;
   if (use_data_logging) {
-    transport_cb = NULL;
+    transport_cb = nullptr;
   }
 
   ProtobufLogConfig log_config = {
@@ -377,7 +372,7 @@ static ProtobufLogRef prv_log_create_measurement(TestPLParsedMsg *input, bool us
   };
 
   ProtobufLogRef session_ref = protobuf_log_create(&log_config, transport_cb, 0);
-  cl_assert(session_ref != NULL);
+  cl_assert(session_ref != nullptr);
   return session_ref;
 }
 
@@ -442,8 +437,8 @@ static void prv_test_decode_payload(TestPLParsedMsg *input, bool use_data_loggin
 
 // ---------------------------------------------------------------------------------------------
 void test_protobuf_log__initialize(void) {
-  struct tm time_tm = s_init_time_tm;
-  time_t utc_sec = mktime(&time_tm);
+  struct pbl_tm time_tm = s_init_time_tm;
+  time_t utc_sec = pbl_mktime(&time_tm);
   fake_rtc_init(100 /*initial_ticks*/, utc_sec);
 
   TimezoneInfo tz_info = {
@@ -453,7 +448,7 @@ void test_protobuf_log__initialize(void) {
   time_util_update_timezone(&tz_info);
 
   s_dls_session_created = false;
-  s_saved_encoded_msg = NULL;
+  s_saved_encoded_msg = nullptr;
 
   protobuf_log_init();
 }
@@ -575,7 +570,7 @@ void test_protobuf_log__measurements_multiple(void) {
   };
 
   ProtobufLogRef session_ref = protobuf_log_create(&log_config, prv_protobuf_log_transport, 0);
-  cl_assert(session_ref != NULL);
+  cl_assert(session_ref != nullptr);
 
   // ------------------
   // Encode the first set of measurements
@@ -659,7 +654,7 @@ void test_protobuf_log__measurements_auto_flush(void) {
   };
 
   ProtobufLogRef session_ref = protobuf_log_create(&log_config, prv_protobuf_log_transport, 110);
-  cl_assert(session_ref != NULL);
+  cl_assert(session_ref != nullptr);
 
   // ------------------
   // Keep adding samples, relying on auto-flush
@@ -671,7 +666,7 @@ void test_protobuf_log__measurements_auto_flush(void) {
     success = protobuf_log_session_add_measurements(
         session_ref, rtc_get_time(), num_values_per_sample, &values[i * num_values_per_sample]);
     cl_assert(success);
-    if (s_saved_encoded_msg == NULL) {
+    if (s_saved_encoded_msg == nullptr) {
       LOG("No message available yet...");
     } else {
       msg = prv_parse_encoded_mset_payload(s_saved_encoded_msg);
@@ -679,7 +674,7 @@ void test_protobuf_log__measurements_auto_flush(void) {
                         msg->msrmt.num_values * sizeof(uint32_t));
       num_samples_encoded += msg->msrmt.num_samples;
       free(s_saved_encoded_msg);
-      s_saved_encoded_msg = NULL;
+      s_saved_encoded_msg = nullptr;
     }
   }
 
@@ -688,7 +683,7 @@ void test_protobuf_log__measurements_auto_flush(void) {
   cl_assert(success);
 
   if (num_samples_encoded < num_samples) {
-    if (s_saved_encoded_msg == NULL) {
+    if (s_saved_encoded_msg == nullptr) {
       LOG("No message available yet...");
     } else {
       msg = prv_parse_encoded_mset_payload(s_saved_encoded_msg);
@@ -756,7 +751,7 @@ void test_protobuf_log__hr_samples(void) {
   // Create a session
   ProtobufLogTransportCB transport_cb = prv_protobuf_log_transport;
   ProtobufLogRef session_ref = protobuf_log_hr_create(transport_cb);
-  cl_assert(session_ref != NULL);
+  cl_assert(session_ref != nullptr);
 
   const uint32_t values_per_samples = input.msrmt.num_types;
   bool success;
@@ -812,7 +807,7 @@ void test_protobuf_log__events_basic(void) {
 
   ProtobufLogTransportCB transport_cb = prv_protobuf_log_transport;
   ProtobufLogRef session_ref = protobuf_log_create(&log_config, transport_cb, 0);
-  cl_assert(session_ref != NULL);
+  cl_assert(session_ref != nullptr);
 
   bool success;
   for (int i = 0; i < ARRAY_LENGTH(events); i++) {

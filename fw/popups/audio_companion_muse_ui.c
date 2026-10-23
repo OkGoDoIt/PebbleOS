@@ -18,7 +18,6 @@
 #include "pbl/services/i18n/i18n.h"
 #include "resource/resource_ids.auto.h"
 #include "services/audio_companion/muse_setup_relay.h"
-#include "system/passert.h"
 
 #include <string.h>
 

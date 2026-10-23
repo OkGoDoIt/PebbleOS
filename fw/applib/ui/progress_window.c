@@ -13,7 +13,6 @@
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/window_private.h>
 #include <applib/ui/window_stack.h>
-#include <system/passert.h>
 
 #define SCROLL_OUT_MS         250
 #define BAR_HEIGHT            PROGRESS_SUGGESTED_HEIGHT
@@ -109,7 +108,7 @@ static void prv_schedule_progress_success_animation(ProgressWindow *data) {
                          },
                          data);
 
-  Animation *animation = animation_sequence_create(animation1, animation2, NULL);
+  Animation *animation = animation_sequence_create(animation1, animation2, nullptr);
 
   data->result_animation = animation;
   animation_schedule(animation);

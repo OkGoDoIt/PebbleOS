@@ -12,26 +12,6 @@
 // Stubs
 /////////////////////
 
-#include <stubs_alerts_preferences.h>
-#include <stubs_analytics.h>
-#include <stubs_attribute.h>
-#include <stubs_clock.h>
-#include <stubs_graphics.h>
-#include <stubs_graphics_context.h>
-#include <stubs_kino_layer.h>
-#include <stubs_layer.h>
-#include <stubs_layout_node.h>
-#include <stubs_logging.h>
-#include <stubs_notification_image.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pin_db.h>
-#include <stubs_resources.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_text_node.h>
-#include <stubs_timeline_item.h>
-#include <stubs_timeline_resources.h>
-
 // Not in stubs_graphics.h: test_bitmap_layer.c defines its own.
 void graphics_draw_bitmap_in_rect(GContext *ctx, const GBitmap *src_bitmap, const GRect *rect) {
 }
@@ -46,7 +26,7 @@ static const EmojiEntry s_emoji_table[] = JUMBOJI_TABLE(EMOJI_ENTRY);
 void test_jumboji__jumboji_table(void) {
   for (unsigned int i = 0; i < ARRAY_LENGTH(s_emoji_table); i++) {
     const EmojiEntry *emoji = &s_emoji_table[i];
-    const Codepoint codepoint = utf8_peek_codepoint((utf8_t *)emoji->string, NULL);
+    const Codepoint codepoint = utf8_peek_codepoint((utf8_t *)emoji->string, nullptr);
     if (emoji->codepoint != codepoint) {
       printf("  ENTRY(\"%s\", 0x%05x, %s)\n", emoji->string, (unsigned int)codepoint,
              emoji->resource_name);
@@ -59,7 +39,7 @@ ResourceId prv_get_emoji_icon_by_string(const EmojiEntry *table, const char *str
 
 void test_jumboji__jumboji_detection(void) {
   // NULL is not an emoji
-  cl_check(prv_get_emoji_icon_by_string(s_emoji_table, NULL) == INVALID_RESOURCE);
+  cl_check(prv_get_emoji_icon_by_string(s_emoji_table, nullptr) == INVALID_RESOURCE);
 
   // Empty string is not an emoji
   cl_check(prv_get_emoji_icon_by_string(s_emoji_table, "") == INVALID_RESOURCE);

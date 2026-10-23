@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <applib/fonts/fonts.h>
@@ -104,7 +103,6 @@ typedef struct {
   //! Vertical padding in px to add to the font line height when rendering
   int16_t line_spacing_delta;
 
-  //! TODO: PBL-22653 recover TextLayoutExtended padding by reducing the below types
   //! Layout restriction callback shrinking text box to fit within perimeter
   TextLayoutFlowData flow_data;
 } TextLayoutExtended;

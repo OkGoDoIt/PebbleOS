@@ -11,14 +11,9 @@
 #include <pbl/util/list.h>
 
 #include <process_management/app_run_state.h>
-#include <system/passert.h>
 
 // Stubs
 ///////////////////////////////////////
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_rand_ptr.h>
 
 // Fakes
 ///////////////////////////////////////
@@ -41,7 +36,7 @@ typedef struct PBL_PACKED {
 
 // Globals
 ///////////////////////////////////////
-CommSession *s_session = NULL;
+CommSession *s_session = nullptr;
 
 static uint8_t s_launcher_deprecated_messages = 0;
 
@@ -138,7 +133,7 @@ extern void app_run_state_protocol_msg_callback(CommSession *, const uint8_t *, 
 void test_app_run_state__initialize(void) {
   s_launcher_deprecated_messages = 0;
   s_app_run_state_messages = 0;
-  s_session = NULL;
+  s_session = nullptr;
   s_flags = 0;
 
   s_malloc_count = 0;
@@ -221,7 +216,7 @@ void test_app_run_state__protocol_msg_callback(void) {
     cl_assert_equal_i(s_app_run_state_messages, msg_count);
   }
 
-  app_run_state_protocol_msg_callback(NULL, (uint8_t *)&msg, sizeof(msg));
+  app_run_state_protocol_msg_callback(nullptr, (uint8_t *)&msg, sizeof(msg));
 
   cl_assert_equal_i(s_launcher_deprecated_messages, 1);
 }

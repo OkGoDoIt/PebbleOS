@@ -20,26 +20,6 @@
 // Stubs
 /////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_bootbits.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_ui_window.h>
-#include <stubs_unobstructed_area.h>
-
 // Helper Functions
 /////////////////////
 #include "../graphics/test_graphics.h"
@@ -74,10 +54,10 @@ void test_emoji_fonts__initialize(void) {
 
 void test_emoji_fonts__cleanup(void) {
   free(fb);
-  fb = NULL;
+  fb = nullptr;
 
   gbitmap_destroy(s_dest_bitmap);
-  s_dest_bitmap = NULL;
+  s_dest_bitmap = nullptr;
 }
 
 // Helpers
@@ -131,8 +111,8 @@ void prv_prepare_canvas_and_render_emoji(ResourceId font_handle) {
   const int max_height = 2000;    // Large size protected from overflow and automatically truncated
   const GSize max_size = {max_width, max_height};
 
-  // FIXME: PBL-34261 graphics_text_layout_get_max_used_size reports a max of 192px in a unit test
-  // with the default aplite framebuffer size. Work around this issue by creating a larger canvas.
+  // graphics_text_layout_get_max_used_size is capped by the framebuffer size, so measure on a
+  // larger canvas.
   prv_prepare_canvas(max_size, GColorWhite);
 
   const GRect max_draw_frame = grect_inset_internal((GRect){.size = max_size}, margin.x, margin.y);
@@ -167,5 +147,11 @@ void test_emoji_fonts__gothic_24_emoji(void) {
 
 void test_emoji_fonts__gothic_28_emoji(void) {
   prv_prepare_canvas_and_render_emoji(RESOURCE_ID_GOTHIC_28_EMOJI);
+  cl_check(gbitmap_pbi_eq(s_dest_bitmap, TEST_PBI_FILE));
+}
+
+void test_emoji_fonts__gothic_36_text(void) {
+  // Gothic 36 has no emoji font of its own, so it draws them from an emoji font
+  prv_prepare_canvas_and_render_emoji(RESOURCE_ID_GOTHIC_36);
   cl_check(gbitmap_pbi_eq(s_dest_bitmap, TEST_PBI_FILE));
 }

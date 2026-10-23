@@ -4,11 +4,6 @@
 #include <applib/graphics/gbitmap_pbi.h>
 #include <applib/graphics/gtypes.h>
 #include <clar.h>
-#include <stubs_app_state.h>
-#include <stubs_graphics_context.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_process_manager.h>
 
 // Stubs
 ///////////////////////
@@ -26,7 +21,7 @@ ResAppNum sys_get_current_resource_num(void) {
 
 const uint8_t *sys_resource_read_only_bytes(ResAppNum app_num, uint32_t resource_id,
                                             size_t *num_bytes_out) {
-  return NULL;
+  return nullptr;
 }
 
 // Fakes
@@ -66,7 +61,7 @@ size_t sys_resource_load_range(ResAppNum app_num, uint32_t id, uint32_t start_of
 
 void test_gbitmap_resource_validation__initialize(void) {
   s_resource_size = 0;
-  s_fake_bitmap_data = (FakeBitmapData){0};
+  s_fake_bitmap_data = (FakeBitmapData){};
 }
 
 static uint32_t prv_calculate_size(FakeBitmapData *bitmap) {

@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/blob_db/reminder_db.h>
 #include <pbl/services/bluetooth/ble_hrm.h>
@@ -10,6 +12,7 @@
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/services/notifications/action_chaining_window.h>
 #include <pbl/services/notifications/alerts_preferences.h>
+#include <pbl/services/notifications/alerts_preferences_private.h>
 #include <pbl/services/notifications/ancs/ancs_notifications.h>
 #include <pbl/services/notifications/notification_constants.h>
 #include <pbl/services/notifications/notification_storage.h>
@@ -28,6 +31,7 @@
 #include <applib/ui/dialogs/dialog_private.h>
 #include <applib/ui/dialogs/expandable_dialog.h>
 #include <applib/ui/dialogs/simple_dialog.h>
+#include <applib/ui/preferred_durations.h>
 #include <applib/ui/progress_window.h>
 #include <applib/ui/window.h>
 #include <applib/ui/window_manager.h>
@@ -42,7 +46,6 @@
 #include <popups/ble_hrm/ble_hrm_stop_sharing_popup.h>
 #include <popups/notifications/notification_window.h>
 #include <process_state/app_state/app_state.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_timeline, CONFIG_SERVICE_TIMELINE_LOG_LEVEL);
 
@@ -145,29 +148,29 @@ static void prv_cleanup_action_result(ActionResultData *data, bool succeeded) {
 
   if (data->action_menu) {
     action_menu_close(data->action_menu, true);
-    data->action_menu = NULL;
+    data->action_menu = nullptr;
   } else if (data->chaining_data.action_chaining_window) {
     window_stack_remove(data->chaining_data.action_chaining_window, true);
-    data->chaining_data.action_chaining_window = NULL;
+    data->chaining_data.action_chaining_window = nullptr;
   }
 
   if (data->voice_data) {
     prv_cleanup_voice_data(data->voice_data);
-    data->voice_data = NULL;
+    data->voice_data = nullptr;
   }
 
   if (data->chaining_data.notif) {
     timeline_item_destroy(data->chaining_data.notif);
-    data->chaining_data.notif = NULL;
+    data->chaining_data.notif = nullptr;
   }
 
   if (data->progress_window) {
     progress_window_destroy(data->progress_window);
-    data->progress_window = NULL;
+    data->progress_window = nullptr;
   }
 
   applib_free(data->dialog.message);
-  data->dialog.message = NULL;
+  data->dialog.message = nullptr;
 
   event_service_client_unsubscribe(&data->event_service_info);
   prv_cancel_response_timer(data);
@@ -181,9 +184,9 @@ static void prv_show_result_window(ActionResultData *data, const TimelineResourc
   const bool use_simple_dialog =
       simple_dialog_does_text_fit(msg, DISP_FRAME.size, simple_dialog_icon_size, use_status_bar);
 
-  SimpleDialog *simple_dialog = NULL;
-  ExpandableDialog *expandable_dialog = NULL;
-  Dialog *dialog = NULL;
+  SimpleDialog *simple_dialog = nullptr;
+  ExpandableDialog *expandable_dialog = nullptr;
+  Dialog *dialog = nullptr;
 
   if (use_simple_dialog) {
     simple_dialog = simple_dialog_create("Action Result");
@@ -214,7 +217,7 @@ static void prv_show_result_window(ActionResultData *data, const TimelineResourc
   dialog_set_icon(dialog, icon_res_info.res_id);
   dialog_set_icon_animate_direction(dialog, DialogIconAnimationFromLeft);
   const uint32_t dialog_timeout_ms =
-      use_simple_dialog ? DIALOG_TIMEOUT_DEFAULT : DIALOG_TIMEOUT_INFINITE;
+      use_simple_dialog ? preferred_result_display_duration() : DIALOG_TIMEOUT_INFINITE;
   dialog_set_timeout(dialog, dialog_timeout_ms);
 
   if (data->action_menu) {
@@ -341,7 +344,7 @@ static void prv_invoke_chaining_action(Window *chaining_window, TimelineItemActi
 
   const bool ignore_failures = false;
   prv_subscribe_to_action_results_and_timeouts(data, ignore_failures);
-  timeline_invoke_action(data->chaining_data.notif, action, NULL);
+  timeline_invoke_action(data->chaining_data.notif, action, nullptr);
 }
 
 static void prv_handle_chaining_response(ActionResultData *data, PebbleEvent *event) {
@@ -369,7 +372,7 @@ static void prv_handle_chaining_response(ActionResultData *data, PebbleEvent *ev
   };
 
   Attribute *title_attr = attribute_find(&action_result->attr_list, AttributeIdTitle);
-  const char *title = title_attr ? title_attr->cstring : NULL;
+  const char *title = title_attr ? title_attr->cstring : nullptr;
   action_chaining_window_push(prv_get_window_stack(data), title, &action_result->action_group,
                               prv_invoke_chaining_action, cb_data, prv_cleanup_chaining_action_menu,
                               cb_data);
@@ -406,9 +409,13 @@ static void prv_handle_do_response_response(ActionResultData *data) {
   // Lack of an action menu means this was a standalone action, so adjust reply menu accordingly
   const TimelineItemActionSource current_item_source =
       kernel_ui_get_current_timeline_item_action_source();
-  timeline_actions_push_response_menu(item, reply_action, color, prv_cleanup_do_response_menu,
-                                      prv_get_window_stack(data), current_item_source,
-                                      data->standalone_action);
+  ActionMenu *menu = timeline_actions_push_response_menu(
+      item, reply_action, color, prv_cleanup_do_response_menu, prv_get_window_stack(data),
+      current_item_source, data->standalone_action);
+  if (current_item_source == TimelineItemActionSourceModalNotification ||
+      current_item_source == TimelineItemActionSourceNotificationApp) {
+    action_menu_set_content_size(menu, alerts_preferences_get_notification_content_size());
+  }
 
   prv_cleanup_action_result(data, true /* succeeded */);
 }
@@ -423,7 +430,7 @@ static void prv_action_handle_response(PebbleEvent *e, void *context) {
 
   PebbleSysNotificationActionResult *action_result = e->sys_notification.action_result;
 
-  if (action_result == NULL ||
+  if (action_result == nullptr ||
       (data->response.ignore_failures && action_result->type != ActionResultTypeSuccess)) {
     const bool success = false;
     prv_cleanup_action_result(data, success);
@@ -509,7 +516,7 @@ static ActionResultData *prv_invoke_remote_action(ActionMenu *action_menu,
                                                   const TimelineItem *pin, void *context) {
   ActionResultData *data = applib_zalloc(sizeof(ActionResultData));
   if (!data) {
-    return NULL;
+    return nullptr;
   }
 
   data->action_menu = action_menu;
@@ -590,14 +597,14 @@ static ActionResultData *prv_invoke_remote_action(ActionMenu *action_menu,
     }
     case TimelineItemActionTypeOpenPin:
     case TimelineItemActionTypeOpenWatchApp:
-      WTF;
+      pbl_panic();
     case TimelineItemActionTypeAncsNegative:
     case TimelineItemActionTypeAncsDelete:
     case TimelineItemActionTypeAncsPositive:
     case TimelineItemActionTypeAncsDial:
     case TimelineItemActionTypeInsightResponse:
     default:
-      timeline_invoke_action(pin, action, NULL);
+      timeline_invoke_action(pin, action, nullptr);
       break;
   }
 
@@ -606,7 +613,7 @@ static ActionResultData *prv_invoke_remote_action(ActionMenu *action_menu,
 
 // invoke actions that are immediately handled locally
 static void prv_invoke_local_action(const TimelineItemAction *action, const TimelineItem *pin) {
-  timeline_invoke_action(pin, action, NULL);
+  timeline_invoke_action(pin, action, nullptr);
 }
 
 static void prv_do_action_analytics(const TimelineItem *pin, const ActionMenuItem *item) {
@@ -634,7 +641,7 @@ static void prv_invoke_ble_hrm_stop_sharing_action(ActionMenu *action_menu,
 
   const TimelineItemAction *dismiss_action = timeline_item_find_dismiss_action(item);
   if (dismiss_action) {
-    timeline_invoke_action(item, dismiss_action, NULL);
+    timeline_invoke_action(item, dismiss_action, nullptr);
   }
 
   SimpleDialog *stopped_sharing_dialog = ble_hrm_stop_sharing_popup_create();
@@ -649,7 +656,7 @@ PBL_T_STATIC ActionResultData *prv_invoke_action(ActionMenu *action_menu,
     case TimelineItemActionTypeOpenPin:
     case TimelineItemActionTypeOpenWatchApp:
       prv_invoke_local_action(action, pin);
-      return NULL;
+      return nullptr;
     case TimelineItemActionTypeAncsResponse:
     case TimelineItemActionTypeAncsGeneric:
     case TimelineItemActionTypeAncsNegative:
@@ -673,7 +680,7 @@ PBL_T_STATIC ActionResultData *prv_invoke_action(ActionMenu *action_menu,
 #ifdef CONFIG_SERVICE_BLE_HRM
     case TimelineItemActionTypeBLEHRMStopSharing:
       prv_invoke_ble_hrm_stop_sharing_action(action_menu, pin);
-      return NULL;
+      return nullptr;
 #else
     case TimelineItemActionTypeBLEHRMStopSharing:
       break;
@@ -684,12 +691,13 @@ PBL_T_STATIC ActionResultData *prv_invoke_action(ActionMenu *action_menu,
   if (action_menu) {
     action_menu_close(action_menu, true);
   }
-  return NULL;
+  return nullptr;
 }
 
 void timeline_actions_invoke_action(const TimelineItemAction *action, const TimelineItem *pin,
                                     ActionCompleteCallback complete_cb, void *cb_data) {
-  ActionResultData *data = prv_invoke_action(NULL /* action_menu */, action, pin, NULL /* label */);
+  ActionResultData *data =
+      prv_invoke_action(nullptr /* action_menu */, action, pin, nullptr /* label */);
 
   if (data) {
     data->action_complete.callback = complete_cb;
@@ -717,7 +725,7 @@ static void prv_push_dismiss_first_use_dialog(ActionMenu *action_menu) {
 
   ExpandableDialog *first_use_dialog = expandable_dialog_create_with_params(
       "Dismiss First Use", RESOURCE_ID_QUICK_DISMISS, tutorial_msg,
-      gcolor_legible_over(GColorLightGray), GColorLightGray, NULL,
+      gcolor_legible_over(GColorLightGray), GColorLightGray, nullptr,
       RESOURCE_ID_ACTION_BAR_ICON_CHECK, expandable_dialog_close_cb);
   i18n_free(tutorial_msg, action_menu);
   expandable_dialog_push(first_use_dialog, action_menu->window.parent_window_stack);
@@ -864,7 +872,7 @@ static void prv_start_voice_reply(ActionMenu *action_menu, const ActionMenuItem 
     .action_data = item->action_data,
     .context = item_copy,
     .action_menu = action_menu,
-    .voice_window = voice_window_create(NULL, 0, VoiceEndpointSessionTypeDictation),
+    .voice_window = voice_window_create(nullptr, 0, VoiceEndpointSessionTypeDictation),
   };
   PBL_ASSERTN(data->voice_window);
 
@@ -915,7 +923,7 @@ static ActionMenuLevel *prv_create_responses_level(TimelineItemAction *action,
       num_items++;
     }
   }
-  ActionMenuLevel *responses_level = prv_create_level(num_items, NULL);
+  ActionMenuLevel *responses_level = prv_create_level(num_items, nullptr);
   responses_level->num_items = num_items;
 
   // If we weren't given a root, assume this is the root level for i18n ownership
@@ -947,7 +955,7 @@ static ActionMenuLevel *prv_create_responses_level(TimelineItemAction *action,
   };
   ActionMenuLevel *(*level_getters[ReplyOptionCount])(ActionMenuLevel *, TimelineItemAction *,
                                                       void *) = {
-    NULL,
+    nullptr,
     prv_create_template_level_from_action,
     prv_create_emoji_level_from_action,
   };
@@ -991,8 +999,8 @@ static void prv_postpone_later_today(ActionMenu *action_menu,
   // 2 hours from time of creation otherwise
 
   time_t utc_sec = rtc_get_time();
-  struct tm local_tm;
-  localtime_r(&utc_sec, &local_tm);
+  struct pbl_tm local_tm;
+  pbl_localtime_r(&utc_sec, &local_tm);
 
   if (local_tm.tm_hour < 10) {
     local_tm.tm_hour = 12;
@@ -1006,7 +1014,7 @@ static void prv_postpone_later_today(ActionMenu *action_menu,
     local_tm.tm_hour += 2;
     local_tm.tm_sec = 0;
   }
-  time_t new_time = mktime(&local_tm);
+  time_t new_time = pbl_mktime(&local_tm);
 
   prv_invoke_remote_action(action_menu, action, pin, (void *)(uintptr_t)new_time);
 }
@@ -1019,12 +1027,12 @@ static void prv_postpone_tomorrow(ActionMenu *action_menu, const ActionMenuItem 
 
   // The new time is 9am the following day
   time_t tomorrow_utc = rtc_get_time() + PBL_SEC_PER_DAY;
-  struct tm local_tm;
-  localtime_r(&tomorrow_utc, &local_tm);
+  struct pbl_tm local_tm;
+  pbl_localtime_r(&tomorrow_utc, &local_tm);
   local_tm.tm_hour = 9;
   local_tm.tm_min = 0;
   local_tm.tm_sec = 0;
-  time_t new_time = mktime(&local_tm);
+  time_t new_time = pbl_mktime(&local_tm);
 
   prv_invoke_remote_action(action_menu, action, pin, (void *)(uintptr_t)new_time);
 }
@@ -1032,8 +1040,8 @@ static void prv_postpone_tomorrow(ActionMenu *action_menu, const ActionMenuItem 
 static ActionMenuLevel *prv_create_postpone_level(TimelineItemAction *action,
                                                   ActionMenuLevel *root_level) {
   time_t utc_sec = rtc_get_time();
-  struct tm local_tm;
-  localtime_r(&utc_sec, &local_tm);
+  struct pbl_tm local_tm;
+  pbl_localtime_r(&utc_sec, &local_tm);
 
   // Only show the "later today" option if it is before 8pm
   const bool show_later_today = local_tm.tm_hour >= 20 ? false : true;
@@ -1079,7 +1087,7 @@ ActionMenuLevel *timeline_actions_create_action_menu_root_level(uint8_t num_item
                                                                 TimelineItemActionSource source) {
   kernel_ui_set_current_timeline_item_action_source(source);
 
-  ActionMenuLevel *root_level = prv_create_level(num_items, NULL);
+  ActionMenuLevel *root_level = prv_create_level(num_items, nullptr);
   root_level->separator_index = separator_index;
 
   prv_request_responsive_session();
@@ -1089,7 +1097,7 @@ ActionMenuLevel *timeline_actions_create_action_menu_root_level(uint8_t num_item
 
 static void prv_cleanup_action_menu(ActionMenu *action_menu) {
   ActionMenuLevel *root_level = action_menu_get_root_level(action_menu);
-  action_menu_hierarchy_destroy(root_level, NULL, NULL);
+  action_menu_hierarchy_destroy(root_level, nullptr, nullptr);
   i18n_free_all(root_level);
   prv_reset_session_responsiveness();
 }
@@ -1101,7 +1109,7 @@ static void prv_timeline_action_menu_did_close(ActionMenu *action_menu, const Ac
     timeline_action_menu->did_close(action_menu, item, timeline_action_menu->item);
   }
   if (timeline_action_menu->action_result) {
-    timeline_action_menu->action_result->action_menu = NULL;
+    timeline_action_menu->action_result->action_menu = nullptr;
   }
   prv_cleanup_action_menu(action_menu);
   applib_free(timeline_action_menu);
@@ -1112,7 +1120,7 @@ ActionMenu *timeline_actions_push_action_menu(ActionMenuConfig *base_config,
   PBL_ASSERTN(base_config);
   TimelineActionMenu *timeline_action_menu = applib_zalloc(sizeof(TimelineActionMenu));
   if (!timeline_action_menu) {
-    return NULL;
+    return nullptr;
   }
 
   ActionMenuConfig config = *base_config;
@@ -1141,7 +1149,7 @@ ActionMenu *timeline_actions_push_response_menu(TimelineItem *item,
     .context = item,
     .colors.background = bg_color,
     .did_close = did_close_cb,
-    .root_level = prv_create_responses_level(reply_action, NULL, standalone_reply),
+    .root_level = prv_create_responses_level(reply_action, nullptr, standalone_reply),
   };
   return timeline_actions_push_action_menu(&config, window_stack);
 }
@@ -1191,12 +1199,12 @@ static void prv_dismiss_all_step(void *context) {
     const TimelineItemAction *action = timeline_item_find_dismiss_action(&item);
     if (action) {
       timeline_enable_ancs_bulk_action_mode(ctx->ancs_bulk_mode);
-      timeline_invoke_action(&item, action, NULL);
+      timeline_invoke_action(&item, action, nullptr);
       timeline_enable_ancs_bulk_action_mode(false);
       ctx->performed_actions = true;
 
-      // FIXME: PBL-34338 There are other actions that should also use bulk mode to avoid crashes
-      // such as dismissing notifications on Android while disconnected
+      // TODO: other actions should also use bulk mode to avoid crashes, such as dismissing
+      // notifications on Android while disconnected
       if (action->type == TimelineItemActionTypeAncsNegative) {
         ctx->ancs_bulk_mode = true;
       }

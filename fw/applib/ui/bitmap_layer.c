@@ -7,14 +7,15 @@
 #include <applib/graphics/graphics.h>
 #include <process_management/process_manager.h>
 
-void bitmap_layer_update_proc(BitmapLayer *image, GContext *ctx) {
+void bitmap_layer_update_proc(Layer *layer, GContext *ctx) {
+  BitmapLayer *image = (BitmapLayer *)layer;
   const GColor bg_color = image->background_color;
   if (!gcolor_is_transparent(bg_color)) {
     graphics_context_set_fill_color(ctx, bg_color);
     graphics_fill_rect(ctx, &image->layer.bounds);
   }
   graphics_context_set_compositing_mode(ctx, image->compositing_mode);
-  if (image->bitmap != NULL) {
+  if (image->bitmap != nullptr) {
     const GSize size = image->bitmap->bounds.size;
     const bool clips = true; // bitmap layer not allowed to draw outside of its frame
     GRect rect = (GRect){{0, 0}, size};
@@ -23,7 +24,7 @@ void bitmap_layer_update_proc(BitmapLayer *image, GContext *ctx) {
       // Dirty workaround for calculation of offset in graphics_draw_bitmap_in_rect
       // and preserving state of bitmap alignment in bitmap_layer
       // The previous behavior is relied on by some 2.x apps, and therefore we exclude
-      // the fix for apps compiled with older SDKs. See PBL-19136 for details.
+      // the fix for apps compiled with older SDKs.
       rect.origin.x -= image->layer.bounds.origin.x;
       rect.origin.y -= image->layer.bounds.origin.y;
     }
@@ -35,7 +36,7 @@ void bitmap_layer_init(BitmapLayer *image, const GRect *frame) {
   *image = (BitmapLayer){};
   image->layer.frame = *frame;
   image->layer.bounds = (GRect){{0, 0}, frame->size};
-  image->layer.update_proc = (LayerUpdateProc)bitmap_layer_update_proc;
+  image->layer.update_proc = bitmap_layer_update_proc;
   layer_set_clips(&image->layer, true);
   image->background_color = GColorClear;
   image->compositing_mode = GCompOpAssign;
@@ -55,7 +56,7 @@ void bitmap_layer_deinit(BitmapLayer *bitmap_layer) {
 }
 
 void bitmap_layer_destroy(BitmapLayer *bitmap_layer) {
-  if (bitmap_layer == NULL) {
+  if (bitmap_layer == nullptr) {
     return;
   }
   bitmap_layer_deinit(bitmap_layer);
@@ -71,7 +72,7 @@ const GBitmap *bitmap_layer_get_bitmap(BitmapLayer *bitmap_layer) {
 }
 
 void bitmap_layer_set_bitmap(BitmapLayer *image, const GBitmap *bitmap) {
-  if (image == NULL) {
+  if (image == nullptr) {
     return;
   }
   image->bitmap = bitmap;

@@ -15,7 +15,6 @@
  * @{
  */
 
-// TODO (PBL-36438): use proper enum naming
 /**
  * @brief Weather condition, as sent by the phone.
  *
@@ -38,6 +37,15 @@ typedef enum {
  * @return Identifier of the type, e.g. "PartlyCloudy".
  */
 const char *weather_type_get_name(WeatherType weather_type);
+
+/**
+ * @brief Get the short condition phrase for a weather type.
+ *
+ * @param weather_type Weather type.
+ * @return Untranslated phrase to pass to i18n_get(), e.g. "Partly Cloudy", or nullptr if the type
+ *         has none.
+ */
+const char *weather_type_get_phrase(WeatherType weather_type);
 
 /**
  * @brief Get the background color for a weather type.

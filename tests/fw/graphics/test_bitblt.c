@@ -17,8 +17,6 @@
 #include "graphics_common_stubs.h"
 #include "test_graphics.h"
 
-#include <stubs_applib_resource.h>
-
 static GContext ctx;
 static FrameBuffer framebuffer;
 
@@ -486,7 +484,7 @@ void test_bitblt__1bit_to_8bit_compor(void) {
   };
 
   memset(dest_data, GColorBlue.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpOr, GColorLightGray);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpOr, GColorLightGray);
 
   cl_check(gbitmap_pbi_eq(&dest_bitmap, "test_bitblt__1bit_to_8bit_compor-expect.8bit.pbi"));
 
@@ -518,38 +516,38 @@ void test_bitblt__1bit_to_8bit_comptint(void) {
 
   // Destination White
   memset(dest_data, GColorWhite.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorWhite);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorWhite);
   cl_check(gbitmap_pbi_eq(
       &dest_bitmap,
       "test_bitblt__1bit_to_8bit_comptint_white_cross_white_corners-expect.8bit.pbi"));
 
   memset(dest_data, GColorWhite.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorBlack);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorBlack);
   cl_check(gbitmap_pbi_eq(
       &dest_bitmap,
       "test_bitblt__1bit_to_8bit_comptint_white_cross_black_corners-expect.8bit.pbi"));
 
   memset(dest_data, GColorWhite.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorLightGray);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorLightGray);
   cl_check(gbitmap_pbi_eq(
       &dest_bitmap,
       "test_bitblt__1bit_to_8bit_comptint_white_cross_lightgray_corners-expect.8bit.pbi"));
 
   // Destination Black
   memset(dest_data, GColorBlack.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorWhite);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorWhite);
   cl_check(gbitmap_pbi_eq(
       &dest_bitmap,
       "test_bitblt__1bit_to_8bit_comptint_black_cross_white_corners-expect.8bit.pbi"));
 
   memset(dest_data, GColorBlack.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorBlack);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorBlack);
   cl_check(gbitmap_pbi_eq(
       &dest_bitmap,
       "test_bitblt__1bit_to_8bit_comptint_black_cross_black_corners-expect.8bit.pbi"));
 
   memset(dest_data, GColorBlack.argb, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorLightGray);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorLightGray);
   cl_check(gbitmap_pbi_eq(
       &dest_bitmap,
       "test_bitblt__1bit_to_8bit_comptint_black_cross_lightgray_corners-expect.8bit.pbi"));
@@ -837,33 +835,33 @@ void test_bitblt__1bit_to_1bit_comptint(void) {
 
   // Destination White
   memset(dest_data, 0b11111111, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorClear);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorClear);
   cl_check(gbitmap_pbi_eq(&dest_bitmap,
                           "test_bitblt__1bit_to_1bit_comptint_white_on_white-expect.1bit.pbi"));
 
   memset(dest_data, 0b11111111, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorWhite);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorWhite);
   cl_check(gbitmap_pbi_eq(&dest_bitmap,
                           "test_bitblt__1bit_to_1bit_comptint_white_on_white-expect.1bit.pbi"));
 
   memset(dest_data, 0b11111111, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorBlack);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorBlack);
   cl_check(gbitmap_pbi_eq(&dest_bitmap,
                           "test_bitblt__1bit_to_1bit_comptint_black_on_white-expect.1bit.pbi"));
 
   // Destination Black
   memset(dest_data, 0b00000000, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorClear);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorClear);
   cl_check(gbitmap_pbi_eq(&dest_bitmap,
                           "test_bitblt__1bit_to_1bit_comptint_black_on_black-expect.1bit.pbi"));
 
   memset(dest_data, 0b00000000, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorWhite);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorWhite);
   cl_check(gbitmap_pbi_eq(&dest_bitmap,
                           "test_bitblt__1bit_to_1bit_comptint_white_on_black-expect.1bit.pbi"));
 
   memset(dest_data, 0b00000000, sizeof(dest_data));
-  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){0}, GCompOpTint, GColorBlack);
+  bitblt_bitmap_into_bitmap(&dest_bitmap, src_bitmap, (GPoint){}, GCompOpTint, GColorBlack);
   cl_check(gbitmap_pbi_eq(&dest_bitmap,
                           "test_bitblt__1bit_to_1bit_comptint_black_on_black-expect.1bit.pbi"));
 
@@ -907,9 +905,8 @@ void DISABLED_test_bitblt__1bit_to_8bit_bounds_and_origin_offset(void) {
   gbitmap_destroy(src_bitmap);
 }
 
-// This test is the same as test_bitblt__1bit_to_1bit_bounds_and_origin_offset, except it is for
-// 1-bit to 1-bit.
-// FIXME: This is a known legacy-broken case in 1-bit bitblt. See PBL-14671 for more information
+// Same as test_bitblt__1bit_to_8bit_bounds_and_origin_offset, but for 1-bit to 1-bit.
+// TODO: 1-bit source tiling with bounds/offset past a word boundary doesn't match the reference
 void DISABLED__test_bitblt__1bit_to_1bit_bounds_and_origin_offset(void) {
   GBitmap *src_bitmap =
       get_gbitmap_from_pbi("test_bitblt__1bit_to_1bit_bounds_and_origin_offset.1bit.pbi");

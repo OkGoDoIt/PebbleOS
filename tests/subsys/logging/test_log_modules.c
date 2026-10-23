@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <stdio.h>
 #include <time.h>
 
 #include <pbl/kernel/compiler.h>
@@ -14,7 +15,6 @@
 
 #include <kernel/pebble_tasks.h>
 #include <logging/logging_private.h>
-#include <stubs_passert.h>
 
 PBL_LOG_MODULE_DEFINE(test_runtime, CONFIG_TEST_RUNTIME_LOG_LEVEL);
 
@@ -46,11 +46,11 @@ void kernel_applib_release_log_state(LogState *state) {
 }
 
 LogState *app_state_get_log_state(void) {
-  return NULL;
+  return nullptr;
 }
 
 LogState *worker_state_get_log_state(void) {
-  return NULL;
+  return nullptr;
 }
 
 uint32_t sys_stack_free_bytes(void) {
@@ -96,7 +96,7 @@ void pbl_log_advanced(const char *buffer, int length, bool async) {
 
 void test_log_modules__initialize(void) {
   PBL_LOG_MODULE_LEVEL_SET(test_runtime, CONFIG_TEST_RUNTIME_LOG_LEVEL);
-  s_state = (LogState){0};
+  s_state = (LogState){};
   s_serial_count = s_flash_count = 0;
   s_serial_level = s_flash_level = 0;
   s_serial_async = s_flash_async = false;

@@ -8,17 +8,23 @@ menuconfig TEMPERATURE
 
 if TEMPERATURE
 
+config TEMPERATURE_SHELL
+    bool "Shell commands"
+    default y
+    depends on SHELL && !RECOVERY_FW
+    help
+      The temp shell command, to read the die temperature.
+
 config TEMPERATURE_NRF5
     bool "Nordic nRF5"
     default y if SOC_NRF52
-    select HAL_NORDIC
     help
       Support for the Nordic nRF5 die temperature sensor.
 
 config TEMPERATURE_SF32LB
     bool "SiFli SF32LB"
     default y if SOC_SF32LB52
-    select HAL_SIFLI
+    depends on CLK_SF32LB
     help
       Support for the SiFli SF32LB temperature sensor.
 

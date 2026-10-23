@@ -3,19 +3,23 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/drivers/accel.h>
+#include <pbl/drivers/gpio.h>
+#include <pbl/drivers/i2c.h>
+#include <pbl/drivers/intc.h>
 #include <pbl/drivers/rtc.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/mcu/cache.h>
 #include <pbl/services/regular_timer.h>
 
+#include <board/board.h>
+
 /**
  * @defgroup drivers_imu_lis2dw12 LIS2DW12
  * @ingroup drivers_imu
- * @brief ST LIS2DW12 accelerometer driver board configuration.
+ * @brief ST LIS2DW12 @ref drivers_accel driver.
  * @{
  */
 
@@ -26,8 +30,6 @@
 
 /** @brief LIS2DW12 driver state, owned by the driver. */
 typedef struct LIS2DW12State {
-  /** Driver initialized. */
-  bool initialized;
   /** Watch mounted rotated 180 degrees: X and Y are inverted. */
   bool rotated;
   /** Shake detection requested. */
@@ -38,7 +40,7 @@ typedef struct LIS2DW12State {
   uint32_t sampling_interval_us;
   /** Samples per FIFO batch requested by the subscribers, 0 when not streaming. */
   uint8_t num_samples;
-  /** Raw FIFO read buffer, filled with i2c_read_register_block_dma(). */
+  /** Raw FIFO read buffer, filled with pbl_i2c_read_register_block_dma(). */
   uint8_t raw_sample_buf[DCACHE_ROUND_UP(
       LIS2DW12_FIFO_SIZE * LIS2DW12_SAMPLE_SIZE_BYTES)] PBL_ALIGNED(DCACHE_LINE_SIZE_MAX);
   /** Watchdog timer detecting a stalled INT1 stream. */
@@ -63,20 +65,48 @@ typedef struct LIS2DW12State {
   bool wu_active;
 } LIS2DW12State;
 
-/** @brief LIS2DW12 board configuration. */
-typedef struct LIS2DW12Config {
+/** @brief LIS2DW12 accelerometer. */
+struct pbl_lis2dw12 {
+  /** Accelerometer, child of the I2C bus. */
+  struct pbl_accel accel;
   /** Driver state. */
   LIS2DW12State *state;
   /** I2C device. */
-  I2CSlavePort i2c;
+  struct pbl_i2c_dev i2c;
   /** INT1 interrupt line. */
-  ExtiConfig int1;
+  struct pbl_irq_spec int1;
   /** INT1 input, to read back the pad level. */
-  InputConfig int1_in;
+  struct pbl_gpio int1_in;
   /** Sensor axis feeding each watch axis (0: X, 1: Y, 2: Z). */
   uint8_t axis_map[3];
   /** Direction of each watch axis: 1 or -1. */
   int8_t axis_dir[3];
-} LIS2DW12Config;
+};
+
+/** @cond INTERNAL_HIDDEN */
+extern const struct pbl_accel_ops pbl_lis2dw12_ops;
+/** @endcond */
+
+/**
+ * @brief Define a LIS2DW12.
+ *
+ * Only one instance is supported.
+ *
+ * @param sym Symbol of the instance; the accelerometer is @c sym.accel.
+ * @param _bus I2C bus.
+ * @param _addr 7-bit I2C address.
+ * @param ... Designated initializers of the remaining fields: @c int1, @c int1_in, @c axis_map
+ *            and @c axis_dir.
+ */
+#define PBL_LIS2DW12_DEFINE(sym, _bus, _addr, ...)                             \
+  PBL_ACCEL_STATE_DEFINE(sym);                                                 \
+  static LIS2DW12State sym##_lis2dw12_state;                                   \
+  const struct pbl_lis2dw12 sym = {                                            \
+    .accel = PBL_ACCEL_INIT(sym, "lis2dw12", &(_bus)->dev, &pbl_lis2dw12_ops), \
+    .state = &sym##_lis2dw12_state,                                            \
+    .i2c = PBL_I2C_DEV(_bus, _addr),                                           \
+    __VA_ARGS__,                                                               \
+  };                                                                           \
+  PBL_DEVICE_REGISTER(sym, &sym.accel.dev)
 
 /** @} */

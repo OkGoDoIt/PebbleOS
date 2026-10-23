@@ -29,6 +29,7 @@
 #include <pbl/services/light.h>
 #include <pbl/services/notifications/notification_storage.h>
 #include <pbl/services/timeline/attribute.h>
+#include <pbl/services/time.h>
 #include <pbl/services/timeline/item.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
@@ -223,9 +224,9 @@ static const char *prv_meta(MuseAppData *data) {
   if (old) {
     size_t used = 0;
     if (now - v->began_at >= MUSE_SHOW_DAY_AFTER_S) {
-      struct tm local;
-      localtime_r(&v->began_at, &local);
-      used = strftime(when, sizeof(when), "%a ", &local);
+      struct pbl_tm local;
+      pbl_localtime_r(&v->began_at, &local);
+      used = pbl_strftime_r(when, sizeof(when), "%a ", &local);
     }
     clock_copy_time_string_timestamp(when + used, (uint8_t)(sizeof(when) - used), v->began_at);
   }

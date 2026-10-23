@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/drivers/button_id.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/services/touch/touch.h>
 
@@ -24,7 +25,7 @@
 #include <process_management/app_manager.h>
 #include <process_management/process_loader.h>
 #include <process_state/app_state/app_state.h>
-#include <system/passert.h>
+#include <syscall/syscall.h>
 #include <tinymt32.h>
 
 #if defined(CONFIG_MALLOC_INSTRUMENTATION) && defined(CONFIG_SHELL)
@@ -34,9 +35,9 @@
 typedef struct {
   Heap heap;
 
-  struct tm gmtime_tm;
-  struct tm localtime_tm;
-  char localtime_zone[TZ_LEN];
+  struct pbl_tm gmtime_tm;
+  struct pbl_tm localtime_tm;
+  char localtime_zone[PBL_TZ_LEN];
 
   tinymt32_t rand_seed;
 
@@ -62,8 +63,6 @@ typedef struct {
   GContext graphics_context;
 
   EventServiceInfo event_service_state;
-
-  BLEAppState ble_app_state;
 
   AccelServiceState accel_state;
 
@@ -142,7 +141,7 @@ KERNEL_READONLY_DATA static AppState *s_app_state_ptr;
 
 bool app_state_configure(MemorySegment *app_state_ram, ProcessAppSDKType sdk_type,
                          int16_t obstruction_origin_y) {
-  s_app_state_ptr = memory_segment_split(app_state_ram, NULL, sizeof(AppState));
+  s_app_state_ptr = memory_segment_split(app_state_ram, nullptr, sizeof(AppState));
   if (!s_app_state_ptr) {
     return false;
   }
@@ -159,13 +158,13 @@ bool app_state_configure(MemorySegment *app_state_ram, ProcessAppSDKType sdk_typ
     // 3.x basalt platforms.
 
     s_app_state_ptr->legacy2_framebuffer =
-        memory_segment_split(app_state_ram, NULL, sizeof(GBitmap));
+        memory_segment_split(app_state_ram, nullptr, sizeof(GBitmap));
     if (!s_app_state_ptr->legacy2_framebuffer) {
       return false;
     }
 
     uint16_t row_size = gbitmap_format_get_row_size_bytes(LEGACY_2X_DISP_COLS, GBitmapFormat1Bit);
-    void *fb_data = memory_segment_split(app_state_ram, NULL, row_size * LEGACY_2X_DISP_ROWS);
+    void *fb_data = memory_segment_split(app_state_ram, nullptr, row_size * LEGACY_2X_DISP_ROWS);
     if (!fb_data) {
       return false;
     }
@@ -206,12 +205,13 @@ static bool prv_app_touch_nav_top_bridge_disabled(void *ctx) {
   // touch service layer, not this slot. So a set raw_handler means the app owns touch and must not
   // also receive synthesized buttons.
   const TouchServiceState *touch_state = app_state_get_touch_service_state();
-  const bool app_has_raw_subscriber = touch_state && (touch_state->raw_handler != NULL);
+  const bool app_has_raw_subscriber = touch_state && (touch_state->raw_handler != nullptr);
   return touch_nav_app_bridge_disabled(window_opt_out, app_has_raw_subscriber);
 }
 
 static void prv_app_touch_nav_pop_top(void *ctx) {
-  window_stack_pop_with_transition(app_state_get_window_stack(), NULL /* default pop transition */);
+  window_stack_pop_with_transition(app_state_get_window_stack(),
+                                   nullptr /* default pop transition */);
 }
 
 static void prv_app_touch_nav_emit_button(void *ctx, ButtonId button) {
@@ -227,18 +227,18 @@ static const TouchNavOps s_app_touch_nav_ops = {
   .top_bridge_disabled = prv_app_touch_nav_top_bridge_disabled,
   .pop_top = prv_app_touch_nav_pop_top,
   .emit_button = prv_app_touch_nav_emit_button,
-  .idle_refresh = NULL, // the app task has no idle-timeout refresh; that is the kernel's job
+  .idle_refresh = nullptr, // the app task has no idle-timeout refresh; that is the kernel's job
 };
 
 // Twin subscription effects for the app task. The subscribe/reconcile state machine lives in
 // touch_nav.c; these ops bind it to the app task's touch service slot and nav state.
 static bool prv_app_twin_pref_enabled(void *ctx) {
-  return touch_nav_enabled();
+  return sys_touch_nav_enabled();
 }
 
 static bool prv_app_twin_master_enabled(void *ctx) {
   // The master "Touch" switch IS the global touch kill: an opted-in app follows it alone.
-  return touch_service_is_globally_enabled();
+  return sys_touch_service_is_enabled();
 }
 
 static void prv_app_twin_install_handler(void *ctx) {
@@ -246,13 +246,13 @@ static void prv_app_twin_install_handler(void *ctx) {
   touch_service_set_system_handler(touch_nav_dispatch, &s_app_state_ptr->touch_nav_state);
   // Mark the app twin live so the dispatch gate and touch-driven backlight treat this app as
   // navigating even when system nav (the Touch Navigation sub-pref) is off.
-  touch_set_app_nav_active(true);
+  sys_touch_set_app_nav_active(true);
 }
 
 static void prv_app_twin_remove_handler(void *ctx) {
-  touch_set_app_nav_active(false);
+  sys_touch_set_app_nav_active(false);
   recognizer_manager_cancel_and_reset(&s_app_state_ptr->recognizer_manager);
-  touch_service_set_system_handler(NULL, NULL);
+  touch_service_set_system_handler(nullptr, nullptr);
 }
 
 static const TouchNavTwinOps s_app_twin_ops = {
@@ -300,8 +300,6 @@ PBL_NOINLINE void app_state_init(void) {
                                                               : GContextInitializationMode_App;
   graphics_context_init(&s_app_state_ptr->graphics_context, &s_app_state_ptr->framebuffer,
                         init_mode);
-
-  ble_init_app_state();
 
   accel_service_state_init(app_state_get_accel_state());
 
@@ -351,10 +349,10 @@ Heap *app_state_get_heap(void) {
   return &s_app_state_ptr->heap;
 }
 
-struct tm *app_state_get_gmtime_tm(void) {
+struct pbl_tm *app_state_get_gmtime_tm(void) {
   return &s_app_state_ptr->gmtime_tm;
 }
-struct tm *app_state_get_localtime_tm(void) {
+struct pbl_tm *app_state_get_localtime_tm(void) {
   return &s_app_state_ptr->localtime_tm;
 }
 char *app_state_get_localtime_zone(void) {
@@ -378,10 +376,6 @@ AnimationState *app_state_get_animation_state() {
 
 AppMessageCtx *app_state_get_app_message_ctx(void) {
   return &s_app_state_ptr->app_message_ctx;
-}
-
-BLEAppState *app_state_get_ble_app_state(void) {
-  return &s_app_state_ptr->ble_app_state;
 }
 
 ClickManager *app_state_get_click_manager() {
@@ -543,7 +537,7 @@ void app_touch_nav_subscribe(void) {
 }
 
 void app_touch_nav_unsubscribe(void) {
-  prv_app_twin_remove_handler(NULL);
+  prv_app_twin_remove_handler(nullptr);
 }
 
 void app_touch_nav_resync(void) {
@@ -614,5 +608,5 @@ static int prv_cmd_heap_app(const struct pbl_shell *sh, size_t argc, char **argv
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_sys_heap, app, NULL, "Dump the app heap", prv_cmd_heap_app, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys_heap, app, nullptr, "Dump the app heap", prv_cmd_heap_app, 0, 0);
 #endif

@@ -5,9 +5,6 @@
 
 #include <clar.h>
 #include <fake_rtc.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_rand_ptr.h>
 
 void test_uuid__equal(void) {
   const Uuid system = UUID_SYSTEM;
@@ -61,6 +58,6 @@ void test_uuid__string(void) {
   uuid_to_string(&invalid, buffer);
   cl_assert_equal_s(buffer, "{ffffffff-ffff-ffff-ffff-ffffffffffff}");
 
-  uuid_to_string(NULL, buffer);
+  uuid_to_string(nullptr, buffer);
   cl_assert_equal_s(buffer, "{NULL UUID}");
 }

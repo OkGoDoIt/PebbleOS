@@ -66,10 +66,25 @@ jobs:
           find artifacts -type f -exec cp {} release/ \;
           ls -l release
 
+      - name: Check if tag is on main
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$TAG...main" --jq .status)
+          if [[ "$status" == "ahead" || "$status" == "identical" ]]; then
+            echo "on_main=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on_main=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v3.0.3
         with:
           files: release/*
+          make_latest: ${{ steps.main.outputs.on_main }}
 
       - name: Publish release to eng-dash
         if: ${{ github.repository == 'coredevices/PebbleOS' }}

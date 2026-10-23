@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
+#include <kernel/pebble_tasks.h>
 #include <shell/prefs.h>
 
 /**
@@ -42,6 +42,20 @@
  */
 void light_init(void);
 
+#ifdef CONFIG_BACKLIGHT_HAS_COLOR
+/**
+ * @ingroup services_light
+ * @brief Reschedule the day/night color switch after a backlight color pref is loaded or changed.
+ */
+void light_handle_color_prefs_changed(void);
+
+/**
+ * @ingroup services_light
+ * @brief Re-apply the system color after the wall clock or time zone changes.
+ */
+void light_handle_clock_change(void);
+#endif
+
 /**
  * @ingroup services_light
  * @brief Handle a button press.
@@ -64,9 +78,19 @@ void light_button_released(void);
  * @ingroup services_light
  * @brief Handle a touch finger-down.
  *
- * Acts like a button press; repeated calls before light_touch_up() count once.
+ * Lights the backlight for the timeout; repeated calls before light_touch_up() count once.
+ * Unlike a held button, a held touch doesn't keep the backlight on: only light_touch_moved()
+ * restarts the timeout.
  */
 void light_touch_down(void);
+
+/**
+ * @ingroup services_light
+ * @brief Handle a touch moving while down.
+ *
+ * Restarts the timeout of the backlight lit by light_touch_down().
+ */
+void light_touch_moved(void);
 
 /**
  * @ingroup services_light
@@ -111,11 +135,11 @@ void light_enable_interaction(void);
 
 /**
  * @ingroup services_light
- * @brief Return to the normal state machine after an app forced the light with light_enable().
+ * @brief Return to the normal state machine if @p task forced the light with light_enable().
  *
- * Also releases a touch hold that never saw its liftoff.
+ * @param task Task that exited.
  */
-void light_reset_user_controlled(void);
+void light_reset_user_controlled_by_task(PebbleTask task);
 
 /**
  * @brief Tint the backlight LED to a packed 24-bit RGB value.
@@ -140,9 +164,9 @@ void light_set_system_color(void);
  * @ingroup services_light
  * @brief Make the system color take precedence over any app color.
  *
- * Reference counted: while held, the LED shows the user's default color even if an app set an
- * override. Used by notifications and other modals to show neutral white without clearing the
- * app's color. No-op on platforms without a color backlight.
+ * Reference counted: while held, the LED shows the user's current system color even if an app
+ * set an override. Used by notifications and other modals to show neutral white without clearing
+ * the app's color. No-op on platforms without a color backlight.
  */
 void light_system_color_request(void);
 
@@ -228,6 +252,34 @@ bool light_is_lit_by_touch(void);
  * @return Ambient light level in lux.
  */
 uint32_t light_get_ambient_lux(void);
+
+/**
+ * @ingroup services_light
+ * @brief Get the ambient light level the backlight wake gate compares against the dark
+ * threshold.
+ *
+ * Same sample as light_get_ambient_lux() but without screen compensation, so dark screen
+ * content can't keep the backlight off in a dim room.
+ *
+ * @return Ambient light level in lux.
+ */
+uint32_t light_get_ambient_gate_lux(void);
+
+/**
+ * @ingroup services_light
+ * @brief Get the ambient light level below which the backlight turns on.
+ *
+ * @return Threshold, in the units of light_get_ambient_gate_lux().
+ */
+uint32_t light_get_dark_threshold(void);
+
+/**
+ * @ingroup services_light
+ * @brief Set the ambient light level below which the backlight turns on.
+ *
+ * @param threshold Threshold, in the units of light_get_ambient_gate_lux().
+ */
+void light_set_dark_threshold(uint32_t threshold);
 
 /** @} */
 

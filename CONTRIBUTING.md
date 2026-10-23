@@ -4,7 +4,7 @@ Thank you for your interest in contributing to PebbleOS! We welcome contribution
 
 Developer documentation — building the firmware, running it in QEMU, exporting
 SDK functions, and more — lives in the `docs/` directory and is published at
-<https://pebbleos-core.readthedocs.io>.
+<https://pebbleos.readthedocs.io>.
 
 ## Developer Certification of Origin (DCO)
 

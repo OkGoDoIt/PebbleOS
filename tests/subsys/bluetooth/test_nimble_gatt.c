@@ -18,7 +18,6 @@
 
 #include <stubs_logging.h>
 #include <stubs_nimble_npl.h>
-#include <stubs_passert.h>
 
 // Fakes: the bits of NimBLE the glue calls
 ///////////////////////////////////////////////////////////

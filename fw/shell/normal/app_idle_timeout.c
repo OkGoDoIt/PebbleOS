@@ -3,13 +3,13 @@
 
 #include "app_idle_timeout.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 
 #include <kernel/event_loop.h>
 #include <shell/normal/watchface.h>
 #include <shell/system_shell.h>
-#include <system/passert.h>
 
 TimerID s_timer;
 uint32_t s_timeout_ms;
@@ -29,7 +29,7 @@ static void prv_kernel_callback_watchface_launch(void *data) {
 
 static void prv_timeout_expired(void *cb_data) {
   PBL_LOG_DBG("App idle timeout hit! launching watchface");
-  launcher_task_add_callback(prv_kernel_callback_watchface_launch, NULL);
+  launcher_task_add_callback(prv_kernel_callback_watchface_launch, nullptr);
 }
 
 static void prv_start_timer(bool create) {
@@ -38,7 +38,8 @@ static void prv_start_timer(bool create) {
   }
 
   if (s_timer != TIMER_INVALID_ID && !s_app_paused && !s_touch_held && s_app_started) {
-    bool success = new_timer_start(s_timer, s_timeout_ms, prv_timeout_expired, NULL, 0 /* flags */);
+    bool success =
+        new_timer_start(s_timer, s_timeout_ms, prv_timeout_expired, nullptr, 0 /* flags */);
     PBL_ASSERTN(success);
   }
 }

@@ -8,7 +8,6 @@
 #include <applib/graphics/graphics.h>
 #include <applib/graphics/gtypes.h>
 #include <applib/ui/layer.h>
-#include <system/passert.h>
 
 static int16_t scale_progress_bar_width_px(unsigned int progress_percent, int16_t rect_width_px) {
   return ((progress_percent * (rect_width_px)) / 100);
@@ -20,7 +19,8 @@ void progress_layer_set_progress(ProgressLayer *progress_layer, unsigned int pro
   layer_mark_dirty(&progress_layer->layer);
 }
 
-void progress_layer_update_proc(ProgressLayer *progress_layer, GContext *ctx) {
+void progress_layer_update_proc(Layer *layer, GContext *ctx) {
+  ProgressLayer *progress_layer = (ProgressLayer *)layer;
   const GRect *bounds = &progress_layer->layer.bounds;
 
   int16_t progress_bar_width_px =
@@ -46,7 +46,7 @@ void progress_layer_init(ProgressLayer *progress_layer, const GRect *frame) {
   *progress_layer = (ProgressLayer){};
 
   layer_init(&progress_layer->layer, frame);
-  progress_layer->layer.update_proc = (LayerUpdateProc)progress_layer_update_proc;
+  progress_layer->layer.update_proc = progress_layer_update_proc;
   progress_layer->foreground_color = GColorBlack;
   progress_layer->background_color = GColorWhite;
   progress_layer->corner_radius = 1;

@@ -3,6 +3,7 @@
 
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/event_service.h>
@@ -19,7 +20,6 @@
 #include <process_management/app_install_manager.h>
 #include <process_management/app_manager.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
 
 PBL_LOG_MODULE_DEFINE(service_wakeup, CONFIG_SERVICE_WAKEUP_LOG_LEVEL);
 
@@ -32,6 +32,8 @@ PBL_LOG_MODULE_DEFINE(service_wakeup, CONFIG_SERVICE_WAKEUP_LOG_LEVEL);
 // complexity, I have hard coded this buffer to a max size instead of going the linked_list
 // route. 16 apps should be more than enough.
 #define NUM_APPS_ALERT_ON_BOOT 16
+// Longest timer armed at once, events further away re-arm it when it expires
+#define WAKEUP_TIMER_MAX_S (24 * 60 * 60)
 
 static PBL_MUTEX_DEFINE(s_mutex);
 
@@ -55,6 +57,9 @@ typedef struct PBL_PACKED {
   int32_t timestamp;
 } WakeupState;
 
+#define WAKEUP_ID_MIN 1
+#define WAKEUP_ID_MAX INT32_MAX
+
 struct prv_missed_events_s {
   uint8_t missed_apps_count;
   AppInstallId *missed_app_ids;
@@ -68,7 +73,7 @@ struct prv_check_app_and_wakeup_event_s {
 // Local prototypes
 static WakeupEntry prv_wakeup_settings_get_entry(WakeupId wakeup_id);
 static void prv_wakeup_settings_delete_entry(WakeupId wakeup_id);
-static StatusCode prv_wakeup_settings_add_entry(WakeupId wakeup_id, WakeupEntry entry);
+static WakeupId prv_wakeup_settings_add_entry(WakeupEntry entry);
 static void prv_wakeup_timer_next_pending(void);
 
 static bool s_wakeup_enabled = false;
@@ -76,13 +81,23 @@ static TimerID s_current_timer_id = TIMER_INVALID_ID; // single timer reused for
 // single structure containing the global wakeup state
 static WakeupState s_wakeup_state = {-1, -1, 0};
 static bool s_catchup_enabled = false; // enables catching up with missed events
+static bool s_dispatched = false;
+static time_t s_last_dispatch_time;
 
 void wakeup_dispatcher_system_task(void *data) {
   WakeupId wakeup_id = (WakeupId)(intptr_t)data;
   WakeupEntry entry = prv_wakeup_settings_get_entry(wakeup_id);
 
+  if (entry.timestamp > rtc_get_time()) {
+    prv_wakeup_timer_next_pending();
+    return;
+  }
+
   // Delete event from settings
   prv_wakeup_settings_delete_entry(wakeup_id);
+
+  s_dispatched = true;
+  s_last_dispatch_time = rtc_get_time();
 
   AppInstallId app_id = app_install_get_id_for_uuid(&entry.uuid);
 
@@ -158,7 +173,7 @@ static void prv_wakeup_timer_next_pending(void) {
 
   // If there is already a wakeup timer scheduled, cancel it. There will be a
   // new timer scheduled for the soonest wakeup that is registered.
-  if (new_timer_scheduled(s_current_timer_id, NULL)) {
+  if (new_timer_scheduled(s_current_timer_id, nullptr)) {
     new_timer_stop(s_current_timer_id);
   }
 
@@ -170,7 +185,7 @@ static void prv_wakeup_timer_next_pending(void) {
       // Reset wakeup state to use for the search
       s_wakeup_state.current_wakeup_id = -1;
       s_wakeup_state.timestamp = 0;
-      settings_file_each(&wakeup_settings, prv_find_next_wakeup_id_callback, NULL);
+      settings_file_each(&wakeup_settings, prv_find_next_wakeup_id_callback, nullptr);
       settings_file_close(&wakeup_settings);
     } else {
       PBL_LOG_ERR("Error: could not open APP_WAKEUP settings");
@@ -196,9 +211,17 @@ static void prv_wakeup_timer_next_pending(void) {
       time_difference = MAX(time_difference, WAKEUP_CATCHUP_WINDOW);
     }
 
+    // Space out events of different apps that fall close together
+    if (s_dispatched) {
+      int32_t spacing = s_last_dispatch_time + WAKEUP_CATCHUP_WINDOW - current_time;
+      time_difference = MAX(time_difference, MIN(spacing, WAKEUP_CATCHUP_WINDOW));
+    }
+
+    time_difference = MIN(time_difference, WAKEUP_TIMER_MAX_S);
+
     // timers are in milliseconds, set main callback dispatch for wakeup
     // WakeupId is used to save/restore/lookup wakeup events
-    new_timer_start(s_current_timer_id, (time_difference * 1000), prv_wakeup_dispatcher,
+    new_timer_start(s_current_timer_id, (uint32_t)time_difference * 1000, prv_wakeup_dispatcher,
                     (void *)((intptr_t)s_wakeup_state.current_wakeup_id), 0);
   }
 }
@@ -236,6 +259,10 @@ static bool prv_check_for_events(SettingsFile *file, SettingsRecordInfo *info, v
   return false; // stop iterating
 }
 
+static WakeupId prv_wakeup_id_next(WakeupId wakeup_id) {
+  return (wakeup_id >= WAKEUP_ID_MAX) ? WAKEUP_ID_MIN : (wakeup_id + 1);
+}
+
 static void prv_update_events_callback(SettingsFile *old_file, SettingsFile *new_file,
                                        SettingsRecordInfo *info, void *context) {
   // Check if valid entry
@@ -265,10 +292,13 @@ static void prv_update_events_callback(SettingsFile *old_file, SettingsFile *new
   time_t current_time = rtc_get_time();
   int32_t time_difference = timestamp - current_time;
 
-  if (timestamp >= s_wakeup_state.next_wakeup_id) {
-    s_wakeup_state.next_wakeup_id = timestamp + 1;
-  } else if (wakeup_id >= s_wakeup_state.next_wakeup_id) {
-    s_wakeup_state.next_wakeup_id = wakeup_id + 1;
+  // Entries outside the ID range can never fire
+  if (wakeup_id < WAKEUP_ID_MIN) {
+    return;
+  }
+
+  if (wakeup_id >= s_wakeup_state.next_wakeup_id) {
+    s_wakeup_state.next_wakeup_id = prv_wakeup_id_next(wakeup_id);
   }
 
   // schedule non-expired events
@@ -278,12 +308,15 @@ static void prv_update_events_callback(SettingsFile *old_file, SettingsFile *new
                       sizeof(WakeupEntry));
   } else {
     if (entry.notify_if_missed) {
-      if (missed_events->missed_app_ids == NULL) {
+      if (missed_events->missed_app_ids == nullptr) {
         // This is allocated here, but free'd in the wakeup_ui.h module
         missed_events->missed_app_ids =
             kernel_malloc(NUM_APPS_ALERT_ON_BOOT * sizeof(AppInstallId));
+        if (missed_events->missed_app_ids == nullptr) {
+          return;
+        }
       }
-      if (missed_events->missed_apps_count > NUM_APPS_ALERT_ON_BOOT) {
+      if (missed_events->missed_apps_count >= NUM_APPS_ALERT_ON_BOOT) {
         // We have more than NUM_APPS_ALERT_ON_BOOT apps that had events fire while the watch
         // was shut off. Very rare this will happen, but just down show that the apps > 16 missed
         // an event.
@@ -298,13 +331,13 @@ static void prv_update_events_callback(SettingsFile *old_file, SettingsFile *new
 }
 
 void wakeup_init(void) {
-  struct prv_missed_events_s missed_events = {0, NULL};
+  struct prv_missed_events_s missed_events = {0, nullptr};
 
-  event_service_init(PEBBLE_WAKEUP_EVENT, NULL, NULL);
+  event_service_init(PEBBLE_WAKEUP_EVENT, nullptr, nullptr);
 
   // Create single reusable timer for wakeup events
   s_current_timer_id = new_timer_create();
-  s_wakeup_state.next_wakeup_id = rtc_get_time();
+  s_wakeup_state.next_wakeup_id = CLIP(rtc_get_time(), WAKEUP_ID_MIN, WAKEUP_ID_MAX);
   s_wakeup_state.timestamp = -1;
 
   SettingsFile wakeup_settings;
@@ -348,8 +381,8 @@ static bool prv_compiled_without_utc_support(void) {
   return false;
 }
 
-DEFINE_SYSCALL(WakeupId, sys_wakeup_schedule, time_t timestamp, int32_t reason,
-               bool notify_if_missed) {
+PBL_SYSCALL(WakeupId, sys_wakeup_schedule, (VAL, time_t, timestamp), (VAL, int32_t, reason),
+            (VAL, bool, notify_if_missed)) {
   if (prv_compiled_without_utc_support()) {
     // Legacy apps get local time returned from the time() call.
     timestamp = time_local_to_utc(timestamp);
@@ -357,14 +390,13 @@ DEFINE_SYSCALL(WakeupId, sys_wakeup_schedule, time_t timestamp, int32_t reason,
 
   time_t current_time = rtc_get_time();
   int32_t time_difference = timestamp - current_time;
-  WakeupId wakeup_id = s_wakeup_state.next_wakeup_id++;
 
   // Disallow scheduling past events
   if (time_difference <= 0) {
     return E_INVALID_ARGUMENT;
   }
 
-  Uuid uuid = app_manager_get_current_app_md()->uuid;
+  Uuid uuid = sys_process_manager_get_current_process_md()->uuid;
 
   WakeupEntry entry = {
     .uuid = uuid,
@@ -374,12 +406,9 @@ DEFINE_SYSCALL(WakeupId, sys_wakeup_schedule, time_t timestamp, int32_t reason,
     .utc = clock_is_timezone_set()
   };
 
-  // Add to settings file
-  StatusCode retval = prv_wakeup_settings_add_entry(wakeup_id, entry);
-
-  // If there was an error adding the wakeup event, return the error
-  if (retval < S_SUCCESS) {
-    return retval;
+  WakeupId wakeup_id = prv_wakeup_settings_add_entry(entry);
+  if (wakeup_id < 0) {
+    return wakeup_id;
   }
 
   // If this new event is sooner than the currently scheduled timer, make this
@@ -401,7 +430,7 @@ static void prv_wakeup_settings_delete_entry(WakeupId wakeup_id) {
 }
 
 static WakeupEntry prv_wakeup_settings_get_entry(WakeupId wakeup_id) {
-  WakeupEntry entry = {{0}};
+  WakeupEntry entry = {};
 
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   {
@@ -416,13 +445,13 @@ static WakeupEntry prv_wakeup_settings_get_entry(WakeupId wakeup_id) {
   return entry;
 }
 
-DEFINE_SYSCALL(void, sys_wakeup_delete, WakeupId wakeup_id) {
+PBL_SYSCALL(void, sys_wakeup_delete, (VAL, WakeupId, wakeup_id)) {
   WakeupEntry entry = prv_wakeup_settings_get_entry(wakeup_id);
 
   // Only allow owner to delete its own wakeup events
-  if (uuid_equal(&app_manager_get_current_app_md()->uuid, &entry.uuid)) {
+  if (uuid_equal(&sys_process_manager_get_current_process_md()->uuid, &entry.uuid)) {
     if (wakeup_id == s_wakeup_state.current_wakeup_id &&
-        new_timer_scheduled(s_current_timer_id, NULL)) {
+        new_timer_scheduled(s_current_timer_id, nullptr)) {
       new_timer_stop(s_current_timer_id);
     }
     prv_wakeup_settings_delete_entry(wakeup_id);
@@ -451,10 +480,12 @@ static bool prv_check_count_and_availability_callback(SettingsFile *file, Settin
     return true; // continue iterating
   }
 
-  if (uuid_equal(&app_manager_get_current_app_md()->uuid, &entry.uuid)) {
-    check->wakeup_count++;
+  if (!uuid_equal(&sys_process_manager_get_current_process_md()->uuid, &entry.uuid)) {
+    return true; // continue iterating
   }
-  // If the wakeup_id is with the same minute as another wakeup event
+
+  check->wakeup_count++;
+  // If the wakeup_id is with the same minute as another wakeup event of the app
   if ((entry.timestamp - WAKEUP_EVENT_WINDOW < check->wakeup_timestamp) &&
       (check->wakeup_timestamp < (entry.timestamp + WAKEUP_EVENT_WINDOW))) {
     check->wakeup_count = E_RANGE;
@@ -463,8 +494,19 @@ static bool prv_check_count_and_availability_callback(SettingsFile *file, Settin
   return true; // continue iterating
 }
 
-static StatusCode prv_wakeup_settings_add_entry(WakeupId wakeup_id, WakeupEntry entry) {
-  status_t status = S_SUCCESS;
+static WakeupId prv_wakeup_id_alloc(SettingsFile *file) {
+  WakeupId wakeup_id;
+
+  do {
+    wakeup_id = s_wakeup_state.next_wakeup_id;
+    s_wakeup_state.next_wakeup_id = prv_wakeup_id_next(wakeup_id);
+  } while (settings_file_exists(file, &wakeup_id, sizeof(wakeup_id)));
+
+  return wakeup_id;
+}
+
+static WakeupId prv_wakeup_settings_add_entry(WakeupEntry entry) {
+  WakeupId status;
 
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   {
@@ -483,8 +525,12 @@ static StatusCode prv_wakeup_settings_add_entry(WakeupId wakeup_id, WakeupEntry 
       } else if (check.wakeup_count >= MAX_WAKEUP_EVENTS_PER_APP) {
         status = E_OUT_OF_RESOURCES;
       } else {
-        settings_file_set(&wakeup_settings, (uint8_t *)&wakeup_id, sizeof(WakeupId),
-                          (uint8_t *)&entry, sizeof(WakeupEntry));
+        WakeupId wakeup_id = prv_wakeup_id_alloc(&wakeup_settings);
+        status = settings_file_set(&wakeup_settings, (uint8_t *)&wakeup_id, sizeof(WakeupId),
+                                   (uint8_t *)&entry, sizeof(WakeupEntry));
+        if (status == S_SUCCESS) {
+          status = wakeup_id;
+        }
       }
       settings_file_close(&wakeup_settings);
     } else {
@@ -510,10 +556,10 @@ static void prv_delete_events_by_uuid_callback(SettingsFile *old_file, SettingsF
   info->get_val(old_file, (uint8_t *)&entry, sizeof(WakeupEntry));
 
   // If the UUID is equal, delete the entry
-  if (uuid_equal(&app_manager_get_current_app_md()->uuid, &entry.uuid)) {
+  if (uuid_equal(&sys_process_manager_get_current_process_md()->uuid, &entry.uuid)) {
     // if this is the current timer event, cancel it
     if (wakeup_id == s_wakeup_state.current_wakeup_id &&
-        new_timer_scheduled(s_current_timer_id, NULL)) {
+        new_timer_scheduled(s_current_timer_id, nullptr)) {
       new_timer_stop(s_current_timer_id);
     }
     // Deletes the entry automatically if not written
@@ -524,13 +570,13 @@ static void prv_delete_events_by_uuid_callback(SettingsFile *old_file, SettingsF
   }
 }
 
-DEFINE_SYSCALL(void, sys_wakeup_cancel_all_for_app, void) {
+PBL_SYSCALL(void, sys_wakeup_cancel_all_for_app) {
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   {
     SettingsFile wakeup_settings;
     if (settings_file_open(&wakeup_settings, SETTINGS_FILE_NAME, SETTINGS_FILE_SIZE) == S_SUCCESS) {
       // Update settings file removing all events with UUID = uuid
-      settings_file_rewrite(&wakeup_settings, prv_delete_events_by_uuid_callback, NULL);
+      settings_file_rewrite(&wakeup_settings, prv_delete_events_by_uuid_callback, nullptr);
       settings_file_close(&wakeup_settings);
     }
   }
@@ -540,7 +586,7 @@ DEFINE_SYSCALL(void, sys_wakeup_cancel_all_for_app, void) {
   prv_wakeup_timer_next_pending();
 }
 
-DEFINE_SYSCALL(time_t, sys_wakeup_query, WakeupId wakeup_id) {
+PBL_SYSCALL(time_t, sys_wakeup_query, (VAL, WakeupId, wakeup_id)) {
   status_t status = E_DOES_NOT_EXIST;
   WakeupEntry entry = {};
 
@@ -567,7 +613,7 @@ DEFINE_SYSCALL(time_t, sys_wakeup_query, WakeupId wakeup_id) {
   }
 
   // timer doesn't belong to this app
-  if (!uuid_equal(&app_manager_get_current_app_md()->uuid, &entry.uuid)) {
+  if (!uuid_equal(&sys_process_manager_get_current_process_md()->uuid, &entry.uuid)) {
     return E_DOES_NOT_EXIST;
   }
 
@@ -584,7 +630,7 @@ void wakeup_enable(bool enable) {
   s_wakeup_enabled = enable;
   if (enable && !was_enabled) {
     prv_wakeup_timer_next_pending();
-  } else if (!enable && s_current_timer_id && new_timer_scheduled(s_current_timer_id, NULL)) {
+  } else if (!enable && s_current_timer_id && new_timer_scheduled(s_current_timer_id, nullptr)) {
     new_timer_stop(s_current_timer_id);
   }
 }
@@ -613,7 +659,7 @@ void wakeup_migrate_timezone(int utc_diff) {
 
 static void prv_wakeup_rewrite_kernel_bg_cb(void *data) {
   // Update each wakeup entry via prv_update_events_callback and record any missed events
-  struct prv_missed_events_s missed_events = {0, NULL};
+  struct prv_missed_events_s missed_events = {0, nullptr};
 
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   {
@@ -645,9 +691,9 @@ void wakeup_handle_significant_clock_change(void) {
   // 3. Reschedule the next wakeup timer
 
   if (pebble_task_get_current() == PebbleTask_KernelBackground) {
-    prv_wakeup_rewrite_kernel_bg_cb(NULL);
+    prv_wakeup_rewrite_kernel_bg_cb(nullptr);
   } else {
-    system_task_add_callback(prv_wakeup_rewrite_kernel_bg_cb, NULL);
+    system_task_add_callback(prv_wakeup_rewrite_kernel_bg_cb, nullptr);
   }
 }
 

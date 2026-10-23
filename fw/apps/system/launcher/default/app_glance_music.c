@@ -7,7 +7,9 @@
 
 #include <stdio.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/services/music.h>
 #include <pbl/util/string.h>
 #include <pbl/util/struct.h>
@@ -17,7 +19,6 @@
 #include <kernel/pbl_malloc.h>
 #include <process_management/app_install_manager.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 // We need enough space for the track artist and title (so 2 * MUSIC_BUFFER_LENGTH from music.h),
 // the delimiter string " - " (3), and 1 for the null terminator
@@ -34,18 +35,18 @@ typedef struct LauncherAppGlanceMusic {
 
 static KinoReel *prv_get_icon(LauncherAppGlanceStructured *structured_glance) {
   LauncherAppGlanceMusic *music_glance = launcher_app_glance_structured_get_data(structured_glance);
-  return NULL_SAFE_FIELD_ACCESS(music_glance, icon, NULL);
+  return NULL_SAFE_FIELD_ACCESS(music_glance, icon, nullptr);
 }
 
 static const char *prv_get_title(LauncherAppGlanceStructured *structured_glance) {
   LauncherAppGlanceMusic *music_glance = launcher_app_glance_structured_get_data(structured_glance);
-  return NULL_SAFE_FIELD_ACCESS(music_glance, title, NULL);
+  return NULL_SAFE_FIELD_ACCESS(music_glance, title, nullptr);
 }
 
 static void prv_music_glance_subtitle_dynamic_text_node_update(
-    PBL_UNUSED GContext *ctx, PBL_UNUSED GTextNode *node, PBL_UNUSED const GRect *box,
-    PBL_UNUSED const GTextNodeDrawConfig *config, PBL_UNUSED bool render, char *buffer,
-    size_t buffer_size, void *user_data) {
+    [[maybe_unused]] GContext *ctx, [[maybe_unused]] GTextNode *node,
+    [[maybe_unused]] const GRect *box, [[maybe_unused]] const GTextNodeDrawConfig *config,
+    [[maybe_unused]] bool render, char *buffer, size_t buffer_size, void *user_data) {
   LauncherAppGlanceStructured *structured_glance = user_data;
   LauncherAppGlanceMusic *music_glance = launcher_app_glance_structured_get_data(structured_glance);
   if (music_glance) {
@@ -79,7 +80,6 @@ static void prv_set_glance_icon(LauncherAppGlanceMusic *music_glance,
   kino_reel_destroy(music_glance->icon);
 
   // Set the new icon and record its resource ID
-  // TODO PBL-38539: Switch from using a regular resource ID to using a TimelineResourceId
   music_glance->icon = kino_reel_create_with_resource(new_icon_resource_id);
   PBL_ASSERTN(music_glance->icon);
   music_glance->icon_resource_id = new_icon_resource_id;
@@ -101,7 +101,7 @@ static bool prv_should_display_music_state(MusicPlayState play_state,
     case MusicPlayStateInvalid:
       return false;
   }
-  WTF;
+  pbl_panic();
 }
 
 static void prv_update_glance_for_music_state(LauncherAppGlanceStructured *structured_glance) {
@@ -125,7 +125,7 @@ static void prv_update_glance_for_music_state(LauncherAppGlanceStructured *struc
     // Get the artist and title strings for the music playing or paused
     char artist_buffer[MUSIC_BUFFER_LENGTH] = {};
     char title_buffer[MUSIC_BUFFER_LENGTH] = {};
-    music_get_now_playing(title_buffer, artist_buffer, NULL /* album_buffer */);
+    music_get_now_playing(title_buffer, artist_buffer, nullptr /* album_buffer */);
 
     // Only populate the glance with music info if we have both an artist string and a title string
     if (!IS_EMPTY_STRING(artist_buffer) && !IS_EMPTY_STRING(title_buffer)) {
@@ -164,7 +164,7 @@ static void prv_music_event_handler(PebbleEvent *event, void *context) {
     case PebbleMediaEventTypePhoneAudioReported:
       return;
   }
-  WTF;
+  pbl_panic();
 }
 
 static const LauncherAppGlanceStructuredImpl s_music_structured_glance_impl = {

@@ -5,10 +5,14 @@
 #include <pbl/services/time.h>
 #include <pbl/services/timeline/timeline_layout.h>
 #include <pbl/services/timeline/timeline_resources.h>
+#include <pbl/util/math.h>
 #include <pbl/util/size.h>
 #include <pbl/util/string.h>
 #include <pbl/util/units.h>
 
+#include <applib/graphics/gcontext.h>
+#include <applib/graphics/text_resources.h>
+#include <applib/graphics/utf8.h>
 #include <applib/preferred_content_size.h>
 #include <applib/ui/ui.h>
 #include <apps/system/timeline/layer.h>
@@ -45,8 +49,6 @@ typedef struct TimelineLayoutStyle {
   int16_t primary_list_margin_h;
   int16_t primary_secondary_peek_margin_h;
   bool thin_can_have_secondary;
-  int16_t fat_future_title_offset_y;
-  int16_t fat_past_title_offset_y;
   int16_t thin_future_title_offset_y;
   int16_t thin_past_title_offset_y;
 } TimelineLayoutStyle;
@@ -56,8 +58,6 @@ static const TimelineLayoutStyle s_style_medium = {
   .thin_time_margin_h = -8,
   .primary_list_margin_h = 6,
   .primary_line_spacing_delta = -2,
-  .fat_future_title_offset_y = 0,
-  .fat_past_title_offset_y = 0,
   .thin_future_title_offset_y = 0,
   .thin_past_title_offset_y = 0,
 };
@@ -66,12 +66,9 @@ static const TimelineLayoutStyle s_style_large = {
   .fat_time_margin_h = -3,
   .thin_time_margin_h = -6,
   .primary_list_margin_h = 2,
-  // PBL-42540: This property is dependent on the screen size. Whether there can be a secondary
-  // depends on whether the remaining screen space after fat permits.
+  // Whether there can be a secondary depends on the screen space remaining after fat
   .primary_secondary_peek_margin_h = -5,
   .thin_can_have_secondary = true,
-  .fat_future_title_offset_y = 25,
-  .fat_past_title_offset_y = -30,
   .thin_future_title_offset_y = 45,
   .thin_past_title_offset_y = 10,
 };
@@ -96,7 +93,7 @@ static void prv_update_proc(Layer *layer, GContext *ctx);
 static GTextNode *prv_create_pin_view_node(TimelineLayout *layout);
 
 static const TimelineLayoutStyle *prv_get_style(void) {
-  return s_styles[system_theme_get_content_size()];
+  return s_styles[PBL_IF_ROUND_ELSE(PreferredContentSizeDefault, system_theme_get_content_size())];
 }
 
 TimelineResourceId timeline_layout_get_icon_resource_id(LayoutLayerMode mode,
@@ -183,7 +180,7 @@ void timeline_layout_deinit(TimelineLayout *timeline_layout) {
     }
     task_free(timeline_layout->metric_icon_layers);
     timeline_layout->num_metric_icon_layers = 0;
-    timeline_layout->metric_icon_layers = NULL;
+    timeline_layout->metric_icon_layers = nullptr;
   }
   animation_unschedule(timeline_layout->transition_animation);
   timeline_layout_deinit_view(timeline_layout);
@@ -219,12 +216,12 @@ void timeline_layout_get_icon_frame(const GRect *bounds, TimelineScrollDirection
                                     GRect *frame) {
   const GSize size = timeline_resources_get_gsize(TimelineResourceSizeTiny);
   const bool is_future = (scroll_direction == TimelineScrollDirectionDown);
-  PBL_UNUSED const int offset_y_rect = -5;
-  // Center the icon vertically at screen center (offsets differ by content size/style)
-  const bool use_large_style = (system_theme_get_content_size() >= PreferredContentSizeLarge);
+  [[maybe_unused]] const int offset_y_rect = -5;
+  // Round icon offsets follow the display geometry used by the timeline layer.
+  const bool use_large_style = (PreferredContentSizeDefault >= PreferredContentSizeLarge);
   // s_style_large: future_top_margin=39, past layout origin=117, icon_offset_y=3
   // s_style_medium: future_top_margin=39, past layout origin=61, icon_offset_y=0
-  PBL_UNUSED const int offset_y_round =
+  [[maybe_unused]] const int offset_y_round =
       use_large_style ? (is_future ? 76 : -2) : (is_future ? 40 : 17);
   const GPoint origin = {
     .x = bounds->size.w - size.w + 2,
@@ -273,7 +270,7 @@ static void prv_init_icon(TimelineLayout *timeline_layout, const GRect *icon_fra
     kino_reel_destroy(icon_reel);
     icon_reel = prv_create_kino_reel_with_timeline_resource(
         timeline_layout, icon_res_size, fallback_resource, TIMELINE_RESOURCE_NOTIFICATION_FLAG,
-        NULL /* app_id */);
+        nullptr /* app_id */);
     if (!icon_reel) {
       return;
     }
@@ -349,8 +346,56 @@ const LayoutColors *timeline_layout_get_colors(const LayoutLayer *layout_ref) {
 // View
 ////////////////////////
 
+#if PBL_ROUND
+typedef struct {
+  GContext *ctx;
+  GFont font;
+  int16_t top;
+  int16_t bottom;
+} TitleMetrics;
+
+static bool prv_measure_title_glyph(int index, Codepoint codepoint, void *context) {
+  if (codepoint_is_zero_width(codepoint) || codepoint_is_unicode_space(codepoint) ||
+      codepoint == NEWLINE_CODEPOINT) {
+    return true;
+  }
+  TitleMetrics *metrics = context;
+  GlyphLocation location;
+  const GlyphData *glyph =
+      text_resources_get_glyph(&metrics->ctx->font_cache, codepoint, metrics->font, &location);
+  if (glyph && glyph->header.width_px && glyph->header.height_px) {
+    const int16_t top = glyph->header.top_offset_px + location.baseline_adjust;
+    metrics->top = MIN(metrics->top, top);
+    metrics->bottom = MAX(metrics->bottom, top + glyph->header.height_px);
+  }
+  return true;
+}
+
+static void prv_anchor_title(TimelineLayout *layout) {
+  GTextNodeContainer *container = (GTextNodeContainer *)layout->view_node;
+  GTextNode *time_node = container->nodes[0];
+  GTextNodeText *title = (GTextNodeText *)container->nodes[1];
+  const int16_t font_height = fonts_get_font_height(title->font);
+  TitleMetrics metrics = {
+    .ctx = graphics_context_get_current_context(),
+    .font = title->font,
+    .top = font_height,
+  };
+  utf8_each_codepoint(title->text, prv_measure_title_glyph, &metrics);
+  if (metrics.top >= metrics.bottom) {
+    container->node.offset.y = -container->node.cached_size.h / 2;
+    return;
+  }
+  const int16_t last_line_offset = MAX(
+      title->node.cached_size.h - title->node.margin.h - font_height - title->line_spacing_delta,
+      0);
+  const int16_t title_center = (metrics.top + metrics.bottom + last_line_offset) / 2;
+  container->node.offset.y = -time_node->cached_size.h - title->node.offset.y - title_center;
+}
+#endif
+
 void timeline_layout_init_view(TimelineLayout *layout, LayoutLayerMode mode) {
-  GTextNode *view_node = NULL;
+  GTextNode *view_node = nullptr;
   switch (mode) {
     case LayoutLayerModeCard:
       view_node = layout->impl->card_view_constructor(layout);
@@ -366,6 +411,11 @@ void timeline_layout_init_view(TimelineLayout *layout, LayoutLayerMode mode) {
   }
   layout->view_node = view_node;
   timeline_layout_get_size(layout, graphics_context_get_current_context(), &layout->view_size);
+#if PBL_ROUND
+  if (mode == LayoutLayerModePinnedFat) {
+    prv_anchor_title(layout);
+  }
+#endif
 }
 
 void timeline_layout_deinit_view(TimelineLayout *layout) {
@@ -373,7 +423,7 @@ void timeline_layout_deinit_view(TimelineLayout *layout) {
     layout->impl->card_view_deinitializer(layout);
   }
   graphics_text_node_destroy(layout->view_node);
-  layout->view_node = NULL;
+  layout->view_node = nullptr;
 }
 
 static GTextNode *prv_create_all_day_text_node(const TimelineLayout *layout) {
@@ -399,8 +449,7 @@ static GTextNode *prv_create_all_day_text_node(const TimelineLayout *layout) {
   };
   GTextNodeText *text_node = (GTextNodeText *)layout_create_text_node_from_config(
       &layout->layout_layer, &s_all_day_config.text.extent.node);
-  // TODO: PBL-30522 Enable timeline list view text flow
-  // Remove when text flow is enabled
+  // TODO: remove once timeline list view text flow is enabled
   if (PBL_IF_ROUND_ELSE(layout->layout_layer.mode == LayoutLayerModePinnedThin, false)) {
     const bool is_future = (layout->info->scroll_direction == TimelineScrollDirectionDown);
     const int padding_left = is_future ? 25 : 29;
@@ -472,7 +521,7 @@ static GTextNode *prv_create_time_text_node(const TimelineLayout *layout) {
 
 static const char *prv_get_secondary_text(const TimelineLayout *layout) {
   const AttributeList *attributes = layout->layout_layer.attributes;
-  return attribute_get_string(attributes, AttributeIdShortSubtitle, NULL)
+  return attribute_get_string(attributes, AttributeIdShortSubtitle, nullptr)
              ?: attribute_get_string(attributes, layout->impl->attributes.secondary_id, "");
 }
 
@@ -496,11 +545,13 @@ static GTextNode *prv_create_pin_view_node(TimelineLayout *layout) {
   GTextNodeVertical *vertical_node = graphics_text_node_create_vertical(num_vertical_nodes);
   const bool is_future = (layout->info->scroll_direction == TimelineScrollDirectionDown);
   const bool is_peek = (layout->layout_layer.mode == LayoutLayerModePeek);
+  const bool is_fat = (layout->layout_layer.mode == LayoutLayerModePinnedFat);
   vertical_node->vertical_alignment =
       is_peek ? GVerticalAlignmentCenter
-              : PBL_IF_ROUND_ELSE((is_future ? GVerticalAlignmentBottom : GVerticalAlignmentTop),
-                                  GVerticalAlignmentTop);
-  GTextNode *time_text_node = !is_peek ? prv_create_time_text_node(layout) : NULL;
+              : PBL_IF_ROUND_ELSE(
+                    (is_future && !is_fat ? GVerticalAlignmentBottom : GVerticalAlignmentTop),
+                    GVerticalAlignmentTop);
+  GTextNode *time_text_node = !is_peek ? prv_create_time_text_node(layout) : nullptr;
   if (time_text_node) {
 #if PBL_RECT
     // A long time may run into the sidebar's arrow instead of being cut short
@@ -510,8 +561,7 @@ static GTextNode *prv_create_pin_view_node(TimelineLayout *layout) {
   }
 
   const char *secondary_text = prv_get_secondary_text(layout);
-  const bool is_fat = (layout->layout_layer.mode == LayoutLayerModePinnedFat);
-  PBL_UNUSED const bool is_thin = (layout->layout_layer.mode == LayoutLayerModePinnedThin);
+  [[maybe_unused]] const bool is_thin = (layout->layout_layer.mode == LayoutLayerModePinnedThin);
   const TimelineLayoutStyle *style = prv_get_style();
   const bool thin_can_have_secondary = style->thin_can_have_secondary;
   const bool has_secondary =
@@ -526,6 +576,13 @@ static GTextNode *prv_create_pin_view_node(TimelineLayout *layout) {
     const int hour_title_margin = is_fat ? style->fat_time_margin_h : style->thin_time_margin_h;
     if (time_text_node) {
       time_text_node->margin.h += hour_title_margin;
+#if PBL_RECT
+      if (!layout->info->all_day &&
+          system_theme_get_content_size() == PreferredContentSizeExtraLarge) {
+        // The 36px title font needs a tighter gap below the time header.
+        time_text_node->margin.h -= 8;
+      }
+#endif
     }
 
     static const LayoutNodeTextConfig s_primary_config = {
@@ -538,10 +595,10 @@ static GTextNode *prv_create_pin_view_node(TimelineLayout *layout) {
     GTextNodeText *primary_node = (GTextNodeText *)layout_create_text_node_from_config(
         &layout->layout_layer, &s_primary_config.extent.node);
     const char *primary_text =
-        layout->impl->get_primary_text ? layout->impl->get_primary_text(layout) : NULL;
+        layout->impl->get_primary_text ? layout->impl->get_primary_text(layout) : nullptr;
     primary_node->text =
         primary_text
-            ?: attribute_get_string(attributes, AttributeIdShortTitle, NULL)
+            ?: attribute_get_string(attributes, AttributeIdShortTitle, nullptr)
             ?: attribute_get_string(attributes, layout->impl->attributes.primary_id, "");
     primary_node->line_spacing_delta = style->primary_line_spacing_delta;
     int num_primary_lines = is_fat ? 2 : 1;
@@ -586,8 +643,7 @@ static GTextNode *prv_create_pin_view_node(TimelineLayout *layout) {
     secondary_node->overflow = overflow;
     graphics_text_node_container_add_child(&vertical_node->container, &secondary_node->node);
 
-    // TODO: PBL-30522 Enable timeline list view text flow
-    // Remove when text flow is enabled
+    // TODO: remove once timeline list view text flow is enabled
     if (PBL_IF_ROUND_ELSE(!is_future && !is_peek, false)) {
       const int padding_left = 8;
       secondary_node->node.offset.x += padding_left;
@@ -595,14 +651,9 @@ static GTextNode *prv_create_pin_view_node(TimelineLayout *layout) {
     }
   }
 
-  if (PBL_IF_ROUND_ELSE(!is_peek, false)) {
-    if (is_fat) {
-      vertical_node->container.node.offset.y =
-          is_future ? style->fat_future_title_offset_y : style->fat_past_title_offset_y;
-    } else {
-      vertical_node->container.node.offset.y =
-          is_future ? style->thin_future_title_offset_y : style->thin_past_title_offset_y;
-    }
+  if (PBL_IF_ROUND_ELSE(is_thin, false)) {
+    vertical_node->container.node.offset.y =
+        is_future ? style->thin_future_title_offset_y : style->thin_past_title_offset_y;
   }
 
   if (is_peek) {
@@ -653,6 +704,20 @@ static void prv_get_pin_view_bounds(TimelineLayout *layout, GRect *box_out) {
     box_out->size.h = thin_height;
   } else if (layout->layout_layer.mode == LayoutLayerModePinnedFat) {
     box_out->size.h -= PBL_IF_ROUND_ELSE(30, 20);
+#if PBL_ROUND
+    // Round pins keep the display's height, so make room for a time header larger than default
+    const int time_growth_h =
+        fonts_get_font_height(system_theme_get_font(TextStyleFont_TimeHeaderNumbers)) -
+        fonts_get_font_height(
+            system_theme_get_font_for_default_size(TextStyleFont_TimeHeaderNumbers));
+    box_out->size.h += MAX(time_growth_h, 0);
+    // The title's glyph center is anchored to the icon's resting position within the pin, so
+    // the title scrolls with the pin while the icon animates separately.
+    const GRect pin_frame = {{0, timeline_layer_get_icon_offset_y()}, box_out->size};
+    GRect icon_frame;
+    timeline_layout_get_icon_frame(&pin_frame, layout->info->scroll_direction, &icon_frame);
+    box_out->origin.y = icon_frame.origin.y + icon_frame.size.h / 2;
+#endif
   }
 }
 
@@ -665,7 +730,7 @@ static void prv_get_card_view_bounds(TimelineLayout *layout, GRect *box_out) {
 static void prv_render_view(TimelineLayout *layout, GContext *ctx, bool render, GSize *size_out) {
   const bool is_card = (layout->layout_layer.mode == LayoutLayerModeCard);
   const bool is_peek = (layout->layout_layer.mode == LayoutLayerModePeek);
-  const bool PBL_UNUSED paging = PBL_IF_ROUND_ELSE((is_card || is_peek), false);
+  [[maybe_unused]] const bool paging = PBL_IF_ROUND_ELSE((is_card || is_peek), false);
   GRect box;
   (is_card ? prv_get_card_view_bounds : prv_get_pin_view_bounds)(layout, &box);
   graphics_context_set_text_color(
@@ -687,7 +752,7 @@ static void prv_render_view(TimelineLayout *layout, GContext *ctx, bool render, 
 
 void timeline_layout_render_view(TimelineLayout *layout, GContext *ctx) {
   const bool render = true;
-  prv_render_view(layout, ctx, render, NULL);
+  prv_render_view(layout, ctx, render, nullptr);
 }
 
 void timeline_layout_get_size(TimelineLayout *layout, GContext *ctx, GSize *size_out) {

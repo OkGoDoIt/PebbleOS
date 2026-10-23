@@ -34,7 +34,7 @@ static FontHelper s_font_helpers[] = {
   {.key = FONT_KEY_LECO_38_BOLD_NUMBERS, .handle = RESOURCE_ID_LECO_38_BOLD_NUMBERS},
   {.key = FONT_KEY_LECO_42_NUMBERS, .handle = RESOURCE_ID_LECO_42_NUMBERS},
   {.key = FONT_KEY_LECO_28_LIGHT_NUMBERS, .handle = RESOURCE_ID_LECO_28_LIGHT_NUMBERS},
-#if defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
+#if defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
   {.key = FONT_KEY_LECO_60_NUMBERS_AM_PM, .handle = RESOURCE_ID_LECO_60_NUMBERS_AM_PM},
 #endif
   {.key = FONT_KEY_GOTHIC_14_EMOJI, .handle = RESOURCE_ID_GOTHIC_14_EMOJI},
@@ -46,7 +46,7 @@ static FontHelper s_font_helpers[] = {
   {.key = FONT_KEY_GOTHIC_28_BOLD, .handle = RESOURCE_ID_GOTHIC_28_BOLD},
   {.key = FONT_KEY_GOTHIC_36, .handle = RESOURCE_ID_GOTHIC_36},
   {.key = FONT_KEY_GOTHIC_36_BOLD, .handle = RESOURCE_ID_GOTHIC_36_BOLD},
-#if defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
+#if defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
   {.key = FONT_KEY_AGENCY_FB_46_NUMBERS_AM_PM, .handle = RESOURCE_ID_AGENCY_FB_46_NUMBERS_AM_PM},
   {.key = FONT_KEY_AGENCY_FB_88_NUMBERS_AM_PM, .handle = RESOURCE_ID_AGENCY_FB_88_NUMBERS_AM_PM},
   {.key = FONT_KEY_AGENCY_FB_88_THIN_NUMBERS_AM_PM,
@@ -61,7 +61,7 @@ static FontHelper *prv_font_helper_from_font_key(const char *font_key) {
       return &s_font_helpers[i];
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 static GFont prv_get_font(const char *font_key) {
@@ -94,7 +94,7 @@ FontInfo *fonts_get_system_emoji_font_for_size(unsigned int font_height) {
     }
   }
   // Didn't find a suitable emoji font
-  return NULL;
+  return nullptr;
 }
 
 GFont fonts_get_system_font(const char *font_key) {
@@ -114,6 +114,5 @@ int16_t fonts_get_font_cap_offset(GFont font) {
     return 0;
   }
 
-  // FIXME PBL-25709: Actually use font-specific caps and also provide function for baseline offsets
   return (int16_t)(((int16_t)font->max_height) * 22 / 100);
 }

@@ -8,6 +8,7 @@
 #include "settings.h"
 #include "system.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/i18n/i18n.h>
 
 #include <applib/event_service_client.h>
@@ -18,7 +19,6 @@
 #include <kernel/pbl_malloc.h>
 #include <process_state/app_state/app_state.h>
 #include <shell/prefs.h>
-#include <system/passert.h>
 
 typedef struct SettingsData {
   Window window;
@@ -277,7 +277,7 @@ static Window *prv_create(SettingsMenuItem category, const char *title_override,
 }
 
 Window *settings_window_create(SettingsMenuItem category, SettingsCallbacks *callbacks) {
-  return prv_create(category, NULL, callbacks);
+  return prv_create(category, nullptr, callbacks);
 }
 
 Window *settings_window_create_with_title(SettingsMenuItem category, const char *title,

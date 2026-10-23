@@ -2,7 +2,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #pragma once
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/kernel/compiler.h>
@@ -108,9 +107,9 @@ typedef struct PBL_PACKED {
  */
 #define ALG_DLS_MINUTES_RECORD_VERSION 14
 
-_Static_assert((ALG_DLS_MINUTES_RECORD_VERSION & (1 << 2)) > 0,
-               "Android 3.10-4.0 requires bit 2 to be set");
-_Static_assert(ALG_DLS_MINUTES_RECORD_VERSION <= 225, "iOS requires version less that 255");
+static_assert((ALG_DLS_MINUTES_RECORD_VERSION & (1 << 2)) > 0,
+              "Android 3.10-4.0 requires bit 2 to be set");
+static_assert(ALG_DLS_MINUTES_RECORD_VERSION <= 225, "iOS requires version less that 255");
 
 /** @brief Data logging minute sample. */
 typedef struct PBL_PACKED {
@@ -138,7 +137,7 @@ typedef struct PBL_PACKED {
   uint8_t heart_rate_zone;
 
   // New fields added in version 14
-  /** Blood oxygen saturation (%) measured this minute, 0 if none. */
+  /** SpO2 (%) measured this minute, 0 if none. */
   uint8_t spo2_percent;
   /** SpO2 signal quality (@c HeartRateQuality value), 0 if none. */
   uint8_t spo2_quality;
@@ -340,6 +339,18 @@ void activity_algorithm_post_process_sleep_sessions(uint16_t num_sessions,
  */
 bool activity_algorithm_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_records,
                                            time_t *utc_start);
+
+/**
+ * @brief Get the heart rate of each minute in a time range, reading the minute data once.
+ *
+ * @param[out] heart_rate_bpm Array of @p num_minutes heart rates, one per minute from
+ * @p utc_start, 0 for minutes without a reading.
+ * @param num_minutes Number of minutes to fill in.
+ * @param utc_start UTC time of the first minute, rounded down to the minute.
+ * @return true on success.
+ */
+bool activity_algorithm_get_minute_heart_rate(uint8_t *heart_rate_bpm, uint32_t num_minutes,
+                                              time_t utc_start);
 
 /**
  * @brief Dump the minute file base64-encoded with PBL_LOG.

@@ -10,6 +10,7 @@
 #include <pbl/bluetooth/gatt.h>
 #include <pbl/bluetooth/ppog_reversed.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
@@ -25,11 +26,8 @@
 #include <comm/bt_lock.h>
 #include <kernel/event_loop.h>
 #include <kernel/pbl_malloc.h>
+#include <kernel/pebble_tasks.h>
 #include <system/hexdump.h>
-#include <system/passert.h>
-
-//! See https://pebbletechnology.atlassian.net/wiki/pages/viewpage.action?pageId=22511665
-//! for detailed information regarding the PPoGATT protocol state machine.
 
 typedef enum {
   StateDisconnectedReadingMeta,
@@ -58,7 +56,7 @@ typedef enum {
   DeleteReasonCount,
 } DeleteReason;
 
-_Static_assert(DeleteReasonCount <= CommSessionCloseReason_TransportSpecificEnd + 1, "");
+static_assert(DeleteReasonCount <= CommSessionCloseReason_TransportSpecificEnd + 1, "");
 
 typedef enum {
   AckTimeoutState_Inactive = 0,
@@ -131,14 +129,14 @@ typedef struct PPoGATTClient {
   //! Guards prv_send_next_packets against re-entry while bt_lock is dropped.
   bool send_in_progress;
 
-  //! Number of consecutive send attempts that failed for lack of BT stack
-  //! buffers (reversed role only); 0 when not stalled.
+  //! Number of consecutive send retries for lack of BT stack buffers; 0 when
+  //! not stalled.
   uint16_t send_retry_count;
 
   TimerID rx_ack_timer; //! Timer to ensure Acks for data are dispatched regularly
 
   //! Timer to retry sending after the BT stack ran out of buffers
-  //! (reversed role only; NimBLE has no "buffers freed" event to wait for)
+  //! (NimBLE has no "buffers freed" event to wait for)
   TimerID send_retry_timer;
 
   //! Whether the PPoGATT server transports "System", "App" or "Hybrid" PP sessions.
@@ -159,10 +157,6 @@ typedef struct PPoGATTClient {
 static PPoGATTClient *s_ppogatt_head;
 
 static RegularTimerInfo s_ack_timer;
-
-//! Last timer value. It rolls over after 3, back to 0.
-//! This way the time-outs can be crammed into 2 bits per packet.
-static uint8_t s_timer_ticks;
 
 static uint8_t s_disconnect_counter;
 
@@ -413,7 +407,7 @@ static void prv_ack_timeout_kernelmain_cb(void *unused) {
 //! Never block on bt_lock from the timer task (it stalls every other timer in
 //! the system); bounce to KernelMain, where the rest of the PPoG state machine runs.
 static void prv_timer_callback(void *unused) {
-  launcher_task_add_callback(prv_ack_timeout_kernelmain_cb, NULL);
+  launcher_task_add_callback(prv_ack_timeout_kernelmain_cb, nullptr);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -421,7 +415,7 @@ static void prv_timer_callback(void *unused) {
 static PPoGATTClient *prv_create_client(TimerID rx_ack_timer, TimerID send_retry_timer) {
   PPoGATTClient *client = kernel_malloc(sizeof(PPoGATTClient));
   if (!client) {
-    return NULL;
+    return nullptr;
   }
   *client = (PPoGATTClient){};
   client->app_uuid = UUID_INVALID;
@@ -445,7 +439,7 @@ static void prv_delete_client(PPoGATTClient *client, bool is_disconnected, Delet
     pbl_bt_characteristic_t data_char = client->characteristics.data;
     // Release bt_lock before calling into NimBLE to avoid deadlock with ble_hs_mutex.
     bt_unlock();
-    gatt_client_subscriptions_subscribe(data_char, BLESubscriptionNone, GAPLEClientKernel);
+    gatt_client_subscriptions_subscribe(data_char, BLESubscriptionNone);
     bt_lock();
   }
 
@@ -454,10 +448,10 @@ static void prv_delete_client(PPoGATTClient *client, bool is_disconnected, Delet
   }
 
   if (client->role == PPoGATTRoleReversed && s_reversed_active_conn == client->rev.connection) {
-    s_reversed_active_conn = NULL;
+    s_reversed_active_conn = nullptr;
   }
 
-  list_remove(&client->node, (ListNode **)&s_ppogatt_head, NULL);
+  list_remove(&client->node, (ListNode **)&s_ppogatt_head, nullptr);
   new_timer_delete(client->rx_ack_timer);
   new_timer_delete(client->send_retry_timer);
   kernel_free(client);
@@ -535,7 +529,7 @@ static bool prv_client_filter_callback(ListNode *found_node, void *data) {
 
 static bool prv_is_client_valid(const PPoGATTClient *client) {
   return (list_find((ListNode *)s_ppogatt_head, prv_client_filter_callback, (void *)client) !=
-          NULL);
+          nullptr);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -568,34 +562,15 @@ static void prv_enter_awaiting_reset_complete(PPoGATTClient *client, bool self_i
     DeleteReason reason =
         self_initiated ? DeleteReason_ResetSelfInitiated : DeleteReason_ResetRemoteInitiated;
     comm_session_close(client->session, (CommSessionCloseReason)reason);
-    client->session = NULL;
+    client->session = nullptr;
   }
   client->in.next_expected_data_sn = 0;
-  // FIXME: Use SN for RR / RC (https://pebbletechnology.atlassian.net/browse/PBL-12424)
-  client->out = (__typeof__(client->out)){};
+  // TODO: use the SN for Reset Request / Reset Complete
+  client->out = (typeof(client->out)){};
 
   if (prv_client_supports_enhanced_throughput_features(client)) {
-    // Set our desired window sizes
-    //
-    // Note: as of PBL-38806 (which is in Android 4.0), the Android app will negotiate the MTU size
-    // before starting up a PPoG session so we can use this info to dynamically change the window
-    // size. The iOS app has no control over when the MTU size is negotiated (though it seems to be
-    // negotiated in time) but if we were to use PPoG V1 on iOS it's something we should check
-
-    if (prv_get_max_payload_size(client) < GATT_MTU_MINIMUM) {
-      // If a device does not support large a large MTU/payload size, its throughput is severely
-      // limited by the window size leading. This prevents us from handling throughput sensitive
-      // operations (such as dictation) in time and results in dropped packets. To improve this,
-      // negotiate a larger TX Window size so we can get a better data rate.
-      client->out.tx_window_size = (PPOGATT_SN_MOD_DIV - 1);
-    } else {
-      // TODO: For larger MTU sizes, we wind up getting throttled by default_kernel_sender.c
-      // because it limits kernel heap space allocated to ~1kB. We may be able to improve App
-      // Message throughput by fiddling with this value but at the same time we run a higher risk
-      // of blowing up the Dialog Heap if a lot of payloads get queued up on the BT chip. When time
-      // allows, we should fiddle with this setting to see if we can optimize outbound throughput
-      client->out.tx_window_size = PPOGATT_V0_WINDOW_SIZE;
-    }
+    // Set our desired window sizes: the largest TX window, the phone caps it
+    client->out.tx_window_size = (PPOGATT_SN_MOD_DIV - 1);
 
     const uint8_t desired_rx_window =
         MIN(PPOGATT_V1_DESIRED_RX_WINDOW_SIZE, PPOGATT_SN_MOD_DIV - 1);
@@ -639,7 +614,7 @@ static void prv_start_reset(PPoGATTClient *client) {
 
     bt_lock();
     GAPLEConnection *connection = prv_get_connection(client);
-    PBL_ASSERTN(connection != NULL);
+    PBL_ASSERTN(connection != nullptr);
     bt_unlock();
 
     pbl_bt_gap_le_disconnect(&connection->device);
@@ -659,7 +634,6 @@ static void prv_handle_reset_request(PPoGATTClient *client) {
   }
   if (client->state == StateConnectedClosedAwaitingResetCompleteRemoteInitiatedReset) {
     // Already in remote-initiated reset procedure, server retrying?
-    // See https://pebbletechnology.atlassian.net/browse/PBL-12424
     PBL_LOG_INFO("Ignoring reset request because remote server already requested.");
     return;
   }
@@ -772,6 +746,15 @@ static void prv_handle_data(PPoGATTClient *client, const PPoGATTPacket *packet,
       .sn = client->in.next_expected_data_sn,
       .type = PPoGATTPacketTypeAck,
     };
+    if (!prv_client_supports_enhanced_throughput_features(client)) {
+      client->out.send_rx_ack_now = true;
+    } else {
+      client->out.outstanding_rx_ack_count++;
+      if (client->out.outstanding_rx_ack_count >= (client->out.rx_window_size / 2)) {
+        // we want to ACK data before the other side is blocking waiting for an ACK
+        client->out.send_rx_ack_now = true;
+      }
+    }
     prv_send_next_packets(client);
 
     client->in.next_expected_data_sn = prv_next_sn(client->in.next_expected_data_sn);
@@ -871,7 +854,7 @@ static void prv_retry_meta_read(PPoGATTClient *client) {
   // gatt_client_op_read manages bt_lock internally.
   bt_unlock();
 
-  enum pbl_bt_errno result = gatt_client_op_read(meta, GAPLEClientKernel);
+  enum pbl_bt_errno result = gatt_client_op_read(meta);
 
   // Re-acquire bt_lock before accessing client state again
   bt_lock();
@@ -959,8 +942,8 @@ static void prv_handle_meta_read(PPoGATTClient *client, const uint8_t *value, si
   // See prv_retry_meta_read for the same pattern.
   bt_unlock();
 
-  enum pbl_bt_errno e = gatt_client_subscriptions_subscribe(data_char, BLESubscriptionNotifications,
-                                                            GAPLEClientKernel);
+  enum pbl_bt_errno e =
+      gatt_client_subscriptions_subscribe(data_char, BLESubscriptionNotifications);
 
   // Re-acquire bt_lock before accessing client state
   bt_lock();
@@ -1029,7 +1012,6 @@ void ppogatt_create(void) {
   {
     PBL_ASSERT_TASK(PebbleTask_KernelMain);
     PBL_ASSERTN(!s_ppogatt_head);
-    s_timer_ticks = 0;
     s_rediscovery_requested_this_connection = false;
   }
   bt_unlock();
@@ -1058,15 +1040,14 @@ void ppogatt_handle_service_removed(pbl_bt_characteristic_t *characteristics,
       client = next;
     }
 
-    // PBL-42768 - In the logs in this ticket it looks to me like we missed that the service
-    // was removed. Add some diagnostic logging to hopefully reveal more info on a failure
+    // Diagnostics in case the service removal was missed
     if (!client_removed) {
       pbl_bt_characteristic_t meta = 0;
       pbl_bt_characteristic_t data = 0;
 
       // assume one client
       PPoGATTClient *client = s_ppogatt_head;
-      if (client != NULL) {
+      if (client != nullptr) {
         meta = client->characteristics.meta;
         data = client->characteristics.data;
       }
@@ -1306,7 +1287,7 @@ void ppogatt_handle_service_discovered(pbl_bt_characteristic_t *characteristics)
     // gatt_client_op_read manages bt_lock internally.
     bt_unlock();
 
-    enum pbl_bt_errno result = gatt_client_op_read(meta, GAPLEClientKernel);
+    enum pbl_bt_errno result = gatt_client_op_read(meta);
 
     // Re-acquire bt_lock before accessing client state again
     bt_lock();
@@ -1324,7 +1305,7 @@ void ppogatt_handle_service_discovered(pbl_bt_characteristic_t *characteristics)
 
 bool ppogatt_can_handle_characteristic(pbl_bt_characteristic_t characteristic) {
   bt_lock();
-  bool can_handle = (prv_find_client_with_characteristic(characteristic, NULL) != NULL);
+  bool can_handle = (prv_find_client_with_characteristic(characteristic, nullptr) != nullptr);
   bt_unlock();
   return can_handle;
 }
@@ -1336,13 +1317,13 @@ void ppogatt_handle_subscribe(pbl_bt_characteristic_t characteristic,
   bt_lock();
   {
     const bool is_subscribed = (subscription_type != BLESubscriptionNone);
-    PPoGATTClient *client = prv_find_client_with_characteristic(characteristic, NULL);
+    PPoGATTClient *client = prv_find_client_with_characteristic(characteristic, nullptr);
     if (!client && is_subscribed) {
       PBL_LOG_ERR("PPoGATT Client could be found, unsubscribing");
       // Attempt to unsubscribe to avoid wasting bandwidth.
       // Release bt_lock before calling into NimBLE to avoid deadlock with ble_hs_mutex.
       bt_unlock();
-      gatt_client_subscriptions_subscribe(characteristic, BLESubscriptionNone, GAPLEClientKernel);
+      gatt_client_subscriptions_subscribe(characteristic, BLESubscriptionNone);
       bt_lock();
       goto unlock;
     }
@@ -1400,7 +1381,7 @@ static PPoGATTPacket *prv_lazily_allocate_packet_if_needed(const PPoGATTClient *
   if (!packet) {
     const uint16_t max_payload_size = prv_get_max_payload_size(client);
     if (max_payload_size == 0) {
-      return NULL;
+      return nullptr;
     }
     packet = (PPoGATTPacket *)kernel_malloc_check(sizeof(PPoGATTPacket) + max_payload_size);
     *heap_packet_in_out = packet;
@@ -1417,7 +1398,7 @@ static const PPoGATTPacket *prv_prepare_next_reset_packet(const PPoGATTClient *c
   if (!packet) {
     PBL_LOG_WRN("Couldn't allocate reset packet: role=%u state=%u type=%u", client->role,
                 client->state, (unsigned)client->out.reset_packet_to_send.type);
-    return NULL;
+    return nullptr;
   }
 
   if (client->out.reset_packet_to_send.type == PPoGATTPacketTypeResetRequest) {
@@ -1498,24 +1479,30 @@ static void prv_send_retry_timer_cb(void *data) {
   launcher_task_add_callback(prv_send_retry_kernelmain_cb, data);
 }
 
+//! Out of mbufs (e.g. inbound flood during a firmware update). NimBLE has no
+//! "buffers freed" event, so retry later, backing off while the stall lasts.
+static void prv_retry_send_later(PPoGATTClient *client) {
+  if (new_timer_scheduled(client->send_retry_timer, nullptr)) {
+    return;
+  }
+  if (client->send_retry_count == 0) {
+    PBL_LOG_DBG("PPoGATT out of buffers, retrying");
+  }
+  // Double the delay per retry; the inner MIN only bounds the shift.
+  const uint32_t delay_ms = MIN(PPOGATT_SEND_RETRY_DELAY_MS << MIN(client->send_retry_count, 16),
+                                PPOGATT_SEND_RETRY_MAX_DELAY_MS);
+  client->send_retry_count++;
+  new_timer_start(client->send_retry_timer, delay_ms, prv_send_retry_timer_cb, client, 0);
+}
+
 static const PPoGATTPacket *prv_prepare_next_packet(PPoGATTClient *client,
                                                     PPoGATTPacket **heap_packet_in_out,
                                                     uint16_t *payload_size_out) {
   if (client->out.reset_packet_byte != 0) {
     return prv_prepare_next_reset_packet(client, heap_packet_in_out, payload_size_out);
   } else if (client->out.ack_packet_byte != 0) {
-    if (!prv_client_supports_enhanced_throughput_features(client)) {
-      client->out.send_rx_ack_now = true;
-    } else {
-      client->out.outstanding_rx_ack_count++;
-      if (client->out.outstanding_rx_ack_count >= (client->out.rx_window_size / 2)) {
-        // we want to ACK data before the other side is blocking waiting for an ACK
-        client->out.send_rx_ack_now = true;
-      }
-    }
-
     if (client->out.send_rx_ack_now) {
-      if (new_timer_scheduled(client->rx_ack_timer, NULL)) {
+      if (new_timer_scheduled(client->rx_ack_timer, nullptr)) {
         new_timer_stop(client->rx_ack_timer);
       }
 
@@ -1524,7 +1511,7 @@ static const PPoGATTPacket *prv_prepare_next_packet(PPoGATTClient *client,
       return (const PPoGATTPacket *)&client->out.ack_packet_to_send;
     }
 
-    if (!new_timer_scheduled(client->rx_ack_timer, NULL)) {
+    if (!new_timer_scheduled(client->rx_ack_timer, nullptr)) {
       new_timer_start(client->rx_ack_timer, PPOGATT_MAX_DATA_ACK_LATENCY_MS, rx_ack_timer_cb,
                       client, 0);
     }
@@ -1533,20 +1520,20 @@ static const PPoGATTPacket *prv_prepare_next_packet(PPoGATTClient *client,
 
   // Data packets:
   if (client->state != StateConnectedOpen) {
-    return NULL;
+    return nullptr;
   };
   if (prv_num_packets_in_flight(client) >= client->out.tx_window_size) {
     // Max number of data packets in flight, try again when we got some of them Ack'd.
-    return NULL;
+    return nullptr;
   }
   uint16_t read_space = comm_session_send_queue_get_length(client->session);
   if (read_space == 0) {
-    return NULL;
+    return nullptr;
   }
 
   const uint16_t max_payload_size = prv_get_max_payload_size(client);
   if (!max_payload_size) {
-    return NULL;
+    return nullptr;
   }
 
   // Bytes that are awaiting an Ack, have already been handed to Bluetopia, but are still
@@ -1563,7 +1550,7 @@ static const PPoGATTPacket *prv_prepare_next_packet(PPoGATTClient *client,
 
     if (payload_size == 0) {
       // No data to send
-      return NULL;
+      return nullptr;
     }
 
     // Cap to the size that the GATT MTU allows:
@@ -1572,7 +1559,7 @@ static const PPoGATTPacket *prv_prepare_next_packet(PPoGATTClient *client,
 
   PPoGATTPacket *packet = prv_lazily_allocate_packet_if_needed(client, heap_packet_in_out);
   if (!packet) {
-    return NULL;
+    return nullptr;
   }
   packet->type = PPoGATTPacketTypeData;
   packet->sn = client->out.next_data_sn;
@@ -1602,6 +1589,36 @@ static void prv_finalize_queued_packet(PPoGATTClient *client, uint16_t payload_s
 
 // -------------------------------------------------------------------------------------------------
 
+//! Hands a packet to NimBLE, releasing bt_lock for the call to avoid a
+//! deadlock with ble_hs_mutex.
+static enum pbl_bt_errno prv_write_packet(PPoGATTClient *client, const PPoGATTPacket *packet,
+                                          uint16_t length) {
+  bt_lock_assert_held(true);
+
+  enum pbl_bt_errno e;
+#ifdef CONFIG_BT_SERVICE_PPOG_REVERSED
+  if (client->role == PPoGATTRoleReversed) {
+    bt_unlock();
+    e = pbl_bt_ppog_reversed_notify(client->rev.conn_handle, (const uint8_t *)packet, length);
+  } else
+#endif
+  {
+    GAPLEConnection *connection;
+    const uint16_t att_handle = gatt_client_characteristic_get_handle_and_connection(
+        client->characteristics.data, &connection);
+    if (!att_handle) {
+      return PBL_BT_ERRNO_INVALID_PARAMETER;
+    }
+    // If the connection goes away meanwhile, NimBLE fails the conn_handle lookup.
+    bt_unlock();
+    e = pbl_bt_gatt_write_without_response(connection, (const uint8_t *)packet, length, att_handle);
+  }
+  bt_lock();
+  return e;
+}
+
+// -------------------------------------------------------------------------------------------------
+
 static void prv_send_next_packets(PPoGATTClient *client) {
   if (client->send_in_progress) {
     // Re-entered while the outer call dropped bt_lock; reschedule so queued
@@ -1614,118 +1631,29 @@ static void prv_send_next_packets(PPoGATTClient *client) {
   client->send_in_progress = true;
 
   uint16_t payload_size = 0;
-  const PPoGATTPacket *packet = NULL;
-  PPoGATTPacket *heap_packet = NULL;
+  const PPoGATTPacket *packet = nullptr;
+  PPoGATTPacket *heap_packet = nullptr;
 
   // Cap the number of times we loop here, to avoid blocking the task for too long.
   uint8_t loop_count = 0;
   while ((packet = prv_prepare_next_packet(client, &heap_packet, &payload_size))) {
     ++loop_count;
 
-    if (client->role == PPoGATTRoleReversed) {
-      const uint16_t total_len = sizeof(PPoGATTPacket) + payload_size;
-      // Release bt_lock before calling into NimBLE to avoid deadlock with ble_hs_mutex.
-      const bool lock_was_held = bt_lock_is_held();
-      if (lock_was_held) {
-        bt_unlock();
-      }
-      const enum pbl_bt_errno e =
-          pbl_bt_ppog_reversed_notify(client->rev.conn_handle, (const uint8_t *)packet, total_len);
-      if (lock_was_held) {
-        bt_lock();
-      }
-      if (e == PBL_BT_ERRNO_NOT_ENOUGH_RESOURCES) {
-        // Out of mbufs (e.g. inbound flood during a firmware update). NimBLE
-        // has no "buffers freed" event, so retry after a short delay.
-        if (client->send_retry_count++ == 0) {
-          PBL_LOG_WRN("Reversed PPoG out of buffers, retrying");
-        }
-        if (!new_timer_scheduled(client->send_retry_timer, NULL)) {
-          new_timer_start(client->send_retry_timer, PPOGATT_SEND_RETRY_DELAY_MS,
-                          prv_send_retry_timer_cb, client, 0);
-        }
-        break;
-      } else if (e != PBL_BT_ERRNO_OK) {
-        PBL_LOG_ERR("Reversed PPoG notify failed %i", e);
-        break;
-      }
-      if (client->send_retry_count) {
-        PBL_LOG_INFO("Reversed PPoG send recovered after %u retries", client->send_retry_count);
-        client->send_retry_count = 0;
-      }
-      prv_finalize_queued_packet(client, payload_size);
-
-      const uint8_t max_loop_count = 10;
-      if (loop_count > max_loop_count) {
-        prv_send_next_packets_async(client);
-        break;
-      }
-      continue;
-    }
-
-    // Get the connection and handle while holding bt_lock
-    GAPLEConnection *connection;
-    uint16_t att_handle;
-    bool lock_was_held = bt_lock_is_held();
-
-    if (lock_was_held) {
-      att_handle = gatt_client_characteristic_get_handle_and_connection(
-          client->characteristics.data, &connection);
-      if (!att_handle) {
-        // Invalid characteristic, bail out
-        break;
-      }
-      // Release bt_lock BEFORE calling into NimBLE to avoid deadlock.
-      // See comment in gatt_client_op_write_without_response.
-      bt_unlock();
-    } else {
-      // If bt_lock wasn't held, we can call gatt_client_op_write_without_response directly
-      // (it will manage the lock itself)
-      const enum pbl_bt_errno e = gatt_client_op_write_without_response(
-          client->characteristics.data, (const uint8_t *)packet,
-          sizeof(PPoGATTPacket) + payload_size, GAPLEClientKernel);
-      if (e == PBL_BT_ERRNO_NOT_ENOUGH_RESOURCES) {
-        // Need to wait for "Buffer Empty" event (see ppogatt_handle_buffer_empty)
-        break;
-      } else if (e != PBL_BT_ERRNO_OK) {
-        // Most likely the LE connection got busted, don't think retrying will help.
-        PBL_LOG_ERR("Write failed %i", e);
-        break;
-      } else {
-        // Packet successfully queued
-        prv_finalize_queued_packet(client, payload_size);
-      }
-
-      const uint8_t max_loop_count = 10;
-      if (loop_count > max_loop_count) {
-        prv_send_next_packets_async(client);
-        break;
-      }
-      continue;
-    }
-
-    // Call into NimBLE without holding bt_lock
-    const enum pbl_bt_errno e = pbl_bt_gatt_write_without_response(
-        connection, (const uint8_t *)packet, sizeof(PPoGATTPacket) + payload_size, att_handle);
-
-    // Re-acquire bt_lock before accessing client state
-    bt_lock();
-
+    const enum pbl_bt_errno e =
+        prv_write_packet(client, packet, sizeof(PPoGATTPacket) + payload_size);
     if (e == PBL_BT_ERRNO_NOT_ENOUGH_RESOURCES) {
-      // Need to wait for "Buffer Empty" event (see ppogatt_handle_buffer_empty)
+      prv_retry_send_later(client);
       break;
     } else if (e != PBL_BT_ERRNO_OK) {
       // Most likely the LE connection got busted, don't think retrying will help.
       PBL_LOG_ERR("Write failed %i", e);
       break;
-    } else {
-      //     PBL_LOG_DBG("OUT:");
-      //     PBL_HEXDUMP(LOG_LEVEL_DEBUG, (const uint8_t *) packet, sizeof(PPoGATTPacket) +
-      //     payload_size);
-
-      // Packet successfully queued
-      prv_finalize_queued_packet(client, payload_size);
     }
+    if (client->send_retry_count) {
+      PBL_LOG_DBG("PPoGATT send recovered after %u retries", client->send_retry_count);
+      client->send_retry_count = 0;
+    }
+    prv_finalize_queued_packet(client, payload_size);
 
     const uint8_t max_loop_count = 10;
     if (loop_count > max_loop_count) {
@@ -1739,21 +1667,6 @@ static void prv_send_next_packets(PPoGATTClient *client) {
   kernel_free(heap_packet);
 
   client->send_in_progress = false;
-}
-
-// -------------------------------------------------------------------------------------------------
-
-void ppogatt_handle_buffer_empty(void) {
-  bt_lock();
-  {
-    // FIXME: How to avoid one client using up all the buffer space all the time?
-    PPoGATTClient *client = s_ppogatt_head;
-    while (client) {
-      prv_send_next_packets(client);
-      client = (PPoGATTClient *)client->node.next;
-    }
-  }
-  bt_unlock();
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1831,7 +1744,7 @@ TransportDestination ppogatt_get_destination(Transport *transport) {
 }
 
 bool ppogatt_has_client_for_uuid(const Uuid *uuid) {
-  return (prv_find_client_with_uuid(uuid) != NULL);
+  return (prv_find_client_with_uuid(uuid) != nullptr);
 }
 
 uint32_t ppogatt_client_count(void) {

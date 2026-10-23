@@ -5,12 +5,12 @@
 
 #include "app_run_state.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 
 #include <applib/app_message/app_message_internal.h>
 #include <applib/dict.h>
 #include <process_management/app_install_manager.h>
-#include <system/passert.h>
 
 #define LAUNCHER_MESSAGE_ENDPOINT_ID (0x31)
 
@@ -104,7 +104,7 @@ static bool prv_receive_push_cmd(CommSession *session, AppMessagePush *push_mess
 
     // Call into app_run_state to take the action (to avoid duping code):
     const Uuid *app_uuid = &push_message->uuid;
-    app_run_state_command(NULL, (AppRunStateCommand)cmd, app_uuid);
+    app_run_state_command(nullptr, (AppRunStateCommand)cmd, app_uuid);
     tuple = dict_read_next(&iter);
   }
 

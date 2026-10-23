@@ -79,13 +79,13 @@ dstzone_list = (
     "Chile",
     "Tonga",
     "Eire",
+    "USback",
 )
 dstzone_dict = {name: index for index, name in enumerate(dstzone_list)}
 
 # Make sure some of these values don't move around, because the firmware code in
 # include/pbl/services/time.h depends on certain special case timezones having certain values (see the
 # DSTID_* defines). This is gross and brittle and it would be better to generate a header.
-# PBL-30559
 assert dstzone_dict["Brazil"] == 6
 assert dstzone_dict["LH"] == 20
 
@@ -352,6 +352,16 @@ def build_zoneinfo_list(tzfile):
     return zoneinfo_list
 
 
+# POSIX-style names that tzdata 2026d turned from links into zones of their own, kept as
+# links to the equivalent IANA zone so phones sending them still resolve.
+POSIX_ZONE_LINKS = {
+    "EST5EDT": "America/New_York",
+    "CST6CDT": "America/Chicago",
+    "MST7MDT": "America/Denver",
+    "PST8PDT": "America/Los_Angeles",
+}
+
+
 def zonelink_parse(tzfile):
     """
     Top level wrapper, searches the raw zoneinfo file
@@ -360,7 +370,7 @@ def zonelink_parse(tzfile):
             None
     """
 
-    zonelink_list = []
+    zonelink_list = [f"{target} {linkname}" for linkname, target in POSIX_ZONE_LINKS.items()]
 
     with open(tzfile) as infile:
         lines = infile.readlines()

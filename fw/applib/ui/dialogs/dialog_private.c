@@ -3,6 +3,8 @@
 
 #include "dialog_private.h"
 
+#include <pbl/kernel/assert.h>
+
 #include <applib/app_timer.h>
 #include <applib/applib_malloc.auto.h>
 #include <applib/ui/dialogs/dialog.h>
@@ -12,11 +14,10 @@
 #include <applib/ui/window_stack.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 static void prv_app_timer_callback(void *context) {
   Dialog *dialog = context;
-  dialog->timer = NULL;
+  dialog->timer = nullptr;
   dialog_pop(dialog);
 }
 
@@ -71,7 +72,7 @@ void dialog_load(Dialog *dialog) {
 void dialog_unload(Dialog *dialog) {
   if (dialog->timer) {
     app_timer_cancel(dialog->timer);
-    dialog->timer = NULL;
+    dialog->timer = nullptr;
   }
 
   if (dialog->show_status_layer) {
@@ -127,7 +128,7 @@ bool dialog_init_icon_layer(Dialog *dialog, KinoReel *image, GPoint icon_origin,
   const int16_t ICON_TARGET_PT_X = icon_rect.size.w;
   const int16_t ICON_TARGET_PT_Y = (icon_rect.size.h / 2);
 
-  KinoReel *reel = NULL;
+  KinoReel *reel = nullptr;
   if (animated) {
     reel = kino_reel_scale_segmented_create(image, true, icon_rect);
     kino_reel_transform_set_from_frame(reel, from);

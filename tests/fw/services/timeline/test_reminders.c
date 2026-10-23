@@ -21,7 +21,6 @@
 #include <fake_pebble_tasks.h>
 #include <fake_spi_flash.h>
 #include <fake_system_task.h>
-#include <stubs_layout_layer.h>
 static time_t now = 0;
 static int num_events_put = 0;
 
@@ -45,17 +44,6 @@ void event_put(PebbleEvent *event) {
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_blob_db_sync.h>
-#include <stubs_blob_db_sync_util.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pin_db.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
 
 extern bool get_reminder_armed(void);
 extern time_t get_reminder_timestamp(void);
@@ -303,7 +291,7 @@ void test_reminders__scheduled_at_the_reminder_time(void) {
   cl_assert_equal_i(num_events_put, 1);
 
   // item2 is next, at 100: scheduled for exactly that time.
-  cl_assert(s_job != NULL);
+  cl_assert(s_job != nullptr);
   cl_assert_equal_i(s_job_time, 100);
   cl_assert(!fake_cron_job_fire_if_due(99));
   cl_assert_equal_i(num_events_put, 1);

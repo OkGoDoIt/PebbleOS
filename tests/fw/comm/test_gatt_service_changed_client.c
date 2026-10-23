@@ -20,15 +20,6 @@
 // Stubs
 ///////////////////////////////////////////////////////////
 
-#include <stubs_bt_lock.h>
-#include <stubs_events.h>
-#include <stubs_gatt_client_subscriptions.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_regular_timer.h>
-
 void core_dump_reset(bool is_forced) {
 }
 
@@ -51,7 +42,7 @@ bool gap_le_connection_is_valid(const GAPLEConnection *conn) {
 }
 
 GAPLEConnection *gap_le_connection_any(void) {
-  return NULL;
+  return nullptr;
 }
 
 uint16_t gaps_get_starting_att_handle(void) {
@@ -60,7 +51,7 @@ uint16_t gaps_get_starting_att_handle(void) {
 
 GAPLEConnection *gatt_client_characteristic_get_connection(
     pbl_bt_characteristic_t characteristic_ref) {
-  return NULL;
+  return nullptr;
 }
 
 pbl_bt_service_t gatt_client_att_handle_get_service(GAPLEConnection *connection,
@@ -82,12 +73,6 @@ void gatt_client_service_get_all_characteristics_and_descriptors(
 
 void launcher_task_add_callback(void (*callback)(void *data), void *data) {
   callback(data);
-}
-
-// FIXME: PBL-23945
-void fake_kernel_malloc_mark(void) {
-}
-void fake_kernel_malloc_mark_assert_equal(void) {
 }
 
 // Helpers
@@ -166,8 +151,6 @@ void test_gatt_service_changed_client__handle_indication_service_changed(void) {
                                          TEST_GATT_CONNECTION_ID);
   const uint16_t att_handle = fake_gatt_gatt_profile_service_service_changed_att_handle();
 
-  fake_kernel_malloc_mark();
-
   const int start_count_before_indication = fake_gatt_is_service_discovery_start_count();
 
   const uint16_t handle_range[2] = {
@@ -179,8 +162,6 @@ void test_gatt_service_changed_client__handle_indication_service_changed(void) {
   // Re-discovery is trigger on KernelBG:
   fake_system_task_callbacks_invoke_pending();
 
-  // The KernelBG trip uses kernel_malloc, make sure it's cleaning up properly:
-  fake_kernel_malloc_mark_assert_equal();
   cl_assert_equal_b(handled, true);
 
   // Expect service discovery to be started once more:

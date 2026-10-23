@@ -1,12 +1,12 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/put_bytes/put_bytes_storage_internal.h>
 #include <pbl/util/size.h>
 
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_put_bytes, CONFIG_SERVICE_PUT_BYTES_LOG_LEVEL);
 
@@ -66,10 +66,10 @@ bool pb_storage_init(PutBytesStorage *storage, PutBytesObjectType object_type, u
   };
 
   // Make sure we haven't initialized this storage yet.
-  PBL_ASSERTN(info && storage && storage->impl == NULL);
+  PBL_ASSERTN(info && storage && storage->impl == nullptr);
 
   if (object_type >= ARRAY_LENGTH(IMPL_FOR_OBJECT_TYPE) ||
-      IMPL_FOR_OBJECT_TYPE[object_type] == NULL) {
+      IMPL_FOR_OBJECT_TYPE[object_type] == nullptr) {
     PBL_LOG_WRN("Unsupported PutBytesObjectType %u", object_type);
     return false;
   }

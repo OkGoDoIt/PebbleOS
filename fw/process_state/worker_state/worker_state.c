@@ -16,9 +16,8 @@
 typedef struct {
   Heap heap;
 
-  struct tm gmtime_tm;
-  struct tm localtime_tm;
-  char localtime_zone[TZ_LEN];
+  struct pbl_tm gmtime_tm;
+  struct pbl_tm localtime_tm;
 
   tinymt32_t rand_seed;
 
@@ -31,10 +30,9 @@ typedef struct {
   PluginServiceState plugin_service_state;
 
   LogState log_state;
+  char localtime_zone[PBL_TZ_LEN];
 
   BatteryStateServiceState battery_state_service_state;
-
-  MusicServiceState music_service_state;
 
   BacklightServiceState backlight_service_state;
 
@@ -45,11 +43,13 @@ typedef struct {
   HealthServiceState health_service_state;
 } WorkerState;
 
+static_assert(sizeof(WorkerState) <= CONFIG_WORKER_RAM_RUNTIME_SIZE);
+
 KERNEL_READONLY_DATA static WorkerState *s_worker_state_ptr;
 
 bool worker_state_configure(MemorySegment *worker_state_ram) {
-  s_worker_state_ptr = memory_segment_split(worker_state_ram, NULL, sizeof(WorkerState));
-  return s_worker_state_ptr != NULL;
+  s_worker_state_ptr = memory_segment_split(worker_state_ram, nullptr, sizeof(WorkerState));
+  return s_worker_state_ptr != nullptr;
 }
 
 void worker_state_init(void) {
@@ -60,8 +60,6 @@ void worker_state_init(void) {
   plugin_service_state_init(worker_state_get_plugin_service());
 
   battery_state_service_state_init(worker_state_get_battery_state_service_state());
-
-  music_service_state_init(worker_state_get_music_service_state());
 
   backlight_service_state_init(worker_state_get_backlight_service_state());
 
@@ -80,10 +78,10 @@ Heap *worker_state_get_heap(void) {
   return &s_worker_state_ptr->heap;
 }
 
-struct tm *worker_state_get_gmtime_tm(void) {
+struct pbl_tm *worker_state_get_gmtime_tm(void) {
   return &s_worker_state_ptr->gmtime_tm;
 }
-struct tm *worker_state_get_localtime_tm(void) {
+struct pbl_tm *worker_state_get_localtime_tm(void) {
   return &s_worker_state_ptr->localtime_tm;
 }
 char *worker_state_get_localtime_zone(void) {
@@ -117,10 +115,6 @@ BatteryStateServiceState *worker_state_get_battery_state_service_state(void) {
   return &s_worker_state_ptr->battery_state_service_state;
 }
 
-MusicServiceState *worker_state_get_music_service_state(void) {
-  return &s_worker_state_ptr->music_service_state;
-}
-
 BacklightServiceState *worker_state_get_backlight_service_state(void) {
   return &s_worker_state_ptr->backlight_service_state;
 }
@@ -143,5 +137,6 @@ static int prv_cmd_heap_worker(const struct pbl_shell *sh, size_t argc, char **a
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_sys_heap, worker, NULL, "Dump the worker heap", prv_cmd_heap_worker, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_sys_heap, worker, nullptr, "Dump the worker heap", prv_cmd_heap_worker, 0,
+                     0);
 #endif

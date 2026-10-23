@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config INTC
+    bool
+    help
+      Secondary interrupt controller class (pbl/drivers/intc.h), selected
+      by the drivers that provide interrupt lines, such as GPIO ports.
+
+config INTC_SHELL
+    bool "Interrupt controller shell commands"
+    default y
+    depends on INTC && SHELL
+    help
+      The irq shell command, to list the lines of every interrupt
+      controller.

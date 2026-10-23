@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/session_transport.h>
 #include <pbl/util/math.h>
@@ -13,7 +14,6 @@
 #include <kernel/event_loop.h>
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 typedef struct {
   CommSession *session;
@@ -172,7 +172,7 @@ static void prv_close_session(void) {
   bt_lock();
 
   comm_session_close(s_transport.session, CommSessionCloseReason_UnderlyingDisconnection);
-  s_transport.session = NULL;
+  s_transport.session = nullptr;
 
   PebbleEvent e = {
     .type = PBL_BT_PEBBLE_CONNECTION_EVENT,
@@ -185,7 +185,7 @@ static void prv_close_session(void) {
 
 // -----------------------------------------------------------------------------------------
 bool qemu_transport_is_connected(void) {
-  return (s_transport.session != NULL) && s_emulated_session_connected;
+  return (s_transport.session != nullptr) && s_emulated_session_connected;
 }
 
 // -----------------------------------------------------------------------------------------

@@ -114,20 +114,20 @@ typedef enum {
 // Static asserts to make sure user has configured flash logging correctly for
 // the platform of interest
 
-_Static_assert((MAX_POSSIBLE_LOG_GENS >= 4) && (MAX_POSSIBLE_LOG_GENS < MAX_LOG_FILE_ID),
-               "Invalid number of log generation numbers");
-_Static_assert(MAX_POSSIBLE_LOG_GENS < MAX_PAGE_CHUNK_ID,
-               "Invalid number of chunk ids for serial distance to work");
-_Static_assert((LOG_REGION_SIZE / ERASE_UNIT_SIZE) >= 2,
-               "Need to have at least 2 eraseable units for flash logging to work");
-_Static_assert((LOG_REGION_SIZE % LOG_PAGE_SIZE) == 0,
-               "The log page size must be divisible by the log region size");
-_Static_assert(((FLASH_REGION_DEBUG_DB_END % ERASE_UNIT_SIZE) == 0) &&
-                   ((FLASH_REGION_DEBUG_DB_END % ERASE_UNIT_SIZE) == 0),
-               "Space for flash logging must be aligned on an erase region boundary");
-_Static_assert(LOG_PAGE_SIZE <= ERASE_UNIT_SIZE, "Log pages must fit within an erase unit");
-_Static_assert((ERASE_UNIT_SIZE % LOG_PAGE_SIZE) == 0,
-               "The log page size must be divisible by the erase unit size");
+static_assert((MAX_POSSIBLE_LOG_GENS >= 4) && (MAX_POSSIBLE_LOG_GENS < MAX_LOG_FILE_ID),
+              "Invalid number of log generation numbers");
+static_assert(MAX_POSSIBLE_LOG_GENS < MAX_PAGE_CHUNK_ID,
+              "Invalid number of chunk ids for serial distance to work");
+static_assert((LOG_REGION_SIZE / ERASE_UNIT_SIZE) >= 2,
+              "Need to have at least 2 eraseable units for flash logging to work");
+static_assert((LOG_REGION_SIZE % LOG_PAGE_SIZE) == 0,
+              "The log page size must be divisible by the log region size");
+static_assert(((FLASH_REGION_DEBUG_DB_END % ERASE_UNIT_SIZE) == 0) &&
+                  ((FLASH_REGION_DEBUG_DB_END % ERASE_UNIT_SIZE) == 0),
+              "Space for flash logging must be aligned on an erase region boundary");
+static_assert(LOG_PAGE_SIZE <= ERASE_UNIT_SIZE, "Log pages must fit within an erase unit");
+static_assert((ERASE_UNIT_SIZE % LOG_PAGE_SIZE) == 0,
+              "The log page size must be divisible by the erase unit size");
 
 //! Given the current address and amount to increment it by, handles wrapping
 //! and computes the valid flash address
@@ -147,25 +147,11 @@ static uint8_t prv_get_next_log_file_id(uint8_t file_id) {
 }
 
 static uint32_t prv_get_unit_base_address(uint32_t addr) {
-#if defined(CONFIG_BOARD_ASTERIX) || defined(CONFIG_BOARD_OBELIX) ||         \
-    defined(CONFIG_BOARD_GETAFIX) || defined(CONFIG_BOARD_QEMU_EMERY) ||     \
-    defined(CONFIG_BOARD_QEMU_FLINT) || defined(CONFIG_BOARD_QEMU_GABBRO) || \
-    defined(CONFIG_BOARD_NATIVE_EMERY)
   return flash_get_subsector_base_address(addr);
-#else
-#error "Invalid platform!"
-#endif
 }
 
 static void prv_erase_unit(uint32_t addr) {
-#if defined(CONFIG_BOARD_ASTERIX) || defined(CONFIG_BOARD_OBELIX) ||         \
-    defined(CONFIG_BOARD_GETAFIX) || defined(CONFIG_BOARD_QEMU_EMERY) ||     \
-    defined(CONFIG_BOARD_QEMU_FLINT) || defined(CONFIG_BOARD_QEMU_GABBRO) || \
-    defined(CONFIG_BOARD_NATIVE_EMERY)
   flash_erase_subsector_blocking(addr);
-#else
-#error "Invalid platform!"
-#endif
 }
 
 static void prv_format_flash_logging_region(void) {

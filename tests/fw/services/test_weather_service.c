@@ -25,15 +25,6 @@
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_events.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
 
 static EventServiceInfo *s_event_info;
 void event_service_client_subscribe(EventServiceInfo *service_info) {
@@ -167,7 +158,7 @@ void test_weather_service__get_default_location_forecast_from_weather_db_update(
     .blob_db = {
       .db_id = BlobDBIdWeather,
       .type = BlobDBEventTypeFlush,
-      .key = NULL,
+      .key = nullptr,
       .key_len = 0,
     }
   };

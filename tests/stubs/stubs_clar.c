@@ -2,11 +2,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <setjmp.h>
-#include <stdbool.h>
 
-bool clar_expecting_passert = false;
-bool clar_passert_occurred = false;
-jmp_buf clar_passert_jmp_buf;
+bool clar_expecting_panic = false;
+bool clar_panic_occurred = false;
+jmp_buf clar_panic_jmp_buf;
 
 void clar__assert(int condition, const char *file, int line, const char *error_msg,
                   const char *description, int should_abort) {};

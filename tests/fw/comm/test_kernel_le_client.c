@@ -5,21 +5,16 @@
 
 #include <clar.h>
 #include <comm/ble/gap_le_advert.h>
-#include <comm/ble/gap_le_task.h>
 #include <comm/ble/gatt_client_subscriptions.h>
 #include <comm/ble/kernel_le_client/kernel_le_client.h>
 #include <comm/ble/kernel_le_client/test/test_definition.h>
 #include <kernel/events.h>
+#include <kernel/pbl_malloc.h>
 
 // Stubs
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <fake_system_task.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_rtc.h>
 
 void ams_create(void) {
 }
@@ -57,17 +52,15 @@ bool bt_persistent_storage_has_ble_ancs_bonding(void) {
 void gap_le_advert_unschedule_job_types(GAPLEAdvertisingJobTag *tag_types, size_t num_types) {
 }
 
-void gap_le_connect_cancel_all(GAPLEClient client) {
+void gap_le_connect_cancel_all(void) {
 }
 
-enum pbl_bt_errno gap_le_connect_cancel_by_bonding(pbl_bt_bonding_id_t bonding_id,
-                                                   GAPLEClient client) {
+enum pbl_bt_errno gap_le_connect_cancel_by_bonding(pbl_bt_bonding_id_t bonding_id) {
   return PBL_BT_ERRNO_OK;
 }
 
 enum pbl_bt_errno gap_le_connect_connect_by_bonding(pbl_bt_bonding_id_t bonding_id,
-                                                    bool auto_reconnect, bool is_pairing_required,
-                                                    GAPLEClient client) {
+                                                    bool auto_reconnect, bool is_pairing_required) {
   return PBL_BT_ERRNO_OK;
 }
 
@@ -94,14 +87,13 @@ uint32_t event_kernel_to_kernel_num_free(void) {
 
 uint16_t gatt_client_subscriptions_consume_notification(
     pbl_bt_characteristic_t *characteristic_ref_out, uint8_t *value_out,
-    uint16_t *value_length_in_out, GAPLEClient client, bool *has_more_out) {
+    uint16_t *value_length_in_out, bool *has_more_out) {
   --s_pending_notifications;
   *has_more_out = (s_pending_notifications > 0);
   return *has_more_out ? 1 : 0;
 }
 
-bool gatt_client_subscriptions_get_notification_header(GAPLEClient client,
-                                                       GATTBufferedNotificationHeader *header_out) {
+bool gatt_client_subscriptions_get_notification_header(GATTBufferedNotificationHeader *header_out) {
   if (s_pending_notifications == 0) {
     return false;
   }
@@ -109,7 +101,7 @@ bool gatt_client_subscriptions_get_notification_header(GAPLEClient client,
   return true;
 }
 
-void gatt_client_subscriptions_reschedule(GAPLEClient c) {
+void gatt_client_subscriptions_reschedule(void) {
   ++s_reschedule_count;
 }
 
@@ -124,10 +116,7 @@ void ppogatt_create(void) {
 void ppogatt_destroy(void) {
 }
 
-void ppogatt_handle_buffer_empty(void) {
-}
-
-void gatt_client_op_cleanup(GAPLEClient client) {
+void gatt_client_op_cleanup(void) {
 }
 
 void ppogatt_reset_disconnect_counter(void) {
@@ -194,9 +183,10 @@ uint8_t gatt_client_service_get_characteristics_matching_uuids(
 }
 
 static int s_read_responses_consumed_count;
-void gatt_client_consume_read_response(uintptr_t object_ref, uint8_t value_out[],
-                                       uint16_t value_length, GAPLEClient client) {
+bool gatt_client_consume_read_response(uintptr_t object_ref, uint8_t value_out[],
+                                       uint16_t value_length) {
   ++s_read_responses_consumed_count;
+  return true;
 }
 
 static int s_services_discovered_count;
@@ -345,8 +335,6 @@ void test_kernel_le_client__service_added(void) {
 
   kernel_free(info);
 }
-
-// FIXME: PBL-27751: Improve test coverage of kernel_le_client.c
 
 void test_kernel_le_client__deleting_last_bonding_stops_reconnecting(void) {
   s_has_gateway_bonding = false;

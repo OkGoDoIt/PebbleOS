@@ -56,17 +56,6 @@ void sys_timeline_resources_get_id(const TimelineResourceInfo *timeline_res,
 // Stubs
 ////////////////////////////////////////////////////////////////
 
-#include <stubs_app_cache.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_event_service_client.h>
-#include <stubs_events.h>
-#include <stubs_i18n.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-
 status_t pfs_remove(const char *name) {
   fake_settings_file_reset();
   return S_SUCCESS;
@@ -167,7 +156,7 @@ void prv_reload_with_validation_cb(AppGlanceReloadSession *session, size_t limit
   slice = (AppGlanceSlice){
     .expiration_time = APP_GLANCE_SLICE_NO_EXPIRATION,
     .layout.icon = TIMELINE_RESOURCE_BIRTHDAY_EVENT,
-    .layout.subtitle_template_string = NULL,
+    .layout.subtitle_template_string = nullptr,
   };
   cl_assert_equal_i(app_glance_add_slice(session, slice), APP_GLANCE_RESULT_SUCCESS);
   num_slices_added++;
@@ -219,7 +208,7 @@ void prv_reload_with_validation_cb(AppGlanceReloadSession *session, size_t limit
   s_test_state.resource_is_valid = true;
   slice = (AppGlanceSlice){
     .expiration_time = APP_GLANCE_SLICE_NO_EXPIRATION,
-    .layout.subtitle_template_string = NULL,
+    .layout.subtitle_template_string = nullptr,
   };
   cl_assert(app_glance_add_slice(session, slice) & APP_GLANCE_RESULT_SLICE_CAPACITY_EXCEEDED);
 
@@ -276,7 +265,7 @@ static void prv_glance_clear_test(AppGlanceReloadCallback reload_cb) {
   fake_rtc_increment_time(10);
 
   // Reload the glance using the provided callback; this should empty the slices in the glance
-  app_glance_reload(reload_cb, NULL);
+  app_glance_reload(reload_cb, nullptr);
 
   // Read the glance back and check that it doesn't have any slices anymore
   AppGlance glance_read = {};
@@ -293,7 +282,7 @@ static void prv_glance_clear_test(AppGlanceReloadCallback reload_cb) {
 }
 
 void test_app_glance__reload_with_null_callback_empties_slices(void) {
-  prv_glance_clear_test(NULL);
+  prv_glance_clear_test(nullptr);
 }
 
 static void prv_reload_with_no_slices_added_cb(AppGlanceReloadSession *session, size_t limit,

@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/util/hash.h>
 #include <pbl/util/math.h>
 #include <pbl/util/size.h>
@@ -23,7 +24,6 @@
 #include <clar.h>
 #include <resource/resource.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 static GContext s_ctx;
 
@@ -42,33 +42,7 @@ GContext *graphics_context_get_current_context(void) {
 // Stubs
 /////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_app_timer.h>
-#include <stubs_bootbits.h>
 #include <stubs_buffer.h>
-#include <stubs_click.h>
-#include <stubs_heap.h>
-#include <stubs_layer.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_process_manager.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
-#include <stubs_status_bar_layer.h>
-#include <stubs_syscall_internal.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_vibes.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
 
 int16_t interpolate_int16(int32_t normalized, int16_t from, int16_t to) {
   return to;
@@ -97,8 +71,9 @@ uint32_t interpolate_moook_duration() {
 // Setup and Teardown
 ////////////////////////////////////
 
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 static GBitmap *s_dest_bitmap;
+static PreferredContentSize s_content_size_override = NumPreferredContentSizes;
 
 // To easily render multiple windows in a single canvas, we'll use an 8-bit bitmap for color
 // displays (including round), but we can use the native format for black and white displays (1-bit)
@@ -142,7 +117,8 @@ void test_action_menu_window__cleanup(void) {
   free(fb);
 
   gbitmap_destroy(s_dest_bitmap);
-  s_dest_bitmap = NULL;
+  s_dest_bitmap = nullptr;
+  s_content_size_override = NumPreferredContentSizes;
 }
 
 // Helpers
@@ -151,7 +127,7 @@ void test_action_menu_window__cleanup(void) {
 static void prv_action_menu_did_close_cb(ActionMenu *action_menu, const ActionMenuItem *item,
                                          void *context) {
   ActionMenuLevel *root_level = action_menu_get_root_level(action_menu);
-  action_menu_hierarchy_destroy(root_level, NULL, NULL);
+  action_menu_hierarchy_destroy(root_level, nullptr, nullptr);
 }
 
 static void prv_noop_action_callback(ActionMenu *action_menu, const ActionMenuItem *action,
@@ -211,6 +187,9 @@ static void prv_render_action_menu_window(const ActionMenuLevel *root_level,
 
   // Set the window on screen so its window handlers will be called
   window_set_on_screen(&action_menu_window->window, true, true);
+  if (s_content_size_override < NumPreferredContentSizes) {
+    action_menu_set_content_size(action_menu_window, s_content_size_override);
+  }
 
   // Scroll down to the selected index
   ActionMenuData *data = window_get_user_data(&action_menu_window->window);
@@ -290,6 +269,16 @@ static void prv_render_action_menus_animated(SettingsContentSize content_size,
   }
 }
 
+// Renders each size through the content size override, with the system size left at Small
+static void prv_render_action_menus_static_override(SettingsContentSize content_size,
+                                                    const ActionMenuLevel *root_level,
+                                                    unsigned int selected_index,
+                                                    unsigned int additional_crumbs) {
+  s_content_size_override = system_theme_get_content_size();
+  system_theme_set_content_size(PreferredContentSizeSmall);
+  prv_render_action_menus_static(content_size, root_level, selected_index, additional_crumbs);
+}
+
 void prv_prepare_canvas_and_render_action_menus_static(const ActionMenuLevel *root_level,
                                                        unsigned int selected_index,
                                                        unsigned int additional_crumbs) {
@@ -312,11 +301,11 @@ void test_action_menu_window__wide_display_mode_with_just_titles(void) {
     return; // no monochrome baseline
   }
   ActionMenuLevel *root_level = action_menu_level_create(3);
-  action_menu_level_add_action(root_level, "I will text back", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(root_level, "I will text back", prv_noop_action_callback, nullptr);
   action_menu_level_add_action(root_level,
                                "Sorry, I can't talk right now, call me back at a later time",
-                               prv_noop_action_callback, NULL);
-  action_menu_level_add_action(root_level, "I will call back", prv_noop_action_callback, NULL);
+                               prv_noop_action_callback, nullptr);
+  action_menu_level_add_action(root_level, "I will call back", prv_noop_action_callback, nullptr);
 
   const unsigned int selected_index = 1;
   prv_prepare_canvas_and_render_action_menus_animated(root_level, selected_index);
@@ -335,7 +324,7 @@ static void prv_render_emoji_picker(unsigned int selected_index, bool glyph_grid
   root_level->display_mode =
       glyph_grid ? ActionMenuLevelDisplayModeGlyphGrid : ActionMenuLevelDisplayModeThin;
   for (size_t i = 0; i < ARRAY_LENGTH(thin_values); i++) {
-    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, NULL);
+    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, nullptr);
   }
 
   prv_prepare_canvas_and_render_action_menus_static(root_level, selected_index, 0);
@@ -346,7 +335,7 @@ static void prv_check_emoji_picker(unsigned int selected_index, const char *file
   // The glyph grid must fall back to the legacy thin rendering on monochrome displays.
   prv_render_emoji_picker(selected_index, false);
   GBitmap *legacy = s_dest_bitmap;
-  s_dest_bitmap = NULL;
+  s_dest_bitmap = nullptr;
   prv_render_emoji_picker(selected_index, true);
   cl_check(gbitmap_eq(s_dest_bitmap, legacy, filename));
   gbitmap_destroy(legacy);
@@ -363,6 +352,12 @@ void test_action_menu_window__thin_display_mode_with_emoji(void) {
                     PBL_IF_COLOR_ELSE(true, false));
 }
 
+// Apps can only use the thin display mode, which must show the selected emoji too
+void test_action_menu_window__thin_display_mode_emoji_selection(void) {
+  prv_render_emoji_picker(4, false);
+  cl_check(gbitmap_pbi_eq(s_dest_bitmap, TEST_PBI_FILE));
+}
+
 void test_action_menu_window__emoji_picker_snooze(void) {
   prv_check_emoji_picker(12, TEST_PBI_FILE);
 }
@@ -375,14 +370,14 @@ void test_action_menu_window__glyph_grid_not_settable_from_sdk(void) {
   ActionMenuLevel *level = action_menu_level_create(1);
   action_menu_level_set_display_mode(level, ActionMenuLevelDisplayModeGlyphGrid);
   cl_assert_equal_i(level->display_mode, ActionMenuLevelDisplayModeWide);
-  action_menu_hierarchy_destroy(level, NULL, NULL);
+  action_menu_hierarchy_destroy(level, nullptr, nullptr);
 }
 
 void test_action_menu_window__wide_items_reset_glyph_grid(void) {
   ActionMenuLevel *root_level = action_menu_level_create(3);
   root_level->display_mode = ActionMenuLevelDisplayModeGlyphGrid;
   for (int i = 0; i < 3; ++i) {
-    action_menu_level_add_action(root_level, "😃", prv_noop_action_callback, NULL);
+    action_menu_level_add_action(root_level, "😃", prv_noop_action_callback, nullptr);
   }
   ActionMenuConfig config = {
     .root_level = root_level,
@@ -394,7 +389,7 @@ void test_action_menu_window__wide_items_reset_glyph_grid(void) {
   ActionMenuLayer *aml = &data->action_menu_layer;
   cl_assert(aml->glyph_grid);
 
-  action_menu_layer_set_short_items(aml, NULL, 0, 0);
+  action_menu_layer_set_short_items(aml, nullptr, 0, 0);
   action_menu_layer_set_items(aml, root_level->items, 3, 0, 0);
   cl_assert(!aml->glyph_grid);
   cl_assert(aml->layout_cache.font != fonts_get_system_font(FONT_KEY_GOTHIC_28_EMOJI));
@@ -408,7 +403,7 @@ void test_action_menu_window__thin_display_mode_two_row(void) {
   ActionMenuLevel *root_level = action_menu_level_create(ARRAY_LENGTH(thin_values));
   action_menu_level_set_display_mode(root_level, ActionMenuLevelDisplayModeThin);
   for (size_t i = 0; i < ARRAY_LENGTH(thin_values); i++) {
-    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, NULL);
+    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, nullptr);
   }
 
   const unsigned int selected_index = 4;
@@ -424,7 +419,7 @@ void test_action_menu_window__thin_display_mode_one_row(void) {
   ActionMenuLevel *root_level = action_menu_level_create(ARRAY_LENGTH(thin_values));
   action_menu_level_set_display_mode(root_level, ActionMenuLevelDisplayModeThin);
   for (size_t i = 0; i < ARRAY_LENGTH(thin_values); i++) {
-    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, NULL);
+    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, nullptr);
   }
 
   const unsigned int selected_index = 1;
@@ -440,7 +435,7 @@ void test_action_menu_window__thin_display_mode_one_item(void) {
   ActionMenuLevel *root_level = action_menu_level_create(ARRAY_LENGTH(thin_values));
   action_menu_level_set_display_mode(root_level, ActionMenuLevelDisplayModeThin);
   for (size_t i = 0; i < ARRAY_LENGTH(thin_values); i++) {
-    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, NULL);
+    action_menu_level_add_action(root_level, thin_values[i], prv_noop_action_callback, nullptr);
   }
 
   const unsigned int selected_index = 0;
@@ -448,27 +443,45 @@ void test_action_menu_window__thin_display_mode_one_item(void) {
   cl_check(gbitmap_pbi_eq(s_dest_bitmap, TEST_PBI_FILE));
 }
 
-void test_action_menu_window__wide_display_mode_with_chevron(void) {
-  if (!PBL_COLOR) {
-    return; // no monochrome baseline
-  }
+static ActionMenuLevel *prv_create_chevron_levels(void) {
   ActionMenuLevel *root_level = action_menu_level_create(3);
   ActionMenuLevel *voice_level = action_menu_level_create(1);
-  action_menu_level_add_action(voice_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(voice_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, voice_level, "Voice");
 
   ActionMenuLevel *template_level = action_menu_level_create(1);
   action_menu_level_add_action(template_level, "This won't be seen", prv_noop_action_callback,
-                               NULL);
+                               nullptr);
   action_menu_level_add_child(root_level, template_level, "Template");
 
   ActionMenuLevel *emoji_level = action_menu_level_create(1);
-  action_menu_level_add_action(emoji_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(emoji_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, emoji_level, "Emoji");
+  return root_level;
+}
 
+void test_action_menu_window__wide_display_mode_with_chevron(void) {
+  if (!PBL_COLOR) {
+    return; // no monochrome baseline
+  }
   const unsigned int selected_index = 1;
-  prv_prepare_canvas_and_render_action_menus_static(root_level, selected_index, 0);
+  prv_prepare_canvas_and_render_action_menus_static(prv_create_chevron_levels(), selected_index, 0);
   cl_check(gbitmap_pbi_eq(s_dest_bitmap, TEST_PBI_FILE));
+}
+
+void test_action_menu_window__content_size_override(void) {
+  if (!PBL_COLOR) {
+    return; // no monochrome baseline
+  }
+  const unsigned int selected_index = 1;
+  prv_prepare_canvas_and_render_for_each_size(prv_render_action_menus_static_override,
+                                              prv_create_chevron_levels(), selected_index,
+                                              1 /* num_rows */, 0 /* additional_crumbs */);
+  cl_check(gbitmap_pbi_eq(
+      s_dest_bitmap,
+      TEST_NAMED_PBI_FILE("test_action_menu_window__wide_display_mode_with_chevron")));
 }
 
 void test_action_menu_window__wide_display_mode_with_chevron_and_long_labels(void) {
@@ -477,17 +490,19 @@ void test_action_menu_window__wide_display_mode_with_chevron_and_long_labels(voi
   }
   ActionMenuLevel *root_level = action_menu_level_create(3);
   ActionMenuLevel *voice_level = action_menu_level_create(1);
-  action_menu_level_add_action(voice_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(voice_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, voice_level, "I will text back");
 
   ActionMenuLevel *template_level = action_menu_level_create(1);
   action_menu_level_add_action(template_level, "This won't be seen", prv_noop_action_callback,
-                               NULL);
+                               nullptr);
   action_menu_level_add_child(root_level, template_level,
                               "Sorry, I can't talk right now, call me back at a later time");
 
   ActionMenuLevel *emoji_level = action_menu_level_create(1);
-  action_menu_level_add_action(emoji_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(emoji_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, emoji_level, "I will call back");
 
   const unsigned int selected_index = 1;
@@ -501,17 +516,19 @@ void test_action_menu_window__wide_display_mode_with_chevron_and_long_labels_hyp
   }
   ActionMenuLevel *root_level = action_menu_level_create(3);
   ActionMenuLevel *voice_level = action_menu_level_create(1);
-  action_menu_level_add_action(voice_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(voice_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, voice_level, "Dismiss");
 
   ActionMenuLevel *template_level = action_menu_level_create(1);
   action_menu_level_add_action(template_level, "This won't be seen", prv_noop_action_callback,
-                               NULL);
+                               nullptr);
   action_menu_level_add_child(root_level, template_level,
                               "Reply to HUBERT BLAINE WOLFESCHLEGELSTEINHAUSENBERGERDORFF");
 
   ActionMenuLevel *emoji_level = action_menu_level_create(1);
-  action_menu_level_add_action(emoji_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(emoji_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, emoji_level, "Open on phone");
 
   const unsigned int selected_index = 1;
@@ -524,12 +541,13 @@ void test_action_menu_window__wide_display_mode_with_separator(void) {
     return; // no monochrome baseline
   }
   ActionMenuLevel *root_level = action_menu_level_create(3);
-  action_menu_level_add_action(root_level, "Change Time", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(root_level, "Change Time", prv_noop_action_callback, nullptr);
 
-  action_menu_level_add_action(root_level, "Change Days", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(root_level, "Change Days", prv_noop_action_callback, nullptr);
 
   ActionMenuLevel *snooze_level = action_menu_level_create(1);
-  action_menu_level_add_action(snooze_level, "This won't be seen", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(snooze_level, "This won't be seen", prv_noop_action_callback,
+                               nullptr);
   action_menu_level_add_child(root_level, snooze_level, "Snooze Delay");
 
   root_level->separator_index = root_level->num_items - 1;
@@ -552,7 +570,7 @@ void test_action_menu_window__emoji_picker_selection(void) {
   ActionMenuLevel *root_level = action_menu_level_create(21);
   root_level->display_mode = ActionMenuLevelDisplayModeGlyphGrid;
   for (int i = 0; i < 21; ++i) {
-    action_menu_level_add_action(root_level, "😃", prv_emoji_action_callback, NULL);
+    action_menu_level_add_action(root_level, "😃", prv_emoji_action_callback, nullptr);
   }
   ActionMenuConfig config = {
     .root_level = root_level,
@@ -574,14 +592,14 @@ void test_action_menu_window__emoji_picker_selection(void) {
   system_theme_set_content_size(size);
 #endif
 
-  PBL_UNUSED static const int round_rows[] = {0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-                                              1, 1, 1, 2, 2, 2, 2, 2, 2, 2};
+  [[maybe_unused]] static const int round_rows[] = {0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
+                                                    1, 1, 1, 2, 2, 2, 2, 2, 2, 2};
   for (int count = 0; count <= 21; ++count) {
     action_menu_layer_set_short_items(aml, root_level->items, count, 0);
     const int expected_rows = PBL_IF_ROUND_ELSE((count + 9) / 10, (count + 2) / 3);
     cl_assert_equal_i(menu->callbacks.get_num_rows(menu, 0, aml), expected_rows);
 #if PBL_ROUND
-    int page_counts[3] = {0};
+    int page_counts[3] = {};
     for (int i = 0; i < count; ++i) {
       prv_set_selected_index(aml, i, false);
       const int page = menu_layer_get_selected_index(menu).row;
@@ -600,7 +618,7 @@ void test_action_menu_window__emoji_picker_selection(void) {
     prv_set_selected_index(aml, i, false);
     MenuIndex selected = menu_layer_get_selected_index(menu);
     cl_assert_equal_i(selected.row, PBL_IF_ROUND_ELSE(round_rows[i], i / 3));
-    s_last_emoji_action = NULL;
+    s_last_emoji_action = nullptr;
     menu->callbacks.select_click(menu, &selected, menu->callback_context);
     cl_assert(s_last_emoji_action == &root_level->items[i]);
     action_menu_unfreeze(action_menu);
@@ -619,8 +637,8 @@ static void prv_freezing_action_callback(ActionMenu *action_menu, const ActionMe
 
 void test_action_menu_window__frozen_ignores_tap(void) {
   ActionMenuLevel *root_level = action_menu_level_create(2);
-  action_menu_level_add_action(root_level, "Send to phone", prv_freezing_action_callback, NULL);
-  action_menu_level_add_action(root_level, "Other", prv_noop_action_callback, NULL);
+  action_menu_level_add_action(root_level, "Send to phone", prv_freezing_action_callback, nullptr);
+  action_menu_level_add_action(root_level, "Other", prv_noop_action_callback, nullptr);
 
   ActionMenuConfig config = {
     .root_level = root_level,

@@ -3,14 +3,15 @@
 
 #include <pbl/drivers/button.h>
 #include <pbl/drivers/debounced_button.h>
-#include <pbl/drivers/exti.h>
+#include <pbl/drivers/gpio.h>
+#include <pbl/input/input.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/soc/sf32lb/sleep.h>
 #include <pbl/util/bitops.h>
 
 #include <bf0_hal_tim.h>
 #include <board/board.h>
-#include <kernel/events.h>
 #include <system/bootbits.h>
 #include <system/reboot_reason.h>
 #include <system/reset.h>
@@ -31,7 +32,7 @@
 
 // A button must be stable for 20 samples (40ms) to be accepted.
 static const uint32_t s_num_debounce_samples = 20;
-static GPT_HandleTypeDef s_tim_hdl = {0};
+static GPT_HandleTypeDef s_tim_hdl = {};
 static bool s_timer_enabled = false;
 
 static void prv_timer_handler(void);
@@ -70,7 +71,7 @@ static void prv_enable_button_timer(void) {
   __enable_irq();
 }
 
-static void prv_button_interrupt_handler(void) {
+static void prv_button_interrupt_handler(void *arg) {
   prv_enable_button_timer();
 }
 
@@ -78,13 +79,13 @@ void debounced_button_init(void) {
   button_init();
 
   for (int i = 0; i < NUM_BUTTONS; ++i) {
-    const ExtiConfig config = {
-      .peripheral = BOARD_CONFIG_BUTTON.buttons[i].port,
-      .gpio_pin = BOARD_CONFIG_BUTTON.buttons[i].pin,
-      .pull = BOARD_CONFIG_BUTTON.buttons[i].pull,
-    };
-    exti_configure_pin(config, ExtiTrigger_RisingFalling, prv_button_interrupt_handler);
-    exti_enable(config);
+    struct pbl_irq_spec irq;
+
+    PBL_ASSERTN(
+        pbl_gpio_to_irq(&BOARD_CONFIG_BUTTON.buttons[i].gpio, PBL_IRQ_TYPE_EDGE_BOTH, &irq) == 0);
+    PBL_ASSERTN(pbl_device_init(&irq.intc->dev) == 0);
+    PBL_ASSERTN(pbl_intc_request(&irq, prv_button_interrupt_handler, nullptr) == 0);
+    PBL_ASSERTN(pbl_intc_enable(&irq) == 0);
   }
 
   initialize_button_timer();
@@ -127,11 +128,7 @@ static void prv_timer_handler(void) {
 
       pbl_bitset32_update(&s_debounced_button_state, i, is_pressed);
 
-      PebbleEvent e = {
-        .type = (is_pressed) ? PEBBLE_BUTTON_DOWN_EVENT : PEBBLE_BUTTON_UP_EVENT,
-        .button.button_id = i
-      };
-      event_put_isr(&e);
+      pbl_input_report_key(BOARD_CONFIG_BUTTON.buttons[i].code, is_pressed, true);
     }
   }
 
@@ -171,34 +168,3 @@ static void prv_timer_handler(void) {
     __enable_irq();
   }
 }
-
-#ifdef CONFIG_SHELL
-#include <errno.h>
-
-#include <pbl/shell/shell.h>
-
-static int prv_cmd_button_raw(const struct pbl_shell *sh, size_t argc, char **argv) {
-  long button;
-  long is_down;
-
-  if (pbl_shell_strtol(argv[1], &button) != 0 || button < 0 || button >= NUM_BUTTONS) {
-    pbl_shell_error(sh, "invalid button '%s'", argv[1]);
-    return -EINVAL;
-  }
-
-  if (pbl_shell_strtol(argv[2], &is_down) != 0 || (is_down != 0 && is_down != 1)) {
-    pbl_shell_error(sh, "invalid state '%s'", argv[2]);
-    return -EINVAL;
-  }
-
-  PebbleEvent e = {
-    .type = is_down ? PEBBLE_BUTTON_DOWN_EVENT : PEBBLE_BUTTON_UP_EVENT,
-    .button.button_id = (ButtonId)button,
-  };
-  event_put(&e);
-  return 0;
-}
-
-PBL_SHELL_SUBCMD_ADD(sub_button, raw, NULL, "Inject a raw event <id> <0=up|1=down>",
-                     prv_cmd_button_raw, 3, 0);
-#endif

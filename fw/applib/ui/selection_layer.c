@@ -301,7 +301,7 @@ static void prv_draw_text(SelectionLayer *selection_layer, GContext *ctx) {
 
         GRect rect = GRect(current_x_offset, y_offset, selection_layer->cell_widths[i], height);
         graphics_draw_text(ctx, text, selection_layer->font, rect, GTextOverflowModeFill,
-                           GTextAlignmentCenter, NULL);
+                           GTextAlignmentCenter, nullptr);
       }
     }
     // Update the x-offset so we are ready for the next cell
@@ -309,7 +309,8 @@ static void prv_draw_text(SelectionLayer *selection_layer, GContext *ctx) {
   }
 }
 
-static void prv_draw_selection_layer(SelectionLayer *selection_layer, GContext *ctx) {
+static void prv_draw_selection_layer(Layer *layer, GContext *ctx) {
+  SelectionLayer *selection_layer = (SelectionLayer *)layer;
   // The first thing that is drawn is the background for each cell
   prv_draw_cell_backgrounds(selection_layer, ctx);
 
@@ -419,7 +420,8 @@ static Animation *prv_create_bump_settle_animation(SelectionLayer *selection_lay
 static void prv_run_value_change_animation(SelectionLayer *selection_layer) {
   Animation *bump_text = prv_create_bump_text_animation(selection_layer);
   Animation *bump_settle = prv_create_bump_settle_animation(selection_layer);
-  selection_layer->value_change_animation = animation_sequence_create(bump_text, bump_settle, NULL);
+  selection_layer->value_change_animation =
+      animation_sequence_create(bump_text, bump_settle, nullptr);
   animation_schedule(selection_layer->value_change_animation);
 }
 
@@ -507,7 +509,7 @@ static void prv_run_slide_animation(SelectionLayer *selection_layer) {
   Animation *over_animation = prv_create_slide_animation(selection_layer);
   Animation *settle_animation = prv_create_slide_settle_animation(selection_layer);
   selection_layer->next_cell_animation =
-      animation_sequence_create(over_animation, settle_animation, NULL);
+      animation_sequence_create(over_animation, settle_animation, nullptr);
 
   animation_schedule(selection_layer->next_cell_animation);
 }
@@ -548,7 +550,8 @@ void prv_select_click_handler(ClickRecognizerRef recognizer, void *context) {
   }
 }
 
-static void prv_click_config_provider(SelectionLayer *selection_layer) {
+static void prv_click_config_provider(void *context) {
+  SelectionLayer *selection_layer = context;
   // Config UP / DOWN button behavior:
   window_set_click_context(BUTTON_ID_UP, selection_layer);
   window_set_click_context(BUTTON_ID_DOWN, selection_layer);
@@ -585,7 +588,7 @@ void selection_layer_init(SelectionLayer *selection_layer, const GRect *frame, u
   layer_create_with_data(*frame, sizeof(selection_layer));
   layer_set_frame(&selection_layer->layer, frame);
   layer_set_clips(&selection_layer->layer, false);
-  layer_set_update_proc(&selection_layer->layer, (LayerUpdateProc)prv_draw_selection_layer);
+  layer_set_update_proc(&selection_layer->layer, prv_draw_selection_layer);
 }
 
 SelectionLayer *selection_layer_create(GRect frame, unsigned num_cells) {
@@ -655,8 +658,8 @@ void selection_layer_set_active(SelectionLayer *selection_layer, bool is_active)
 void selection_layer_set_click_config_onto_window(SelectionLayer *selection_layer,
                                                   struct Window *window) {
   if (selection_layer && window) {
-    window_set_click_config_provider_with_context(
-        window, (ClickConfigProvider)prv_click_config_provider, selection_layer);
+    window_set_click_config_provider_with_context(window, prv_click_config_provider,
+                                                  selection_layer);
   }
 }
 

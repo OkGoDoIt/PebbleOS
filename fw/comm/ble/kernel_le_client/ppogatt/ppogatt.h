@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <applib/bluetooth/ble_client.h>
+#include <comm/ble/gatt_client_subscriptions.h>
 
 struct Transport;
 
@@ -30,10 +30,6 @@ void ppogatt_handle_service_removed(pbl_bt_characteristic_t *characteristics,
                                     uint8_t num_characteristics);
 
 void ppogatt_invalidate_all_references(void);
-
-//! Interface for kernel_le_client, to handle the event that the Bluetooth stack has space available
-//! again in its outbound queue. It will trigger the PPoGATT module to send out the next packet(s).
-void ppogatt_handle_buffer_empty(void);
 
 //! Interface for CommSession, to let it signal the PPoGATT transport that data has been written
 //! into the SendBuffer and can be sent out.

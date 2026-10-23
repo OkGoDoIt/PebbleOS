@@ -3,7 +3,7 @@
 
 //! Weather system app — the rich ported UI, fed by the weather BlobDB.
 //!
-//! The animated forecast (PAGE_LIST) is the home/base window of the carousel
+//! The animated forecast is the home/base window of the carousel
 //! ring: forecast -> clock -> globe -> forecast. The forecast renders the active
 //! location's days from the BlobDB; the clock face and globe are pushed on top of
 //! it and dismissed back to it. City switching is wired from the forecast list
@@ -114,7 +114,7 @@ static const char *prv_phrase_for_type(uint8_t type) {
     case WeatherType_Generic:
     case WeatherType_Unknown:
     default:
-      return NULL;
+      return nullptr;
   }
 }
 
@@ -143,7 +143,7 @@ static void prv_day_label(int day_offset, char *buf, size_t bufsize) {
       i18n_noop("Thursday"), i18n_noop("Friday"), i18n_noop("Saturday"),
     };
     time_t t = rtc_get_time() + (time_t)day_offset * PBL_SEC_PER_DAY;
-    struct tm *lt = localtime(&t); // compat maps to pbl_override_localtime
+    struct pbl_tm *lt = localtime(&t); // compat maps to pbl_override_localtime
     int w = (lt && lt->tm_wday >= 0 && lt->tm_wday < 7) ? lt->tm_wday : 0;
     i18n_get_with_buffer(kWday[w], buf, bufsize);
   }
@@ -155,7 +155,7 @@ static void prv_day_label(int day_offset, char *buf, size_t bufsize) {
 // same pair the sunset computation uses).
 static int prv_location_local_hour(const WxDsForecast *ds) {
   time_t now = rtc_get_time();
-  struct tm *lt = localtime(&now);
+  struct pbl_tm *lt = localtime(&now);
   if (!lt)
     return -1;
   int hour = lt->tm_hour;
@@ -246,7 +246,7 @@ static void prv_fill_days_from_ds(WeatherAppData *data, const WxDsForecast *ds) 
     // delta on the same city. Consistency with the clock outranks the saved-city refinement
     // (which the clock doesn't have either).
     time_t now_t = rtc_get_time();
-    struct tm *lt_h = localtime(&now_t);
+    struct pbl_tm *lt_h = localtime(&now_t);
     const int hour = lt_h ? lt_h->tm_hour : -1;
     if (ds->hourly_count == WX_DS_HOURLY && hour >= 0 && hour < WX_DS_HOURLY &&
         ds->hourly_type[hour] <= WeatherType_RainAndSnow) {
@@ -332,7 +332,7 @@ static void prv_fill_days_from_ds(WeatherAppData *data, const WxDsForecast *ds) 
 // Push the card's glance strings (sunset title, high/low°, location) to the forecast so its
 // hero icon-fly can animate the identical text in, synced to the icon landing.
 static void prv_sync_glance_strings(WeatherAppData *data) {
-  const WeatherLocationForecast *today = data->days_received >= 1 ? &data->days[0] : NULL;
+  const WeatherLocationForecast *today = data->days_received >= 1 ? &data->days[0] : nullptr;
   char sunset[40], temp[16], loc[64];
   expanded_view_format_glance(today, data->latitude_e2, data->longitude_e2, data->utc_offset_min,
                               sunset, sizeof(sunset), temp, sizeof(temp), loc, sizeof(loc));
@@ -361,7 +361,7 @@ static void prv_read_current_location(WeatherAppData *data, WxDsForecast *scratc
 
 static void prv_warning_dialog_dismiss_cb(void) {
   if (s_data) {
-    s_data->warning_dialog = NULL;
+    s_data->warning_dialog = nullptr;
   }
 }
 
@@ -387,7 +387,7 @@ static void prv_refresh(WeatherAppData *data) {
   data->location_count = weather_ds_location_count();
   if (data->location_count <= 0) {
     data->days_received = 0;
-    forecast_list_update_data(NULL, 0);
+    forecast_list_update_data(nullptr, 0);
     prv_show_no_data_warning(data);
     return;
   }
@@ -406,8 +406,8 @@ static void prv_refresh(WeatherAppData *data) {
     // prv_refresh in prv_init runs before the base window is pushed).
     forecast_list_update_data(data->days, data->days_received);
     // Keep the expanded card current too if it happens to be showing (no-op otherwise).
-    expanded_view_update_data(data->days_received >= 1 ? &data->days[0] : NULL, data->latitude_e2,
-                              data->longitude_e2, data->utc_offset_min);
+    expanded_view_update_data(data->days_received >= 1 ? &data->days[0] : nullptr,
+                              data->latitude_e2, data->longitude_e2, data->utc_offset_min);
     // And the weather report — it borrows days[] and must re-render today's edition.
     weather_report_update_data(data->days, data->days_received);
     prv_sync_glance_strings(data); // for the hero-fly text
@@ -416,19 +416,8 @@ static void prv_refresh(WeatherAppData *data) {
 
 // ---- Navigation ----
 
-// Page identities. The animated forecast (PAGE_LIST) is the persistent base window; at most one of
-// {clock, globe, expanded card} sits on top of it, reached via buttons. s_page is a simple tag the
-// button handlers keep updated (the swipe carousel that once read it has been removed). PAGE_MAIN,
-// the old scrub screen, is gone; its enum value is retained only to keep the numbering stable.
-typedef enum {
-  PAGE_MAIN = 0,
-  PAGE_LIST,
-  PAGE_CLOCK,
-  PAGE_GLOBE,
-  PAGE_EXPANDED,
-  PAGE_COUNT
-} WeatherCarouselPage;
-static WeatherCarouselPage s_page = PAGE_LIST;
+// The animated forecast is the persistent base window; at most one of {clock, globe, expanded
+// card} sits on top of it, reached via buttons.
 
 // ---- Sub-view transitions ----
 
@@ -447,7 +436,7 @@ static void prv_push_clock(WeatherAppData *data, bool static_push) {
   // day the record carries hourly for today).
   uint8_t s_hourly_type[24]; // stack scratch — every consumer copies synchronously
   int8_t s_hourly_temp[24];
-  const uint8_t *hourly_types = NULL;
+  const uint8_t *hourly_types = nullptr;
   bool have_hourly = false;
 
   if (di == 0 && data->hourly_valid) {
@@ -495,14 +484,13 @@ static void prv_push_clock(WeatherAppData *data, bool static_push) {
 // today's hourly weather. The list resets itself to the resting forecast beneath.
 static void prv_on_clock_burst_requested(void *ctx) {
   WeatherAppData *data = (WeatherAppData *)ctx;
-  s_page = PAGE_CLOCK;
   prv_push_clock(data, false); // static_push=false -> clock_face_push (spiral intro), no slide
 }
 
 // The expanded weather card is the middle of the vertical stack: forecast -> card -> globe.
 // It borrows today's forecast (day 0) and takes the UP/DOWN callbacks that step the stack.
 static void prv_push_expanded(WeatherAppData *data, ExpandedViewEntrance entrance) {
-  const WeatherLocationForecast *today = (data->days_received >= 1) ? &data->days[0] : NULL;
+  const WeatherLocationForecast *today = (data->days_received >= 1) ? &data->days[0] : nullptr;
   expanded_view_push(today, data->latitude_e2, data->longitude_e2, data->utc_offset_min, entrance,
                      prv_expanded_down_to_main, data, prv_expanded_select_to_globe, data);
 }
@@ -514,7 +502,6 @@ static void prv_on_list_up_to_expanded(void *ctx) {
   // landing). Reveal the static card; don't replay the text slide.
   if (expanded_view_is_showing())
     return;
-  s_page = PAGE_EXPANDED;
   prv_push_expanded(data, ExpandedViewEntranceStatic);
 }
 
@@ -525,7 +512,6 @@ static void prv_expanded_select_to_globe(void *ctx) {
   // now-hidden card underneath (its white slide-out already covered the base — no flash).
   if (!data->globe_view) {
     expanded_view_dismiss(false);
-    s_page = PAGE_LIST;
     return;
   }
   if (data->current_lat_e2 != INT16_MIN && data->current_lon_e2 != INT16_MIN) {
@@ -534,7 +520,6 @@ static void prv_expanded_select_to_globe(void *ctx) {
   }
   // Open hovering the ACTIVE location's pin — the city last selected to look at.
   globe_view_focus_coords(data->globe_view, data->latitude_e2, data->longitude_e2);
-  s_page = PAGE_GLOBE;
   globe_view_push_slide_in_right(data->globe_view);
   expanded_view_dismiss(false); // remove the card, now hidden beneath the globe
 }
@@ -546,7 +531,6 @@ static void prv_expanded_down_to_main(void *ctx) {
   // un-animated so the fly IS the transition (no competing compositor slide).
   forecast_list_arm_return_fly();
   expanded_view_dismiss(false);
-  s_page = PAGE_LIST;
 }
 
 static void prv_report_after_exit(void *ctx) {
@@ -579,8 +563,8 @@ static void prv_on_report_requested(void *ctx) {
 static void prv_on_list_transition_done(void *ctx) {
   WeatherAppData *data = (WeatherAppData *)ctx;
   // The animated forecast is the carousel base window — pushed once and never dismissed.
-  forecast_list_push(data->days, data->days_received, (int)data->current_day_index, false, NULL,
-                     NULL, prv_on_city_select_requested, data);
+  forecast_list_push(data->days, data->days_received, (int)data->current_day_index, false, nullptr,
+                     nullptr, prv_on_city_select_requested, data);
   forecast_list_set_on_clock_request(prv_on_clock_burst_requested, data);
   forecast_list_set_on_up_request(prv_on_list_up_to_expanded, data);
   forecast_list_set_on_select_request(prv_on_report_requested, data);
@@ -624,7 +608,6 @@ static void prv_globe_back_to_expanded(void *ctx) {
   if (clock_face_is_showing()) {
     clock_face_dismiss(false);
   }
-  s_page = PAGE_EXPANDED;
   prv_push_expanded(data, ExpandedViewEntranceCardFromLeft);
 }
 
@@ -649,7 +632,6 @@ static void prv_globe_location_selected(int ds_index, bool force, void *ctx) {
   // this callback returns (commit_hovered_location() → globe_view_pop() pops the
   // top window); its self-pop lands on the forecast base — the mainscreen.
   prv_select_ds_location((WeatherAppData *)ctx, ds_index);
-  s_page = PAGE_LIST;
 }
 
 // ---- Saved-locations list ----
@@ -666,7 +648,6 @@ static void prv_on_saved_location_selected(int ds_index, void *ctx) {
   }
   expanded_view_dismiss(false);
   clock_face_dismiss(false);
-  s_page = PAGE_LIST;
 }
 
 static void prv_open_saved_locations(void *ctx) {
@@ -694,12 +675,7 @@ static void prv_on_clock_wrap_to_main(void *ctx) {
   if (clock_face_is_showing()) {
     clock_face_dismiss(false);
   }
-  s_page = PAGE_LIST;
 }
-
-// The swipe-driven carousel ring (weather_carousel_navigate + prv_carousel_show + s_ring) was
-// removed: screens are now reached only via buttons. s_page remains as a simple page-identity tag
-// the button handlers keep updated (ready for gesture nav to be re-added against the new layout).
 
 static void prv_handle_weather(PebbleEvent *event, void *context) {
   prv_refresh(s_data);
@@ -707,7 +683,7 @@ static void prv_handle_weather(PebbleEvent *event, void *context) {
 
 static PBL_NOINLINE void prv_init(void) {
   // System-app statics survive across launches and a crashed run never reaches
-  // unload — clear every module's launch-persistent state first (like s_page).
+  // unload — clear every module's launch-persistent state first.
   clock_face_reset();
   expanded_view_reset();
   weather_report_reset();
@@ -725,8 +701,6 @@ static PBL_NOINLINE void prv_init(void) {
   // as they did on the v4.18 base.
   app_touch_navigation_enable(false);
 #endif
-  // The animated forecast is the carousel base window; start the ring there.
-  s_page = PAGE_LIST;
   // zalloc leaves coords at 0 — a VALID lat/lon (0°,0°). Unknown must be INT16_MIN so the
   // "have GPS coords?" gates don't pass before prv_refresh reads the current-location record.
   data->current_lat_e2 = INT16_MIN;
@@ -771,13 +745,13 @@ static void prv_deinit(void) {
       event_service_client_unsubscribe(&s_data->weather_event_info);
     }
     i18n_free_all(s_data);
-    clock_face_set_wrap_callback(NULL, NULL);
+    clock_face_set_wrap_callback(nullptr, nullptr);
     if (s_data->globe_view) {
       globe_view_destroy(s_data->globe_view);
-      s_data->globe_view = NULL;
+      s_data->globe_view = nullptr;
     }
   }
-  s_data = NULL;
+  s_data = nullptr;
 }
 
 static void prv_main(void) {
@@ -796,5 +770,5 @@ const PebbleProcessMd *weather_app_get_info(void) {
     .name = i18n_noop("Weather"),
     .icon_resource_id = RESOURCE_ID_GENERIC_WEATHER_TINY,
   };
-  return weather_ds_supported() ? (const PebbleProcessMd *)&s_weather_app_info : NULL;
+  return weather_ds_supported() ? (const PebbleProcessMd *)&s_weather_app_info : nullptr;
 }

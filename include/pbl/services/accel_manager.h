@@ -5,7 +5,6 @@
 
 #include "accel_manager_types.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <kernel/pebble_tasks.h>
@@ -107,6 +106,13 @@ AccelManagerState *sys_accel_manager_data_subscribe(AccelSamplingRate rate,
  * @return true if a data callback was posted and hasn't been consumed yet, including one running.
  */
 bool sys_accel_manager_data_unsubscribe(AccelManagerState *state);
+
+/**
+ * @brief Remove every subscription that delivers its data to @p task.
+ *
+ * @param task Task whose subscriptions to remove.
+ */
+void accel_manager_remove_task_subscriptions(PebbleTask task);
 
 /**
  * @brief Change the sampling rate of a subscription.

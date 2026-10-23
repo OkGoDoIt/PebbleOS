@@ -64,30 +64,34 @@ static void prv_set_action_menu_layer_callbacks(ActionMenuData *data,
       (ActionMenuLayerCallbacks){
         .select = prv_action_callback,
         .selection_changed =
-            enable_selection_changed ? prv_action_menu_layer_selection_changed : NULL,
+            enable_selection_changed ? prv_action_menu_layer_selection_changed : nullptr,
       },
       data);
 }
 
-static void prv_view_model_did_change(ActionMenuData *data) {
-  ActionMenuViewModel *vm = &data->view_model;
-  const ActionMenuLevel *cur_level = vm->cur_level;
-  GRect frame = grect_inset(data->action_menu.window.layer.frame, vm->menu_insets);
-  layer_set_frame(&data->action_menu_layer.layer, &frame);
+static void prv_update_items(ActionMenuData *data) {
+  const ActionMenuLevel *cur_level = data->view_model.cur_level;
   prv_set_action_menu_layer_callbacks(data, false);
   const bool glyph_grid = (cur_level->display_mode == ActionMenuLevelDisplayModeGlyphGrid);
   if (glyph_grid || cur_level->display_mode == ActionMenuLevelDisplayModeThin) {
-    action_menu_layer_set_items(&data->action_menu_layer, NULL, 0, 0, 0);
+    action_menu_layer_set_items(&data->action_menu_layer, nullptr, 0, 0, 0);
     action_menu_layer_set_glyph_grid(&data->action_menu_layer, glyph_grid);
     action_menu_layer_set_short_items(&data->action_menu_layer, cur_level->items,
                                       cur_level->num_items, cur_level->default_selected_item);
   } else {
-    action_menu_layer_set_short_items(&data->action_menu_layer, NULL, 0, 0);
+    action_menu_layer_set_short_items(&data->action_menu_layer, nullptr, 0, 0);
     action_menu_layer_set_items(&data->action_menu_layer, cur_level->items, cur_level->num_items,
                                 cur_level->default_selected_item, cur_level->separator_index);
   }
   prv_set_action_menu_layer_callbacks(data, true);
   action_menu_layer_notify_selection_changed(&data->action_menu_layer);
+}
+
+static void prv_view_model_did_change(ActionMenuData *data) {
+  ActionMenuViewModel *vm = &data->view_model;
+  GRect frame = grect_inset(data->action_menu.window.layer.frame, vm->menu_insets);
+  layer_set_frame(&data->action_menu_layer.layer, &frame);
+  prv_update_items(data);
   crumbs_layer_set_level(&data->crumbs_layer, vm->num_dots);
 }
 
@@ -140,7 +144,7 @@ static Animation *prv_create_content_in_animation(ActionMenuData *data,
   Animation *crumbs_anim = crumbs_layer_get_animation(&data->crumbs_layer);
   animation_set_duration(crumbs_anim, IN_OUT_ANIMATION_DURATION);
   // combine the two
-  Animation *spawn_anim = animation_spawn_create(content_in, crumbs_anim, NULL);
+  Animation *spawn_anim = animation_spawn_create(content_in, crumbs_anim, nullptr);
   return spawn_anim;
 }
 
@@ -155,7 +159,7 @@ static Animation *prv_create_content_out_animation(ActionMenuData *data,
   Animation *content_out = property_animation_get_animation(prop_anim);
   animation_set_duration(content_out, IN_OUT_ANIMATION_DURATION);
   AnimationHandlers anim_handlers = {
-    .started = NULL,
+    .started = nullptr,
     .stopped = prv_next_level_anim_stopped,
   };
 
@@ -175,12 +179,12 @@ static void prv_set_level(ActionMenuData *data, const ActionMenuLevel *level) {
     return;
   }
 
-  prv_invoke_level_selection_changed(data, NULL);
+  prv_invoke_level_selection_changed(data, nullptr);
 
   Animation *content_out = prv_create_content_out_animation(data, level);
   Animation *content_in = prv_create_content_in_animation(data, level);
 
-  data->level_change_anim = animation_sequence_create(content_out, content_in, NULL);
+  data->level_change_anim = animation_sequence_create(content_out, content_in, nullptr);
   animation_schedule(data->level_change_anim);
 }
 
@@ -239,6 +243,7 @@ static void prv_action_window_load(Window *window) {
   // Init action menu layer
   ActionMenuLayer *action_menu_layer = &data->action_menu_layer;
   action_menu_layer_init(action_menu_layer, &GRectZero);
+  action_menu_layer_set_content_size(action_menu_layer, data->content_size);
   prv_set_action_menu_layer_callbacks(data, true);
   action_menu_layer_set_align(action_menu_layer, data->config.align);
   // Init crumbs layer
@@ -287,7 +292,7 @@ static void prv_dummy_click_config(void *data) {
 
 ActionMenuLevel *action_menu_get_root_level(ActionMenu *action_menu) {
   if (!action_menu)
-    return NULL;
+    return nullptr;
   ActionMenuData *data = window_get_user_data(&action_menu->window);
   return (ActionMenuLevel *)data->config.root_level;
 }
@@ -337,6 +342,19 @@ void action_menu_set_result_window(ActionMenu *action_menu, Window *result_windo
   data->result_window = result_window;
 }
 
+void action_menu_set_content_size(ActionMenu *action_menu, PreferredContentSize size) {
+  if (!action_menu) {
+    return;
+  }
+
+  ActionMenuData *data = window_get_user_data(&action_menu->window);
+  data->content_size = size;
+  if (window_is_loaded(&action_menu->window)) {
+    action_menu_layer_set_content_size(&data->action_menu_layer, size);
+    prv_update_items(data);
+  }
+}
+
 void action_menu_set_align(ActionMenuConfig *config, ActionMenuAlign align) {
   if (!config) {
     return;
@@ -347,6 +365,7 @@ void action_menu_set_align(ActionMenuConfig *config, ActionMenuAlign align) {
 ActionMenu *action_menu_open(WindowStack *window_stack, ActionMenuConfig *config) {
   ActionMenuData *data = applib_type_zalloc(ActionMenuData);
   data->config = *config;
+  data->content_size = NumPreferredContentSizes;
 #if CONFIG_SCREEN_COLOR_DEPTH_BITS == 8
   // Apply defaults if client didn't assign foreground/background colors
   if (gcolor_is_invisible(data->config.colors.background)) {

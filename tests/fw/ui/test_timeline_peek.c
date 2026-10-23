@@ -31,6 +31,7 @@
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
+#include <fixtures/screen_grid.h>
 
 void clock_get_until_time(char *buffer, int buf_size, time_t timestamp, int max_relative_hrs) {
   snprintf(buffer, buf_size, "In 5 minutes");
@@ -38,44 +39,6 @@ void clock_get_until_time(char *buffer, int buf_size, time_t timestamp, int max_
 
 // Stubs
 /////////////////////
-
-#include <stubs_activity.h>
-#include <stubs_alerts_preferences.h>
-#include <stubs_analytics.h>
-#include <stubs_animation_timing.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_app_timer.h>
-#include <stubs_bootbits.h>
-#include <stubs_click.h>
-#include <stubs_cron.h>
-#include <stubs_event_loop.h>
-#include <stubs_i18n.h>
-#include <stubs_layer.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_menu_cell_layer.h>
-#include <stubs_modal_manager.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_process_info.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_pin_db.h>
-#include <stubs_process_manager.h>
-#include <stubs_property_animation.h>
-#include <stubs_scroll_layer.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
-#include <stubs_status_bar_layer.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_timeline_event.h>
-#include <stubs_timeline_layer.h>
-#include <stubs_unobstructed_area.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
 
 // Helper Functions
 /////////////////////
@@ -121,14 +84,14 @@ void test_timeline_peek__initialize(void) {
   rtc_set_time(PBL_SEC_PER_DAY);
 
   // We start time out at 5pm on Jan 1, 2015 for all of these tests
-  struct tm time_tm = {
+  struct pbl_tm time_tm = {
     // Thursday, Jan 1, 2015, 5pm
     .tm_hour = 17,
     .tm_mday = 1,
     .tm_year = 115
   };
 
-  const time_t utc_sec = mktime(&time_tm);
+  const time_t utc_sec = pbl_mktime(&time_tm);
   fake_rtc_init(0 /* initial_ticks */, utc_sec);
 
   // Setup graphics context
@@ -151,6 +114,7 @@ void test_timeline_peek__initialize(void) {
 }
 
 void test_timeline_peek__cleanup(void) {
+  system_theme_set_content_size(PreferredContentSizeDefault);
 }
 
 // Helpers
@@ -188,7 +152,7 @@ typedef struct TimelinePeekItemConfig {
 } TimelinePeekItemConfig;
 
 static TimelineItem *prv_set_timeline_item(const TimelinePeekItemConfig *config, bool animated) {
-  TimelineItem *item = NULL;
+  TimelineItem *item = nullptr;
   const time_t now = rtc_get_time();
   const time_t timestamp = config ? (config->timestamp ?: now) : now;
   if (config) {
@@ -200,7 +164,7 @@ static TimelineItem *prv_set_timeline_item(const TimelinePeekItemConfig *config,
     }
     attribute_list_add_uint32(&list, AttributeIdIconPin, config->icon);
     item = timeline_item_create_with_attributes(timestamp, PBL_MIN_PER_HOUR, TimelineItemTypePin,
-                                                LayoutIdGeneric, &list, NULL);
+                                                LayoutIdGeneric, &list, nullptr);
     attribute_list_destroy_list(&list);
   }
   timeline_peek_set_item(item, timestamp >= now, config ? config->num_concurrent : 0,
@@ -323,11 +287,48 @@ void test_timeline_peek__peek_in_5_minutes(void) {
   cl_check(gbitmap_pbi_eq(s_dest_bitmap, TEST_PBI_FILE));
 }
 
+// Content Size Tests
+//////////////////////
+
+static const TimelinePeekItemConfig s_content_size_items[] = {
+  {
+    .title = "CoreUX Design x Eng",
+    .subtitle = "ConfRM-Missile Command",
+    .icon = TIMELINE_RESOURCE_TIMELINE_CALENDAR,
+  },
+  {
+    .title = "OMG I think the text fits!",
+    .icon = TIMELINE_RESOURCE_GENERIC_WARNING,
+    .num_concurrent = 2,
+  },
+};
+
+//! Renders the whole screen with the peek in place
+static void prv_render_timeline_peek_screen(const TimelinePeekItemConfig *config) {
+  TimelineItem *item = prv_set_timeline_item(config, false /* animated */);
+  timeline_peek_set_visible(true, false /* animated */);
+  prv_render_layer(&timeline_peek_get_peek()->window.layer, &DISP_FRAME, false /* use_screen */);
+  timeline_item_destroy(item);
+}
+
+void test_timeline_peek__content_sizes(void) {
+  ScreenGrid grid;
+  screen_grid_init(&grid, ARRAY_LENGTH(s_content_size_items));
+  for (PreferredContentSize size = grid.first_size; size <= grid.last_size; size++) {
+    system_theme_set_content_size(size);
+    for (size_t row = 0; row < ARRAY_LENGTH(s_content_size_items); row++) {
+      prv_render_timeline_peek_screen(&s_content_size_items[row]);
+      screen_grid_add(&grid, &s_ctx, size, row);
+    }
+  }
+  screen_grid_check(&grid, TEST_PBI_FILE);
+}
+
 // Visibility Tests
 //////////////////////
 
 void test_timeline_peek__peek_visibility(void) {
-  prv_set_timeline_item(NULL, false /* animated */);
+  prv_set_timeline_item(nullptr, false /* animated */);
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Normally it is animated, but for this unit test, we don't request `animated`
@@ -346,7 +347,7 @@ void test_timeline_peek__peek_visibility(void) {
   cl_assert(layer->frame.origin.y < DISP_ROWS);
 
   // Peek service hides the peek UI. Not animated for this unit test.
-  prv_set_timeline_item(NULL, false /* animated */);
+  prv_set_timeline_item(nullptr, false /* animated */);
   // Peek should now be off-screen.
   cl_assert(layer->frame.origin.y >= DISP_ROWS);
 }
@@ -372,7 +373,7 @@ void test_timeline_peek__peek_visible_to_hidden_outside_of_watchface(void) {
   cl_assert(layer->frame.origin.y >= DISP_ROWS);
 
   // Peek service hides the peek UI using the animated code path.
-  prv_set_timeline_item(NULL, true /* animated */);
+  prv_set_timeline_item(nullptr, true /* animated */);
   // This time we set the item to NULL, not just request invisibility. Since we're not in the
   // watchface, even though `animated` was requested, it should immediately move the position.
   cl_assert(layer->frame.origin.y >= DISP_ROWS);
@@ -386,7 +387,7 @@ void test_timeline_peek__peek_visible_to_hidden_outside_of_watchface(void) {
 }
 
 void test_timeline_peek__peek_hidden_to_visible_outside_of_watchface(void) {
-  prv_set_timeline_item(NULL, false /* animated */);
+  prv_set_timeline_item(nullptr, false /* animated */);
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Normally it is animated, but for this unit test, we don't request `animated`
@@ -447,7 +448,7 @@ void test_timeline_peek__peek_visible_leaving_and_entering_watchface(void) {
 }
 
 void test_timeline_peek__peek_hidden_leaving_and_entering_watchface(void) {
-  prv_set_timeline_item(NULL, true /* animated */);
+  prv_set_timeline_item(nullptr, true /* animated */);
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Peek should be off-screen.

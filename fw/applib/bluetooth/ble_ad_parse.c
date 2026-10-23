@@ -3,14 +3,16 @@
 
 #include "ble_ad_parse.h"
 
+#include <string.h>
+
 #include <pbl/btutil/bt_uuid.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/util/byteorder.h>
 #include <pbl/util/math.h>
 
 #include <applib/applib_malloc.auto.h>
-#include <syscall/syscall.h>
-#include <system/passert.h>
+#include <comm/ble/gap_le_advert.h>
 
 // -----------------------------------------------------------------------------
 //! Internal parsed advertisement data structures.
@@ -211,7 +213,7 @@ static void ble_ad_parse_ad_data(const struct pbl_bt_ad_data *ad_data,
       return; // corrupted
     }
 
-    bool (*parse_func)(const BLEAdElement *, const BLEAdParseCallbacks *, void *) = NULL;
+    bool (*parse_func)(const BLEAdElement *, const BLEAdParseCallbacks *, void *) = nullptr;
 
     switch (elem->header.type) {
       case BLEAdTypeService16BitUUIDPartial ... BLEAdTypeService128BitUUIDComplete:
@@ -477,7 +479,7 @@ static uint8_t *prv_length_ptr_if_fits_or_null(uint8_t *length, size_t size_to_w
   const uint8_t used = *length & (~BLE_AD_DATA_FINALIZED);
   const uint8_t left = PBL_BT_AD_REPORT_DATA_MAX_LENGTH - used;
   // Return pointer to the pointer if size_to_write will fit, or NULL otherwise:
-  return (left >= size_to_write) ? length : NULL;
+  return (left >= size_to_write) ? length : nullptr;
 }
 
 // -----------------------------------------------------------------------------
@@ -633,7 +635,7 @@ bool ble_ad_set_service_uuids(struct pbl_bt_ad_data *ad, const Uuid uuids[], uin
       element->header.type = BLEAdTypeService16BitUUIDComplete;
       break;
     default:
-      WTF;
+      pbl_panic();
   }
 
   element->header.length = buffer_size - 1 /* -1 Length byte */;
@@ -651,7 +653,7 @@ bool ble_ad_set_service_uuids(struct pbl_bt_ad_data *ad, const Uuid uuids[], uin
         element->uuid_16[i] = prv_convert_to_16bit_uuid(&uuids[i]);
         break;
       default:
-        WTF;
+        pbl_panic();
     }
   }
 
@@ -679,7 +681,7 @@ bool ble_ad_set_tx_power_level(struct pbl_bt_ad_data *ad) {
   BLEAdElement *element = (BLEAdElement *)element_buffer;
   element->header.length = sizeof(int8_t) + 1 /* +1 Type byte */;
   element->header.type = BLEAdTypeTxPowerLevel;
-  *((int8_t *)element->data) = sys_ble_get_advertising_tx_power();
+  *((int8_t *)element->data) = gap_le_advert_get_tx_power();
 
   return prv_write_element_to_ad_data(ad, element);
 }

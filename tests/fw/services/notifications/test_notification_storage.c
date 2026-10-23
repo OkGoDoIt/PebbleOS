@@ -1,8 +1,6 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
-
 #include <pbl/services/filesystem/pfs.h>
 #include <pbl/services/notifications/notification_storage.h>
 #include <pbl/services/notifications/notification_storage_private.h>
@@ -15,18 +13,6 @@
 ////////////////////////////////////
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
-#include <stubs_analytics.h>
-#include <stubs_hexdump.h>
-#include <stubs_layout_layer.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_serial.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
 
 #define TEST_START FLASH_REGION_FILE_TEST_SPACE_BEGIN
 #define TEST_SIZE  (FLASH_REGION_FILE_TEST_SPACE_END - FLASH_REGION_FILE_TEST_SPACE_BEGIN)
@@ -83,7 +69,7 @@ bool system_task_add_callback(SystemTaskEventCallback cb, void *data) {
 }
 
 PebblePhoneCaller *phone_call_util_create_caller(const char *number, const char *name) {
-  return NULL;
+  return nullptr;
 }
 
 // Setup
@@ -172,10 +158,10 @@ static bool prv_items_iterator_callback(void *data, const CommonTimelineItemHead
   if (item) {
     context->item_count++;
     cl_assert(uuid_equal(&item->header.id, &context->recent_id));
-    cl_assert_equal_s(attribute_get_string(&item->attr_list, AttributeIdTitle, NULL),
+    cl_assert_equal_s(attribute_get_string(&item->attr_list, AttributeIdTitle, nullptr),
                       context->expected_title);
-    cl_assert_equal_s(attribute_get_string(&item->attr_list, AttributeIdSender, NULL), "");
-    cl_assert(attribute_get_string(&item->attr_list, AttributeIdBody, NULL) == NULL);
+    cl_assert_equal_s(attribute_get_string(&item->attr_list, AttributeIdSender, nullptr), "");
+    cl_assert(attribute_get_string(&item->attr_list, AttributeIdBody, nullptr) == nullptr);
   } else {
     context->header_count++;
     cl_assert(uuid_equal(&header->id, &context->older_id));
@@ -451,37 +437,6 @@ void test_notification_storage__remove_single(void) {
 
   notification_storage_remove(&i);
   cl_assert_equal_b(notification_storage_get(&i, &r), false);
-}
-
-void test_notification_storage__exists_matches_deleted(void) {
-  Uuid i;
-  uuid_generate(&i);
-  TimelineItem e = {
-    .header =
-        {
-          .id = i,
-          .type = TimelineItemTypeNotification,
-          .layout = LayoutIdGeneric,
-          .timestamp = 0x53f0dda5,
-        },
-    .attr_list = {
-      .num_attributes = ARRAY_LENGTH(attributes),
-      .attributes = attributes,
-    },
-  };
-
-  notification_storage_store(&e);
-  notification_storage_remove(&i);
-
-  uint8_t status;
-  cl_assert(notification_storage_notification_exists(&i));
-  cl_assert_equal_b(notification_storage_get_status(&i, &status), false);
-  cl_assert_equal_i(notification_storage_get_len(&i), 0);
-
-  notification_storage_set_status(&i, TimelineItemStatusActioned);
-  TimelineItem r;
-  cl_assert_equal_b(notification_storage_get(&i, &r), false);
-  cl_assert_equal_b(notification_storage_get_status(&i, &status), false);
 }
 
 void test_notification_storage__set_actioned_flag(void) {

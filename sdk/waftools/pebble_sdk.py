@@ -18,7 +18,9 @@ from sdk_helpers import (
     configure_platform,
     get_target_platforms,
     truncate_to_32_bytes,
+    validate_manifest_version,
     validate_message_keys_object,
+    validate_plugin,
 )
 from waflib.Configure import conf
 
@@ -189,10 +191,21 @@ def configure(conf):
 
     project_info = _extract_project_info(conf, info_json, info_json_node.name)
 
-    conf.env.PROJECT_INFO = project_info
+    validate_manifest_version(conf, project_info)
+    validate_plugin(conf, project_info)
+    project_info.setdefault("manifestVersion", 2)
+
     project_type = project_info.get("projectType", None)
+    if project_type == "plugin":
+        # Nothing to install on the watch, but the phone app still reads these.
+        project_info.setdefault("resources", {"media": []})
+        project_info.setdefault("watchapp", {"watchface": False})
+
+    conf.env.PROJECT_INFO = project_info
     if project_type == "moddable":
         conf.env.BUILD_TYPE = "moddable"
+    elif project_type == "plugin":
+        conf.env.BUILD_TYPE = "plugin"
     else:
         conf.env.BUILD_TYPE = "app"
 
@@ -210,6 +223,11 @@ def configure(conf):
 
     conf.env.REQUESTED_PLATFORMS = project_info.get("targetPlatforms", [])
     conf.env.LIB_DIR = "node_modules"
+
+    if conf.env.BUILD_TYPE == "plugin":
+        # A plugin runs on the phone only: there is no watch platform to configure.
+        conf.env.TARGET_PLATFORMS = []
+        return
 
     get_target_platforms(conf)
 
@@ -278,6 +296,13 @@ def build(bld):
 
         resource_path = resource_node.path_from(bld.path) if resource_node else None
         generate_resources(bld, resource_path)
+
+    if bld.env.BUILD_TYPE == "plugin":
+        bld(
+            rule=_write_appinfo_json_file,
+            target=bld.path.get_bld().make_node("appinfo.json"),
+            vars=["PROJECT_INFO"],
+        )
 
     # bld.env is set back to a shallow copy of the original ConfigSet that was set when this `build`
     # method was invoked

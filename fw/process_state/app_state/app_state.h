@@ -14,7 +14,6 @@
 #include <applib/app_wakeup.h>
 #include <applib/backlight_service_private.h>
 #include <applib/battery_state_service_private.h>
-#include <applib/bluetooth/ble_app_support.h>
 #include <applib/compass_service_private.h>
 #include <applib/connection_service_private.h>
 #include <applib/graphics/gtypes.h>
@@ -88,8 +87,6 @@ AnimationState *app_state_get_animation_state(void);
 
 AppMessageCtx *app_state_get_app_message_ctx(void);
 
-BLEAppState *app_state_get_ble_app_state(void);
-
 ClickManager *app_state_get_click_manager(void);
 
 WindowStack *app_state_get_window_stack(void);
@@ -145,10 +142,9 @@ void app_touch_nav_unsubscribe(void);
 //! sub-pref turned off).
 void app_touch_nav_resync(void);
 
-//! Privileged setter behind the app_touch_navigation_enable() SDK call (invoked via the
-//! sys_app_touch_navigation_enable syscall). Sets this app's touch-nav participation and reconciles
-//! the app twin's subscription with the master pref (subscribe when enabling with the pref on,
-//! unsubscribe when disabling). Idempotent. Runs on the app task.
+//! Backs the app_touch_navigation_enable() SDK call. Sets this app's touch-nav participation and
+//! reconciles the app twin's subscription with the master pref (subscribe when enabling with the
+//! pref on, unsubscribe when disabling). Idempotent. Runs on the app task, unprivileged.
 void app_touch_nav_set_participating(bool enable);
 
 JsRuntimeContext *app_state_get_js_runtime_context(void);
@@ -193,8 +189,8 @@ EventServiceInfo *app_state_get_speaker_finish_event_info(void);
 //! capture_frame_buffer API. Note this memory is only valid when used with 2.x apps.
 GBitmap *app_state_legacy2_get_2bit_framebuffer(void);
 
-struct tm *app_state_get_gmtime_tm(void);
-struct tm *app_state_get_localtime_tm(void);
+struct pbl_tm *app_state_get_gmtime_tm(void);
+struct pbl_tm *app_state_get_localtime_tm(void);
 char *app_state_get_localtime_zone(void);
 
 void *app_state_get_rand_ptr(void);

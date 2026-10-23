@@ -50,6 +50,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        host: [linux, macos]
+        board: [native_flint, native_emery, native_gabbro]
         include:
           - host: linux
             os: ubuntu-24.04
@@ -77,6 +79,12 @@ jobs:
         if: matrix.host == 'macos'
         run: brew install $(grep -v '^#' requirements-brew.txt)
 
+      # The SDK's ARM toolchain builds the app side of the SDK, which the
+      # interpreter of third-party apps is generated from.
+      - name: Install the PebbleOS SDK (macOS)
+        if: matrix.host == 'macos'
+        run: curl -LsSf https://github.com/coredevices/PebbleOS-SDK/releases/latest/download/pebbleos-sdk-installer.sh | sh -s -- --defaults
+
       - name: Set up Python (macOS)
         if: matrix.host == 'macos'
         uses: actions/setup-python@v7
@@ -89,7 +97,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Configure
-        run: pbl configure --board native_emery
+        run: pbl configure --board ${{ matrix.board }}
 
       - name: Build
         run: pbl build
@@ -109,7 +117,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: native-smoke-${{ matrix.host }}
+          name: native-smoke-${{ matrix.host }}-${{ matrix.board }}
           path: |
             build/smoke.log
             build/smoke.bmp

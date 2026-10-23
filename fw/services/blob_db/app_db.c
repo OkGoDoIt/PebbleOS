@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/app_fetch_endpoint.h>
@@ -13,7 +15,6 @@
 
 #include <kernel/pbl_malloc.h>
 #include <process_management/app_install_manager_private.h>
-#include <system/passert.h>
 #include <system/status_codes.h>
 
 PBL_LOG_MODULE_DECLARE(service_blob_db, CONFIG_SERVICE_BLOB_DB_LOG_LEVEL);
@@ -237,10 +238,10 @@ void app_db_init(void) {
   // is then one greater than the largest found.
   status_t rv = prv_lock_mutex_and_open_file();
   if (rv != S_SUCCESS) {
-    WTF;
+    pbl_panic();
   }
 
-  struct AppDBInitData data = {0};
+  struct AppDBInitData data = {};
 
   settings_file_each(&s_app_db.settings_file, prv_each_inspect_ids, &data);
 
@@ -288,7 +289,8 @@ status_t app_db_insert(const uint8_t *key, int key_len, const uint8_t *val, int 
 
   if (rv == S_SUCCESS) {
     // app install something
-    app_install_do_callbacks(new_install ? APP_AVAILABLE : APP_UPGRADED, app_id, NULL, NULL, NULL);
+    app_install_do_callbacks(new_install ? APP_AVAILABLE : APP_UPGRADED, app_id, nullptr, nullptr,
+                             nullptr);
   }
 
   return rv;
@@ -366,7 +368,7 @@ status_t app_db_delete(const uint8_t *key, int key_len) {
     // uuid will be free'd by app_install_manager
     Uuid *uuid_copy = kernel_malloc_check(sizeof(Uuid));
     memcpy(uuid_copy, key, sizeof(Uuid));
-    app_install_do_callbacks(APP_REMOVED, app_id, uuid_copy, NULL, NULL);
+    app_install_do_callbacks(APP_REMOVED, app_id, uuid_copy, nullptr, nullptr);
   }
 
   return rv;
@@ -383,7 +385,7 @@ status_t app_db_flush(void) {
     }
   }
 
-  app_install_do_callbacks(APP_DB_CLEARED, INSTALL_ID_INVALID, NULL, NULL, NULL);
+  app_install_do_callbacks(APP_DB_CLEARED, INSTALL_ID_INVALID, nullptr, nullptr, nullptr);
 
   // let app install manager deal with deleting the cache and removing related timeline pins
   app_install_clear_app_db();

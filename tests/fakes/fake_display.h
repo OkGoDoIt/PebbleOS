@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #define DISP_BYTES_LINE DISP_COLS / 8
@@ -17,7 +16,7 @@ typedef struct {
 } DisplayRow;
 
 typedef bool (*NextRowCallback)(DisplayRow *row);
-typedef void (*UpdateCompleteCallback)(void);
+typedef void (*UpdateCompleteCallback)(bool success);
 
 typedef enum {
   DISPLAY_STATE_IDLE,

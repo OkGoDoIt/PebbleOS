@@ -2,26 +2,28 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <inttypes.h>
-#include <stdbool.h>
 #include <string.h>
 
+#include <pbl/device.h>
+#include <pbl/drivers/clk/sf32lb.h>
 #include <pbl/drivers/crc.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/irq.h>
+#include <pbl/kernel/mmio.h>
 #include <pbl/logging/logging.h>
+#include <pbl/util/bitops.h>
 
-#include <bf0_hal.h>
-#include <bf0_hal_crc.h>
+#include <hardware/sf32lb52_crc.h>
 
 PBL_LOG_MODULE_DEFINE(driver_crc_sf32lb, CONFIG_DRIVER_CRC_LOG_LEVEL);
 
 #define CRC32_POLY 0x04C11DB7U
 
-#define CR_CRC32                                                                                 \
-  ((HAL_CRC_POLYSIZE_32 << CRC_CR_POLYSIZE_Pos) | (HAL_CRC_DATASIZE_32 << CRC_CR_DATASIZE_Pos) | \
-   (1U << CRC_CR_REV_IN_Pos) | CRC_CR_REV_OUT)
-#define CR_CRC32_LEGACY \
-  ((HAL_CRC_POLYSIZE_32 << CRC_CR_POLYSIZE_Pos) | (HAL_CRC_DATASIZE_32 << CRC_CR_DATASIZE_Pos))
+#define CR_CRC32_LEGACY                                       \
+  (PBL_FIELD_PREP(CRC_CR_POLYSIZE_MASK, CRC_CR_POLYSIZE_32) | \
+   PBL_FIELD_PREP(CRC_CR_DATASIZE_MASK, CRC_CR_DATASIZE_32))
+#define CR_CRC32 \
+  (CR_CRC32_LEGACY | PBL_FIELD_PREP(CRC_CR_REV_IN_MASK, CRC_CR_REV_IN_BYTE) | CRC_CR_REV_OUT)
 
 // Longest run fed to the unit with interrupts locked
 #define BURST_LEN 256U
@@ -37,52 +39,61 @@ enum state {
   STATE_BROKEN,
 };
 
+static const struct pbl_clk s_clk = PBL_CLK(SF32LB_HPSYS_RCC, SF32LB52_HPSYS_CLK_CRC1);
 static volatile enum state s_state = STATE_UNTESTED;
 
-static uint32_t prv_burst(enum algo algo, uint32_t value, const uint8_t *data, size_t len) {
-  CRC_TypeDef *const crc = hwp_crc1;
+static inline uint32_t prv_getreg(uint32_t offset) {
+  return pbl_readl(SF32LB52_CRC1_BASE + offset);
+}
 
+static inline void prv_putreg(uint32_t offset, uint32_t value) {
+  pbl_writel(value, SF32LB52_CRC1_BASE + offset);
+}
+
+static uint32_t prv_burst(enum algo algo, uint32_t value, const uint8_t *data, size_t len) {
   // The unit keeps its register unreflected: a reflected CRC-32 resumes from the bit-reversed
   // complement of its output.
-  crc->POL = CRC32_POLY;
-  if (algo == ALGO_CRC32) {
-    crc->INIT = __RBIT(~value);
-    crc->CR = CR_CRC32;
-  } else {
-    crc->INIT = value;
-    crc->CR = CR_CRC32_LEGACY;
-  }
-  crc->CR |= CRC_CR_RESET;
+  const uint32_t cr = (algo == ALGO_CRC32) ? CR_CRC32 : CR_CRC32_LEGACY;
+
+  prv_putreg(SF32LB52_CRC_POL_OFFSET, CRC32_POLY);
+  prv_putreg(SF32LB52_CRC_INIT_OFFSET, (algo == ALGO_CRC32) ? pbl_bitrev32(~value) : value);
+  prv_putreg(SF32LB52_CRC_CR_OFFSET, cr);
+  prv_putreg(SF32LB52_CRC_CR_OFFSET, cr | CRC_CR_RESET);
 
   for (size_t i = 0; i < len; i += 4) {
     uint32_t word;
     memcpy(&word, &data[i], sizeof(word));
     // The unit consumes words in memory order; the legacy checksum takes each one MSB first.
-    crc->DR = (algo == ALGO_CRC32) ? word : PBL_BSWAP32(word);
-    while ((crc->SR & CRC_SR_DONE) == 0) {
+    prv_putreg(SF32LB52_CRC_DR_OFFSET, (algo == ALGO_CRC32) ? word : PBL_BSWAP32(word));
+    while ((prv_getreg(SF32LB52_CRC_SR_OFFSET) & CRC_SR_DONE) == 0U) {
     }
   }
 
-  return (algo == ALGO_CRC32) ? ~crc->DR : crc->DR;
+  value = prv_getreg(SF32LB52_CRC_DR_OFFSET);
+
+  return (algo == ALGO_CRC32) ? ~value : value;
 }
 
 static size_t prv_compute(enum algo algo, uint32_t *value, const void *data, size_t len) {
   const uint8_t *bytes = data;
   const size_t total = len & ~(size_t)3;
-  uint32_t result = *value;
+  size_t done = 0;
 
-  for (size_t done = 0; done < total;) {
+  while (done < total) {
     const size_t burst = (total - done < BURST_LEN) ? (total - done) : BURST_LEN;
+
     pbl_irq_lock();
-    HAL_RCC_EnableModule(RCC_MOD_CRC1);
-    result = prv_burst(algo, result, &bytes[done], burst);
-    HAL_RCC_DisableModule(RCC_MOD_CRC1);
+    if (pbl_clk_enable(&s_clk) != 0) {
+      pbl_irq_unlock();
+      break;
+    }
+    *value = prv_burst(algo, *value, &bytes[done], burst);
+    pbl_clk_disable(&s_clk);
     pbl_irq_unlock();
     done += burst;
   }
 
-  *value = result;
-  return total;
+  return done;
 }
 
 static bool prv_check(enum algo algo, uint32_t init, uint32_t expected) {
@@ -107,6 +118,11 @@ static bool prv_check(enum algo algo, uint32_t init, uint32_t expected) {
 
 static bool prv_ready(void) {
   if (s_state == STATE_UNTESTED) {
+    if (pbl_device_init(&s_clk.ctrl->dev) != 0) {
+      s_state = STATE_BROKEN;
+      return false;
+    }
+
     const bool ok = prv_check(ALGO_CRC32, 0, 0x68c4f033U) &&
                     prv_check(ALGO_CRC32_LEGACY, 0xffffffffU, 0x50b663c0U);
     s_state = ok ? STATE_OK : STATE_BROKEN;

@@ -1,36 +1,7 @@
 # Reference
 
-Lookup material: the firmware C API reference, external talks and documents
-about PebbleOS, and specifications for the protocols used by the firmware
-and its tooling.
-
-## C API reference
-
-The Doxygen-generated reference for the firmware sources (applib, services,
-kernel, drivers) is published alongside this site:
-
-<a href="../apidoc/index.html">PebbleOS API reference</a>
-
-## App SDK guides
-
-Hand-written guides for app-facing APIs that need more than the per-function
-Doxygen reference.
-
-```{toctree}
-:maxdepth: 1
-
-recognizers.md
-```
-
-## External resources
-
-Podcasts, presentations and developer documents from the Pebble community.
-
-```{toctree}
-:maxdepth: 1
-
-external.md
-```
+Specifications of the protocols and file formats used by the firmware and
+its tooling.
 
 ## PULSEv2 protocol suite
 
@@ -56,6 +27,7 @@ the phone apps.
 :maxdepth: 1
 
 blob-db.md
+language-packs.md
 ```
 
 ## Binary formats

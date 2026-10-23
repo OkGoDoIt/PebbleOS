@@ -137,7 +137,7 @@ static void prv_handle_dec(unsigned index, void *context) {
 // ---------------------------------------------------------------------------
 
 static void prv_text_layer_init(Layer *window_layer, TextLayer *text_layer, const GFont font) {
-  text_layer_init_with_parameters(text_layer, &GRectZero, NULL, font, GColorBlack, GColorClear,
+  text_layer_init_with_parameters(text_layer, &GRectZero, nullptr, font, GColorBlack, GColorClear,
                                   GTextAlignmentCenter, GTextOverflowModeTrailingEllipsis);
   layer_add_child(window_layer, &text_layer->layer);
   layer_set_hidden(&text_layer->layer, true);
@@ -148,7 +148,7 @@ static void prv_text_layer_init(Layer *window_layer, TextLayer *text_layer, cons
 // ---------------------------------------------------------------------------
 
 void date_selection_window_set_to_current_date(DateSelectionWindowData *window) {
-  struct tm now;
+  struct pbl_tm now;
   clock_get_time_tm(&now);
   // Clamp the year to the selectable range so that dates outside the valid
   // window (e.g. year 2000 after an RTC reset) are snapped to the nearest

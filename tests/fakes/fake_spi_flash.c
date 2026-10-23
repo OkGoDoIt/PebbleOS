@@ -25,7 +25,7 @@ typedef struct FakeFlashState {
   uint32_t erase_count;
 } FakeFlashState;
 
-static FakeFlashState s_state = {0};
+static FakeFlashState s_state = {};
 
 void fake_spi_flash_erase(void) {
   memset(s_state.storage, 0xff, s_state.length);
@@ -33,8 +33,8 @@ void fake_spi_flash_erase(void) {
 
 void fake_spi_flash_cleanup(void) {
   free(s_state.storage);
-  s_state.storage = NULL;
-  s_state = (FakeFlashState){0};
+  s_state.storage = nullptr;
+  s_state = (FakeFlashState){};
 }
 
 //! @param offset the offset at which this fake region of flash begins.
@@ -73,17 +73,16 @@ void fake_spi_flash_init(uint32_t offset, uint32_t length) {
   s_state.storage = malloc(length);
   s_state.write_count = 0;
   // Note: this is a harness failure, not a code failure.
-  cl_assert(s_state.storage != NULL);
+  cl_assert(s_state.storage != nullptr);
   memset(s_state.storage, 0xff, length);
 }
 
-void fake_flash_assert_region_untouched(uint32_t start_addr, uint32_t length) {
-  if (length == 0) {
-    return;
-  }
-
-  for (uint32_t i = 0; i < length; i++) {
-    cl_assert(s_state.storage[start_addr + i] == 0xff);
+void fake_flash_assert_untouched_outside(uint32_t begin, uint32_t end) {
+  for (uint32_t addr = s_state.offset; addr < s_state.offset + s_state.length; addr++) {
+    if (addr >= begin && addr < end) {
+      continue;
+    }
+    cl_assert(s_state.storage[addr - s_state.offset] == 0xff);
   }
 }
 
@@ -140,7 +139,7 @@ void flash_write_bytes(const uint8_t *buffer, uint32_t start_addr, uint32_t buff
   ++s_state.write_count;
 
   for (int i = 0; i < buffer_size; ++i) {
-    if (s_state.jmp_on_failure != NULL) {
+    if (s_state.jmp_on_failure != nullptr) {
       if (s_state.bytes_left_till_write_failure == 0) {
         longjmp(*s_state.jmp_on_failure, 1);
       } else {

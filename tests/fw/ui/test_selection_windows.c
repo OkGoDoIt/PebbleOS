@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/util/hash.h>
 #include <pbl/util/math.h>
 #include <pbl/util/size.h>
@@ -13,11 +14,11 @@
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/time_range_selection_window.h>
 #include <applib/ui/time_selection_window.h>
+#include <applib/ui/window_private.h>
 #include <apps/system/settings/notifications_private.h>
 #include <clar.h>
 #include <resource/resource.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 // Helper Functions
 /////////////////////
@@ -32,14 +33,15 @@
 
 #include <fake_graphics_context.h>
 #include <fake_spi_flash.h>
+#include <stubs_app_install_manager.h>
 
 static GContext s_ctx;
 
-void clock_get_time_tm(struct tm *time_tm) {
+void clock_get_time_tm(struct pbl_tm *time_tm) {
   rtc_get_time_tm(time_tm);
 }
 
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 static GBitmap *s_dest_bitmap;
 
 // To easily render multiple windows in a single canvas, we'll use an 8-bit bitmap for color
@@ -71,35 +73,7 @@ GContext *graphics_context_get_current_context(void) {
 // Stubs
 /////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_animation_timing.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_app_timer.h>
-#include <stubs_bootbits.h>
 #include <stubs_buffer.h>
-#include <stubs_click.h>
-#include <stubs_heap.h>
-#include <stubs_layer.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_menu_cell_layer.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_process_manager.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
-#include <stubs_status_bar_layer.h>
-#include <stubs_syscall_internal.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_text_layer_flow.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
 
 // Setup and Teardown
 ////////////////////////////////////
@@ -119,7 +93,7 @@ void test_selection_windows__cleanup(void) {
   if (s_dest_bitmap) {
     gbitmap_destroy(s_dest_bitmap);
   }
-  s_dest_bitmap = NULL;
+  s_dest_bitmap = nullptr;
 }
 
 // Helpers
@@ -198,7 +172,7 @@ static void prv_render_time_range_selection_window(GContext *ctx,
   ctx->draw_state.drawing_box.origin = GPoint(x_offset, 0);
 
   TimeRangeSelectionWindowData selection_window;
-  time_range_selection_window_init(&selection_window, SELECTION_COLOR, NULL, NULL);
+  time_range_selection_window_init(&selection_window, SELECTION_COLOR, nullptr, nullptr);
 
   selection_window.from.hour = 16;
   selection_window.from.minute = 20;

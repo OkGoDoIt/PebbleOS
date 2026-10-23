@@ -7,7 +7,6 @@
 #include "services/audio_companion/spool.h"
 
 #include "stubs_logging.h"
-#include "stubs_passert.h"
 #include "fake_pbl_malloc.h"
 
 #include <string.h>

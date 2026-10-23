@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
 #include <string.h>
 
 #include <pbl/util/math.h>
@@ -13,9 +12,6 @@
 
 // Stubs
 ///////////////////////////////////////////////////////////
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
 
 // Tests
 ///////////////////////////////////////////////////////////
@@ -67,7 +63,7 @@ static void serialize_callback(const uint8_t *const data, const uint16_t size, v
   // Read back:
   DictionaryIterator iter;
   Tuple *tuple = dict_read_begin_from_buffer(&iter, data, size);
-  cl_assert(tuple != NULL);
+  cl_assert(tuple != nullptr);
   cl_assert(iter.dictionary->count == 3);
 }
 
@@ -120,7 +116,7 @@ void test_dict__write_read(void) {
   cl_assert(result == DICT_OK);
   result = dict_write_int32(&iter, SOME_INT32_KEY, -32);
   cl_assert(result == DICT_OK);
-  result = dict_write_cstring(&iter, SOME_NULL_KEY, NULL);
+  result = dict_write_cstring(&iter, SOME_NULL_KEY, nullptr);
   cl_assert(result == DICT_OK);
   result = dict_write_cstring(&iter, SOME_EMPTY_STRING_KEY, SOME_EMPTY_STRING);
   cl_assert(result == DICT_OK);
@@ -143,7 +139,7 @@ void test_dict__write_read(void) {
   bool int32_found = false;
   bool null_cstring_found = false;
   bool empty_cstring_found = false;
-  while (tuple != NULL) {
+  while (tuple != nullptr) {
     ++count;
     switch (tuple->key) {
       case SOME_DATA_KEY:

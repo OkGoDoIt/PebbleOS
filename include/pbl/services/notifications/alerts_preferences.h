@@ -5,7 +5,6 @@
 
 #include "alerts_private.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -95,6 +94,23 @@ void alerts_preferences_dnd_set_touch_backlight(bool enable);
  * @return true if the touch backlight is allowed.
  */
 bool alerts_preferences_dnd_get_touch_backlight(void);
+
+/**
+ * @brief Set whether incoming alerts turn on the backlight while DND is active.
+ *
+ * Only alerts allowed by the DND interruptions mask are affected; the others are
+ * already silent during DND.
+ *
+ * @param enable true to allow the notification backlight (default), false to suppress it.
+ */
+void alerts_preferences_dnd_set_notification_backlight(bool enable);
+
+/**
+ * @brief Get whether incoming alerts turn on the backlight while DND is active.
+ *
+ * @return true if the notification backlight is allowed.
+ */
+bool alerts_preferences_dnd_get_notification_backlight(void);
 
 /**
  * @brief Set whether the speaker is muted while DND is active.

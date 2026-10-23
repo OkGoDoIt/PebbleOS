@@ -5,10 +5,9 @@
 
 #include <applib/ui/dialogs/simple_dialog.h>
 #include <clar.h>
+#include <fff.h>
 #include <kernel/event_loop.h>
 #include <kernel/ui/modals/modal_manager.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
 
 extern void ping_protocol_msg_callback(CommSession *session, const uint8_t *data, size_t length);
 
@@ -16,7 +15,6 @@ extern void ping_protocol_msg_callback(CommSession *session, const uint8_t *data
 
 static CallbackEventCallback s_callbacks[MAX_CALLBACKS];
 static int s_num_callbacks;
-static int s_num_pongs;
 static int s_num_dialogs;
 static SimpleDialog s_dialog;
 
@@ -28,14 +26,11 @@ void launcher_task_add_callback(CallbackEventCallback callback, void *data) {
 void system_task_add_callback(CallbackEventCallback callback, void *data) {
 }
 
-bool comm_session_send_data(CommSession *session, uint16_t endpoint_id, const uint8_t *data,
-                            size_t length, uint32_t timeout_ms) {
-  s_num_pongs++;
-  return true;
-}
+FAKE_VALUE_FUNC(bool, comm_session_send_data, CommSession *, uint16_t, const uint8_t *, size_t,
+                uint32_t);
 
 CommSession *comm_session_get_system_session(void) {
-  return NULL;
+  return nullptr;
 }
 
 bool battery_is_usb_connected(void) {
@@ -79,12 +74,12 @@ void dialog_set_text(Dialog *dialog, const char *text) {
 }
 
 WindowStack *modal_manager_get_window_stack(ModalPriority priority) {
-  return NULL;
+  return nullptr;
 }
 
 static void prv_run_callbacks(void) {
   for (int i = 0; i < s_num_callbacks; i++) {
-    s_callbacks[i](NULL);
+    s_callbacks[i](nullptr);
   }
   s_num_callbacks = 0;
 }
@@ -95,12 +90,13 @@ static void prv_dismiss_dialog(void) {
 
 static void prv_receive_ping(uint8_t cookie) {
   const uint8_t ping[] = {0x00, 0x00, 0x00, 0x00, cookie, 0x00};
-  ping_protocol_msg_callback(NULL, ping, sizeof(ping));
+  ping_protocol_msg_callback(nullptr, ping, sizeof(ping));
 }
 
 void test_ping__initialize(void) {
   s_num_callbacks = 0;
-  s_num_pongs = 0;
+  RESET_FAKE(comm_session_send_data);
+  comm_session_send_data_fake.return_val = true;
   s_num_dialogs = 0;
 }
 
@@ -117,7 +113,7 @@ void test_ping__burst_shows_one_dialog(void) {
   }
   prv_run_callbacks();
 
-  cl_assert_equal_i(s_num_pongs, 100);
+  cl_assert_equal_i(comm_session_send_data_fake.call_count, 100);
   cl_assert_equal_i(s_num_dialogs, 1);
 }
 
@@ -129,6 +125,6 @@ void test_ping__dialog_shown_again_once_dismissed(void) {
   prv_receive_ping(1);
   prv_run_callbacks();
 
-  cl_assert_equal_i(s_num_pongs, 2);
+  cl_assert_equal_i(comm_session_send_data_fake.call_count, 2);
   cl_assert_equal_i(s_num_dialogs, 2);
 }

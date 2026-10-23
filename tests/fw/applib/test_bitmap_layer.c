@@ -7,18 +7,6 @@
 
 // Stubs
 /////////////////////
-#include <stubs_app_state.h>
-#include <stubs_graphics.h>
-#include <stubs_graphics_context.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_resources.h>
-#include <stubs_syscalls.h>
-#include <stubs_ui_window.h>
-#include <stubs_unobstructed_area.h>
 
 // Fakes
 /////////////////////
@@ -45,7 +33,7 @@ void test_bitmap_layer__cleanup(void) {
 // Tests
 //////////////////////
 
-// Test inspired by PBL-19136. Check that bitmaps get drawn in the right rect
+// Check that bitmaps get drawn in the right rect
 // on recent SDKs but that a previous bug is kept for 2.x SDK
 void test_bitmap_layer__nonzero_bounds(void) {
   GContext ctx = {

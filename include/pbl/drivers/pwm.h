@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <board/board.h>
@@ -18,9 +17,9 @@
  *
  * @code{.c}
  * // 256 Hz output with 1024 steps
- * pwm_init(&BACKLIGHT_PWM.pwm, 1024, 1024 * 256);
- * pwm_enable(&BACKLIGHT_PWM.pwm, true);
- * pwm_set_duty_cycle(&BACKLIGHT_PWM.pwm, 512);
+ * pwm_init(&s_pwm, 1024, 1024 * 256);
+ * pwm_enable(&s_pwm, true);
+ * pwm_set_duty_cycle(&s_pwm, 512);
  * @endcode
  * @{
  */

@@ -5,13 +5,13 @@
 
 #include <errno.h>
 #include <inttypes.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <pbl/drivers/watchdog.h>
 #include <pbl/kernel/thread.h>
 #include <pbl/services/compositor/compositor.h>
+#include <pbl/services/compositor/compositor_private.h>
 #include <pbl/shell/shell.h>
 #include <pbl/task_wdt/task_wdt.h>
 #include <pbl/util/math.h>
@@ -33,6 +33,7 @@ static GContext *prv_perftest_get_context(void) {
   GContext *ctx = &s_perftest_ctx;
   FrameBuffer *fb = compositor_get_framebuffer();
   memset(fb->buffer, 0xff, FRAMEBUFFER_SIZE_BYTES);
+  compositor_app_framebuffer_mirror_invalidate();
   graphics_context_init(ctx, fb, GContextInitializationMode_App);
   return ctx;
 }
@@ -135,7 +136,7 @@ static const PerftestTextString s_perftest_text_strings[TestStringCount] = {
                   "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
         .lengths =
             {
-#if defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
+#if defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
               [TestStringFont_Gothic18] = 204,
               [TestStringFont_Gothic24B] = 144,
               [TestStringFont_Other] = STRING_LENGTH_MAX,
@@ -156,7 +157,7 @@ static const PerftestTextString s_perftest_text_strings[TestStringCount] = {
                   "ハヒフヘホマミムメモヤユヨラリルレロワヲン",
         .lengths =
             {
-#if defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
+#if defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
               [TestStringFont_Gothic18] = 579,
               [TestStringFont_Gothic24B] = 291,
               [TestStringFont_Other] = STRING_LENGTH_MAX,
@@ -170,7 +171,7 @@ static const PerftestTextString s_perftest_text_strings[TestStringCount] = {
               "FLASH access on Robe"
               "\xe2\x80\xa6",
     .lengths = {
-#if defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
+#if defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
       [TestStringFont_Gothic18] = 134,
       [TestStringFont_Gothic24B] = 134,
       [TestStringFont_Other] = STRING_LENGTH_MAX,
@@ -232,7 +233,7 @@ static void prv_perftest_text_main(void *data) {
     graphics_context_set_text_color(ctx, GColorBlack);
 
     profiler_start();
-    graphics_draw_text(ctx, s_text_test_str, font, bounds, TEXT_OVERFLOW, TEXT_ALIGNMENT, NULL);
+    graphics_draw_text(ctx, s_text_test_str, font, bounds, TEXT_OVERFLOW, TEXT_ALIGNMENT, nullptr);
     profiler_stop();
     avg += profiler_get_total_duration(true);
   }
@@ -273,7 +274,7 @@ static int prv_perftest_text(const struct pbl_shell *sh, const char *string_type
   args->y_offset_str = y_offset;
 
   s_perftest_text_running = true;
-  launcher_task_add_callback(prv_perftest_text_main, NULL);
+  launcher_task_add_callback(prv_perftest_text_main, nullptr);
   while (s_perftest_text_running) {
     pbl_thread_yield();
     watchdog_feed();
@@ -308,14 +309,14 @@ static int prv_cmd_text_all(const struct pbl_shell *sh, size_t argc, char **argv
 }
 
 static const struct pbl_shell_cmd sub_perftest[] = {
-  PBL_SHELL_CMD_ARG(line, NULL, "Time line drawing <aa|noaa> <width>", prv_cmd_line, 3, 0),
-  PBL_SHELL_CMD_ARG(text, NULL, "Time text drawing <best|worst|typical> <font_key> <y_offset>",
+  PBL_SHELL_CMD_ARG(line, nullptr, "Time line drawing <aa|noaa> <width>", prv_cmd_line, 3, 0),
+  PBL_SHELL_CMD_ARG(text, nullptr, "Time text drawing <best|worst|typical> <font_key> <y_offset>",
                     prv_cmd_text, 4, 0),
-  PBL_SHELL_CMD(line_all, NULL, "Time line drawing for all variants", prv_cmd_line_all),
-  PBL_SHELL_CMD(text_all, NULL, "Time text drawing for all variants", prv_cmd_text_all),
+  PBL_SHELL_CMD(line_all, nullptr, "Time line drawing for all variants", prv_cmd_line_all),
+  PBL_SHELL_CMD(text_all, nullptr, "Time text drawing for all variants", prv_cmd_text_all),
   PBL_SHELL_SUBCMD_SET_END,
 };
 
-PBL_SHELL_CMD_REGISTER(perftest, sub_perftest, "Drawing performance tests", NULL);
+PBL_SHELL_CMD_REGISTER(perftest, sub_perftest, "Drawing performance tests", nullptr);
 
 #endif

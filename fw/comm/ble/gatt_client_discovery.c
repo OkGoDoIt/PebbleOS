@@ -178,7 +178,7 @@ extern uint8_t gatt_client_copy_service_refs_by_discovery_generation(
 static void prv_send_event(PebbleBLEGATTClientServiceEventInfo *info) {
   PebbleEvent e = (const PebbleEvent){
     .type = PEBBLE_BLE_GATT_CLIENT_EVENT,
-    .task_mask = 0,
+    .task_mask = (PebbleTaskBitset) ~(1u << PebbleTask_KernelMain),
     .bluetooth = {
       .le = {
         .gatt_client_service = {
@@ -188,7 +188,6 @@ static void prv_send_event(PebbleBLEGATTClientServiceEventInfo *info) {
       },
     },
   };
-  // TODO: send only to tasks that are connected virtually
   event_put(&e);
 }
 
@@ -278,9 +277,9 @@ void gatt_client_discovery_handle_service_range_change(GAPLEConnection *connecti
   // a service has been removed/updated
   gatt_client_subscription_cleanup_by_att_handle_range(connection, range);
   ListNode **head = (ListNode **)&connection->gatt_remote_services;
-  list_remove((ListNode *)service_node, head, NULL);
+  list_remove((ListNode *)service_node, head, nullptr);
   kernel_free(service_node->service);
-  service_node->service = NULL;
+  service_node->service = nullptr;
   kernel_free(service_node);
 
   prv_send_event(info);
@@ -291,11 +290,11 @@ static void prv_free_service_nodes(GAPLEConnection *connection) {
   while (node) {
     GATTServiceNode *next = (GATTServiceNode *)node->node.next;
     kernel_free(node->service);
-    node->service = NULL;
+    node->service = nullptr;
     kernel_free(node);
     node = next;
   }
-  connection->gatt_remote_services = NULL;
+  connection->gatt_remote_services = nullptr;
 }
 
 static void prv_remove_current_discovery_job(GAPLEConnection *connection) {
@@ -304,13 +303,12 @@ static void prv_remove_current_discovery_job(GAPLEConnection *connection) {
     return;
   }
   list_remove((ListNode *)connection->discovery_jobs, (ListNode **)&connection->discovery_jobs,
-              NULL);
+              nullptr);
   kernel_free(node);
 
   // Handle the case where we are have received service change indication
   // messages for the same range in quick succession and have multiple jobs
-  // scheduled as a result. This shouldn't be a frequent occurrence but see
-  // PBL-24741 as an example
+  // scheduled as a result.
 
   DiscoveryJobQueue *new_job = connection->discovery_jobs;
   if (!new_job) {
@@ -330,7 +328,7 @@ static void prv_remove_current_discovery_job(GAPLEConnection *connection) {
 void gatt_client_cleanup_discovery_jobs(GAPLEConnection *connection) {
   bt_lock();
   {
-    while (connection->discovery_jobs != NULL) {
+    while (connection->discovery_jobs != nullptr) {
       prv_remove_current_discovery_job(connection);
     }
   }
@@ -453,7 +451,7 @@ enum pbl_bt_errno gatt_client_discovery_discover_all(const struct pbl_bt_device_
     }
     conn_mgr_set_ble_conn_response_time(connection, PBL_BT_CONSUMER_LE_SERVICE_DISCOVERY,
                                         PBL_BT_RESPONSE_TIME_MIN, 30);
-    prv_add_discovery_job(connection, NULL);
+    prv_add_discovery_job(connection, nullptr);
     // if we get here there is no discovery in progress so dispatch the job
     ret_val = prv_run_next_job(connection);
   }

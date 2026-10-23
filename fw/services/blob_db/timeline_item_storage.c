@@ -157,7 +157,7 @@ status_t timeline_item_storage_next_item(TimelineItemStorage *storage, Uuid *id_
                                          TimelineItemStorageFilterCallback filter_cb) {
   RtcTicks lock_ticks = prv_storage_lock(storage, __func__);
 
-  NextInfo next_info = {0};
+  NextInfo next_info = {};
   next_info.current = rtc_get_time();
   next_info.max_age = storage->max_item_age;
   next_info.filter_cb = filter_cb;
@@ -291,12 +291,12 @@ status_t timeline_item_storage_insert(TimelineItemStorage *storage, const uint8_
   time_t timestamp = timeline_item_get_tz_timestamp(&hdr->common);
   time_t end_timestamp = timestamp + hdr->common.duration * PBL_SEC_PER_MIN;
   if (end_timestamp < (int)(now - storage->max_item_age)) {
-    PBL_LOG_WRN("Rejecting stale timeline item %ld seconds old", now - timestamp);
+    PBL_LOG_WRN("Rejecting stale timeline item %ld seconds old", (long)(now - timestamp));
     return E_INVALID_OPERATION;
   }
 
-  // FIXME: PBL-39523 timeline_item_storage_insert modifies a const buffer
-  // Invert flags & status to store on flash
+  // Invert flags & status to store on flash.
+  // TODO: avoid temporarily modifying the const val buffer.
   hdr->common.flags = ~hdr->common.flags;
   hdr->common.status = ~hdr->common.status;
 
@@ -418,7 +418,7 @@ static bool prv_flush_filter_cb(void *key, size_t key_len, void *val, size_t val
 
 status_t timeline_item_storage_flush(TimelineItemStorage *storage) {
   RtcTicks lock_ticks = prv_storage_lock(storage, __func__);
-  status_t rv = settings_file_rewrite_filtered(&storage->file, prv_flush_filter_cb, NULL);
+  status_t rv = settings_file_rewrite_filtered(&storage->file, prv_flush_filter_cb, nullptr);
   prv_storage_unlock(storage, lock_ticks, __func__);
   return rv;
 }

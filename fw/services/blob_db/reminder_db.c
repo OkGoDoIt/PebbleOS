@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/blob_db/reminder_db.h>
 #include <pbl/services/blob_db/sync.h>
@@ -11,7 +12,6 @@
 #include <pbl/util/uuid.h>
 
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DECLARE(service_blob_db, CONFIG_SERVICE_BLOB_DB_LOG_LEVEL);
 
@@ -31,7 +31,7 @@ typedef struct {
 static TimelineItemStorage s_storage;
 
 static status_t prv_read_item_header(TimelineItem *item_out, TimelineItemId *id) {
-  SerializedTimelineItemHeader hdr = {{{0}}};
+  SerializedTimelineItemHeader hdr = {};
   status_t rv = reminder_db_read((uint8_t *)id, sizeof(TimelineItemId), (uint8_t *)&hdr,
                                  sizeof(SerializedTimelineItemHeader));
   timeline_item_deserialize_header(item_out, &hdr);
@@ -261,7 +261,7 @@ status_t reminder_db_is_dirty(bool *is_dirty_out) {
 }
 
 BlobDBDirtyItem *reminder_db_get_dirty_list(void) {
-  BlobDBDirtyItem *dirty_list = NULL;
+  BlobDBDirtyItem *dirty_list = nullptr;
   timeline_item_storage_each(&s_storage, sync_util_build_dirty_list_cb, &dirty_list);
 
   return dirty_list;

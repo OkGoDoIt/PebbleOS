@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 
 #include <applib/app_logging.h>
@@ -18,14 +19,14 @@
 #include <applib/preferred_content_size.h>
 #include <process_state/app_state/app_state.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 static GTextLayoutCacheRef prv_text_layer_get_cache_handle(TextLayer *text_layer) {
   PBL_ASSERTN(text_layer);
-  return text_layer->should_cache_layout ? text_layer->layout_cache : NULL;
+  return text_layer->should_cache_layout ? text_layer->layout_cache : nullptr;
 }
 
-void text_layer_update_proc(TextLayer *text_layer, GContext *ctx) {
+void text_layer_update_proc(Layer *layer, GContext *ctx) {
+  TextLayer *text_layer = (TextLayer *)layer;
   PBL_ASSERTN(text_layer);
   const GColor bg_color = text_layer->background_color;
   if (!(gcolor_equal(bg_color, GColorClear))) {
@@ -56,7 +57,7 @@ void text_layer_init_with_parameters(TextLayer *text_layer, const GRect *frame, 
   *text_layer = (TextLayer){};
   text_layer->layer.frame = *frame;
   text_layer->layer.bounds = (GRect){{0, 0}, frame->size};
-  text_layer->layer.update_proc = (LayerUpdateProc)text_layer_update_proc;
+  text_layer->layer.update_proc = text_layer_update_proc;
   text_layer->text_color = text_color;
   text_layer->background_color = back_color;
   text_layer->overflow_mode = overflow_mode;
@@ -64,7 +65,7 @@ void text_layer_init_with_parameters(TextLayer *text_layer, const GRect *frame, 
 
   text_layer->text_alignment = text_align;
   // Default font
-  if (font == NULL) {
+  if (font == nullptr) {
     const PreferredContentSize runtime_platform_default_size =
         system_theme_get_default_content_size_for_runtime_platform();
     font = fonts_get_system_font(s_text_layer_default_fonts[runtime_platform_default_size]);
@@ -76,7 +77,7 @@ void text_layer_init_with_parameters(TextLayer *text_layer, const GRect *frame, 
 }
 
 void text_layer_init(TextLayer *text_layer, const GRect *frame) {
-  text_layer_init_with_parameters(text_layer, frame, NULL, NULL, GColorBlack, GColorWhite,
+  text_layer_init_with_parameters(text_layer, frame, nullptr, nullptr, GColorBlack, GColorWhite,
                                   GTextAlignmentLeft, GTextOverflowModeTrailingEllipsis);
 }
 
@@ -100,7 +101,7 @@ void text_layer_deinit(TextLayer *text_layer) {
   PBL_ASSERTN(text_layer);
   layer_deinit(&text_layer->layer);
   graphics_text_layout_cache_deinit(&text_layer->layout_cache);
-  text_layer->layout_cache = NULL;
+  text_layer->layout_cache = nullptr;
 }
 
 Layer *text_layer_get_layer(TextLayer *text_layer) {
@@ -187,7 +188,7 @@ void text_layer_set_should_cache_layout(TextLayer *text_layer, bool should_cache
     graphics_text_layout_cache_init(&text_layer->layout_cache);
   } else {
     graphics_text_layout_cache_deinit(&text_layer->layout_cache);
-    text_layer->layout_cache = NULL;
+    text_layer->layout_cache = nullptr;
   }
 }
 
@@ -230,7 +231,7 @@ void text_layer_enable_screen_text_flow_and_paging(TextLayer *text_layer, uint8_
   if (!text_layer) {
     return;
   }
-  if (text_layer->layer.window == NULL) {
+  if (text_layer->layer.window == nullptr) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Before calling %s, layer must be attached to view hierarchy.",
             __func__);
     return;

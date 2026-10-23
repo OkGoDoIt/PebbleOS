@@ -3,10 +3,10 @@
 
 #pragma once
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/drivers/mic.h>
+#include <pbl/drivers/regulator.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/util/circular_buffer.h>
 
@@ -84,6 +84,8 @@ typedef const struct MicDevice {
   uint32_t channel_depth;
   /** Default volume scalar (max 128); not used by the driver. */
   uint16_t default_volume;
+  /** Microphone supply, switched on while capturing; NULL if always powered. */
+  const struct pbl_regulator *vdd;
 } MicDevice;
 
 /**

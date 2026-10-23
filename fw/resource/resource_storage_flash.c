@@ -60,7 +60,6 @@ static void resource_storage_system_bank_init(void) {
   // is called as part of system_resource_init we'll complain and handle missing resources.
 }
 
-// TODO PBL-21009: Move this somewhere else.
 const SystemResourceBank *resource_storage_flash_get_unused_bank(void) {
   size_t unused_bank_index;
   if (s_valid_resources_found) {
@@ -118,16 +117,16 @@ static const uint8_t *resource_storage_system_bank_readonly_bytes(ResourceStoreE
   // Bank is XIP-mapped, so data is addressable at BANK.begin + offset. Only
   // privileged callers get the raw pointer; unprivileged apps use the copy path.
   if (!has_privileged_access) {
-    return NULL;
+    return nullptr;
   }
   return (const uint8_t *)(uintptr_t)(BANK.begin + entry->offset);
 #else
-  return NULL;
+  return nullptr;
 #endif
 }
 
 static void resource_storage_system_bank_clear(ResourceStoreEntry *entry) {
-  uint8_t buffer[MANIFEST_SIZE] = {0};
+  uint8_t buffer[MANIFEST_SIZE] = {};
   flash_write_bytes(buffer, BANK.begin, MANIFEST_SIZE);
 }
 

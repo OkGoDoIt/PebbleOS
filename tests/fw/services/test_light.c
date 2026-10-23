@@ -1,30 +1,22 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/cron/cron.h>
+#include <pbl/drivers/als.h>
 #include <pbl/drivers/backlight.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/services/light.h>
 #include <pbl/util/math.h>
 #include <pbl/util/size.h>
+#include <pbl/util/units.h>
 
 #include <board/board.h>
 #include <clar.h>
 #include <fake_new_timer.h>
-#include <system/passert.h>
+#include <fake_rtc.h>
 
 // Stubs
 ///////////////////////////////////////////////////////////
-#include <stubs_ambient_light.h>
-#include <stubs_analytics.h>
-#include <stubs_battery_monitor.h>
-#include <stubs_events.h>
-#include <stubs_fonts.h>
-#include <stubs_logging.h>
-#include <stubs_low_power.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_print.h>
-#include <stubs_rtc.h>
-#include <stubs_serial.h>
 
 // the time that the backlight remains on but there is zero user interaction
 extern const uint32_t INACTIVE_LIGHT_TIMEOUT_MS;
@@ -40,6 +32,12 @@ static TimerID s_light_timer;
 
 static uint8_t s_backlight_brightness;
 static bool s_backlight_enabled = true;
+static uint32_t s_backlight_color;
+
+int pbl_backlight_set_color(const struct pbl_backlight *bl, uint32_t rgb_color) {
+  s_backlight_color = rgb_color;
+  return 0;
+}
 
 BacklightBehaviour backlight_get_behaviour(void) {
   return BacklightBehaviour_On;
@@ -49,8 +47,10 @@ bool backlight_is_enabled(void) {
   return s_backlight_enabled;
 }
 
+static bool s_ambient_sensor_enabled;
+
 bool backlight_is_ambient_sensor_enabled(void) {
-  return false;
+  return s_ambient_sensor_enabled;
 }
 
 void backlight_set_enabled(bool enabled) {
@@ -60,19 +60,35 @@ void backlight_set_enabled(bool enabled) {
 void backlight_set_ambient_sensor_enabled(bool enabled) {
 }
 
-void backlight_set_brightness(uint8_t brightness) {
+const struct pbl_backlight *const BACKLIGHT = nullptr;
+
+int pbl_backlight_set_brightness(const struct pbl_backlight *bl, uint8_t brightness) {
   s_backlight_brightness = brightness;
+  return 0;
 }
 
-uint8_t backlight_get_level(uint8_t brightness) {
+uint8_t pbl_backlight_get_level(const struct pbl_backlight *bl, uint8_t brightness) {
   return brightness;
 }
 
-void backlight_refresh(void) {
+int pbl_backlight_refresh(const struct pbl_backlight *bl) {
+  return 0;
 }
 
 bool backlight_is_motion_enabled(void) {
   return false;
+}
+
+static uint32_t s_als_raw;
+static uint32_t s_als_compensation_gain;
+
+int pbl_als_read(const struct pbl_als *als, uint32_t *level) {
+  *level = s_als_raw;
+  return 0;
+}
+
+uint32_t als_compensation_correct(uint32_t raw_level) {
+  return raw_level * s_als_compensation_gain;
 }
 
 // From pref.h
@@ -94,6 +110,32 @@ uint8_t backlight_get_intensity(void) {
 void backlight_set_intensity(uint8_t percent_intensity) {
   PBL_ASSERTN(percent_intensity > 0 && percent_intensity <= 100);
   s_backlight_intensity = percent_intensity;
+}
+
+static bool s_day_night_enabled;
+static uint32_t s_day_color = BACKLIGHT_COLOR_WARM_WHITE;
+static uint32_t s_night_color = BACKLIGHT_COLOR_RED;
+static uint16_t s_sunrise_minute;
+static uint16_t s_sunset_minute;
+
+bool backlight_day_night_color_is_enabled(void) {
+  return s_day_night_enabled;
+}
+
+uint32_t backlight_get_default_color(void) {
+  return s_day_color;
+}
+
+uint32_t backlight_get_night_color(void) {
+  return s_night_color;
+}
+
+uint16_t backlight_get_sunrise_minute(void) {
+  return s_sunrise_minute;
+}
+
+uint16_t backlight_get_sunset_minute(void) {
+  return s_sunset_minute;
 }
 
 // Helper functions
@@ -146,17 +188,36 @@ static void check_off(void) {
 // Tests
 ///////////////////////////////////////////////////////////
 
+static void prv_set_schedule(bool enabled, int sunrise_hour, int sunset_hour) {
+  s_day_night_enabled = enabled;
+  s_sunrise_minute = sunrise_hour * PBL_MIN_PER_HOUR;
+  s_sunset_minute = sunset_hour * PBL_MIN_PER_HOUR;
+  light_handle_color_prefs_changed();
+}
+
+static void prv_set_time_of_day(int hour, int minute) {
+  fake_rtc_init(0, hour * PBL_SEC_PER_HOUR + minute * PBL_SEC_PER_MIN);
+}
+
 void test_light__initialize(void) {
+  prv_set_time_of_day(12, 0);
+  pbl_cron_init();
   light_init();
   light_allow(true);
   s_light_timer = ((StubTimer *)s_idle_timers)->id;
   backlight_set_intensity(100);
   s_backlight_enabled = true;
+  s_backlight_color = 0;
+  s_ambient_sensor_enabled = false;
+  s_als_raw = 0;
+  s_als_compensation_gain = 1;
+  prv_set_schedule(false, 6, 18);
 }
 
 void test_light__cleanup(void) {
   s_backlight_brightness = 0;
   s_backlight_enabled = true;
+  pbl_cron_deinit();
   stub_new_timer_delete(s_light_timer);
 }
 
@@ -187,6 +248,28 @@ void test_light__button_press_and_release(void) {
 void test_light__light_enable_interaction(void) {
   light_enable_interaction();
   check_on_timed_and_consume();
+}
+
+void test_light__ambient_gate_ignores_screen_compensation(void) {
+  s_ambient_sensor_enabled = true;
+  light_set_dark_threshold(150);
+  // Dim room behind a black sensor region: compensation scales 100 up to 1200.
+  s_als_raw = 100;
+  s_als_compensation_gain = 12;
+
+  cl_assert_equal_i(light_get_ambient_lux(), 1200);
+  cl_assert_equal_i(light_get_ambient_gate_lux(), 100);
+  light_enable_interaction();
+  check_on_timed_and_consume();
+}
+
+void test_light__ambient_gate_blocks_bright_room(void) {
+  s_ambient_sensor_enabled = true;
+  light_set_dark_threshold(150);
+  s_als_raw = 200;
+
+  light_enable_interaction();
+  check_off();
 }
 
 void test_light__light_enable(void) {
@@ -275,23 +358,67 @@ void test_light__interaction_during_fading(void) {
 }
 
 void test_light__touch_down_and_up(void) {
-  // A touch behaves like a button: on while down, timed out after liftoff.
   light_touch_down();
+  check_on_timed();
+
+  light_touch_up();
+  check_on_timed_and_consume();
+}
+
+void test_light__touch_hold_times_out(void) {
+  // A resting contact (skin, bedding) must not keep the backlight on.
+  light_touch_down();
+  check_on_timed_and_consume();
+
+  light_touch_up();
+  check_off();
+}
+
+void test_light__touch_move_restarts_timeout(void) {
+  light_touch_down();
+  check_on_timed_and_consume_partial();
+
+  light_touch_moved();
+  check_on_timed_and_consume();
+
+  light_touch_moved();
+  check_on_timed();
+
+  light_touch_up();
+  check_on_timed_and_consume();
+}
+
+void test_light__touch_move_without_down_is_noop(void) {
+  light_touch_moved();
+  check_off();
+}
+
+void test_light__button_held_during_touch_keeps_light_on(void) {
+  light_touch_down();
+  light_button_pressed();
   check_on();
 
   light_touch_up();
+  check_on();
+
+  light_button_released();
   check_on_timed_and_consume();
 }
 
 void test_light__touch_down_is_coalesced(void) {
   // Repeated touch-downs take one reference; one touch-up fully releases it.
   light_touch_down();
-  check_on();
+  check_on_timed();
 
   light_touch_down();
-  check_on();
+  check_on_timed();
 
   light_touch_up();
+  check_on_timed_and_consume();
+
+  light_button_pressed();
+  check_on();
+  light_button_released();
   check_on_timed_and_consume();
 }
 
@@ -309,9 +436,10 @@ void test_light__touch_up_without_down_is_noop(void) {
 void test_light__touch_hold_released_on_app_teardown(void) {
   // App teardown must release the hold so the backlight times out, not stick on.
   light_touch_down();
-  check_on();
+  check_on_timed();
 
-  light_reset_user_controlled();
+  light_touch_up();
+  light_reset_user_controlled_by_task(PebbleTask_App);
 
   check_on_timed_and_consume();
 }
@@ -338,4 +466,89 @@ void test_light__touch_lit_period_is_tracked(void) {
   check_on_timed_and_consume();
 
   cl_assert(!light_is_lit_by_touch());
+}
+
+void test_light__day_night_disabled_uses_default_color(void) {
+  prv_set_time_of_day(23, 0);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+  cl_assert_equal_i(pbl_cron_get_job_count(), 0);
+}
+
+void test_light__day_night_picks_color_from_schedule(void) {
+  prv_set_schedule(true, 6, 18);
+
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+  light_enable(false);
+
+  prv_set_time_of_day(23, 0);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_night_color);
+  light_enable(false);
+
+  prv_set_time_of_day(5, 59);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_night_color);
+  light_enable(false);
+
+  prv_set_time_of_day(6, 0);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+}
+
+void test_light__day_night_schedule_wraps_midnight(void) {
+  prv_set_schedule(true, 22, 4);
+
+  prv_set_time_of_day(2, 0);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+  light_enable(false);
+
+  prv_set_time_of_day(12, 0);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_night_color);
+}
+
+void test_light__day_night_equal_times_disable_schedule(void) {
+  prv_set_schedule(true, 6, 6);
+
+  prv_set_time_of_day(23, 0);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+  cl_assert_equal_i(pbl_cron_get_job_count(), 0);
+}
+
+void test_light__day_night_schedules_cron_jobs(void) {
+  prv_set_schedule(true, 6, 18);
+  cl_assert_equal_i(pbl_cron_get_job_count(), 2);
+
+  prv_set_schedule(false, 6, 18);
+  cl_assert_equal_i(pbl_cron_get_job_count(), 0);
+}
+
+void test_light__day_night_cron_retints_lit_backlight(void) {
+  prv_set_schedule(true, 6, 18);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+
+  prv_set_time_of_day(18, 0);
+  pbl_cron_wakeup();
+  cl_assert_equal_i(s_backlight_color, s_night_color);
+  cl_assert_equal_i(pbl_cron_get_job_count(), 2);
+
+  fake_rtc_init(0, PBL_SEC_PER_DAY + 6 * PBL_SEC_PER_HOUR);
+  pbl_cron_wakeup();
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+  cl_assert_equal_i(pbl_cron_get_job_count(), 2);
+}
+
+void test_light__day_night_clock_change_retints_lit_backlight(void) {
+  prv_set_schedule(true, 6, 18);
+  light_enable(true);
+  cl_assert_equal_i(s_backlight_color, s_day_color);
+
+  prv_set_time_of_day(23, 0);
+  light_handle_clock_change();
+  cl_assert_equal_i(s_backlight_color, s_night_color);
 }

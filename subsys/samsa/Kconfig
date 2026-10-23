@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config SAMSA
+    bool "Run third-party apps with the Samsa Thumb-2 interpreter"
+    depends on !CPU_CORTEX_M
+    default y if SOC_POSIX
+    # The thunks are generated from the SDK built for apps.
+    select REQUIRES_ARM_TOOLCHAIN
+    help
+      Interpret the ARM code of third-party apps and workers with Samsa,
+      so a native build can install and run .pbw files.
+
+if SAMSA
+
+module = SAMSA
+module-str = Samsa
+source "subsys/logging/Kconfig.template.log_level"
+
+endif

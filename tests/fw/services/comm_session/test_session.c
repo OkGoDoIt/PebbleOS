@@ -20,14 +20,6 @@ extern void comm_session_send_next_immediately(CommSession *session);
 // Stubs
 ///////////////////////////////////////////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_bt_lock.h>
-#include <stubs_bt_stack.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_syscall_internal.h>
-
 void comm_session_analytics_open_session(CommSession *session) {
 }
 
@@ -158,7 +150,7 @@ void test_session__initialize(void) {
   s_send_next_count = 0;
   s_reset_count = 0;
   s_close_count = 0;
-  s_last_closed_transport = NULL;
+  s_last_closed_transport = nullptr;
   s_dls_private_handle_disconnect_called = false;
   s_comm_session_event_put = false;
   s_pbl_bt_comm_is_current_task_send_next_task = false;
@@ -173,19 +165,19 @@ void test_session__cleanup(void) {
 }
 
 void test_session__get_system_session_disconnected_returns_null(void) {
-  cl_assert_equal_p(comm_session_get_system_session(), NULL);
+  cl_assert_equal_p(comm_session_get_system_session(), nullptr);
 }
 
 void test_session__get_app_session_disconnected_returns_null(void) {
-  cl_assert_equal_p(comm_session_get_current_app_session(), NULL);
+  cl_assert_equal_p(comm_session_get_current_app_session(), nullptr);
 }
 
 void test_session__send_data_returns_false_for_null_session(void) {
   const uint16_t endpoint_id = 1234;
   uint8_t data[] = {1, 2, 3, 4};
-  cl_assert_equal_b(
-      comm_session_send_data(NULL, endpoint_id, data, sizeof(data), COMM_SESSION_DEFAULT_TIMEOUT),
-      false);
+  cl_assert_equal_b(comm_session_send_data(nullptr, endpoint_id, data, sizeof(data),
+                                           COMM_SESSION_DEFAULT_TIMEOUT),
+                    false);
 }
 
 void test_session__basic_open_close(void) {
@@ -267,10 +259,10 @@ void test_session__get_app_session_multiple(void) {
   cl_assert_equal_p(comm_session_get_current_app_session(), modern_app_session);
 
   stub_app_set_uuid((Uuid)UUID_INVALID);
-  cl_assert_equal_p(comm_session_get_current_app_session(), NULL);
+  cl_assert_equal_p(comm_session_get_current_app_session(), nullptr);
 
   stub_app_set_uuid((Uuid)UUID_SYSTEM);
-  cl_assert_equal_p(comm_session_get_current_app_session(), NULL);
+  cl_assert_equal_p(comm_session_get_current_app_session(), nullptr);
 
   comm_session_close(system_session, CommSessionCloseReason_UnderlyingDisconnection);
   comm_session_close(legacy_app_session, CommSessionCloseReason_UnderlyingDisconnection);
@@ -282,7 +274,7 @@ void test_session__assert_if_deinit_and_transport_did_not_clean_up_properly(void
   CommSession *session = comm_session_open(transport, &s_transport_imp, TransportDestinationSystem);
   cl_assert_equal_b(comm_session_is_valid(session), true);
   // Expect assert when Transport didn't clean up after itself:
-  cl_assert_passert(comm_session_deinit());
+  cl_assert_panic(comm_session_deinit());
   comm_session_close(session, CommSessionCloseReason_UnderlyingDisconnection);
 }
 
@@ -361,8 +353,8 @@ void test_session__transport_send_next_task(void) {
   cl_assert_equal_b(comm_session_is_current_task_send_next_task(session), false);
   comm_session_close(session, CommSessionCloseReason_UnderlyingDisconnection);
 
-  transport_imp.schedule = NULL;
-  transport_imp.is_current_task_schedule_task = NULL;
+  transport_imp.schedule = nullptr;
+  transport_imp.is_current_task_schedule_task = nullptr;
 
   session = comm_session_open(transport, &transport_imp, TransportDestinationSystem);
 

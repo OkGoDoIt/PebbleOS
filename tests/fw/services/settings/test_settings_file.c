@@ -10,24 +10,14 @@
 
 #include <clar.h>
 #include <flash_region/flash_region.h>
+#include <kernel/pbl_malloc.h>
 #include <system/hexdump.h>
 
 // Stubs
 ////////////////////////////////////
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
-#include <stubs_analytics.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
 #include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_serial.h>
-#include <stubs_sleep.h>
-#include <stubs_system_reset.h>
-#include <stubs_task_wdt.h>
 
 // Tests
 ////////////////////////////////////
@@ -356,7 +346,7 @@ static RecordResult write_and_change_record_aborting_after_bytes(int after_n_byt
     // in any way.
 
     // Simulate a reboot by clearing out PFS's state.
-    fake_spi_flash_force_future_failure(0, NULL);
+    fake_spi_flash_force_future_failure(0, nullptr);
     extern void pfs_reset_all_state(void);
     pfs_reset_all_state();
     pfs_init(false);

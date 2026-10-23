@@ -3,14 +3,13 @@
 
 #include <pbl/cron/cron.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/services/time.h>
 #include <pbl/util/math.h>
 #include <pbl/util/units.h>
-
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(cron, CONFIG_CRON_LOG_LEVEL);
 
@@ -33,7 +32,7 @@ static TimerID s_wakeup_timer = TIMER_INVALID_ID;
 
 //! Arm (or stop) the wakeup timer for the head job. s_list_mutex must be held.
 static void prv_arm_wakeup(void) {
-  if (s_scheduled_jobs == NULL) {
+  if (s_scheduled_jobs == nullptr) {
     new_timer_stop(s_wakeup_timer);
     return;
   }
@@ -47,8 +46,8 @@ static void prv_arm_wakeup(void) {
     timeout_ms -= timeout_ms / CRON_ARM_EARLY_DIVISOR;
     timeout_ms += CRON_ARM_MARGIN_MS;
   }
-  new_timer_start(s_wakeup_timer, (uint32_t)MIN(timeout_ms, UINT32_MAX), prv_timer_callback, NULL,
-                  0 /*flags*/);
+  new_timer_start(s_wakeup_timer, (uint32_t)MIN(timeout_ms, UINT32_MAX), prv_timer_callback,
+                  nullptr, 0 /*flags*/);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -66,7 +65,7 @@ static int prv_sort(void *a, void *b) {
 // -------------------------------------------------------------------------------------------
 static void prv_timer_callback(void *data) {
   pbl_mutex_lock(&s_list_mutex, PBL_FOREVER);
-  while (s_scheduled_jobs != NULL &&
+  while (s_scheduled_jobs != nullptr &&
          ((struct pbl_cron_job *)s_scheduled_jobs)->cached_execute_time <= rtc_get_time()) {
     struct pbl_cron_job *job = (struct pbl_cron_job *)s_scheduled_jobs;
     // Remove the job from the list, it's done.
@@ -90,8 +89,8 @@ void pbl_cron_handle_clock_change(int32_t utc_time_delta, int32_t gmt_offset_del
   // Because it's ABS, it'll be unsigned. This makes the compiler behave.
   const uint32_t change_diff = ABS(utc_time_delta);
   // Need to re-build the list somewhere else
-  ListNode *newlist = NULL;
-  while (s_scheduled_jobs != NULL) {
+  ListNode *newlist = nullptr;
+  while (s_scheduled_jobs != nullptr) {
     struct pbl_cron_job *job = (struct pbl_cron_job *)s_scheduled_jobs;
     s_scheduled_jobs = list_pop_head(s_scheduled_jobs);
     // Re-calculate the execute time.
@@ -99,7 +98,7 @@ void pbl_cron_handle_clock_change(int32_t utc_time_delta, int32_t gmt_offset_del
     if (!job->absolute && (must_recalc || change_diff >= job->clock_change_tolerance)) {
       job->cached_execute_time = pbl_cron_job_get_execute_time(job);
     }
-    PBL_LOG_DBG("Cron job rescheduled for %ld", job->cached_execute_time);
+    PBL_LOG_DBG("Cron job rescheduled for %ld", (long)job->cached_execute_time);
 
     newlist = list_sorted_add(newlist, &job->list_node, prv_sort, true);
   }
@@ -109,16 +108,16 @@ void pbl_cron_handle_clock_change(int32_t utc_time_delta, int32_t gmt_offset_del
   pbl_mutex_unlock(&s_list_mutex);
 
   // We want to run any tasks we've skipped over.
-  prv_timer_callback(NULL);
+  prv_timer_callback(nullptr);
 }
 
 void pbl_cron_handle_clock_correction(void) {
-  prv_timer_callback(NULL);
+  prv_timer_callback(nullptr);
 }
 
 // --------------------------------------------------------------------------------------------
 void pbl_cron_init(void) {
-  s_scheduled_jobs = NULL;
+  s_scheduled_jobs = nullptr;
 
   if (s_wakeup_timer == TIMER_INVALID_ID) {
     s_wakeup_timer = new_timer_create();
@@ -137,8 +136,8 @@ time_t pbl_cron_job_schedule(struct pbl_cron_job *job) {
   if (!prv_is_scheduled(job)) {
     s_scheduled_jobs = list_sorted_add(s_scheduled_jobs, &job->list_node, prv_sort, true);
   }
-  PBL_LOG_DBG("Cron job scheduled for %ld (%+ld)", job->cached_execute_time,
-              (job->cached_execute_time - now));
+  PBL_LOG_DBG("Cron job scheduled for %ld (%+ld)", (long)job->cached_execute_time,
+              (long)(job->cached_execute_time - now));
 
   prv_arm_wakeup();
   pbl_mutex_unlock(&s_list_mutex);
@@ -151,12 +150,12 @@ void pbl_cron_job_schedule_at(struct pbl_cron_job *job, time_t utc_time) {
   pbl_mutex_lock(&s_list_mutex, PBL_FOREVER);
 
   if (prv_is_scheduled(job)) {
-    list_remove(&job->list_node, &s_scheduled_jobs, NULL);
+    list_remove(&job->list_node, &s_scheduled_jobs, nullptr);
   }
   job->absolute = true;
   job->cached_execute_time = utc_time;
   s_scheduled_jobs = list_sorted_add(s_scheduled_jobs, &job->list_node, prv_sort, true);
-  PBL_LOG_DBG("Cron job scheduled at %ld", job->cached_execute_time);
+  PBL_LOG_DBG("Cron job scheduled at %ld", (long)job->cached_execute_time);
 
   prv_arm_wakeup();
   pbl_mutex_unlock(&s_list_mutex);
@@ -180,7 +179,7 @@ time_t pbl_cron_job_schedule_after(struct pbl_cron_job *job, struct pbl_cron_job
 
   // insert after in the list, which guarantees it gets executed after
   list_insert_after(&job->list_node, &new_job->list_node);
-  PBL_LOG_DBG("Cron job scheduled for %ld", job->cached_execute_time);
+  PBL_LOG_DBG("Cron job scheduled for %ld", (long)job->cached_execute_time);
 
   prv_arm_wakeup();
   pbl_mutex_unlock(&s_list_mutex);
@@ -203,7 +202,7 @@ bool pbl_cron_job_unschedule(struct pbl_cron_job *job) {
   pbl_mutex_lock(&s_list_mutex, PBL_FOREVER);
 
   if (prv_is_scheduled(job)) {
-    list_remove(&job->list_node, &s_scheduled_jobs, NULL);
+    list_remove(&job->list_node, &s_scheduled_jobs, nullptr);
     removed = true;
     prv_arm_wakeup();
   }
@@ -219,13 +218,13 @@ void pbl_cron_clear_all_jobs(void) {
   pbl_mutex_lock(&s_list_mutex, PBL_FOREVER);
 
   // Iterate over all the jobs to remove them all.
-  for (ListNode *iter = s_scheduled_jobs; iter != NULL;) {
+  for (ListNode *iter = s_scheduled_jobs; iter != nullptr;) {
     struct pbl_cron_job *job = (struct pbl_cron_job *)iter;
     iter = list_get_next(iter);
     // Remove the job from the list.
-    list_remove(&job->list_node, NULL, NULL);
+    list_remove(&job->list_node, nullptr, nullptr);
   }
-  s_scheduled_jobs = NULL;
+  s_scheduled_jobs = nullptr;
   prv_arm_wakeup();
 
   pbl_mutex_unlock(&s_list_mutex);
@@ -246,7 +245,7 @@ uint32_t pbl_cron_get_job_count(void) {
 }
 
 void pbl_cron_wakeup(void) {
-  prv_timer_callback(NULL);
+  prv_timer_callback(nullptr);
 }
 
 time_t pbl_cron_get_next_execute_time(void) {
@@ -295,7 +294,7 @@ static int prv_future_past_direction(int **dest_arr, const int *curr_arr) {
 
 // Increase the day in `cron_tm` to fit into the wday set in `cron`.
 // This doesn't take mday into account because that's way too hard and we won't need it.
-static bool prv_adjust_for_wday_spec(const struct pbl_cron_job *cron, struct tm *cron_tm) {
+static bool prv_adjust_for_wday_spec(const struct pbl_cron_job *cron, struct pbl_tm *cron_tm) {
   // If we're allowing any wday, we're not adjusting.
   if (cron->wday == PBL_CRON_WDAY_ANY || cron->wday == 0) {
     return false;
@@ -305,8 +304,8 @@ static bool prv_adjust_for_wday_spec(const struct pbl_cron_job *cron, struct tm 
   bool adjusted = false;
 
   // We need to update cron_tm's tm_wday for proper checking.
-  cron_tm->tm_mday += 1; // Adjustment because struct tm has mday 1-indexed for whatever reason
-  mktime(cron_tm);
+  cron_tm->tm_mday += 1; // Adjustment because struct pbl_tm has mday 1-indexed for whatever reason
+  pbl_mktime(cron_tm);
   cron_tm->tm_mday -= 1;
   // We have 1 week to find a fitting date
   for (int l = 0; l < PBL_DAY_PER_WEEK; l++) {
@@ -322,9 +321,9 @@ static bool prv_adjust_for_wday_spec(const struct pbl_cron_job *cron, struct tm 
 }
 
 static time_t prv_get_execute_time_from_epoch(const struct pbl_cron_job *job, time_t local_epoch) {
-  struct tm current_tm;
-  // We work off of each element, so we need a struct tm.
-  localtime_r(&local_epoch, &current_tm);
+  struct pbl_tm current_tm;
+  // We work off of each element, so we need a struct pbl_tm.
+  pbl_localtime_r(&local_epoch, &current_tm);
 
   // Adjust to be zero-indexed
   current_tm.tm_mday -= 1;
@@ -336,7 +335,7 @@ static time_t prv_get_execute_time_from_epoch(const struct pbl_cron_job *job, ti
     current_tm.tm_sec = 1;
   }
   // Cron tm is based on the current tm
-  struct tm cron_tm = current_tm;
+  struct pbl_tm cron_tm = current_tm;
   // Don't listen to this stuff (yet)
   cron_tm.tm_gmtoff = 0;
   cron_tm.tm_isdst = 0;
@@ -442,7 +441,7 @@ static time_t prv_get_execute_time_from_epoch(const struct pbl_cron_job *job, ti
   // Decide the DSTny (Adjust for DST transitions)
   cron_tm.tm_gmtoff = time_get_gmtoffset();
   cron_tm.tm_isdst = 0; // We'll do the DST adjust ourselves
-  time_t t = mktime(&cron_tm);
+  time_t t = pbl_mktime(&cron_tm);
 
   // Apply offset seconds
   t += job->offset_seconds;

@@ -159,7 +159,8 @@ bool music_service_is_command_supported(MusicServiceCommand command);
 bool music_service_send_command(MusicServiceCommand command);
 
 //! Subscribe to the music event service. Once subscribed, the handler gets
-//! called whenever the music service publishes a change.
+//! called whenever the music service publishes a change. Apps only: a
+//! background worker's subscription is ignored.
 //! @param handler A callback to be executed on music service events
 void music_service_subscribe(MusicServiceEventHandler handler);
 

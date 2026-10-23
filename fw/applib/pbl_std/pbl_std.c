@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/time.h>
 
@@ -12,7 +13,6 @@
 #include <process_state/app_state/app_state.h>
 #include <process_state/worker_state/worker_state.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
 
 // Time
 time_t pbl_override_time(time_t *tloc) {
@@ -26,8 +26,8 @@ time_t pbl_override_time(time_t *tloc) {
 // Manually construct double to avoid requiring soft-fp
 static double prv_time_to_double(time_t time) {
   // time_t is 32bit signed int, convert it manually
-#if !UNITTEST && __SIZEOF_POINTER__ == 4
-  _Static_assert(sizeof(time_t) == 4, "Conversion depends on 32bit time_t");
+#if !UNITTEST && !defined(CONFIG_LIBC_HOST)
+  static_assert(sizeof(time_t) == 4, "Conversion depends on 32bit time_t");
 #endif
 
   if (time == 0) {
@@ -87,36 +87,32 @@ time_t pbl_override_time_legacy(time_t *tloc) {
   return (legacy_time);
 }
 
-static bool prv_tm_matches_local_time(const struct tm *requested, const struct tm *actual) {
+static bool prv_tm_matches_local_time(const struct pbl_tm *requested, const struct pbl_tm *actual) {
   return (requested->tm_sec == actual->tm_sec) && (requested->tm_min == actual->tm_min) &&
          (requested->tm_hour == actual->tm_hour) && (requested->tm_mday == actual->tm_mday) &&
          (requested->tm_mon == actual->tm_mon) && (requested->tm_year == actual->tm_year);
 }
 
-static void prv_fill_localtime_result(time_t t, struct tm *tb) {
+static void prv_fill_localtime_result(time_t t, struct pbl_tm *tb) {
   sys_localtime_r(&t, tb);
   sys_copy_timezone_abbr(tb->tm_zone, t);
 }
 
-static time_t prv_mktime_with_normalized_gmtoff(const struct tm *tb, int isdst) {
-  struct tm normalized = *tb;
+static time_t prv_mktime_with_normalized_gmtoff(const struct pbl_tm *tb, int isdst) {
+  struct pbl_tm normalized = *tb;
   normalized.tm_gmtoff = time_get_gmtoffset() + (isdst ? time_get_dstoffset() : 0);
-  return mktime(&normalized);
+  return pbl_mktime(&normalized);
 }
 
-DEFINE_SYSCALL(time_t, pbl_override_mktime, struct tm *tb) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(tb, sizeof(struct tm));
-  }
-
+PBL_SYSCALL(time_t, pbl_override_mktime, (INOUT, struct pbl_tm *, tb)) {
   time_t t;
   if (tb->tm_isdst >= 0) {
     // Caller knows the DST state — trust their tm_gmtoff and pass through.
-    t = mktime(tb);
+    t = pbl_mktime(tb);
   } else {
     // tm_isdst < 0: caller doesn't know if DST is active. Try both
     // interpretations and keep the one that matches the requested wall time.
-    struct tm actual;
+    struct pbl_tm actual;
     t = prv_mktime_with_normalized_gmtoff(tb, 0);
     time_t dst_t = prv_mktime_with_normalized_gmtoff(tb, 1);
 
@@ -162,10 +158,10 @@ uint16_t pbl_override_time_ms_legacy(time_t *tloc, uint16_t *out_ms) {
 }
 
 extern size_t localized_strftime(char *s, size_t maxsize, const char *format,
-                                 const struct tm *tim_p, const char *locale);
+                                 const struct pbl_tm *tim_p, const char *locale);
 
-struct tm *pbl_override_gmtime(const time_t *timep) {
-  struct tm *gmtime_tm = NULL;
+struct pbl_tm *pbl_override_gmtime(const time_t *timep) {
+  struct pbl_tm *gmtime_tm = nullptr;
 
   if (pebble_task_get_current() == PebbleTask_App) {
     gmtime_tm = app_state_get_gmtime_tm();
@@ -177,9 +173,9 @@ struct tm *pbl_override_gmtime(const time_t *timep) {
   return gmtime_tm;
 }
 
-struct tm *pbl_override_localtime(const time_t *timep) {
-  struct tm *localtime_tm = NULL;
-  char *localtime_zone = NULL;
+struct pbl_tm *pbl_override_localtime(const time_t *timep) {
+  struct pbl_tm *localtime_tm = nullptr;
+  char *localtime_zone = nullptr;
 
   if (pebble_task_get_current() == PebbleTask_App) {
     localtime_tm = app_state_get_localtime_tm();
@@ -192,12 +188,12 @@ struct tm *pbl_override_localtime(const time_t *timep) {
   sys_localtime_r(timep, localtime_tm);
   // We have to work around localtime_r resetting tm_zone below
   sys_copy_timezone_abbr((char *)localtime_zone, *timep);
-  strncpy(localtime_tm->tm_zone, localtime_zone, TZ_LEN);
+  strncpy(localtime_tm->tm_zone, localtime_zone, PBL_TZ_LEN);
 
   return localtime_tm;
 }
 
-size_t pbl_strftime(char *s, size_t maxsize, const char *format, const struct tm *tim_p) {
+size_t pbl_strftime(char *s, size_t maxsize, const char *format, const struct pbl_tm *tim_p) {
   char *locale = app_state_get_locale_info()->app_locale_time;
   return sys_strftime(s, maxsize, format, tim_p, locale);
 }
@@ -206,20 +202,17 @@ size_t pbl_strftime(char *s, size_t maxsize, const char *format, const struct tm
 // — well beyond any reasonable strftime format.
 #define SYS_STRFTIME_FORMAT_MAX 256
 
-DEFINE_SYSCALL(size_t, sys_strftime, char *s, size_t maxsize, const char *format,
-               const struct tm *tim_p, char *locale) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(s, maxsize);
-    // Verify `format` is a null-terminated string entirely within the caller's
-    // app region BEFORE calling strlen() on it; otherwise an app could hand us
-    // a kernel pointer and have strlen() dereference whatever it pleases
-    // (faulting on unmapped memory, or running away on missing terminators).
-    if (!memory_layout_is_cstring_in_region(memory_layout_get_app_region(), format,
-                                            SYS_STRFTIME_FORMAT_MAX)) {
-      PBL_LOG_ERR("strftime format %p not in app region", format);
-      syscall_failed();
+PBL_SYSCALL(size_t, sys_strftime, (OUT_BUF, char *, s, maxsize), (VAL, size_t, maxsize),
+            (STRN, const char *, format, SYS_STRFTIME_FORMAT_MAX),
+            (IN, const struct pbl_tm *, tim_p), (VAL, char *, locale)) {
+  if (from_user) {
+    // Workers pass the app's locale buffer, which is not theirs to read
+    const MpuRegion *region = (pebble_task_get_current() == PebbleTask_Worker)
+                                  ? memory_layout_get_worker_region()
+                                  : memory_layout_get_app_region();
+    if (locale && !memory_layout_is_buffer_in_region(region, locale, ISO_LOCALE_LENGTH)) {
+      locale = nullptr;
     }
-    syscall_assert_userspace_buffer(tim_p, sizeof(struct tm));
   }
 
   return localized_strftime(s, maxsize, format, tim_p, locale);
@@ -231,7 +224,7 @@ void *pbl_memcpy(void *destination, const void *source, size_t num) {
   // negative numbers as their num parameter, which newlib handled by copying nothing, but
   // newlib-nano didn't handle at all and would interpret size_t as a extremely large unsigned
   // number. Guard against this happening so apps that used to work with the old libc will work
-  // with the new libc. See PBL-7873.
+  // with the new libc.
   if (((ptrdiff_t)num) <= 0) {
     return destination;
   }

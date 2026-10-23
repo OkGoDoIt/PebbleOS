@@ -62,8 +62,8 @@ struct PBL_PACKED native_heartbeat_record {
 };
 
 /* The record is logged as a raw byte blob, so it must have no padding. */
-_Static_assert(sizeof(struct native_heartbeat_record) ==
-                   sizeof(uint8_t) + sizeof(uint64_t) + BUILD_ID_EXPECTED_LEN
+static_assert(sizeof(struct native_heartbeat_record) ==
+                  sizeof(uint8_t) + sizeof(uint64_t) + BUILD_ID_EXPECTED_LEN
 #define PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(key)               +sizeof(uint32_t)
 #define PBL_ANALYTICS_METRIC_DEFINE_SIGNED(key)                 +sizeof(int32_t)
 #define PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(key, scale) +sizeof(uint32_t) + sizeof(uint16_t)
@@ -77,8 +77,8 @@ _Static_assert(sizeof(struct native_heartbeat_record) ==
 #undef PBL_ANALYTICS_METRIC_DEFINE_SCALED_SIGNED
 #undef PBL_ANALYTICS_METRIC_DEFINE_TIMER
 #undef PBL_ANALYTICS_METRIC_DEFINE_STRING
-               ,
-               "native_heartbeat_record must be packed (no padding)");
+              ,
+              "native_heartbeat_record must be packed (no padding)");
 
 /* Keep the raw DLS payload compatible with the official app/backend decoder. */
 _Static_assert(sizeof(struct native_heartbeat_record) == NATIVE_HEARTBEAT_RECORD_WIRE_SIZE,
@@ -376,7 +376,7 @@ void pbl_analytics__native_heartbeat(void) {
       (uint8_t)(record.metric_battery_soc_pct / record.metric_battery_soc_pct_scale);
   pbl_mutex_unlock(&s_mutex);
 
-  if (s_dls_session == NULL) {
+  if (s_dls_session == nullptr) {
     Uuid system_uuid = UUID_SYSTEM;
 
     /* This session must stay unbuffered: buffered DLS sessions cap items at
@@ -384,7 +384,7 @@ void pbl_analytics__native_heartbeat(void) {
      * dls_create returns NULL here. The item size is the transmitted prefix, not sizeof. */
     s_dls_session = dls_create(DlsSystemTagAnalyticsNativeHeartbeat, DATA_LOGGING_BYTE_ARRAY,
                                NATIVE_HEARTBEAT_TRANSMIT_SIZE, false, false, &system_uuid);
-    if (s_dls_session == NULL) {
+    if (s_dls_session == nullptr) {
       /* The session is recreated after any logging failure (below), so a transient DLS/PFS error
        * costs one heartbeat; the counter makes the loss visible instead of silent. */
       s_heartbeat_stats.failures++;
@@ -403,7 +403,7 @@ void pbl_analytics__native_heartbeat(void) {
      * this one is gone for good, and nothing else ever recreates it, so without this a single
      * failure silently ends heartbeat reporting until the watch reboots and the official app's
      * Battery screen shows an empty 0% with no error anywhere. */
-    s_dls_session = NULL;
+    s_dls_session = nullptr;
     return;
   }
 
@@ -421,7 +421,7 @@ void pbl_analytics_native_get_heartbeat_stats(NativeHeartbeatStats *stats_out) {
 /* Clar runs a suite's tests in one process, so the cached session and the period storage would
  * otherwise carry across cases. */
 void pbl_analytics__native_test_reset(void) {
-  s_dls_session = NULL;
+  s_dls_session = nullptr;
   memset(s_integer_values, 0, sizeof(s_integer_values));
   memset(s_timers, 0, sizeof(s_timers));
   for (size_t i = 0; i < NATIVE_STRING_COUNT; i++) {
@@ -543,6 +543,6 @@ static int prv_cmd_metrics(const struct pbl_shell *sh, size_t argc, char **argv)
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_analytics, metrics, NULL, "Dump the current metrics", prv_cmd_metrics, 0,
-                     0);
+PBL_SHELL_SUBCMD_ADD(sub_analytics, metrics, nullptr, "Dump the current metrics", prv_cmd_metrics,
+                     0, 0);
 #endif

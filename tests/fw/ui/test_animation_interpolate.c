@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <stdio.h>
+
 #include <pbl/util/size.h>
 
 #include <applib/ui/animation.h>
 #include <applib/ui/animation_interpolate.h>
 #include <clar.h>
-#include <stubs/stubs_logging.h>
-#include <stubs/stubs_passert.h>
 
 InterpolateInt64Function s_animation_private_current_interpolate_override;
 
@@ -16,7 +16,7 @@ InterpolateInt64Function animation_private_current_interpolate_override(void) {
 }
 
 void test_animation_interpolate__initialize(void) {
-  s_animation_private_current_interpolate_override = NULL;
+  s_animation_private_current_interpolate_override = nullptr;
 }
 
 void test_animation_interpolate__override_is_null(void) {

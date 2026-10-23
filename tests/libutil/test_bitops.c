@@ -6,7 +6,7 @@
 #include <clar.h>
 
 void test_bitops__bitset8(void) {
-  uint8_t set[3] = {0};
+  uint8_t set[3] = {};
 
   pbl_bitset8_set(set, 0);
   pbl_bitset8_set(set, 9);
@@ -29,7 +29,7 @@ void test_bitops__bitset8(void) {
 }
 
 void test_bitops__bitset32(void) {
-  uint32_t set[2] = {0};
+  uint32_t set[2] = {};
 
   pbl_bitset32_set(set, 31);
   pbl_bitset32_set(set, 32);
@@ -66,4 +66,12 @@ void test_bitops__bitrev8(void) {
   for (unsigned int v = 0; v < 256; v++) {
     cl_assert_equal_i(pbl_bitrev8(pbl_bitrev8((uint8_t)v)), v);
   }
+}
+
+void test_bitops__bitrev32(void) {
+  cl_assert_equal_i(pbl_bitrev32(0x00000000U), 0x00000000U);
+  cl_assert_equal_i(pbl_bitrev32(0x00000001U), 0x80000000U);
+  cl_assert_equal_i(pbl_bitrev32(0x80000000U), 0x00000001U);
+  cl_assert_equal_i(pbl_bitrev32(0x12345678U), 0x1E6A2C48U);
+  cl_assert_equal_i(pbl_bitrev32(0xFFFFFFFFU), 0xFFFFFFFFU);
 }

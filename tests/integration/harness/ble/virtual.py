@@ -14,27 +14,19 @@ import os
 import socket
 import subprocess
 import sys
-import time
 
 from harness.errors import HarnessError
 
-START_TIMEOUT_S = 10.0
 HARNESS_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
 
 
-def _free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 class VirtualLink:
     def __init__(self, log_path):
-        self.watch_port = _free_port()
-        self.host_port = _free_port()
-        self.control_port = _free_port()
+        self.watch_port = None
+        self.host_port = None
+        self.control_port = None
         self._log_path = log_path
         self._log = None
         self._process = None
@@ -51,39 +43,33 @@ class VirtualLink:
         env["PYTHONPATH"] = os.pathsep.join(
             p for p in (HARNESS_ROOT, env.get("PYTHONPATH")) if p
         )
-        self._process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "harness.ble.virtual",
-                f"tcp-server:127.0.0.1:{self.watch_port}",
-                f"tcp-server:127.0.0.1:{self.host_port}",
-                str(self.control_port),
-            ],
-            stdout=self._log,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        deadline = time.monotonic() + START_TIMEOUT_S
-        for port in (self.watch_port, self.host_port, self.control_port):
-            while not self._listening(port):
-                if self._process.poll() is not None:
-                    raise HarnessError(
-                        f"the virtual Bluetooth link exited; see {self._log_path}"
-                    )
-                if time.monotonic() > deadline:
-                    raise HarnessError("the virtual Bluetooth link did not start")
-                time.sleep(0.1)
-
-    @staticmethod
-    def _listening(port):
-        # lsof-free check: a server socket is bound when we cannot bind it.
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                return True
-        return False
+        # Bound here and handed down, so the ports are ours from the start;
+        # connections queue until the link serves them.
+        listeners = []
+        try:
+            for _ in range(3):
+                listener = socket.socket()
+                listeners.append(listener)
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+            self.watch_port, self.host_port, self.control_port = (
+                listener.getsockname()[1] for listener in listeners
+            )
+            fds = [listener.fileno() for listener in listeners]
+            self._process = subprocess.Popen(
+                [sys.executable, "-m", "harness.ble.virtual", *map(str, fds)],
+                stdout=self._log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                pass_fds=fds,
+            )
+        finally:
+            for listener in listeners:
+                listener.close()
+        if self._process.poll() is not None:
+            raise HarnessError(
+                f"the virtual Bluetooth link exited; see {self._log_path}"
+            )
 
     def power_cycle_watch(self):
         """Reset the watch's controller as a power cycle would: its links
@@ -160,15 +146,15 @@ def _controller_class():
     return ScanResponseController
 
 
-def _serve(transports, control_port):
-    """Run linked software controllers, one per Bumble transport, and power
-    cycle the one a line on ``control_port`` names."""
+def _serve(controller_fds, control_fd):
+    """Run linked software controllers, one per listening socket, and power
+    cycle the one a line on the ``control_fd`` socket names."""
     import asyncio
 
     import bumble.logging
     from bumble import core, hci, ll
     from bumble.link import LocalLink
-    from bumble.transport import open_transport
+    from bumble.transport.tcp_server import open_tcp_server_transport_with_socket
 
     Controller = _controller_class()
 
@@ -211,10 +197,11 @@ def _serve(transports, control_port):
                 await writer.drain()
             writer.close()
 
-        for name in transports:
-            opened.append(await open_transport(name))
+        for fd in controller_fds:
+            sock = socket.socket(fileno=fd)
+            opened.append(await open_tcp_server_transport_with_socket(sock))
             controllers.append(attach(len(controllers)))
-        await asyncio.start_server(on_control, "127.0.0.1", control_port)
+        await asyncio.start_server(on_control, sock=socket.socket(fileno=control_fd))
         await asyncio.get_running_loop().create_future()
 
     bumble.logging.setup_basic_logging()
@@ -222,4 +209,4 @@ def _serve(transports, control_port):
 
 
 if __name__ == "__main__":
-    _serve(sys.argv[1:-1], int(sys.argv[-1]))
+    _serve([int(fd) for fd in sys.argv[1:-1]], int(sys.argv[-1]))

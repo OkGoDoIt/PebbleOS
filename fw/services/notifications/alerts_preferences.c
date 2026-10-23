@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/services/notifications/alerts_preferences.h>
 #include <pbl/services/notifications/alerts_preferences_private.h>
@@ -13,7 +14,6 @@
 #include <pbl/util/math.h>
 
 #include <shell/prefs_private.h>
-#include <system/passert.h>
 
 #define FILE_NAME "notifpref"
 #define FILE_LEN  (1024)
@@ -38,6 +38,9 @@ static bool s_dnd_motion_backlight = true;
 
 #define PREF_KEY_DND_TOUCH_BACKLIGHT "dndTouchBacklight"
 static bool s_dnd_touch_backlight = true;
+
+#define PREF_KEY_DND_NOTIFICATION_BACKLIGHT "dndNotificationBacklight"
+static bool s_dnd_notification_backlight = true;
 
 #define PREF_KEY_DND_MUTE_SPEAKER "dndMuteSpeaker"
 static bool s_dnd_mute_speaker = false;
@@ -160,7 +163,7 @@ static void prv_migrate_notification_content_size(SettingsFile *file) {
   }
 
   s_notification_content_size = PreferredContentSizeDefault;
-  SettingsFile shell_prefs = {{0}};
+  SettingsFile shell_prefs = {};
   if (settings_file_open(&shell_prefs, SHELL_PREFS_FILE_NAME, SHELL_PREFS_FILE_LEN) == S_SUCCESS) {
     uint8_t text_style;
     // Shell pref keys are stored with their NUL terminator.
@@ -323,7 +326,7 @@ static void prv_migrate_vibe_intensity_to_vibe_scores(SettingsFile *file) {
 }
 
 void alerts_preferences_init(void) {
-  SettingsFile file = {{0}};
+  SettingsFile file = {};
   if (settings_file_open(&file, FILE_NAME, FILE_LEN) != S_SUCCESS) {
     return;
   }
@@ -335,7 +338,7 @@ void alerts_preferences_init(void) {
   // by older firmware.
 #define RESTORE_PREF(key, var)                                                              \
   do {                                                                                      \
-    __typeof__(var) _tmp;                                                                   \
+    typeof(var) _tmp;                                                                       \
     if (settings_file_get(&file, key, strlen(key), &_tmp, sizeof(_tmp)) == S_SUCCESS ||     \
         settings_file_get(&file, key, strlen(key) + 1, &_tmp, sizeof(_tmp)) == S_SUCCESS) { \
       var = _tmp;                                                                           \
@@ -356,6 +359,7 @@ void alerts_preferences_init(void) {
   RESTORE_PREF(PREF_KEY_DND_SHOW_NOTIFICATIONS, s_dnd_show_notifications);
   RESTORE_PREF(PREF_KEY_DND_MOTION_BACKLIGHT, s_dnd_motion_backlight);
   RESTORE_PREF(PREF_KEY_DND_TOUCH_BACKLIGHT, s_dnd_touch_backlight);
+  RESTORE_PREF(PREF_KEY_DND_NOTIFICATION_BACKLIGHT, s_dnd_notification_backlight);
   RESTORE_PREF(PREF_KEY_DND_MUTE_SPEAKER, s_dnd_mute_speaker);
   RESTORE_PREF(PREF_KEY_SPEAKER_MUTED, s_speaker_muted);
   RESTORE_PREF(PREF_KEY_SPEAKER_VOLUME, s_speaker_volume);
@@ -408,7 +412,7 @@ void alerts_preferences_init(void) {
 #define SET_PREF(key, value) prv_set_pref(key, strlen(key), &value, sizeof(value))
 static void prv_set_pref(const void *key, size_t key_len, const void *value, size_t value_len) {
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
-  SettingsFile file = {{0}};
+  SettingsFile file = {};
   if (settings_file_open(&file, FILE_NAME, FILE_LEN) != S_SUCCESS) {
     goto cleanup;
   }
@@ -557,12 +561,12 @@ VibeScoreId alerts_preferences_get_vibe_score_for_client(VibeClient client) {
     case VibeClient_OnDisconnect:
       return s_vibe_score_on_disconnect;
     default:
-      WTF;
+      pbl_panic();
   }
 }
 
 void alerts_preferences_set_vibe_score_for_client(VibeClient client, VibeScoreId id) {
-  const char *key = NULL;
+  const char *key = nullptr;
   switch (client) {
     case VibeClient_Notifications: {
       s_vibe_score_notifications = id;
@@ -590,7 +594,7 @@ void alerts_preferences_set_vibe_score_for_client(VibeClient client, VibeScoreId
       break;
     }
     default: {
-      WTF;
+      pbl_panic();
     }
   }
   SET_PREF(key, id);
@@ -633,6 +637,15 @@ void alerts_preferences_dnd_set_touch_backlight(bool enable) {
 
 bool alerts_preferences_dnd_get_touch_backlight(void) {
   return s_dnd_touch_backlight;
+}
+
+void alerts_preferences_dnd_set_notification_backlight(bool enable) {
+  s_dnd_notification_backlight = enable;
+  SET_PREF(PREF_KEY_DND_NOTIFICATION_BACKLIGHT, s_dnd_notification_backlight);
+}
+
+bool alerts_preferences_dnd_get_notification_backlight(void) {
+  return s_dnd_notification_backlight;
 }
 
 void alerts_preferences_dnd_set_mute_speaker(bool enable) {
@@ -731,11 +744,11 @@ void alerts_preferences_handle_blob_db_event(PebbleBlobDBEvent *event) {
 
   const uint8_t *key = event->key;
   int key_len = event->key_len;
-  const char *matched_key = NULL;
+  const char *matched_key = nullptr;
 
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
 
-  SettingsFile file = {{0}};
+  SettingsFile file = {};
   if (settings_file_open(&file, FILE_NAME, FILE_LEN) != S_SUCCESS) {
     pbl_mutex_unlock(&s_mutex);
     return;
@@ -750,7 +763,7 @@ void alerts_preferences_handle_blob_db_event(PebbleBlobDBEvent *event) {
     size_t _pref_strlen = strlen(pref_key);                                           \
     if ((key_len == (int)_pref_strlen || key_len == (int)(_pref_strlen + 1)) &&       \
         memcmp(key, pref_key, _pref_strlen) == 0) {                                   \
-      __typeof__(var) _tmp;                                                           \
+      typeof(var) _tmp;                                                               \
       if (settings_file_get(&file, key, key_len, &_tmp, sizeof(_tmp)) == S_SUCCESS) { \
         var = _tmp;                                                                   \
         matched_key = pref_key;                                                       \
@@ -785,6 +798,7 @@ void alerts_preferences_handle_blob_db_event(PebbleBlobDBEvent *event) {
   RELOAD_IF_MATCH(PREF_KEY_NOTIF_TEXT_SIZE, s_notification_content_size);
   RELOAD_IF_MATCH(PREF_KEY_DND_MOTION_BACKLIGHT, s_dnd_motion_backlight);
   RELOAD_IF_MATCH(PREF_KEY_DND_TOUCH_BACKLIGHT, s_dnd_touch_backlight);
+  RELOAD_IF_MATCH(PREF_KEY_DND_NOTIFICATION_BACKLIGHT, s_dnd_notification_backlight);
   RELOAD_IF_MATCH(PREF_KEY_DND_MUTE_SPEAKER, s_dnd_mute_speaker);
   RELOAD_IF_MATCH(PREF_KEY_SPEAKER_MUTED, s_speaker_muted);
   RELOAD_IF_MATCH(PREF_KEY_DND_AUTO_DISMISS, s_dnd_auto_dismiss);

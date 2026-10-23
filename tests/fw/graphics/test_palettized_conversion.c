@@ -11,18 +11,6 @@
 
 // Stubs
 ////////////////////////////////////
-#include <stubs_app_state.h>
-#include <stubs_applib_resource.h>
-#include <stubs_compiled_with_legacy2_sdk.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_print.h>
-#include <stubs_resources.h>
-#include <stubs_serial.h>
-#include <stubs_syscalls.h>
-#include <stubs_ui_window.h>
 
 extern uint8_t prv_byte_reverse(uint8_t b);
 

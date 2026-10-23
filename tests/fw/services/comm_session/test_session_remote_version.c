@@ -19,11 +19,6 @@ extern void session_remote_version_protocol_msg_callback(CommSession *session, c
 #include <fake_events.h>
 #include <fake_new_timer.h>
 #include <fake_pbl_malloc.h>
-#include <stubs_bt_lock.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_rtc.h>
 
 static bool s_session_is_system;
 bool comm_session_is_system(CommSession *session) {
@@ -60,7 +55,7 @@ static void *s_launcher_task_callback_data;
 
 void launcher_task_add_callback(void (*callback)(void *data), void *data) {
   // Simple fake, can only handle one call
-  cl_assert_equal_p(s_launcher_task_callback, NULL);
+  cl_assert_equal_p(s_launcher_task_callback, nullptr);
 
   s_launcher_task_callback = callback;
   s_launcher_task_callback_data = data;
@@ -119,8 +114,8 @@ void test_session_remote_version__initialize(void) {
 }
 
 void test_session_remote_version__cleanup(void) {
-  s_launcher_task_callback = NULL;
-  s_launcher_task_callback_data = NULL;
+  s_launcher_task_callback = nullptr;
+  s_launcher_task_callback_data = nullptr;
 
   fake_pbl_malloc_clear_tracking();
 }

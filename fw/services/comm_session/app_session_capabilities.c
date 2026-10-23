@@ -8,7 +8,6 @@
 
 #include <process_management/app_install_types.h>
 #include <process_management/app_manager.h>
-#include <system/passert.h>
 
 #define APP_SESSION_CAPABILITIES_CACHE_FILENAME "app_comm"
 
@@ -91,7 +90,7 @@ void comm_session_app_session_capabilities_evict(const Uuid *app_uuid) {
 void comm_session_app_session_capabilities_init(void) {
   SettingsFile settings_file;
   if (PASSED(prv_open_locked(&settings_file))) {
-    settings_file_rewrite(&settings_file, prv_rewrite_cb, NULL);
+    settings_file_rewrite(&settings_file, prv_rewrite_cb, nullptr);
     prv_close_and_unlock(&settings_file);
   }
 }

@@ -5,20 +5,15 @@
 
 #include "display.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/drivers/button_id.h>
+#include <pbl/input/input.h>
 
 typedef void GPIO_TypeDef;
 
-#define GPIO_Port_NULL NULL
+#define GPIO_Port_NULL nullptr
 #define GPIO_Pin_NULL  0U
-
-typedef enum {
-  GPIO_OType_PP,
-  GPIO_OType_OD,
-} GPIOOType_TypeDef;
 
 typedef enum {
   GPIO_PuPd_NOPULL,
@@ -27,23 +22,9 @@ typedef enum {
 } GPIOPuPd_TypeDef;
 
 typedef struct {
-  void *gpio;
-  uint8_t gpio_pin;
-} InputConfig;
-
-typedef struct {
-  void *gpio;
-  uint8_t gpio_pin;
-  bool active_high;
-} OutputConfig;
-
-typedef struct {
   uint8_t backlight_on_percent;
   uint32_t ambient_light_dark_threshold;
   uint32_t ambient_k_delta_threshold;
-  uint32_t ambient_light_lux_dark_offset;
-  uint32_t ambient_light_lux_num;
-  uint32_t ambient_light_lux_den;
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
   uint32_t backlight_default_color;
 #endif
@@ -51,6 +32,7 @@ typedef struct {
 
 typedef struct {
   const char *name;
+  uint16_t code;
 } ButtonConfig;
 
 typedef struct {
@@ -66,18 +48,7 @@ typedef struct {
   uint8_t default_motion_sensitivity;
 } BoardConfigAccel;
 
-typedef struct {
-  int axes_offsets[3];
-  bool axes_inverts[3];
-} MagConfig;
-
-typedef struct {
-  const MagConfig mag_config;
-} BoardConfigMag;
-
 typedef const struct UARTDevice UARTDevice;
-typedef const struct I2CBus I2CBus;
-typedef const struct I2CSlavePort I2CSlavePort;
 typedef const struct QSPIPort QSPIPort;
 typedef const struct QSPIFlash QSPIFlash;
 typedef const struct HRMDevice HRMDevice;

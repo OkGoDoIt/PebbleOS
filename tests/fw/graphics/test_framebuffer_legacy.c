@@ -16,8 +16,6 @@
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
 
-#include <stubs_applib_resource.h>
-
 // The legacy 3.x framebuffer must be byte-for-byte identical to the chalk
 // (spalding) packed circular layout, so chalk apps that access the
 // framebuffer directly render correctly.
@@ -25,7 +23,7 @@
 #define CHALK_GUARD_PAD         76
 #define CHALK_FRAMEBUFFER_BYTES 25944
 
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 
 void test_framebuffer_legacy__initialize(void) {
   fb = malloc(sizeof(FrameBuffer));

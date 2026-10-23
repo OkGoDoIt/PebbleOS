@@ -30,34 +30,6 @@ bool clock_is_24h_style(void) {
 // Stubs
 /////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_app.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_timer.h>
-#include <stubs_app_window_stack.h>
-#include <stubs_bootbits.h>
-#include <stubs_click.h>
-#include <stubs_event_service_client.h>
-#include <stubs_health_service.h>
-#include <stubs_layer.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_process_info.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_process_manager.h>
-#include <stubs_serial.h>
-#include <stubs_shell_prefs.h>
-#include <stubs_sleep.h>
-#include <stubs_syscalls.h>
-#include <stubs_task_wdt.h>
-#include <stubs_text_layer_flow.h>
-#include <stubs_vibes.h>
-#include <stubs_window_manager.h>
-#include <stubs_window_stack.h>
-
 void tick_timer_service_subscribe(TimeUnits tick_units, TickHandler handler) {
 }
 
@@ -154,7 +126,7 @@ void test_kickstart__render_steps_above_daily_avg(void) {
 }
 
 void test_kickstart__render_hr_bpm(void) {
-#ifdef CONFIG_BOARD_ASTERIX
+#ifdef CONFIG_PLATFORM_FLINT
   prv_set_data(&s_data, 10323, 7500, 13000, 82);
 
   window_set_on_screen(&s_data.window, true, true);
@@ -164,7 +136,7 @@ void test_kickstart__render_hr_bpm(void) {
 }
 
 void test_kickstart__render_hr_bpm_obstructed(void) {
-#ifdef CONFIG_BOARD_ASTERIX
+#ifdef CONFIG_PLATFORM_FLINT
   prv_set_data(&s_data, 10323, 7500, 13000, 82);
   prv_set_unobstructed_area_height(TIMELINE_PEEK_HEIGHT);
 
@@ -184,7 +156,7 @@ void test_kickstart__render_steps_above_daily_avg_24h(void) {
 }
 
 void test_kickstart__render_hr_bpm_24h(void) {
-#ifdef CONFIG_BOARD_ASTERIX
+#ifdef CONFIG_PLATFORM_FLINT
   s_clock_is_24h_style = true;
   prv_set_data(&s_data, 10323, 7500, 13000, 82);
 
@@ -195,7 +167,7 @@ void test_kickstart__render_hr_bpm_24h(void) {
 }
 
 void test_kickstart__render_hr_bpm_obstructed_24h(void) {
-#ifdef CONFIG_BOARD_ASTERIX
+#ifdef CONFIG_PLATFORM_FLINT
   s_clock_is_24h_style = true;
   prv_set_data(&s_data, 10323, 7500, 13000, 82);
   prv_set_unobstructed_area_height(TIMELINE_PEEK_HEIGHT);

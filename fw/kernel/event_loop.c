@@ -9,7 +9,7 @@
 #include "events.h"
 
 #include <inttypes.h>
-#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +54,7 @@
 #include <pbl/services/touch/touch.h>
 #include <pbl/services/touch/touch_session.h>
 #endif
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/alarms/alarm.h>
@@ -71,7 +72,6 @@
 #include <shell/prefs.h>
 #include <shell/shell_event_loop.h>
 #include <system/bootbits.h>
-#include <system/passert.h>
 #include <system/testinfra.h>
 
 static const uint32_t FORCE_QUIT_HOLD_MS = 1500;
@@ -167,7 +167,7 @@ static void back_button_force_quit_handler(void *data) {
   // Happens on NewTimer thread -- the launcher task may still be "behind"
   // on servicing events, so do check again later once *this* event gets
   // serviced to see if this is still relevant!
-  launcher_task_add_callback(launcher_force_quit_app, NULL);
+  launcher_task_add_callback(launcher_force_quit_app, nullptr);
 }
 
 static void launcher_handle_button_event(PebbleEvent *e) {
@@ -190,7 +190,7 @@ static void launcher_handle_button_event(PebbleEvent *e) {
       // Start timer for force-quitting app
       s_force_quit_was_cancelled = false;
       bool success = new_timer_start(s_back_hold_timer, FORCE_QUIT_HOLD_MS,
-                                     back_button_force_quit_handler, NULL, 0 /*flags*/);
+                                     back_button_force_quit_handler, nullptr, 0 /*flags*/);
       PBL_ASSERTN(success);
     }
 
@@ -305,7 +305,7 @@ static PBL_NOINLINE void prv_minimal_event_handler(PebbleEvent *e) {
       // interaction session is active; unarmed contact on the idle watchface
       // stays fully inert. Release on liftoff ungated so the refcount can't
       // leak if the session expired or touch was disabled mid-touch.
-      TouchWakeGateResult gate = {0};
+      TouchWakeGateResult gate = {};
       const bool is_modal_focused = (modal_manager_get_enabled() &&
                                      !(modal_manager_get_properties() & ModalProperty_Unfocused));
       if (e->touch.event.type == TouchEvent_Touchdown) {
@@ -343,6 +343,7 @@ static PBL_NOINLINE void prv_minimal_event_handler(PebbleEvent *e) {
       } else if (e->touch.event.type == TouchEvent_PositionUpdate) {
         s_touch_contact_engaged = true;
         touch_session_extend();
+        light_touch_moved();
       } else if (e->touch.event.type == TouchEvent_Liftoff) {
         light_touch_up();
         // A contact that neither moved nor formed a gesture is indistinguishable from a false
@@ -528,10 +529,12 @@ static PBL_NOINLINE void prv_extended_event_handler(PebbleEvent *e) {
 
       // TODO: evaluate if these need to change on every time update
       do_not_disturb_handle_clock_change();
+#ifdef CONFIG_BACKLIGHT_HAS_COLOR
+      light_handle_clock_change();
+#endif
 #endif
       return;
     }
-    case PEBBLE_BLE_SCAN_EVENT:
     case PEBBLE_BLE_CONNECTION_EVENT:
     case PEBBLE_BLE_GATT_CLIENT_EVENT:
       kernel_le_client_handle_event(e);
@@ -545,7 +548,7 @@ static PBL_NOINLINE void prv_extended_event_handler(PebbleEvent *e) {
       if (comm_session_event->is_system) {
         // tell the phone which app is running
         const Uuid *running_uuid = &app_manager_get_current_app_md()->uuid;
-        if (running_uuid != NULL) {
+        if (running_uuid != nullptr) {
           app_run_state_send_update(running_uuid, RUNNING);
         }
       }
@@ -677,5 +680,5 @@ void launcher_main_loop(void) {
     }
   }
 
-  PBL_UNREACHABLE();
+  unreachable();
 }

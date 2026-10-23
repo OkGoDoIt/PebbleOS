@@ -13,39 +13,6 @@
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_ancs.h>
-#include <stubs_ancs_notifications.h>
-#include <stubs_app_cache.h>
-#include <stubs_app_install_manager.h>
-#include <stubs_app_manager.h>
-#include <stubs_blob_db.h>
-#include <stubs_blob_db_sync.h>
-#include <stubs_blob_db_sync_util.h>
-#include <stubs_event_loop.h>
-#include <stubs_event_service_client.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_layout_layer.h>
-#include <stubs_logging.h>
-#include <stubs_modal_manager.h>
-#include <stubs_mutex.h>
-#include <stubs_notification_storage.h>
-#include <stubs_notifications.h>
-#include <stubs_passert.h>
-#include <stubs_phone_call_util.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_regular_timer.h>
-#include <stubs_reminder_db.h>
-#include <stubs_session.h>
-#include <stubs_sleep.h>
-#include <stubs_system_task.h>
-#include <stubs_task_wdt.h>
-#include <stubs_text_layer_flow.h>
-#include <stubs_timeline.h>
-#include <stubs_timeline_peek.h>
-#include <stubs_timeline_pin_window.h>
-#include <stubs_window_stack.h>
 
 // Fakes
 ////////////////////////////////////////////////////////////////
@@ -68,7 +35,7 @@ bool weather_layout_verify(bool existing_attributes[]) {
 }
 
 const TimelineEventImpl *calendar_get_event_service(void) {
-  return NULL;
+  return nullptr;
 }
 
 // Helpers
@@ -583,7 +550,7 @@ void test_timeline_peek_event__dismiss_event(void) {
 
 void test_timeline_peek_event__first_event_with_past_event(void) {
   TimelineItem item = DEFINE_EVENT(.id = 0x01, .timestamp = 20 * PBL_SEC_PER_MIN, .duration = 70);
-  TimelineItem PBL_UNUSED item2 =
+  [[maybe_unused]] TimelineItem item2 =
       DEFINE_EVENT(.id = 0x02, .timestamp = -50 * PBL_SEC_PER_MIN, .duration = 30);
   unsigned int timeout_s = item.header.timestamp - TIMELINE_PEEK_DEFAULT_SHOW_BEFORE_TIME_S;
   CHECK_EVENT(.count = 3, .item_id = item.header.id, .num_concurrent = 0,
@@ -594,7 +561,7 @@ void test_timeline_peek_event__first_event_with_past_event(void) {
 void test_timeline_peek_event__first_event_with_all_day_event_before(void) {
   // All day events show up if no timed event has yet passed
   TimelineItem item = DEFINE_EVENT(.id = 0x01, .timestamp = 20 * PBL_SEC_PER_MIN, .duration = 70);
-  TimelineItem PBL_UNUSED item2 =
+  [[maybe_unused]] TimelineItem item2 =
       DEFINE_EVENT(.id = 0x02, .timestamp = 0, .duration = PBL_MIN_PER_DAY, .all_day = true);
   unsigned int timeout_s = item.header.timestamp - TIMELINE_PEEK_DEFAULT_SHOW_BEFORE_TIME_S;
   CHECK_EVENT(.count = 3, .item_id = item.header.id, .num_concurrent = 0,
@@ -607,9 +574,9 @@ void test_timeline_peek_event__first_event_with_all_day_event_after(void) {
   rtc_set_time(PBL_SEC_PER_HOUR);
   TimelineItem item = DEFINE_EVENT(.id = 0x01, .timestamp = PBL_SEC_PER_HOUR + 20 * PBL_SEC_PER_MIN,
                                    .duration = 70);
-  TimelineItem PBL_UNUSED item2 =
+  [[maybe_unused]] TimelineItem item2 =
       DEFINE_EVENT(.id = 0x02, .timestamp = 0, .duration = PBL_MIN_PER_DAY, .all_day = true);
-  TimelineItem PBL_UNUSED item3 = DEFINE_EVENT(.id = 0x03, .timestamp = 0, .duration = 10);
+  [[maybe_unused]] TimelineItem item3 = DEFINE_EVENT(.id = 0x03, .timestamp = 0, .duration = 10);
   unsigned int timeout_s = 600;
   CHECK_EVENT(.count = 4, .item_id = item.header.id, .num_concurrent = 0,
               .timeout_ms = timeout_s * PBL_MSEC_PER_SEC,

@@ -8,16 +8,12 @@
 #include <applib/graphics/graphics_circle.h>
 #include <clar.h>
 #include <pebble_asserts.h>
+#include <stubs_app_state.h>
 
 // stubs
-#include <stubs_app_state.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_process_manager.h>
 
 GBitmap *graphics_capture_frame_buffer(GContext *ctx) {
-  return NULL;
+  return nullptr;
 }
 bool graphics_release_frame_buffer(GContext *ctx, GBitmap *buffer) {
   return true;
@@ -61,7 +57,7 @@ void test_graphics_circle__initialize(void) {
 
 void test_graphics_circle__gpoint_from_polar_returns_zero_for_null(void) {
   const uint16_t radius = 5;
-  const GPoint result = gpoint_from_polar_internal(NULL, radius, 0);
+  const GPoint result = gpoint_from_polar_internal(nullptr, radius, 0);
   cl_assert_equal_gpoint(result, GPointZero);
 }
 
@@ -211,14 +207,14 @@ void test_graphics_circle__grect_polar_calc_values_handles_null(void) {
   const GRect r = GRect(0, 0, 3, 5);
   const GOvalScaleMode mode = GOvalScaleModeFitCircle;
 
-  grect_polar_calc_values(&r, mode, NULL, NULL);
-  grect_polar_calc_values(&r, mode, &center, NULL);
-  grect_polar_calc_values(&r, mode, NULL, &radius);
+  grect_polar_calc_values(&r, mode, nullptr, nullptr);
+  grect_polar_calc_values(&r, mode, &center, nullptr);
+  grect_polar_calc_values(&r, mode, nullptr, &radius);
 
   cl_assert_gpoint_precise(center, 1, 2);
   cl_assert_fixedS16_3(radius, 1);
 
-  grect_polar_calc_values(NULL, mode, &center, &radius);
+  grect_polar_calc_values(nullptr, mode, &center, &radius);
   cl_assert_gpoint_precise(center, 1, 2);
   cl_assert_fixedS16_3(radius, 1);
 }
@@ -317,7 +313,7 @@ void test_graphics_circle__draw_arc(void) {
   cl_assert_gpoint_precise(s_center, 0, 0);
   cl_assert_fixedS16_3(s_radius, 0);
 
-  graphics_draw_arc(NULL, GRect(0, 0, 10, 12), GOvalScaleModeFitCircle, 0, 0);
+  graphics_draw_arc(nullptr, GRect(0, 0, 10, 12), GOvalScaleModeFitCircle, 0, 0);
   cl_assert_gpoint_precise(s_center, 4.5, 5.5);
   cl_assert_fixedS16_3(s_radius, 4.5);
 }
@@ -329,7 +325,7 @@ void test_graphics_circle__fill_oval(void) {
   cl_assert_equal_i(s_angle_start, 0);
   cl_assert_equal_i(s_angle_end, 0);
 
-  graphics_fill_oval(NULL, GRect(0, 0, 10, 12), GOvalScaleModeFitCircle);
+  graphics_fill_oval(nullptr, GRect(0, 0, 10, 12), GOvalScaleModeFitCircle);
 
   cl_assert_gpoint_precise(s_center, 4.5, 5.5);
   cl_assert_fixedS16_3(s_radius_outer, 4.5);
@@ -337,7 +333,7 @@ void test_graphics_circle__fill_oval(void) {
   cl_assert_equal_i(s_angle_start, 0);
   cl_assert_equal_i(s_angle_end, TRIG_MAX_ANGLE);
 
-  graphics_fill_oval(NULL, GRect(10, 12, -10, -12), GOvalScaleModeFitCircle);
+  graphics_fill_oval(nullptr, GRect(10, 12, -10, -12), GOvalScaleModeFitCircle);
 
   cl_assert_gpoint_precise(s_center, 4.5, 5.5);
   cl_assert_fixedS16_3(s_radius_outer, 4.5);
@@ -345,7 +341,7 @@ void test_graphics_circle__fill_oval(void) {
   cl_assert_equal_i(s_angle_start, 0);
   cl_assert_equal_i(s_angle_end, TRIG_MAX_ANGLE);
 
-  graphics_fill_oval(NULL, GRect(0, 0, 0, 0), GOvalScaleModeFillCircle);
+  graphics_fill_oval(nullptr, GRect(0, 0, 0, 0), GOvalScaleModeFillCircle);
   cl_assert_gpoint_precise(s_center, 0.0, 0.0);
   cl_assert_fixedS16_3(s_radius_outer, 0.0);
   cl_assert(s_radius_inner.integer <= 0);
@@ -369,7 +365,7 @@ void test_graphics_circle__fill_radial(void) {
   cl_assert_fixedS16_3(s_radius_inner, 0);
   cl_assert_fixedS16_3(s_radius_outer, 0);
 
-  graphics_fill_radial(NULL, GRect(0, 0, 10, 12), GOvalScaleModeFitCircle, 3, 0, 0);
+  graphics_fill_radial(nullptr, GRect(0, 0, 10, 12), GOvalScaleModeFitCircle, 3, 0, 0);
   cl_assert_gpoint_precise(s_center, 4.5, 5.5);
   cl_assert_fixedS16_3(s_radius_outer, 4.5);
   cl_assert_fixedS16_3(s_radius_inner, 1.5);

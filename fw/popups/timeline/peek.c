@@ -4,6 +4,7 @@
 #include "peek_private.h"
 
 #include <pbl/cron/cron.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/time.h>
 #include <pbl/util/size.h>
@@ -137,13 +138,13 @@ static void prv_timeline_peek_update_proc(Layer *layer, GContext *ctx) {
 #endif
 }
 
-static void prv_redraw(void *PBL_UNUSED data) {
+static void prv_redraw([[maybe_unused]] void *data) {
   TimelinePeek *peek = &s_peek;
   layer_mark_dirty(&peek->layout_layer);
 }
 
-static void prv_cron_callback(struct pbl_cron_job *job, void *PBL_UNUSED data) {
-  launcher_task_add_callback(prv_redraw, NULL);
+static void prv_cron_callback(struct pbl_cron_job *job, [[maybe_unused]] void *data) {
+  launcher_task_add_callback(prv_redraw, nullptr);
   pbl_cron_job_schedule(job);
 }
 
@@ -194,7 +195,7 @@ static void prv_destroy_layout(void) {
   layout_destroy(&peek->peek_layout->timeline_layout->layout_layer);
   timeline_item_destroy(peek->peek_layout->item);
   task_free(peek->peek_layout);
-  peek->peek_layout = NULL;
+  peek->peek_layout = nullptr;
 }
 
 static PeekLayout *prv_create_layout(TimelineItem *item, unsigned int num_concurrent,
@@ -229,7 +230,7 @@ static void prv_set_layout(PeekLayout *layout) {
 
 static void prv_unschedule_animation(TimelinePeek *peek) {
   animation_unschedule(peek->animation);
-  peek->animation = NULL;
+  peek->animation = nullptr;
 }
 
 //! Returns true if we're running an upscaled legacy app in scaling mode.
@@ -367,13 +368,14 @@ static void prv_transition_frame(TimelinePeek *peek, bool visible, bool animated
     return;
   }
 
-  PropertyAnimation *prop_anim = property_animation_create(&s_peek_prop_impl, peek, NULL, NULL);
+  PropertyAnimation *prop_anim =
+      property_animation_create(&s_peek_prop_impl, peek, nullptr, nullptr);
   property_animation_set_from_grect(prop_anim, &peek->layout_layer.frame);
   property_animation_set_to_grect(prop_anim, &to_frame);
   Animation *animation = property_animation_get_animation(prop_anim);
   animation_set_duration(animation, interpolate_moook_duration());
   animation_set_custom_interpolation(animation, interpolate_moook);
-  animation_set_handlers(animation, s_peek_anim_handlers, NULL);
+  animation_set_handlers(animation, s_peek_anim_handlers, nullptr);
 
   peek->animation = animation;
   animation_schedule(animation);
@@ -413,7 +415,7 @@ static Animation *prv_create_transition_adding_concurrent(TimelinePeek *peek, Pe
   animation_set_duration(bounce_animation,
                          interpolate_moook_custom_duration(&s_extended_moook_out_config));
   animation_set_custom_interpolation(bounce_animation, prv_interpolate_extended_moook_out);
-  return animation_sequence_create(white_animation, bounce_animation, NULL);
+  return animation_sequence_create(white_animation, bounce_animation, nullptr);
 }
 
 static const int32_t s_custom_moook_in[] = {0, 1, INTERPOLATE_MOOOK_BOUNCE_BACK};
@@ -450,7 +452,7 @@ static Animation *prv_create_transition_removing_concurrent(TimelinePeek *peek,
   Animation *bounce_animation = property_animation_get_animation(bounce_prop_anim);
   animation_set_duration(bounce_animation, interpolate_moook_out_duration());
   animation_set_custom_interpolation(bounce_animation, prv_interpolate_moook_out);
-  return animation_sequence_create(remove_animation, bounce_animation, NULL);
+  return animation_sequence_create(remove_animation, bounce_animation, nullptr);
 }
 
 static void prv_transition_concurrent(TimelinePeek *peek, PeekLayout *layout) {
@@ -465,7 +467,7 @@ static void prv_transition_concurrent(TimelinePeek *peek, PeekLayout *layout) {
 
   prv_unschedule_animation(peek);
 
-  Animation *animation = NULL;
+  Animation *animation = nullptr;
   if (peek->peek_layout && (old_num_concurrent < new_num_concurrent)) {
     animation = prv_create_transition_adding_concurrent(peek, layout);
   } else {
@@ -498,7 +500,7 @@ void timeline_peek_init(void) {
   timeline_peek_set_show_before_time(timeline_peek_prefs_get_before_time() * PBL_SEC_PER_MIN);
 
   // Wait one event loop to show the timeline peek
-  launcher_task_add_callback(prv_push_timeline_peek, NULL);
+  launcher_task_add_callback(prv_push_timeline_peek, nullptr);
 }
 
 static void prv_set_visible(bool visible, bool animated) {
@@ -546,12 +548,13 @@ static void prv_set_content(PeekWidgetSource source, TimelineItem *item, bool st
   }
 
   peek->source = item ? source : PeekWidgetSource_None;
-  peek->exists = (item != NULL);
+  peek->exists = (item != nullptr);
   peek->started = started;
   peek->first = first;
   timeline_peek_set_visible(peek->exists, animated);
 
-  PeekLayout *layout = item ? prv_create_layout(item, num_concurrent, source, icon_override) : NULL;
+  PeekLayout *layout =
+      item ? prv_create_layout(item, num_concurrent, source, icon_override) : nullptr;
   if (animated && !peek->animation && peek->visible) {
     // Swap the layout in an animation
     prv_transition_concurrent(peek, layout);
@@ -674,7 +677,7 @@ void timeline_peek_handle_peek_event(PebbleTimelinePeekEvent *event) {
   peek->future_empty = event->is_future_empty;
   bool show = false;
   bool started = false;
-  if (event->item_id != NULL) {
+  if (event->item_id != nullptr) {
     switch (event->time_type) {
       case TimelinePeekTimeType_None:
       case TimelinePeekTimeType_SomeTimeNext:
@@ -700,7 +703,7 @@ void timeline_peek_handle_peek_event(PebbleTimelinePeekEvent *event) {
     timeline_peek_set_item(&item, started, event->num_concurrent, event->is_first_event,
                            true /* animated */);
   } else {
-    timeline_peek_set_item(NULL, false /* started */, 0 /* num_concurrent */,
+    timeline_peek_set_item(nullptr, false /* started */, 0 /* num_concurrent */,
                            false /* is_first_event */, true /* animated */);
   }
   timeline_item_free_allocated_buffer(&item);

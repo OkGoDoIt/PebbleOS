@@ -16,7 +16,7 @@
 #include "pbl/services/notifications/alerts_preferences_private.h"
 #include "pbl/services/notifications/alerts_private.h"
 #include "shell/prefs.h"
-#include "system/passert.h"
+#include "pbl/kernel/fatal.h"
 #include "pbl/util/size.h"
 #include "pbl/util/units.h"
 
@@ -243,7 +243,7 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       break;
     }
     default:
-      WTF;
+      pbl_panic();
   }
   menu_cell_basic_draw(ctx, cell_layer, i18n_get(title, data), i18n_get(subtitle, data), NULL);
 }
@@ -265,7 +265,7 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
       prv_button_mode_menu_push(data);
       break;
     default:
-      WTF;
+      pbl_panic();
   }
   settings_menu_reload_data(SettingsMenuItemQuickView);
   settings_menu_mark_dirty(SettingsMenuItemQuickView);

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/comm_session/session_internal.h>
 #include <pbl/util/uuid.h>
 
@@ -9,7 +10,6 @@
 #include <clar.h>
 #include <process_management/app_run_state.h>
 #include <process_management/launcher_app_message.h>
-#include <system/passert.h>
 
 extern void launcher_app_message_reset(void);
 extern void launcher_app_message_protocol_msg_callback_deprecated(CommSession *session,
@@ -25,11 +25,6 @@ extern void launcher_app_message_protocol_msg_callback_deprecated(CommSession *s
 
 // Stubs
 ////////////////////////////////////
-#include <stubs_bt_lock.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_rand_ptr.h>
 
 AppRunStateCommand s_last_cmd;
 
@@ -110,14 +105,14 @@ void test_launcher_app_message__initialize(void) {
   launcher_app_message_reset();
   s_last_cmd = APP_RUN_STATE_INVALID_COMMAND;
   fake_comm_session_init();
-  s_transport = fake_transport_create(TransportDestinationSystem, NULL, NULL);
+  s_transport = fake_transport_create(TransportDestinationSystem, nullptr, nullptr);
   s_session = fake_transport_set_connected(s_transport, true /* connected */);
 }
 
 void test_launcher_app_message__cleanup(void) {
   fake_transport_destroy(s_transport);
-  s_transport = NULL;
-  s_session = NULL;
+  s_transport = nullptr;
+  s_session = nullptr;
   fake_comm_session_cleanup();
   fake_system_task_callbacks_cleanup();
 }

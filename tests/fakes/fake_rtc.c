@@ -16,13 +16,13 @@ static RtcTicks s_rtc_auto_increment = 0;
 static time_t s_time_base = 0;
 static int16_t s_time_ms_base = 0;
 static int64_t s_time_tick_base = 0;
-static TimezoneInfo s_tzinfo = {{0}};
+static TimezoneInfo s_tzinfo = {};
 
 /*
 // TODO: Unused right now
 void rtc_init(void);
 void rtc_init_timers(void);
-void rtc_set_time_tm(struct tm* time_tm);
+void rtc_set_time_tm(struct pbl_tm* time_tm);
 
 
 void rtc_next_tick_alarm_init(void);
@@ -40,13 +40,13 @@ const char* time_t_to_string(char* buffer, time_t t);
 ////////////////////////////////////
 //! @param buffer Buffer used to write the string into. Must be at least TIME_STRING_BUFFER_SIZE
 const char *rtc_get_time_string(char *buffer) {
-  return NULL;
+  return nullptr;
 }
 
-void rtc_get_time_tm(struct tm *time_tm) {
+void rtc_get_time_tm(struct pbl_tm *time_tm) {
   if (time_tm) {
     time_t temp = rtc_get_time();
-    gmtime_r(&temp, time_tm);
+    pbl_gmtime_r(&temp, time_tm);
   }
 }
 
@@ -71,12 +71,12 @@ void rtc_timezone_clear(void) {
   memset(&s_tzinfo, 0, sizeof(s_tzinfo));
 }
 
-bool rtc_sanitize_struct_tm(struct tm *t) {
+bool rtc_sanitize_struct_tm(struct pbl_tm *t) {
   return false;
 }
 
 bool rtc_sanitize_time_t(time_t *t) {
-  return rtc_sanitize_struct_tm(NULL);
+  return rtc_sanitize_struct_tm(nullptr);
 }
 
 uint16_t rtc_get_timezone_id(void) {

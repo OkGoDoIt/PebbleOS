@@ -6,6 +6,8 @@
 #include "event_service_client.h"
 #include "tick_timer_service_private.h"
 
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/event_service.h>
@@ -16,7 +18,6 @@
 #include <process_state/app_state/app_state.h>
 #include <process_state/worker_state/worker_state.h>
 #include <syscall/syscall.h>
-#include <system/passert.h>
 
 // ----------------------------------------------------------------------------------------------------
 static TickTimerServiceState *prv_get_state(PebbleTask task) {
@@ -31,16 +32,16 @@ static TickTimerServiceState *prv_get_state(PebbleTask task) {
   } else if (task == PebbleTask_KernelMain) {
     return kernel_applib_get_tick_timer_service_state();
   } else {
-    WTF;
+    pbl_panic();
   }
 }
 
 static void do_handle(PebbleEvent *e, void *context) {
   TickTimerServiceState *state = prv_get_state(PebbleTask_Unknown);
-  PBL_ASSERTN(state->handler != NULL);
+  PBL_ASSERTN(state->handler != nullptr);
 
   TimeUnits units_changed = 0;
-  struct tm currtime;
+  struct pbl_tm currtime;
   const time_t tick_time = e->clock_tick.tick_time;
   sys_localtime_r(&tick_time, &currtime);
 
@@ -79,7 +80,7 @@ static void do_handle(PebbleEvent *e, void *context) {
 
 void tick_timer_service_init(void) {
   TickTimerServiceState *state = prv_get_state(PebbleTask_Unknown);
-  state->handler = NULL;
+  state->handler = nullptr;
   event_service_init(PEBBLE_TICK_EVENT, &tick_timer_add_subscriber, &tick_timer_remove_subscriber);
 }
 
@@ -100,7 +101,7 @@ void tick_timer_service_unsubscribe(void) {
   TickTimerServiceState *state = prv_get_state(PebbleTask_Unknown);
   sys_tick_timer_unsubscribe();
   event_service_client_unsubscribe(&state->tick_service_info);
-  state->handler = NULL;
+  state->handler = nullptr;
   if (pebble_task_get_current() == PebbleTask_App && sys_app_is_watchface()) {
     PBL_ANALYTICS_SET_UNSIGNED(app_tick_timer_second_subscribed, 0);
   }

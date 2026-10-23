@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <time.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/timeline/layout_layer.h>
@@ -33,7 +34,6 @@
 #include <popups/timeline/peek_animations.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 #define PAST_TOP_MARGIN_EXTRA   PBL_IF_RECT_ELSE(10, 38)
 #define FUTURE_TOP_MARGIN_EXTRA PBL_IF_RECT_ELSE(10, 18)
@@ -74,8 +74,7 @@ static const TimelineLayerStyle s_style_medium = {
   .right_margin = MARGIN_MEDIUM,
   .icon_right_margin = MARGIN_MEDIUM,
   .fat_pin_height = 110,
-  // PBL-42540: This property is dependent on the screen size. The thin pin height is the
-  // remainder of the screen space after the fat pin.
+  // Remainder of the screen space after the fat pin
   .thin_pin_height = PBL_IF_RECT_ELSE(66, 43),
   .day_sep_dot_diameter = 9,
   .day_sep_offset.x = PBL_IF_ROUND_ELSE(12, 0),
@@ -99,7 +98,6 @@ static const TimelineLayerStyle s_style_large = {
   .icon_offset_y = 3,
   .icon_right_margin = PBL_IF_RECT_ELSE(6, 12),
   .fat_pin_height = 131,
-  // PBL-42540: This property is dependent on the screen size.
   .thin_pin_height = 88,
   .day_sep_dot_diameter = 12,
   .day_sep_offset.y = -21,
@@ -114,16 +112,25 @@ static const TimelineLayerStyle *const s_styles[NumPreferredContentSizes] = {
   [PreferredContentSizeExtraLarge] = &s_style_large,
 };
 
-static int16_t s_height_offsets[TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER];
 static const int s_visible_items[] = {1, 2};
 static const int s_nonvisible_items[] = {0, TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER - 1};
 
 static const TimelineLayerStyle *prv_get_style(void) {
-  return s_styles[system_theme_get_content_size()];
+  // Round pin heights and icon positions depend on the display, not the font size.
+  return s_styles[PBL_IF_ROUND_ELSE(PreferredContentSizeDefault, system_theme_get_content_size())];
+}
+
+// The end-of-timeline and day separator sit relative to the display, not the font size.
+static const TimelineLayerStyle *prv_get_display_style(void) {
+  return s_styles[PreferredContentSizeDefault];
 }
 
 uint16_t timeline_layer_get_fat_pin_height(void) {
   return prv_get_style()->fat_pin_height;
+}
+
+int16_t timeline_layer_get_icon_offset_y(void) {
+  return prv_get_style()->icon_offset_y;
 }
 
 uint16_t timeline_layer_get_ideal_sidebar_width(void) {
@@ -161,26 +168,53 @@ static LayoutLayerMode prv_get_mode(int index) {
   }
 }
 
-static void prv_get_size_for(LayoutLayerMode layout_mode, const GRect *bounds, GSize *size) {
-  const TimelineLayerStyle *style = prv_get_style();
-  const int16_t width = bounds->size.w - (style->left_margin + style->right_margin);
-  switch (layout_mode) {
+static int16_t prv_get_height_offset(TimelineLayer *layer, const TimelineLayerStyle *style,
+                                     int index) {
+  if (layer->scroll_direction == TimelineScrollDirectionUp) {
+    switch (index) {
+      case 0:
+        return PAST_TOP_MARGIN_EXTRA + style->thin_pin_height + (2 * style->fat_pin_height);
+      case 1:
+        return style->past_top_margin + style->thin_pin_height + style->past_thin_pin_margin;
+      case 2:
+        return style->past_top_margin;
+      default:
+        return style->past_top_margin - 2 * style->fat_pin_height;
+    }
+  }
+  switch (index) {
+    case 0:
+      return FUTURE_TOP_MARGIN_EXTRA - 2 * style->fat_pin_height;
+    case 1:
+      return style->future_top_margin;
+    case 2:
+      return style->future_top_margin + style->fat_pin_height;
     default:
-    case LayoutLayerModePinnedFat:
-      *size = GSize(width, style->fat_pin_height);
-      break;
-    case LayoutLayerModePinnedThin:
-      *size = GSize(width, style->thin_pin_height);
-      break;
+      return style->future_top_margin + 3 * style->fat_pin_height;
   }
 }
 
+static void prv_get_frame_for_style(TimelineLayer *layer, const TimelineLayerStyle *style,
+                                    int index, GRect *frame) {
+  index = CLIP(index, 0, TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER - 1);
+  const int16_t width = layer->layer.bounds.size.w - (style->left_margin + style->right_margin);
+  const uint16_t height = (prv_get_mode(index) == LayoutLayerModePinnedThin)
+                              ? style->thin_pin_height
+                              : style->fat_pin_height;
+  *frame = GRect(style->left_margin, prv_get_height_offset(layer, style, index), width, height);
+}
+
 static void prv_get_frame(TimelineLayer *layer, int index, GRect *frame) {
-  const TimelineLayerStyle *style = prv_get_style();
-  index = CLIP(index, 0, (int)ARRAY_LENGTH(s_height_offsets) - 1);
-  const GRect *bounds = &layer->layer.bounds;
-  frame->origin = GPoint(style->left_margin, s_height_offsets[index]);
-  prv_get_size_for(prv_get_mode(index), bounds, &frame->size);
+  prv_get_frame_for_style(layer, prv_get_style(), index, frame);
+}
+
+// Horizontal placement follows the font size style, vertical placement the display style.
+static void prv_get_indicator_frame(TimelineLayer *layer, int index, GRect *frame) {
+  GRect display_frame;
+  prv_get_frame_for_style(layer, prv_get_display_style(), index, &display_frame);
+  prv_get_frame(layer, index, frame);
+  frame->origin.y = display_frame.origin.y;
+  frame->size.h = display_frame.size.h;
 }
 
 void timeline_layer_get_layout_frame(TimelineLayer *layer, int index, GRect *frame_out) {
@@ -212,20 +246,23 @@ void timeline_layer_get_icon_frame(TimelineLayer *layer, int index, GRect *icon_
 }
 
 static void prv_get_end_of_timeline_frame(TimelineLayer *layer, int index, GRect *frame) {
-  prv_get_frame(layer, index, frame);
+  prv_get_indicator_frame(layer, index, frame);
   const bool is_future = (layer->scroll_direction == TimelineScrollDirectionDown);
   const TimelineLayerStyle *style = prv_get_style();
-  gpoint_add_eq(&frame->origin, GPoint(style->fin_offset_x, is_future ? style->future_fin_offset_y
-                                                                      : style->past_fin_offset_y));
+  const TimelineLayerStyle *display_style = prv_get_display_style();
+  gpoint_add_eq(&frame->origin,
+                GPoint(style->fin_offset_x, is_future ? display_style->future_fin_offset_y
+                                                      : display_style->past_fin_offset_y));
   frame->size.w -= PBL_IF_RECT_ELSE(style->sidebar_width, 0);
 }
 
 static void prv_get_day_sep_frame(TimelineLayer *layer, int index, GRect *frame) {
-  prv_get_frame(layer, index, frame);
+  prv_get_indicator_frame(layer, index, frame);
   const bool is_future = (layer->scroll_direction == TimelineScrollDirectionDown);
   const TimelineLayerStyle *style = prv_get_style();
-  frame->origin.y +=
-      is_future ? style->future_day_sep_dot_offset_y : style->past_day_sep_dot_offset_y;
+  const TimelineLayerStyle *display_style = prv_get_display_style();
+  frame->origin.y += is_future ? display_style->future_day_sep_dot_offset_y
+                               : display_style->past_day_sep_dot_offset_y;
   // Remove the built-in margins and subtract the sidebar
   frame->origin.x -= style->left_margin;
   frame->size.w +=
@@ -273,10 +310,10 @@ static void prv_destroy_layout(TimelineLayer *layer, int index) {
   timeline_layout->is_being_destroyed = true;
   layer_remove_from_parent((Layer *)timeline_layout);
   layout_destroy((LayoutLayer *)timeline_layout);
-  layer->layouts[index] = NULL;
+  layer->layouts[index] = nullptr;
 
   app_free(layer->layouts_info[index]);
-  layer->layouts_info[index] = NULL;
+  layer->layouts_info[index] = nullptr;
 }
 
 static void prv_destroy_nonvisible_items(TimelineLayer *layer) {
@@ -284,7 +321,7 @@ static void prv_destroy_nonvisible_items(TimelineLayer *layer) {
     TimelineLayout *timeline_layout = layer->layouts[s_nonvisible_items[i]];
     if (timeline_layout) {
       prv_destroy_layout(layer, s_nonvisible_items[i]);
-      layer->layouts[s_nonvisible_items[i]] = NULL;
+      layer->layouts[s_nonvisible_items[i]] = nullptr;
     }
   }
 }
@@ -393,7 +430,7 @@ Animation *timeline_layer_create_day_sep_hide(TimelineLayer *timeline_layer) {
   GRect to = timeline_layer->day_separator.layer.frame;
   to.origin = GPoint(0, frame.size.h * timeline_layer->move_delta); // all the way off screen
   PropertyAnimation *prop_anim =
-      property_animation_create_layer_frame((Layer *)&timeline_layer->day_separator, NULL, &to);
+      property_animation_create_layer_frame((Layer *)&timeline_layer->day_separator, nullptr, &to);
   Animation *anim = property_animation_get_animation(prop_anim);
   animation_set_duration(anim, TIMELINE_UP_DOWN_ANIMATION_DURATION_MS);
   animation_set_custom_interpolation(anim, timeline_animation_interpolate_moook_soft);
@@ -458,7 +495,6 @@ static void prv_day_sep_anim_stopped(Animation *anim, bool finished, void *conte
   }
 }
 
-// TODO: PBL-21717 Day separator on Spalding
 Animation *timeline_layer_create_day_sep_show(TimelineLayer *timeline_layer) {
   GRect *from = &((Layer *)&timeline_layer->day_separator)->frame;
   GRect to;
@@ -499,7 +535,6 @@ static Animation *prv_create_up_down_animation(TimelineLayer *layer, uint32_t du
     }
   }
 
-// TODO: PBL-21982: Only support rectangular screen for now
 #if PBL_RECT
   Animation *relbar_animation =
       timeline_relbar_layer_create_animation(layer, duration, interpolate);
@@ -584,9 +619,9 @@ Animation *timeline_layer_create_up_down_animation(TimelineLayer *layer, uint32_
 
   Animation *mode_change = animation_create();
   animation_set_implementation(mode_change, &s_mode_change_impl);
-  animation_set_handlers(mode_change, (AnimationHandlers){0}, layer);
+  animation_set_handlers(mode_change, (AnimationHandlers){}, layer);
 
-  return animation_spawn_create(animation, mode_change, NULL);
+  return animation_spawn_create(animation, mode_change, nullptr);
 }
 
 #if PBL_ROUND
@@ -735,8 +770,8 @@ void timeline_layer_move_data(TimelineLayer *layer, int delta) {
       layer->layouts[i] = layer->layouts[i + 1];
       layer->layouts_info[i] = layer->layouts_info[i + 1];
     }
-    layer->layouts[TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER - 1] = NULL;
-    layer->layouts_info[TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER - 1] = NULL;
+    layer->layouts[TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER - 1] = nullptr;
+    layer->layouts_info[TIMELINE_NUM_ITEMS_IN_TIMELINE_LAYER - 1] = nullptr;
   } else if (delta == -1) {
     if (layer->layouts[s_nonvisible_items[1]]) {
       prv_destroy_layout(layer, s_nonvisible_items[1]);
@@ -745,8 +780,8 @@ void timeline_layer_move_data(TimelineLayer *layer, int delta) {
       layer->layouts[i] = layer->layouts[i - 1];
       layer->layouts_info[i] = layer->layouts_info[i - 1];
     }
-    layer->layouts[0] = NULL;
-    layer->layouts_info[0] = NULL;
+    layer->layouts[0] = nullptr;
+    layer->layouts_info[0] = nullptr;
   }
 
   layer->move_delta = delta * prv_get_scroll_delta(layer);
@@ -762,7 +797,7 @@ TimelineLayout *timeline_layer_get_current_layout(TimelineLayer *timeline_layer)
 void timeline_layer_reset(TimelineLayer *layer) {
   // reset the animation
   animation_unschedule(layer->animation);
-  layer->animation = NULL;
+  layer->animation = nullptr;
 
   // reset the day separator
   layer_set_hidden((Layer *)&layer->day_separator, true);
@@ -777,7 +812,7 @@ void timeline_layer_reset(TimelineLayer *layer) {
   prv_destroy_nonvisible_items(layer);
   timeline_layer_set_layouts_hidden(layer, false);
 
-  // PBL-18815: Reset the current day in case the pin was deleted. This should later be animated.
+  // Reset the current day in case the pin was deleted
   const int index = TIMELINE_LAYER_FIRST_VISIBLE_LAYOUT;
   if (layer->layouts[index]) {
     layer->current_day = layer->layouts[index]->info->current_day;
@@ -787,7 +822,6 @@ void timeline_layer_reset(TimelineLayer *layer) {
   prv_place_day_separator(layer);
   prv_place_end_of_timeline(layer);
 
-// TODO: PBL-21982: Only support rectangular screen for now
 #if PBL_RECT
   timeline_relbar_layer_reset(layer);
 #endif
@@ -911,20 +945,6 @@ void timeline_layer_init(TimelineLayer *layer, const GRect *frame_ref,
   // layouts
   layer->scroll_direction = scroll_direction;
   layer->move_delta = prv_get_scroll_delta(layer);
-  if (scroll_direction == TimelineScrollDirectionUp) {
-    s_height_offsets[0] =
-        (PAST_TOP_MARGIN_EXTRA + style->thin_pin_height + (2 * style->fat_pin_height));
-    s_height_offsets[1] =
-        (style->past_top_margin + style->thin_pin_height + style->past_thin_pin_margin);
-    s_height_offsets[2] = style->past_top_margin;
-    s_height_offsets[3] = style->past_top_margin - 2 * style->fat_pin_height;
-  } else {
-    s_height_offsets[0] = FUTURE_TOP_MARGIN_EXTRA - 2 * style->fat_pin_height;
-    s_height_offsets[1] = style->future_top_margin;
-    s_height_offsets[2] = style->future_top_margin + style->fat_pin_height;
-    s_height_offsets[3] =
-        (style->future_top_margin + style->fat_pin_height + (2 * style->fat_pin_height));
-  }
   // layouts layer - contains all the pin
   layer_init(&layer->layouts_layer, &(GRect){.size = frame_ref->size});
   layer_set_clips(&layer->layouts_layer, false);
@@ -950,7 +970,6 @@ void timeline_layer_init(TimelineLayer *layer, const GRect *frame_ref,
   layer_add_child((Layer *)layer, (Layer *)&layer->day_separator);
 
   // end-of-timeline indicator
-  // TODO: PBL-21716 Fin icon layout on Spalding
   prv_get_end_of_timeline_frame(layer, 3, &frame);
   kino_layer_init(&layer->end_of_timeline, &frame);
   kino_layer_set_reel_with_resource(&layer->end_of_timeline, RESOURCE_ID_END_OF_TIMELINE);
@@ -960,7 +979,6 @@ void timeline_layer_init(TimelineLayer *layer, const GRect *frame_ref,
   // populate the timeline with items
   timeline_layer_reset(layer);
 
-// TODO: PBL-21982: Only support rectangular screen for now
 #if PBL_RECT
   // Initialize Relationship bar
   timeline_relbar_layer_init(layer);
@@ -977,7 +995,6 @@ void timeline_layer_deinit(TimelineLayer *layer) {
   peek_layer_deinit(&layer->day_separator);
   kino_layer_deinit(&layer->end_of_timeline);
 
-// TODO: PBL-21982: Only support rectangular screen for now
 #if PBL_RECT
   timeline_relbar_layer_deinit(layer);
 #endif

@@ -3,8 +3,10 @@
 
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/event_service.h>
 
@@ -14,8 +16,6 @@
 #include <process_management/app_manager.h>
 #include <process_management/worker_manager.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_event_service, CONFIG_SERVICE_EVENT_SERVICE_LOG_LEVEL);
 
@@ -29,20 +29,22 @@ typedef struct {
 typedef struct {
   ListNode list_node;
   void *ptr;
+  PebbleEventType type;
   // There is an intent bit for each task + a special "claimed" bit
   uint16_t intents_pending;
 } EventServiceBuffer;
 
 static const uint16_t CLAIMED_BIT = (1 << NumPebbleTask);
 
-static EventServiceBuffer *s_event_service_buffers = NULL;
+static EventServiceBuffer *s_event_service_buffers = nullptr;
 
 // We dynamically allocate one of these for every service UUID that either a client subscribes to or
 // a service publishes an event to.
 typedef struct {
   ListNode list_node;
-  uint16_t service_index; // index of the service
-  Uuid uuid;              // UUID
+  uint16_t service_index;   // index of the service
+  PebbleTaskBitset holders; // tasks that requested the index
+  Uuid uuid;                // UUID
 } EventPluginUUIDEntry;
 
 static uint16_t s_next_service_index = 0;
@@ -59,13 +61,13 @@ static unsigned int s_dropped_events;
 static void prv_event_service_unsubscribe(PebbleSubscriptionEvent *subscription) {
   EventServiceEntry *service = s_event_services[subscription->event_type];
 
-  if (s_event_services[subscription->event_type] == NULL) {
+  if (s_event_services[subscription->event_type] == nullptr) {
     // service does not exist
     PBL_LOG_WRN("Attempted to unsubscribe from %d, no service found", subscription->event_type);
     return;
   }
 
-  if (service->subscribers[subscription->task] == NULL) {
+  if (service->subscribers[subscription->task] == nullptr) {
     // not subscribed
     PBL_LOG_WRN("Attempted to unsubscribe from %d, not subscribed", subscription->event_type);
     return;
@@ -73,8 +75,8 @@ static void prv_event_service_unsubscribe(PebbleSubscriptionEvent *subscription)
 
   PBL_ASSERTN(service->num_subscribers > 0);
   --service->num_subscribers;
-  service->subscribers[subscription->task] = NULL;
-  if (service->remove_subscriber_callback != NULL) {
+  service->subscribers[subscription->task] = nullptr;
+  if (service->remove_subscriber_callback != nullptr) {
     service->remove_subscriber_callback(subscription->task);
   }
 }
@@ -82,9 +84,9 @@ static void prv_event_service_unsubscribe(PebbleSubscriptionEvent *subscription)
 static void prv_event_service_subscribe(PebbleSubscriptionEvent *subscription) {
   EventServiceEntry *service = s_event_services[subscription->event_type];
 
-  if (service == NULL) {
+  if (service == nullptr) {
     // No event service for this event type, create one
-    event_service_init(subscription->event_type, NULL, NULL);
+    event_service_init(subscription->event_type, nullptr, nullptr);
     service = s_event_services[subscription->event_type];
   }
 
@@ -94,7 +96,7 @@ static void prv_event_service_subscribe(PebbleSubscriptionEvent *subscription) {
     return;
   }
 
-  if (service->add_subscriber_callback != NULL) {
+  if (service->add_subscriber_callback != nullptr) {
     service->add_subscriber_callback(subscription->task);
   }
 
@@ -108,12 +110,17 @@ void event_service_subscribe_from_kernel_main(PebbleSubscriptionEvent *subscript
 }
 
 static bool prv_event_service_send_event(struct pbl_msgq *queue, PebbleEvent *e) {
-  PBL_ASSERTN(queue != NULL);
+  PBL_ASSERTN(queue != nullptr);
   bool success = (pbl_msgq_put(queue, e, PBL_NO_WAIT) == 0);
   return success;
 }
 
 void event_service_handle_subscription(PebbleSubscriptionEvent *subscription) {
+  if (subscription->event_type >= PEBBLE_NUM_EVENTS) {
+    PBL_LOG_WRN("Invalid subscription event type %d", subscription->event_type);
+    return;
+  }
+
   if (subscription->subscribe) {
     prv_event_service_subscribe(subscription);
   } else {
@@ -121,14 +128,19 @@ void event_service_handle_subscription(PebbleSubscriptionEvent *subscription) {
   }
 }
 
+static bool prv_release_plugin_indexes(ListNode *node, void *context) {
+  ((EventPluginUUIDEntry *)node)->holders &= ~(PebbleTaskBitset)(uintptr_t)context;
+  return true;
+}
+
 void event_service_clear_process_subscriptions(PebbleTask task) {
   EventServiceEntry *service;
 
   for (int i = 0; i < PEBBLE_NUM_EVENTS; i++) {
-    if ((service = s_event_services[i]) == NULL) {
+    if ((service = s_event_services[i]) == nullptr) {
       continue;
     }
-    if (service->subscribers[task] == NULL) {
+    if (service->subscribers[task] == nullptr) {
       continue;
     }
 
@@ -139,6 +151,10 @@ void event_service_clear_process_subscriptions(PebbleTask task) {
     };
     prv_event_service_unsubscribe(&event);
   }
+
+  pbl_mutex_lock(&s_plugin_list_mutex, PBL_FOREVER);
+  list_foreach(s_plugin_list.next, prv_release_plugin_indexes, (void *)(uintptr_t)(1 << task));
+  pbl_mutex_unlock(&s_plugin_list_mutex);
 }
 
 void event_service_system_init(void) {
@@ -147,7 +163,7 @@ void event_service_system_init(void) {
 void event_service_init(PebbleEventType type,
                         EventServiceAddSubscriberCallback add_subscriber_callback,
                         EventServiceRemoveSubscriberCallback remove_subscriber_callback) {
-  if (s_event_services[type] != NULL) {
+  if (s_event_services[type] != nullptr) {
     // an event service was already inited, free it
     kernel_free(s_event_services[type]);
   }
@@ -159,7 +175,7 @@ void event_service_init(PebbleEventType type,
 }
 
 bool event_service_is_running(PebbleEventType event_type) {
-  if (s_event_services[event_type] == NULL) {
+  if (s_event_services[event_type] == nullptr) {
     return (false);
   }
   if (s_event_services[event_type]->num_subscribers > 0) {
@@ -187,6 +203,7 @@ static bool prv_steal_buffer(void *buf, EventServiceEntry *service, PebbleEvent 
   if (intents_pending) {
     EventServiceBuffer *esb = kernel_zalloc_check(sizeof(EventServiceBuffer));
     esb->ptr = buf;
+    esb->type = e->type;
     esb->intents_pending = intents_pending;
     list_init(&esb->list_node);
     s_event_service_buffers =
@@ -197,10 +214,43 @@ static bool prv_steal_buffer(void *buf, EventServiceEntry *service, PebbleEvent 
   }
 }
 
+static bool prv_plugin_index_filter(ListNode *node, void *tp) {
+  return ((EventPluginUUIDEntry *)node)->service_index == (uint16_t)(uintptr_t)tp;
+}
+
+static bool prv_plugin_index_is_process(uint16_t index, const PebbleProcessMd *md) {
+  if (md == nullptr) {
+    return false;
+  }
+
+  pbl_mutex_lock(&s_plugin_list_mutex, PBL_FOREVER);
+  const EventPluginUUIDEntry *entry = (EventPluginUUIDEntry *)list_find(
+      s_plugin_list.next, prv_plugin_index_filter, (void *)(uintptr_t)index);
+  const bool match = entry && uuid_equal(&entry->uuid, &md->uuid);
+  pbl_mutex_unlock(&s_plugin_list_mutex);
+
+  return match;
+}
+
+// App/worker messages only go to the processes of the app that sent them.
+static void prv_mask_plugin_event_recipients(PebbleEvent *e) {
+  const uint16_t index = e->plugin_service.service_index;
+  if (!prv_plugin_index_is_process(index, app_manager_get_current_app_md())) {
+    e->task_mask |= (1 << PebbleTask_App);
+  }
+  if (!prv_plugin_index_is_process(index, worker_manager_get_current_worker_md())) {
+    e->task_mask |= (1 << PebbleTask_Worker);
+  }
+}
+
 void event_service_handle_event(PebbleEvent *e) {
   EventServiceEntry *service = s_event_services[e->type];
-  if (service == NULL) {
+  if (service == nullptr) {
     return;
+  }
+
+  if (e->type == PEBBLE_PLUGIN_SERVICE_EVENT) {
+    prv_mask_plugin_event_recipients(e);
   }
 
   bool stolen = false;
@@ -260,17 +310,20 @@ static bool prv_buffer_find(ListNode *found_node, void *data) {
   return (esb->ptr == data);
 }
 
-bool event_service_is_known_buffer(const void *buf) {
-  if (buf == NULL) {
+bool event_service_is_known_buffer(const void *buf, PebbleEventType type) {
+  if (buf == nullptr) {
     return false;
   }
   // Cast away const for list_find's callback signature; prv_buffer_find only compares.
-  return list_find((ListNode *)s_event_service_buffers, prv_buffer_find, (void *)buf) != NULL;
+  const EventServiceBuffer *esb = (EventServiceBuffer *)list_find(
+      (ListNode *)s_event_service_buffers, prv_buffer_find, (void *)buf);
+  const uint16_t task_bit = 1 << pebble_task_get_current();
+  return esb && (esb->type == type) && (esb->intents_pending & task_bit);
 }
 
 static EventServiceBuffer *prv_get_esb_for_event(PebbleEvent *e) {
   void *buf = event_get_buffer(e);
-  EventServiceBuffer *esb = NULL;
+  EventServiceBuffer *esb = nullptr;
   if (buf) {
     esb =
         (EventServiceBuffer *)list_find((ListNode *)s_event_service_buffers, prv_buffer_find, buf);
@@ -284,13 +337,13 @@ void *event_service_claim_buffer(PebbleEvent *e) {
     if (esb->intents_pending & CLAIMED_BIT) {
       // For now only 1 claim at a time is needed, so lets keep things simple and just support that
       PBL_LOG_WRN("Buffer already claimed");
-      return NULL;
+      return nullptr;
     } else {
       esb->intents_pending |= CLAIMED_BIT;
       return esb;
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 void event_service_free_claimed_buffer(void *ref) {
@@ -306,10 +359,10 @@ void event_service_free_claimed_buffer(void *ref) {
     uint16_t intents_pending = __sync_and_and_fetch(&esb->intents_pending, ~CLAIMED_BIT);
 
     if (!intents_pending) {
-      list_remove((ListNode *)esb, (ListNode **)&s_event_service_buffers, NULL);
+      list_remove((ListNode *)esb, (ListNode **)&s_event_service_buffers, nullptr);
       if (esb->ptr) {
         kernel_free(esb->ptr);
-        esb->ptr = NULL;
+        esb->ptr = nullptr;
       }
       kernel_free(esb);
     }
@@ -322,29 +375,41 @@ static bool prv_service_filter(ListNode *node, void *tp) {
   return uuid_equal(&info->uuid, (Uuid *)tp);
 }
 
+static bool prv_is_unheld_entry(ListNode *node, void *unused) {
+  return ((EventPluginUUIDEntry *)node)->holders == 0;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
-// TODO: We need to prune out entries from this list when they are no longer needed
 // TODO: The applib should force a restriction on the number of plugin service UUIDs that an app can
 // subscribe
 //          to at once.
-static int16_t prv_get_plugin_index(const Uuid *uuid) {
+static int16_t prv_get_plugin_index(const Uuid *uuid, PebbleTask task) {
   int16_t result = -1;
 
   pbl_mutex_lock(&s_plugin_list_mutex, PBL_FOREVER);
 
-  // Look for this service UUID
-  ListNode *found;
-  ListNode *list = &s_plugin_list;
-  found = list_find(list, prv_service_filter, (void *)uuid);
+  // Look for this service UUID, s_plugin_list is only the list head
+  ListNode *found = list_find(s_plugin_list.next, prv_service_filter, (void *)uuid);
   if (found) {
+    ((EventPluginUUIDEntry *)found)->holders |= (1 << task);
     result = ((EventPluginUUIDEntry *)found)->service_index;
     goto unlock;
   }
 
-  EventPluginUUIDEntry *entry = kernel_zalloc_check(sizeof(EventPluginUUIDEntry));
-  entry->service_index = ++s_next_service_index;
+  EventPluginUUIDEntry *entry;
+  if (s_next_service_index >= CONFIG_SERVICE_EVENT_SERVICE_MAX_PLUGIN_SERVICES) {
+    entry = (EventPluginUUIDEntry *)list_find(s_plugin_list.next, prv_is_unheld_entry, nullptr);
+    if (entry == nullptr) {
+      PBL_LOG_WRN("Too many plugin services");
+      goto unlock;
+    }
+  } else {
+    entry = kernel_zalloc_check(sizeof(EventPluginUUIDEntry));
+    entry->service_index = ++s_next_service_index;
+    list_append(&s_plugin_list, &entry->list_node);
+  }
   entry->uuid = *uuid;
-  list_append(list, &entry->list_node);
+  entry->holders = (1 << task);
   result = entry->service_index;
 
   char uuid_buffer[UUID_STRING_BUFFER_LENGTH];
@@ -356,23 +421,21 @@ unlock:
   return result;
 }
 
-//! @param uuid the UUID of the plugin service, or NULL to use uuid of the current process
+//! @param uuid the UUID of the plugin service, or NULL to use uuid of the current process.
+//!             Unprivileged callers can only use their own UUID.
 //! @return non-negative service index, or -1 if error
-DEFINE_SYSCALL(int16_t, sys_event_service_get_plugin_service_index, const Uuid *uuid) {
-  if (PRIVILEGE_WAS_ELEVATED && uuid != NULL) {
-    syscall_assert_userspace_buffer(uuid, sizeof(*uuid));
+PBL_SYSCALL(int16_t, sys_event_service_get_plugin_service_index, (IN_OPT, const Uuid *, uuid)) {
+  const Uuid *own_uuid = &sys_process_manager_get_current_process_md()->uuid;
+  if (from_user && uuid != nullptr && !uuid_equal(uuid, own_uuid)) {
+    return -1;
   }
-  if (uuid == NULL) {
-    uuid = &sys_process_manager_get_current_process_md()->uuid;
+  if (uuid == nullptr) {
+    uuid = own_uuid;
   }
-  return prv_get_plugin_index(uuid);
+  return prv_get_plugin_index(uuid, pebble_task_get_current());
 }
 
-DEFINE_SYSCALL(void, sys_event_service_cleanup, PebbleEvent *e) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(e, sizeof(PebbleEvent));
-  }
-
+PBL_SYSCALL(void, sys_event_service_cleanup, (OUT_BUF, PebbleEvent *, e, sizeof(PebbleEvent))) {
   EventServiceBuffer *esb = prv_get_esb_for_event(e);
 
   if (esb) {
@@ -383,7 +446,7 @@ DEFINE_SYSCALL(void, sys_event_service_cleanup, PebbleEvent *e) {
       event_clear_buffer(e);
     } else {
       // free the EventServiceBuffer and free the data
-      list_remove((ListNode *)esb, (ListNode **)&s_event_service_buffers, NULL);
+      list_remove((ListNode *)esb, (ListNode **)&s_event_service_buffers, nullptr);
       kernel_free(esb);
 
       event_deinit(e);

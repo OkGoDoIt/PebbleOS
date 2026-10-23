@@ -5,6 +5,7 @@
 
 #include <pbl/cron/cron.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
@@ -26,7 +27,6 @@
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
 #include <process_management/app_install_manager.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_alarms, CONFIG_SERVICE_ALARMS_LOG_LEVEL);
 
@@ -112,7 +112,8 @@ typedef struct Alarm {
 typedef bool (*AlarmOperationCallback)(AlarmId id, AlarmConfig *config, void *context);
 
 // Forward declarations
-static void prv_alarm_operation(AlarmId id, AlarmOperationCallback callback, void *context);
+static void prv_alarm_operation(AlarmId id, AlarmOperationCallback callback, void *context,
+                                bool schedule_changed);
 static bool prv_reload_alarms(SettingsFile *file);
 static bool prv_alarm_get_config(SettingsFile *file, AlarmId id, AlarmConfig *config_out);
 static void prv_alarm_set_config(SettingsFile *file, AlarmId id, const AlarmConfig *config);
@@ -133,6 +134,7 @@ static AlarmConfig s_most_recent_alarm_config;
 static bool s_most_recent_alarm_recorded;
 
 static TimerID s_snooze_timer_id = TIMER_INVALID_ID;
+static uintptr_t s_snooze_generation;
 static uint16_t s_snooze_delay_m = DEFAULT_SNOOZE_DELAY_M;
 
 //! Whether the pending snooze timer was armed by an explicit user snooze rather
@@ -262,7 +264,7 @@ static void prv_timeline_add_alarm(SettingsFile *file, const Alarm *alarm,
   prv_timeline_remove_alarm(file, alarm->id);
 
   // We allocate some larger variables on the heap to reduce stack usage
-  struct tm *local_alarm_time = kernel_malloc_check(sizeof(struct tm));
+  struct pbl_tm *local_alarm_time = kernel_malloc_check(sizeof(struct pbl_tm));
   uint8_t *settings_file_buffer = kernel_malloc_check(ALARM_ENTRY_SIZE);
   AppInstallEntry *entry = kernel_malloc_check(sizeof(AppInstallEntry));
   if (!app_install_get_entry_for_install_id(APP_ID_ALARMS, entry)) {
@@ -276,7 +278,7 @@ static void prv_timeline_add_alarm(SettingsFile *file, const Alarm *alarm,
   for (int i = 0; alarm_time <= current_time + PBL_SEC_PER_DAY * 3; i++) {
     if (last_alarm != alarm_time) {
       last_alarm = alarm_time;
-      localtime_r(&alarm_time, local_alarm_time);
+      pbl_localtime_r(&alarm_time, local_alarm_time);
       if (alarm->config.scheduled_days[local_alarm_time->tm_wday]) {
         Uuid *pinid = (Uuid *)&settings_file_buffer[num_pin_adds * UUID_SIZE];
         status_t rv = prv_add_pin(alarm->id, &alarm->config, alarm_time, pinid);
@@ -337,7 +339,8 @@ static void prv_assign_alarm(Alarm *alarm, struct pbl_cron_job *cron) {
   s_next_alarm = *alarm;
   s_next_alarm_time = pbl_cron_job_schedule(&s_next_alarm_cron);
   PBL_LOG_INFO("Scheduling alarm %u to go off at %d:%d (%ld) (smart:%d)", alarm->id,
-               alarm->config.hour, alarm->config.minute, s_next_alarm_time, alarm->config.is_smart);
+               alarm->config.hour, alarm->config.minute, (long)s_next_alarm_time,
+               alarm->config.is_smart);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -448,7 +451,7 @@ static void prv_put_alarm_event(void) {
   }
 
   AlarmConfig *config =
-      s_most_recent_alarm_id != ALARM_INVALID_ID ? &s_most_recent_alarm_config : NULL;
+      s_most_recent_alarm_id != ALARM_INVALID_ID ? &s_most_recent_alarm_config : nullptr;
   const bool is_smart = (config && config->is_smart && activity_tracking_on());
   PebbleEvent e = (PebbleEvent){
     .type = PEBBLE_ALARM_CLOCK_EVENT,
@@ -464,7 +467,7 @@ static void prv_put_alarm_event(void) {
 // ----------------------------------------------------------------------------------------------
 static bool prv_record_alarm_op(AlarmId id, AlarmConfig *config, void *context) {
   // Add a pin to the timeline (will show up in the past)
-  prv_add_pin(id, config, rtc_get_time(), NULL);
+  prv_add_pin(id, config, rtc_get_time(), nullptr);
 
   return false;
 }
@@ -472,6 +475,8 @@ static bool prv_record_alarm_op(AlarmId id, AlarmConfig *config, void *context) 
 // ----------------------------------------------------------------------------------------------
 static void prv_clear_snooze_timer(void) {
   new_timer_stop(s_snooze_timer_id);
+  // Invalidate callbacks already queued on KernelBG.
+  s_snooze_generation++;
   s_user_snoozed = false;
 }
 
@@ -480,7 +485,7 @@ static void prv_clear_snooze_timer(void) {
 static void prv_process_most_recent_alarm(void) {
   // Only processes the most recent alarm since it modifies the alarm config
   AlarmConfig *config =
-      s_most_recent_alarm_id != ALARM_INVALID_ID ? &s_most_recent_alarm_config : NULL;
+      s_most_recent_alarm_id != ALARM_INVALID_ID ? &s_most_recent_alarm_config : nullptr;
   const bool user_snoozed = s_user_snoozed;
   s_user_snoozed = false;
   bool trigger = true;
@@ -503,20 +508,22 @@ static void prv_process_most_recent_alarm(void) {
     if (!s_most_recent_alarm_recorded) {
       s_most_recent_alarm_recorded = true;
       // Read from flash since the in-memory cache can be modified
-      prv_alarm_operation(s_most_recent_alarm_id, prv_record_alarm_op, NULL);
+      prv_alarm_operation(s_most_recent_alarm_id, prv_record_alarm_op, nullptr, false);
     }
   }
 }
 
 // ----------------------------------------------------------------------------------------------
-static void prv_snooze_kernel_bg_callback(void *unused) {
-  prv_process_most_recent_alarm();
+static void prv_snooze_kernel_bg_callback(void *generation) {
+  if ((uintptr_t)generation == s_snooze_generation) {
+    prv_process_most_recent_alarm();
+  }
 }
 
 // ----------------------------------------------------------------------------------------------
-static void prv_snooze_timer_callback(void *unused) {
+static void prv_snooze_timer_callback(void *generation) {
   PBL_LOG_INFO("Snooze timeout");
-  system_task_add_callback(prv_snooze_kernel_bg_callback, NULL);
+  system_task_add_callback(prv_snooze_kernel_bg_callback, generation);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -652,9 +659,9 @@ static AlarmId prv_get_next_free_alarm_id(SettingsFile *file) {
 // ----------------------------------------------------------------------------------------------
 static int prv_get_day_for_just_once_alarm(int hour, int minute) {
   // Figure out what day the alarm should happen
-  struct tm local_time;
+  struct pbl_tm local_time;
   const time_t current_time = rtc_get_time();
-  localtime_r(&current_time, &local_time);
+  pbl_localtime_r(&current_time, &local_time);
 
   if (hour < local_time.tm_hour || (hour == local_time.tm_hour && minute <= local_time.tm_min)) {
     // The time is before or equal to the current time. Schedule the alarm for tomorrow
@@ -749,7 +756,8 @@ AlarmId alarm_create(const AlarmInfo *info) {
 // ----------------------------------------------------------------------------------------------
 typedef bool (*AlarmOperationCallback)(AlarmId id, AlarmConfig *config, void *context);
 
-static void prv_alarm_operation(AlarmId id, AlarmOperationCallback callback, void *context) {
+static void prv_alarm_operation(AlarmId id, AlarmOperationCallback callback, void *context,
+                                bool schedule_changed) {
   SettingsFile file;
   if (!prv_file_open_and_lock(&file)) {
     return;
@@ -763,6 +771,13 @@ static void prv_alarm_operation(AlarmId id, AlarmOperationCallback callback, voi
 
   if (!callback(id, &config, context)) {
     goto cleanup;
+  }
+
+  if (schedule_changed && id == s_most_recent_alarm_id) {
+    PBL_LOG_DBG("Canceling snooze timer because alarm was edited");
+    prv_clear_snooze_timer();
+    s_most_recent_alarm_id = ALARM_INVALID_ID;
+    s_smart_snooze_counter = 0;
   }
 
   prv_enable_alarm_config(&config, true /* enabled */);
@@ -791,7 +806,7 @@ static bool prv_set_alarm_time_op(AlarmId id, AlarmConfig *config, void *context
 
 void alarm_set_time(AlarmId id, int hour, int minute) {
   prv_assert_alarm_params(hour, minute);
-  prv_alarm_operation(id, prv_set_alarm_time_op, &(SetAlarmTimeContext){hour, minute});
+  prv_alarm_operation(id, prv_set_alarm_time_op, &(SetAlarmTimeContext){hour, minute}, true);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -801,7 +816,7 @@ static bool prv_set_alarm_smart_op(AlarmId id, AlarmConfig *config, void *contex
 }
 
 void alarm_set_smart(AlarmId id, bool smart) {
-  prv_alarm_operation(id, prv_set_alarm_smart_op, (void *)(uintptr_t)smart);
+  prv_alarm_operation(id, prv_set_alarm_smart_op, (void *)(uintptr_t)smart, true);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -811,7 +826,7 @@ static bool prv_set_sound_enabled_op(AlarmId id, AlarmConfig *config, void *cont
 }
 
 void alarm_set_sound_enabled(AlarmId id, bool enabled) {
-  prv_alarm_operation(id, prv_set_sound_enabled_op, (void *)(uintptr_t)enabled);
+  prv_alarm_operation(id, prv_set_sound_enabled_op, (void *)(uintptr_t)enabled, false);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -821,7 +836,7 @@ static bool prv_set_vibrate_enabled_op(AlarmId id, AlarmConfig *config, void *co
 }
 
 void alarm_set_vibrate_enabled(AlarmId id, bool enabled) {
-  prv_alarm_operation(id, prv_set_vibrate_enabled_op, (void *)(uintptr_t)enabled);
+  prv_alarm_operation(id, prv_set_vibrate_enabled_op, (void *)(uintptr_t)enabled, false);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -831,7 +846,7 @@ static bool prv_set_tone_op(AlarmId id, AlarmConfig *config, void *context) {
 }
 
 void alarm_set_tone(AlarmId id, AlarmTone tone) {
-  prv_alarm_operation(id, prv_set_tone_op, (void *)(uintptr_t)tone);
+  prv_alarm_operation(id, prv_set_tone_op, (void *)(uintptr_t)tone, false);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -866,7 +881,7 @@ static bool prv_set_alarm_kind_op(AlarmId id, AlarmConfig *config, void *context
 }
 
 void alarm_set_kind(AlarmId id, AlarmKind kind) {
-  prv_alarm_operation(id, prv_set_alarm_kind_op, (void *)(uintptr_t)kind);
+  prv_alarm_operation(id, prv_set_alarm_kind_op, (void *)(uintptr_t)kind, true);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -878,7 +893,7 @@ static bool prv_set_alarm_custom_op(AlarmId id, AlarmConfig *config, void *conte
 }
 
 void alarm_set_custom(AlarmId id, const bool scheduled_days[PBL_DAY_PER_WEEK]) {
-  prv_alarm_operation(id, prv_set_alarm_custom_op, (void *)scheduled_days);
+  prv_alarm_operation(id, prv_set_alarm_custom_op, (void *)scheduled_days, true);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -1105,7 +1120,7 @@ bool alarm_get_info(AlarmId id, AlarmInfo *info_out) {
     .sound_enabled = config.sound_enabled,
     .vibrate_enabled = !config.vibrate_disabled,
     .tone = config.tone,
-    .scheduled_days = NULL,
+    .scheduled_days = nullptr,
   };
 
 cleanup:
@@ -1115,12 +1130,12 @@ cleanup:
 
 static void prv_snooze_alarm(int snooze_delay_s, bool user_initiated) {
   prv_clear_snooze_timer();
-  // Set before arming the timer: a stale snooze callback queued on KernelBG cannot be cancelled by
-  // new_timer_stop(), and would consume the flag if it ran while the timer was armed without it.
+  // Set the snooze kind before arming the timer.
   s_user_snoozed = user_initiated;
   PBL_LOG_INFO("Snoozing for %d minutes", snooze_delay_s / PBL_SEC_PER_MIN);
-  bool success = new_timer_start(s_snooze_timer_id, snooze_delay_s * PBL_MSEC_PER_SEC,
-                                 prv_snooze_timer_callback, NULL, 0 /* flags*/);
+  bool success =
+      new_timer_start(s_snooze_timer_id, snooze_delay_s * PBL_MSEC_PER_SEC,
+                      prv_snooze_timer_callback, (void *)s_snooze_generation, 0 /* flags*/);
   PBL_ASSERTN(success);
 }
 
@@ -1238,7 +1253,7 @@ void alarm_handle_clock_change(void) {
   }
 
   // Deferred until after the settings file is closed: prv_alarm_operation() opens it itself, and
-  // opening it twice croaks.
+  // opening it twice panics.
   AlarmId record_alarm_id = ALARM_INVALID_ID;
 
   // If there's an active alarm (e.g., currently snoozing), we need to handle it carefully.
@@ -1259,8 +1274,8 @@ void alarm_handle_clock_change(void) {
         // Also check if current time is within the smart alarm window past the deadline
         // This handles cases where counter < 28 but we're legitimately past the alarm time
         time_t now = rtc_get_time();
-        struct tm now_tm;
-        localtime_r(&now, &now_tm);
+        struct pbl_tm now_tm;
+        pbl_localtime_r(&now, &now_tm);
         int current_minutes = now_tm.tm_hour * 60 + now_tm.tm_min;
         int alarm_minutes =
             s_most_recent_alarm_config.hour * 60 + s_most_recent_alarm_config.minute;
@@ -1306,7 +1321,7 @@ void alarm_handle_clock_change(void) {
   prv_file_close_and_unlock(&file);
 
   if (record_alarm_id != ALARM_INVALID_ID) {
-    prv_alarm_operation(record_alarm_id, prv_record_alarm_op, NULL);
+    prv_alarm_operation(record_alarm_id, prv_record_alarm_op, nullptr, false);
   }
 }
 
@@ -1323,7 +1338,7 @@ static void prv_language_change_kernel_bg_callback(void *unused) {
 static EventServiceInfo s_language_change_event_info;
 
 static void prv_language_change_event_handler(PebbleEvent *event, void *context) {
-  system_task_add_callback(prv_language_change_kernel_bg_callback, NULL);
+  system_task_add_callback(prv_language_change_kernel_bg_callback, nullptr);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -1392,7 +1407,7 @@ void alarm_service_enable_alarms(bool enable) {
 
 // ----------------------------------------------------------------------------------------------
 const char *alarm_get_string_for_kind(AlarmKind kind, bool all_caps) {
-  const char *alarm_day_text = NULL;
+  const char *alarm_day_text = nullptr;
   switch (kind) {
     case ALARM_KIND_EVERYDAY:
       alarm_day_text = all_caps ?
@@ -1497,5 +1512,5 @@ static int prv_cmd_alarm(const struct pbl_shell *sh, size_t argc, char **argv) {
   return 0;
 }
 
-PBL_SHELL_CMD_REGISTER(alarm, NULL, "Fire an alarm event", prv_cmd_alarm);
+PBL_SHELL_CMD_REGISTER(alarm, nullptr, "Fire an alarm event", prv_cmd_alarm);
 #endif

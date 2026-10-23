@@ -27,6 +27,14 @@ config NUM_IRQS
 	  Number of SoC interrupt lines, i.e. vector table entries past the
 	  core exceptions. Defaulted per SoC in soc/*/Kconfig.defconfig.
 
+config NUM_IRQ_PRIO_BITS
+	int
+	depends on CPU_CORTEX_M
+	range 1 8
+	help
+	  Number of priority bits implemented by the interrupt controller.
+	  Defaulted per SoC in soc/*/Kconfig.defconfig.
+
 config KERNEL_NUM_PRIORITIES
 	int "Number of thread priorities"
 	default 5
@@ -50,6 +58,22 @@ config KERNEL_STACK_ALIGN
 config KERNEL_MUTEX_LOCK_LR
 	bool "Record the caller of the outermost mutex lock"
 	default y
+
+config ARCH_HAS_USERSPACE
+	bool
+	help
+	  The architecture can run threads unprivileged and take syscalls
+	  from them.
+
+config USERSPACE
+	bool "Unprivileged threads and syscalls"
+	default y
+	depends on ARCH_HAS_USERSPACE
+	help
+	  Let threads run unprivileged, confined by the MPU, and enter
+	  privileged code only through syscalls, which check every argument
+	  they are handed. Without it every thread runs privileged and
+	  syscalls are plain calls.
 
 config RAMFUNC
 	bool

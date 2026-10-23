@@ -27,30 +27,6 @@
 
 // Stub Includes
 ////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_app_manager.h>
-#include <stubs_app_state.h>
-#include <stubs_bootbits.h>
-#include <stubs_event_service_client.h>
-#include <stubs_events.h>
-#include <stubs_heap.h>
-#include <stubs_hexdump.h>
-#include <stubs_i18n.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_persist.h>
-#include <stubs_process_manager.h>
-#include <stubs_quick_launch.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_serial.h>
-#include <stubs_sleep.h>
-#include <stubs_task_wdt.h>
-#include <stubs_watchface.h>
-#include <stubs_worker_manager.h>
 
 // Fake Includes
 ////////////////////////////////////
@@ -209,7 +185,7 @@ static const AppDBEntry bg_counter = {
         .major = 5,
         .minor = 13,
       },
-  .app_face_bg_color = {0},
+  .app_face_bg_color = {},
   .template_id = 0,
   .icon_resource_id = 0,
 };
@@ -232,7 +208,7 @@ static const AppDBEntry menu_layer = {
         .major = 5,
         .minor = 13,
       },
-  .app_face_bg_color = {0},
+  .app_face_bg_color = {},
   .template_id = 0,
   .icon_resource_id = 0,
 };
@@ -418,42 +394,42 @@ void test_app_install_manager__is_from_app_db(void) {
 
 void test_app_install_manager__get_md(void) {
   const PebbleProcessMd *tictoc_md = app_install_get_md(tictoc_id, false);
-  cl_assert(tictoc_md != NULL);
+  cl_assert(tictoc_md != nullptr);
   cl_assert_equal_b(false, tictoc_md->has_worker);
   cl_assert_equal_i(ProcessTypeWatchface, tictoc_md->process_type);
   cl_assert_equal_i(ProcessStorageBuiltin, tictoc_md->process_storage);
   app_install_release_md(tictoc_md);
 
   const PebbleProcessMd *music_md = app_install_get_md(music_id, false);
-  cl_assert(music_md != NULL);
+  cl_assert(music_md != nullptr);
   cl_assert_equal_b(false, music_md->has_worker);
   cl_assert_equal_i(ProcessTypeApp, music_md->process_type);
   cl_assert_equal_i(ProcessStorageBuiltin, music_md->process_storage);
   app_install_release_md(music_md);
 
   const PebbleProcessMd *sports_md = app_install_get_md(sports_id, false);
-  cl_assert(sports_md != NULL);
+  cl_assert(sports_md != nullptr);
   cl_assert_equal_b(false, sports_md->has_worker);
   cl_assert_equal_i(ProcessTypeApp, sports_md->process_type);
   cl_assert_equal_i(ProcessStorageBuiltin, sports_md->process_storage);
   app_install_release_md(sports_md);
 
   const PebbleProcessMd *bg_counter_md = app_install_get_md(bg_counter_id, false);
-  cl_assert(bg_counter_md != NULL);
+  cl_assert(bg_counter_md != nullptr);
   cl_assert_equal_b(true, bg_counter_md->has_worker);
   cl_assert_equal_i(ProcessTypeApp, bg_counter_md->process_type);
   cl_assert_equal_i(ProcessStorageFlash, bg_counter_md->process_storage);
   app_install_release_md(bg_counter_md);
 
   const PebbleProcessMd *bg_counter_md_worker = app_install_get_md(bg_counter_id, true);
-  cl_assert(bg_counter_md_worker != NULL);
+  cl_assert(bg_counter_md_worker != nullptr);
   cl_assert_equal_b(true, bg_counter_md_worker->has_worker);
   cl_assert_equal_i(ProcessTypeWorker, bg_counter_md_worker->process_type);
   cl_assert_equal_i(ProcessStorageFlash, bg_counter_md_worker->process_storage);
   app_install_release_md(bg_counter_md_worker);
 
   const PebbleProcessMd *menu_layer_md = app_install_get_md(menu_layer_id, false);
-  cl_assert(menu_layer_md != NULL);
+  cl_assert(menu_layer_md != nullptr);
   cl_assert_equal_b(false, menu_layer_md->has_worker);
   cl_assert_equal_i(ProcessTypeApp, menu_layer_md->process_type);
   cl_assert_equal_i(ProcessStorageFlash, menu_layer_md->process_storage);

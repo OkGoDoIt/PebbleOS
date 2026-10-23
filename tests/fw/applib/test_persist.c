@@ -19,19 +19,6 @@
 ////////////////////////////////////
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
-#include <stubs_analytics.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_mutex.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
-#include <stubs_print.h>
-#include <stubs_rand_ptr.h>
-#include <stubs_serial.h>
-#include <stubs_sleep.h>
-#include <stubs_system_reset.h>
-#include <stubs_task_wdt.h>
 
 static PebbleProcessMd __pbl_app_info;
 
@@ -84,8 +71,8 @@ const char lipsum[] =
     "nisi orci viverra felis, vitae luctus massa dolor sit amet dolor. Cras "
     "mattis velit vitae pretium pulvinar. Pellentesque auctor, turpis at cras "
     "amet.";
-_Static_assert(sizeof(lipsum) > PERSIST_STRING_MAX_LENGTH,
-               "lipsum string is not long enough for persist tests");
+static_assert(sizeof(lipsum) > PERSIST_STRING_MAX_LENGTH,
+              "lipsum string is not long enough for persist tests");
 
 void test_persist__initialize(void) {
   fake_spi_flash_init(0, 0x1000000);

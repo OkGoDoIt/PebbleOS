@@ -5,6 +5,7 @@
 
 #include "scroll_layer_private.h"
 
+#include <pbl/kernel/assert.h>
 #include <pbl/util/math.h>
 
 #include <applib/applib_malloc.auto.h>
@@ -14,7 +15,6 @@
 #include <applib/ui/shadows.h>
 #include <applib/ui/window.h>
 #include <process_management/app_manager.h>
-#include <system/passert.h>
 
 #ifdef CONFIG_TOUCH
 #include <pbl/drivers/rtc.h>
@@ -119,8 +119,8 @@ static void scroll_layer_property_changed_proc(Layer *layer) {
 // A ScrollLayer embedded in a composite that drives its own scrolling (e.g. MenuLayer) deregisters
 // via scroll_layer_touch_nav_deregister() so the same layer never has two gesture drivers.
 
-_Static_assert(sizeof(((ScrollLayer *)0)->touch_nav_node) == sizeof(TouchNavWidgetNode),
-               "ScrollLayer touch_nav_node must match TouchNavWidgetNode layout");
+static_assert(sizeof(((ScrollLayer *)0)->touch_nav_node) == sizeof(TouchNavWidgetNode),
+              "ScrollLayer touch_nav_node must match TouchNavWidgetNode layout");
 
 static bool prv_is_app_task(void) {
   return pebble_task_get_current() == PebbleTask_App;
@@ -306,14 +306,14 @@ static void prv_scroll_ops_swipe(void *w, SwipeDirection dir) {
 // can_start is NULL: a ScrollLayer's content is always valid, so a pan may always start. tap is
 // NULL: a ScrollLayer has no tap action, so a tap on it is dropped (never a bridge SELECT).
 static const TouchNavWidgetOps s_scroll_touch_nav_ops = {
-  .can_start = NULL,
+  .can_start = nullptr,
   .touchdown = prv_scroll_ops_touchdown,
   .pan_started = prv_scroll_ops_pan_started,
   .get_base_offset = prv_scroll_ops_get_base_offset,
   .pan_update = prv_scroll_ops_pan_update,
   .pan_snap = prv_scroll_ops_pan_snap,
   .pan_cancel = prv_scroll_ops_pan_cancel,
-  .tap = NULL,
+  .tap = nullptr,
   .swipe = prv_scroll_ops_swipe,
 };
 
@@ -392,7 +392,7 @@ void scroll_layer_deinit(ScrollLayer *scroll_layer) {
 }
 
 void scroll_layer_destroy(ScrollLayer *scroll_layer) {
-  if (scroll_layer == NULL) {
+  if (scroll_layer == nullptr) {
     return;
   }
   scroll_layer_deinit(scroll_layer);
@@ -493,13 +493,13 @@ static void prv_set_content_offset(ScrollLayer *scroll_layer, GPoint offset, boo
   if (animated) {
     if (animation) {
       property_animation_init(scroll_layer->animation, &s_content_offset_animation_impl,
-                              scroll_layer, NULL, &offset);
+                              scroll_layer, nullptr, &offset);
       if (was_running && !scroll_layer_get_paging(scroll_layer)) {
         animation_set_curve(animation, AnimationCurveEaseOut);
       }
     } else {
-      scroll_layer->animation =
-          property_animation_create(&s_content_offset_animation_impl, scroll_layer, NULL, &offset);
+      scroll_layer->animation = property_animation_create(&s_content_offset_animation_impl,
+                                                          scroll_layer, nullptr, &offset);
       animation = property_animation_get_animation(scroll_layer->animation);
       if (scroll_layer_get_paging(scroll_layer)) {
         animation_set_custom_interpolation(animation, interpolate_moook);
@@ -608,10 +608,10 @@ void scroll_layer_touch_overscroll_spring_back(ScrollLayer *scroll_layer, int16_
       animation_unschedule(animation);
     }
     property_animation_init(scroll_layer->animation, &s_overscroll_offset_animation_impl,
-                            scroll_layer, NULL, (void *)&target);
+                            scroll_layer, nullptr, (void *)&target);
   } else {
     scroll_layer->animation = property_animation_create(&s_overscroll_offset_animation_impl,
-                                                        scroll_layer, NULL, (void *)&target);
+                                                        scroll_layer, nullptr, (void *)&target);
     if (!scroll_layer->animation) {
       // No animation available: land on the edge instantly rather than staying out of bounds.
       prv_set_content_offset_overscrolled_internal(scroll_layer, target);
@@ -650,10 +650,10 @@ bool scroll_layer_touch_fling_start(ScrollLayer *scroll_layer, int16_t target_y,
       animation_unschedule(animation); // fires a previous coast's stopped handler, if any
     }
     property_animation_init(scroll_layer->animation, &s_content_offset_animation_impl, scroll_layer,
-                            NULL, (void *)&target);
+                            nullptr, (void *)&target);
   } else {
     scroll_layer->animation = property_animation_create(&s_content_offset_animation_impl,
-                                                        scroll_layer, NULL, (void *)&target);
+                                                        scroll_layer, nullptr, (void *)&target);
     if (!scroll_layer->animation) {
       return false;
     }
@@ -681,7 +681,7 @@ void scroll_layer_touch_fling_cleanup(ScrollLayer *scroll_layer) {
   }
   animation_set_duration(animation, ANIMATION_DEFAULT_DURATION_MS);
   animation_set_curve(animation, AnimationCurveDefault);
-  animation_set_handlers(animation, (AnimationHandlers){0}, NULL);
+  animation_set_handlers(animation, (AnimationHandlers){}, nullptr);
 }
 #endif
 
@@ -742,7 +742,8 @@ void scroll_layer_scroll_down_click_handler(ClickRecognizerRef recognizer, void 
   (void)recognizer;
 }
 
-static void scroll_layer_click_config_provider(ScrollLayer *scroll_layer) {
+static void scroll_layer_click_config_provider(void *context) {
+  ScrollLayer *scroll_layer = context;
   // Config UP / DOWN button behavior:
   window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, scroll_layer_scroll_up_click_handler);
   window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100,
@@ -757,8 +758,8 @@ static void scroll_layer_click_config_provider(ScrollLayer *scroll_layer) {
 }
 
 void scroll_layer_set_click_config_onto_window(ScrollLayer *scroll_layer, struct Window *window) {
-  window_set_click_config_provider_with_context(
-      window, (ClickConfigProvider)scroll_layer_click_config_provider, scroll_layer);
+  window_set_click_config_provider_with_context(window, scroll_layer_click_config_provider,
+                                                scroll_layer);
 }
 
 void scroll_layer_set_callbacks(ScrollLayer *scroll_layer, ScrollLayerCallbacks callbacks) {

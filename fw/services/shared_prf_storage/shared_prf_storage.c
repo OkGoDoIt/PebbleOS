@@ -4,6 +4,7 @@
 #include <pbl/btutil/sm_util.h>
 #include <pbl/crc/crc.h>
 #include <pbl/drivers/flash.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/shared_prf_storage/shared_prf_storage.h>
@@ -11,7 +12,6 @@
 
 #include <flash_region/flash_region.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_shared_prf_storage, CONFIG_SERVICE_SHARED_PRF_STORAGE_LOG_LEVEL);
 
@@ -169,7 +169,7 @@ static void prv_invalidate_current_page(void) {
     //
     // We've run out of blank pages. Delete the entire region and roll around to the front.
     // This will take some time.
-    prv_erase_region_and_save(NULL);
+    prv_erase_region_and_save(nullptr);
     s_valid_page_idx = 0;
   }
 }
@@ -305,7 +305,7 @@ void shared_prf_storage_init(void) {
 
     // Keep a write offset, this won't work when we try to roll over to the other 25% of the sectors
     if (s_valid_page_idx == SPRF_PAGE_IDX_INVALID) {
-      prv_erase_region_and_save(NULL);
+      prv_erase_region_and_save(nullptr);
     } else if (s_valid_page_idx > (SPRF_MAX_NUM_PAGES_MULT(SPRF_NUM_PAGES))) {
       prv_erase_region_and_save(&data);
     }
@@ -665,29 +665,29 @@ bool shared_prf_storage_get_bt_classic_pairing_data(struct pbl_bt_addr *addr_out
                                                     char *device_name_out,
                                                     struct pbl_bt_sm_key *link_key_out,
                                                     uint8_t *platform_bits) {
-  WTF;
+  pbl_panic();
 }
 
 void shared_prf_storage_store_bt_classic_pairing_data(struct pbl_bt_addr *addr,
                                                       const char *device_name,
                                                       struct pbl_bt_sm_key *link_key,
                                                       uint8_t platform_bits) {
-  WTF;
+  pbl_panic();
 }
 
 void shared_prf_storage_store_platform_bits(uint8_t platform_bits) {
-  WTF;
+  pbl_panic();
 }
 
 void shared_prf_storage_erase_bt_classic_pairing_data(void) {
-  WTF;
+  pbl_panic();
 }
 
 void shared_prf_store_pairing_data(struct pbl_bt_sm_pairing_info *pairing_info,
                                    const char *device_name_ble, struct pbl_bt_addr *addr,
                                    const char *device_name_classic, struct pbl_bt_sm_key *link_key,
                                    uint8_t platform_bits) {
-  WTF;
+  pbl_panic();
 }
 
 //!

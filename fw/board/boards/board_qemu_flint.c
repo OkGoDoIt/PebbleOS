@@ -1,6 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/drivers/ambient/qemu.h>
+#include <pbl/drivers/backlight/qemu.h>
+#include <pbl/drivers/imu/qemu.h>
+#include <pbl/drivers/temperature/qemu.h>
+#include <pbl/drivers/vibe/qemu.h>
 #include <pbl/kernel/irq.h>
 
 #include <board/board.h>
@@ -69,12 +74,12 @@ const BoardConfig BOARD_CONFIG = {
 const BoardConfigButton BOARD_CONFIG_BUTTON = {
   .buttons =
       {
-        [BUTTON_ID_BACK] = {"Back", NULL, 0, GPIO_PuPd_NOPULL, true},
-        [BUTTON_ID_UP] = {"Up", NULL, 1, GPIO_PuPd_UP, false},
-        [BUTTON_ID_SELECT] = {"Select", NULL, 2, GPIO_PuPd_UP, false},
-        [BUTTON_ID_DOWN] = {"Down", NULL, 3, GPIO_PuPd_UP, false},
+        [BUTTON_ID_BACK] = {"Back", nullptr, 0, GPIO_PuPd_NOPULL, true, PBL_INPUT_KEY_BACK},
+        [BUTTON_ID_UP] = {"Up", nullptr, 1, GPIO_PuPd_UP, false, PBL_INPUT_KEY_UP},
+        [BUTTON_ID_SELECT] = {"Select", nullptr, 2, GPIO_PuPd_UP, false, PBL_INPUT_KEY_SELECT},
+        [BUTTON_ID_DOWN] = {"Down", nullptr, 3, GPIO_PuPd_UP, false, PBL_INPUT_KEY_DOWN},
       },
-  .timer = NULL,
+  .timer = nullptr,
   .timer_irqn = TIMER0_IRQn,
 };
 
@@ -107,3 +112,13 @@ void board_early_init(void) {
 
 void board_init(void) {
 }
+
+const struct pbl_accel *const ACCEL = QEMU_ACCEL;
+
+const struct pbl_als *const ALS = QEMU_ALS;
+
+const struct pbl_backlight *const BACKLIGHT = QEMU_BACKLIGHT;
+
+const struct pbl_vibe *const VIBE = QEMU_VIBE;
+
+const struct pbl_temp *const DIE_TEMP = QEMU_TEMP;

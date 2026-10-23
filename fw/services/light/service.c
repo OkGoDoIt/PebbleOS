@@ -1,25 +1,29 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/als.h>
 #include <pbl/drivers/backlight.h>
 #include <pbl/services/light.h>
+#include <pbl/services/light_level.h>
 
 #include <board/board.h>
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
 #include <pbl/drivers/backlight.h>
 #endif
+#include <pbl/cron/cron.h>
 #include <pbl/drivers/rtc.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/util/math.h>
+#include <pbl/util/units.h>
 
 #include <kernel/events.h>
 #include <kernel/low_power.h>
+#include <kernel/pebble_tasks.h>
 #include <services/light/als_screen_compensation.h>
-#include <syscall/syscall_internal.h>
 
 PBL_LOG_MODULE_DEFINE(service_light, CONFIG_SERVICE_LIGHT_LOG_LEVEL);
 
@@ -72,6 +76,7 @@ static int s_num_buttons_down;
 
 //! The current app is forcing the light on and off, don't muck with it.
 static bool s_user_controlled_state;
+static PebbleTask s_user_controlled_task;
 
 //! True while a touch is holding the backlight on. Lets app teardown release a
 //! touch whose liftoff was never delivered. KernelMain-only.
@@ -89,9 +94,12 @@ static bool s_app_rgb_override_valid;
 
 //! Count of active modal preempts (notifications, etc.) that temporarily
 //! mask any app RGB override. The app's override stays stored; only while
-//! this refcount is non-zero is the LED driven to the default color.
+//! this refcount is non-zero is the LED driven to the system color.
 //! When the refcount returns to zero, the override (if any) is re-applied.
 static uint8_t s_color_preempt_refcount;
+
+static struct pbl_cron_job s_sunrise_job;
+static struct pbl_cron_job s_sunset_job;
 #endif
 
 //! For temporary disabling backlight (ie: low power mode)
@@ -121,13 +129,18 @@ static uint32_t s_total_on_time_ms;            // Total backlight on time tracke
 //! (prv_light_allowed → prv_backlight_get_intensity, plus a button release
 //! that follows the press within the TTL) skip the ~200 ms I2C poll.
 static uint32_t s_als_cached_level;
+//! Same sample without screen compensation; see prv_get_als_gate_level().
+static uint32_t s_als_cached_gate_level;
 static RtcTicks s_als_cached_ticks;        // 0 = invalid
 #define ALS_CACHE_TTL_TICKS (RTC_TICKS_HZ) // 1 second
+
+//! Ambient light level below which the backlight turns on, in lux
+static uint32_t s_dark_threshold;
 
 //! Event-gated continuous ALS:
 //!
 //! Wake-related entry points call prv_als_prime_for_interaction(), which (if
-//! not already primed) takes a single ambient_light_prime() refcount and
+//! not already primed) takes a single pbl_als_prime() refcount and
 //! starts a release timer for ALS_PRIME_HOLDOFF_MS. Each subsequent wake-y
 //! call rearms the timer. When it eventually fires, we drop the prime so the
 //! sensor goes back to idle.
@@ -182,7 +195,7 @@ static void prv_als_prime_release_callback(void *data) {
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   if (s_als_primed) {
     s_als_primed = false;
-    ambient_light_release();
+    pbl_als_release(ALS);
   }
   pbl_mutex_unlock(&s_mutex);
 }
@@ -196,42 +209,88 @@ static void prv_als_prime_for_interaction(void) {
       s_als_cached_ticks = 0;
     }
     s_als_primed = true;
-    ambient_light_prime();
+    pbl_als_prime(ALS);
   }
   new_timer_start(s_als_prime_release_timer_id, ALS_PRIME_HOLDOFF_MS,
-                  prv_als_prime_release_callback, NULL, 0 /* flags */);
+                  prv_als_prime_release_callback, nullptr, 0 /* flags */);
 }
 
-static uint32_t prv_get_als_level(void) {
+static void prv_als_sample(void) {
   RtcTicks now = rtc_get_ticks();
   const bool cache_valid =
       s_als_cached_ticks != 0 &&
       (s_current_brightness > 0 || (now - s_als_cached_ticks) < ALS_CACHE_TTL_TICKS);
   if (cache_valid) {
-    return s_als_cached_level;
+    return;
   }
-  uint32_t level = ambient_light_get_light_level();
+  uint32_t raw = 0U;
+
+  (void)pbl_als_read(ALS, &raw);
+  uint32_t level = raw;
 #if defined(CONFIG_ALS_SCREEN_COMPENSATION) && !defined(CONFIG_RECOVERY_FW)
   // The ALS sits under the display; correct the reading for the transmittance
   // of the pixels in front of the sensor. Done once at ingest so every consumer
-  // sees a screen-corrected value, and the cache below throttles the
-  // framebuffer scan to at most once per TTL.
-  level = als_compensation_correct(level);
+  // but the wake gate sees a screen-corrected value, and the cache below
+  // throttles the framebuffer scan to at most once per TTL.
+  level = als_compensation_correct(raw);
 #endif
   // Convert to lux (identity on boards without coefficients) so thresholds
   // and the backlight ramp operate in device-independent units.
-  level = ambient_light_level_to_lux(level);
-  s_als_cached_level = level;
+  s_als_cached_level = pbl_als_to_lux(ALS, level);
+  s_als_cached_gate_level = pbl_als_to_lux(ALS, raw);
   s_als_cached_ticks = now;
+}
+
+static uint32_t prv_get_als_level(void) {
+  prv_als_sample();
   return s_als_cached_level;
+}
+
+//! Level the wake gate compares against the dark threshold. Compensation only
+//! ever raises a reading, and an over-estimate refuses a wake the user needs,
+//! so the gate uses the uncompensated value: dark screen content can at worst
+//! let the backlight on in a lit room, never keep it off in a dim one.
+static uint32_t prv_get_als_gate_level(void) {
+  prv_als_sample();
+  return s_als_cached_gate_level;
 }
 
 uint32_t light_get_ambient_lux(void) {
   return prv_get_als_level();
 }
 
+uint32_t light_get_ambient_gate_lux(void) {
+  return prv_get_als_gate_level();
+}
+
+uint32_t light_get_dark_threshold(void) {
+  return s_dark_threshold;
+}
+
+void light_set_dark_threshold(uint32_t threshold) {
+  s_dark_threshold = threshold;
+}
+
+AmbientLightLevel light_level_to_enum(uint32_t lux) {
+  const uint32_t delta = BOARD_CONFIG.ambient_k_delta_threshold;
+
+  if (!pbl_device_is_ready(&ALS->dev)) {
+    return AmbientLightLevelUnknown;
+  }
+
+  if (lux < (s_dark_threshold - delta)) {
+    return AmbientLightLevelVeryDark;
+  } else if (lux < s_dark_threshold) {
+    return AmbientLightLevelDark;
+  } else if (lux < (s_dark_threshold + delta)) {
+    return AmbientLightLevelLight;
+  } else {
+    return AmbientLightLevelVeryLight;
+  }
+}
+
 static bool prv_als_is_light(void) {
-  return prv_get_als_level() > ambient_light_get_dark_threshold();
+  return prv_get_als_gate_level() > s_dark_threshold;
 }
 
 static void light_timer_callback(void *data) {
@@ -301,13 +360,80 @@ static void prv_update_intensity_analytics(uint8_t new_intensity_pct) {
 }
 
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
-//! LED color to drive when no app has set an override. Backed by the
-//! user's stored backlight-color preference, defaulting to BACKLIGHT_COLOR_WARM_WHITE.
+static bool prv_day_night_schedule_valid(void) {
+  const uint16_t sunrise = backlight_get_sunrise_minute();
+  const uint16_t sunset = backlight_get_sunset_minute();
+
+  return backlight_day_night_color_is_enabled() && sunrise < PBL_MIN_PER_DAY &&
+         sunset < PBL_MIN_PER_DAY && sunrise != sunset;
+}
+
+static bool prv_is_daytime(const struct pbl_tm *now) {
+  const uint16_t minute = now->tm_hour * PBL_MIN_PER_HOUR + now->tm_min;
+  const uint16_t sunrise = backlight_get_sunrise_minute();
+  const uint16_t sunset = backlight_get_sunset_minute();
+
+  if (sunrise < sunset) {
+    return minute >= sunrise && minute < sunset;
+  }
+  return minute >= sunrise || minute < sunset;
+}
+
+//! LED color to drive when no app has set an override: the user's day color,
+//! or the night color while the day/night schedule says so.
+static uint32_t prv_get_system_color(void) {
+  if (!prv_day_night_schedule_valid()) {
+    return backlight_get_default_color();
+  }
+
+  struct pbl_tm now;
+  rtc_get_time_tm(&now);
+  return prv_is_daytime(&now) ? backlight_get_default_color() : backlight_get_night_color();
+}
+
 static void prv_apply_rgb_color(void) {
   const bool preempted = (s_color_preempt_refcount > 0);
   const uint32_t color =
-      (preempted || !s_app_rgb_override_valid) ? backlight_get_default_color() : s_app_rgb_override;
-  backlight_set_color(color);
+      (preempted || !s_app_rgb_override_valid) ? prv_get_system_color() : s_app_rgb_override;
+  (void)pbl_backlight_set_color(BACKLIGHT, color);
+}
+
+static void prv_apply_system_color_locked(void) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  if (s_light_state != LIGHT_STATE_OFF) {
+    prv_apply_rgb_color();
+  }
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_day_night_cron_callback(struct pbl_cron_job *job, void *data) {
+  prv_apply_system_color_locked();
+  pbl_cron_job_schedule(job);
+}
+
+static void prv_schedule_daily_job(struct pbl_cron_job *job, uint16_t minute_of_day) {
+  *job = (struct pbl_cron_job){
+    .cb = prv_day_night_cron_callback,
+    .minute = minute_of_day % PBL_MIN_PER_HOUR,
+    .hour = minute_of_day / PBL_MIN_PER_HOUR,
+    .mday = PBL_CRON_MDAY_ANY,
+    .month = PBL_CRON_MONTH_ANY,
+  };
+  pbl_cron_job_schedule(job);
+}
+
+void light_handle_color_prefs_changed(void) {
+  pbl_cron_job_unschedule(&s_sunrise_job);
+  pbl_cron_job_unschedule(&s_sunset_job);
+  if (prv_day_night_schedule_valid()) {
+    prv_schedule_daily_job(&s_sunrise_job, backlight_get_sunrise_minute());
+    prv_schedule_daily_job(&s_sunset_job, backlight_get_sunset_minute());
+  }
+  prv_apply_system_color_locked();
+}
+
+void light_handle_clock_change(void) {
+  prv_apply_system_color_locked();
 }
 #endif
 
@@ -334,16 +460,16 @@ static void prv_change_brightness(uint8_t new_brightness) {
   prv_update_intensity_analytics(scaled_brightness);
 
   if (turning_on) {
-    ambient_light_suspend();
+    pbl_als_suspend(ALS);
   }
-  backlight_set_brightness(scaled_brightness);
+  (void)pbl_backlight_set_brightness(BACKLIGHT, scaled_brightness);
   if (turning_off) {
-    ambient_light_resume();
+    pbl_als_resume(ALS);
   }
   s_current_brightness = new_brightness;
 
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
-  // backlight_set_brightness re-applies the last RGB color at the new
+  // pbl_backlight_set_brightness() re-applies the last RGB color at the new
   // intensity; follow up with the app override (or default white) so the
   // LED reflects the current color request for this state change.
   prv_apply_rgb_color();
@@ -352,8 +478,8 @@ static void prv_change_brightness(uint8_t new_brightness) {
 
 //! Hardware backlight level a given intensity would produce.
 static uint8_t prv_hw_level(uint8_t intensity) {
-  return backlight_get_level(
-      DIVIDE_CEIL(intensity * (uint16_t)BOARD_CONFIG.backlight_on_percent, 100U));
+  return pbl_backlight_get_level(
+      BACKLIGHT, DIVIDE_CEIL(intensity * (uint16_t)BOARD_CONFIG.backlight_on_percent, 100U));
 }
 
 //! Build the descending ladder of intensities below `from` that each produce
@@ -396,7 +522,7 @@ static void prv_change_state(BacklightState new_state) {
       new_brightness = prv_backlight_get_intensity();
 
       // Schedule the timer to move us from the ON_TIMED state to the ON_FADING state
-      new_timer_start(s_timer_id, backlight_get_timeout_ms(), light_timer_callback, NULL,
+      new_timer_start(s_timer_id, backlight_get_timeout_ms(), light_timer_callback, nullptr,
                       0 /* flags */);
       break;
     case LIGHT_STATE_ON_FADING:
@@ -417,7 +543,7 @@ static void prv_change_state(BacklightState new_state) {
         new_brightness = s_fade_levels[s_fade_level_idx++];
 
         // Reschedule the timer so we step down the brightness again.
-        new_timer_start(s_timer_id, s_fade_step_ms, light_timer_callback, NULL, 0 /* flags */);
+        new_timer_start(s_timer_id, s_fade_step_ms, light_timer_callback, nullptr, 0 /* flags */);
       }
       break;
     case LIGHT_STATE_OFF:
@@ -436,7 +562,7 @@ static void prv_change_state(BacklightState new_state) {
     // A user-initiated wake with unchanged brightness would otherwise
     // short-circuit. Re-apply the driver state so the hardware is brought back
     // in sync if it has drifted from what the firmware believes.
-    backlight_refresh();
+    (void)pbl_backlight_refresh(BACKLIGHT);
   }
 
   // Notify subscribers when the backlight transitions between on and off.
@@ -475,6 +601,7 @@ static bool prv_light_allowed(void) {
 }
 
 void light_init(void) {
+  s_dark_threshold = BOARD_CONFIG.ambient_light_dark_threshold;
   s_light_state = LIGHT_STATE_OFF;
   s_current_brightness = 0;
   s_num_buttons_down = 0;
@@ -515,7 +642,9 @@ static void prv_button_pressed(bool touch) {
 
   // set the state to be on; releasing buttons will start the timer counting down
   if (prv_light_allowed()) {
-    prv_change_state(LIGHT_STATE_ON);
+    // A touch alone only lights for the timeout, so a resting contact can't keep it on
+    const bool timed = touch && s_num_buttons_down == 1 && !s_user_controlled_state;
+    prv_change_state(timed ? LIGHT_STATE_ON_TIMED : LIGHT_STATE_ON);
   }
 
   pbl_mutex_unlock(&s_mutex);
@@ -549,6 +678,17 @@ void light_touch_down(void) {
   }
   s_touch_holding = true;
   prv_button_pressed(true);
+}
+
+void light_touch_moved(void) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+
+  if (s_touch_holding && s_num_buttons_down == 1 && !s_user_controlled_state &&
+      s_light_state != LIGHT_STATE_ON && prv_light_allowed()) {
+    prv_change_state(LIGHT_STATE_ON_TIMED);
+  }
+
+  pbl_mutex_unlock(&s_mutex);
 }
 
 void light_touch_up(void) {
@@ -590,6 +730,7 @@ void light_enable(bool enable) {
   // I am reluctant to chop it out.
 
   s_user_controlled_state = enable;
+  s_user_controlled_task = pebble_task_get_current();
 
   if (enable) {
     prv_change_state(LIGHT_STATE_ON);
@@ -608,6 +749,7 @@ void light_enable_respect_settings(bool enable) {
   s_touch_lit = false;
 
   s_user_controlled_state = enable;
+  s_user_controlled_task = pebble_task_get_current();
 
   if (enable) {
     prv_als_prime_for_interaction();
@@ -621,15 +763,10 @@ void light_enable_respect_settings(bool enable) {
   pbl_mutex_unlock(&s_mutex);
 }
 
-void light_reset_user_controlled(void) {
-  // Release a touch that never saw its liftoff (app exited mid-press) so the
-  // button refcount can't leak. Call before locking; light_touch_up locks.
-  light_touch_up();
-
+void light_reset_user_controlled_by_task(PebbleTask task) {
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
 
-  // http://www.youtube.com/watch?v=6t_KgE6Yuqg
-  if (s_user_controlled_state) {
+  if (s_user_controlled_state && s_user_controlled_task == task) {
     s_user_controlled_state = false;
 
     if (s_num_buttons_down == 0) {
@@ -732,9 +869,9 @@ void light_toggle_ambient_sensor_enabled(void) {
     prv_change_state(LIGHT_STATE_ON_TIMED);
   } else {
     prv_change_state(LIGHT_STATE_OFF);
-    // FIXME: PBL-24793 There is an edge case of when the backlight has timed off
-    // or you're toggling it from no ambient (always light on buttons) to ambient,
-    // you will see it turn on and immediately off if its bright out
+    // TODO: when the backlight has timed off or you're toggling from no ambient
+    // (always light on buttons) to ambient, it turns on and immediately off if it's
+    // bright out.
   }
   pbl_mutex_unlock(&s_mutex);
 }
@@ -758,31 +895,31 @@ void light_allow(bool allowed) {
   s_backlight_allowed = allowed;
 }
 
-DEFINE_SYSCALL(bool, sys_light_is_on, void) {
+PBL_SYSCALL(bool, sys_light_is_on) {
   return light_is_on();
 }
 
-DEFINE_SYSCALL(void, sys_light_enable_interaction, void) {
+PBL_SYSCALL(void, sys_light_enable_interaction) {
   light_enable_interaction();
 }
 
-DEFINE_SYSCALL(void, sys_light_enable, bool enable) {
+PBL_SYSCALL(void, sys_light_enable, (VAL, bool, enable)) {
   light_enable(enable);
 }
 
-DEFINE_SYSCALL(void, sys_light_enable_respect_settings, bool enable) {
+PBL_SYSCALL(void, sys_light_enable_respect_settings, (VAL, bool, enable)) {
   light_enable_respect_settings(enable);
 }
 
-DEFINE_SYSCALL(void, sys_light_reset_to_timed_mode, void) {
+PBL_SYSCALL(void, sys_light_reset_to_timed_mode) {
   prv_light_reset_to_timed_mode();
 }
 
-DEFINE_SYSCALL(void, sys_light_set_color_rgb888, uint32_t rgb) {
+PBL_SYSCALL(void, sys_light_set_color_rgb888, (VAL, uint32_t, rgb)) {
   light_set_color_rgb888(rgb);
 }
 
-DEFINE_SYSCALL(void, sys_light_set_system_color, void) {
+PBL_SYSCALL(void, sys_light_set_system_color) {
   light_set_system_color();
 }
 

@@ -7,14 +7,6 @@
 #include <applib/graphics/graphics.h>
 #include <applib/graphics/text.h>
 #include <applib/graphics/text_resources.h>
-#include <stubs_app_state.h>
-#include <stubs_applib_resource.h>
-#include <stubs_compiled_with_legacy2_sdk.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pebble_tasks.h>
 
 static const uint8_t *font_bytes;
 static const uint8_t *extension_bytes;
@@ -45,13 +37,10 @@ ResourceCallbackHandle resource_watch(ResAppNum app, uint32_t id, ResourceChange
 FontInfo *fonts_get_system_emoji_font_for_size(unsigned int size) {
   return NULL;
 }
-void passert_failed(const char *file, int line, const char *message, ...) {
+void pbl_panic_at(const char *file, int line, const char *message, ...) {
   abort();
 }
-void passert_failed_no_message(const char *file, int line) {
-  abort();
-}
-void passert_failed_no_message_with_lr(const char *file, int line, uint32_t lr) {
+void pbl_panic_bare_at(const char *file, int line) {
   abort();
 }
 uint8_t *render(const char *text, const uint8_t *font, size_t length, const uint8_t *extension,

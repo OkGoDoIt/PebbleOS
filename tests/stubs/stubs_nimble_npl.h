@@ -9,12 +9,13 @@
 
 #include <host/ble_hs.h>
 #include <nimble/transport.h>
-#include <stubs_irq.h>
-#include <stubs_msgq.h>
-#include <stubs_rtc.h>
-#include <stubs_sched.h>
-#include <stubs_sem.h>
+#include <pbl/kernel/sched.h>
 #include <stubs_thread.h>
+
+// The NPL port's ble_npl_os_started() asks the kernel; there is no default stub for it.
+bool pbl_kernel_is_started(void) {
+  return true;
+}
 
 struct ble_npl_event *npl_pebble_eventq_get(struct ble_npl_eventq *evq, ble_npl_time_t tmo) {
   return NULL;

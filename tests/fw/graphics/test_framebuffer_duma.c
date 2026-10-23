@@ -21,9 +21,7 @@
 ////////////////////////////////////
 #include "graphics_common_stubs.h"
 
-#include <stubs_applib_resource.h>
-
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 
 #define COLOR(x)   ((GColor){.argb = GColor##x##ARGB8})
 #define NUM_COLORS 4
@@ -83,5 +81,5 @@ void test_framebuffer_duma__draw_beyond_framebuffer(void) {
 
   uint8_t *buffer = (uint8_t *)ctx.dest_bitmap.addr;
   // Expect this to assert using duma protection, we are writing past framebuffer
-  cl_assert_passert(draw_fb_raw(buffer, FRAMEBUFFER_SIZE_BYTES + 1, GColorWhite));
+  cl_assert_panic(draw_fb_raw(buffer, FRAMEBUFFER_SIZE_BYTES + 1, GColorWhite));
 }

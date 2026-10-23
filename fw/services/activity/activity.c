@@ -4,8 +4,10 @@
 #include <pbl/cron/cron.h>
 #include <pbl/drivers/battery.h>
 #include <pbl/drivers/vibe.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/kernel/sem.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/activity/activity.h>
 #include <pbl/services/activity/activity_algorithm.h>
@@ -32,9 +34,8 @@
 #include <applib/health_service.h>
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
+#include <kernel/pebble_tasks.h>
 #include <syscall/syscall.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_activity, CONFIG_SERVICE_ACTIVITY_LOG_LEVEL);
 
@@ -45,7 +46,7 @@ static bool s_activity_initialized = false;
 // ------------------------------------------------------------------------------------------------
 ActivityState *activity_private_state(void) {
   if (!s_activity_initialized) {
-    return NULL;
+    return nullptr;
   }
   return &s_activity_state;
 }
@@ -189,7 +190,7 @@ PBL_T_STATIC void prv_hrm_subscription_cb(PebbleHRMEvent *hrm_event, void *conte
 
     // Perform a basic validity check so we only proceed with reasonable data
     // TODO: Use quality to filter out some readings,
-    // TODO PBL-40784: Use HRMQuality_OffWrist as a special case to slow down the HRM subscription
+    // TODO: Use HRMQuality_OffWrist as a special case to slow down the HRM subscription
     bool valid_hr_reading = true;
     if (hrm_event->bpm.bpm < ACTIVITY_DEFAULT_MIN_HR ||
         hrm_event->bpm.bpm > ACTIVITY_DEFAULT_MAX_HR) {
@@ -256,11 +257,11 @@ static void prv_heart_rate_init(void) {
   s_activity_state.hr.toggled_sampling_at_ts = time_get_uptime_seconds();
   s_activity_state.hr.hrm_session = hrm_manager_subscribe_with_callback(
       INSTALL_ID_INVALID, ACTIVITY_HRM_SUBSCRIPTION_OFF_PERIOD_SEC, 0 /*expire_s*/, HRMFeature_BPM,
-      false /*low_latency*/, prv_hrm_subscription_cb, NULL);
+      false /*low_latency*/, prv_hrm_subscription_cb, nullptr);
   PBL_ASSERTN(s_activity_state.hr.hrm_session != HRM_INVALID_SESSION_REF);
 
-  s_activity_state.hr.log_session = protobuf_log_hr_create(NULL);
-  PBL_ASSERTN(s_activity_state.hr.log_session != NULL);
+  s_activity_state.hr.log_session = protobuf_log_hr_create(nullptr);
+  PBL_ASSERTN(s_activity_state.hr.log_session != nullptr);
 #endif // CONFIG_HRM
 }
 
@@ -318,9 +319,9 @@ static void prv_spo2_set_sampling(bool sampling, uint32_t now_ts) {
 // scheduler but runs on its own independent interval.
 static void prv_spo2_subscription_update(uint32_t now_ts) {
 #ifdef CONFIG_HRM
-  // If blood oxygen monitoring is disabled (master toggle off or "Disabled" interval), make sure
+  // If SpO2 monitoring is disabled (master toggle off or "Disabled" interval), make sure
   // we're not sampling and skip.
-  if (!activity_prefs_blood_oxygen_is_enabled() ||
+  if (!activity_prefs_spo2_is_enabled() ||
       activity_prefs_get_spo2_measurement_interval() == HRMonitoringInterval_Disabled) {
     if (s_activity_state.spo2.currently_sampling) {
       prv_spo2_set_sampling(false, now_ts);
@@ -437,7 +438,7 @@ PBL_T_STATIC void prv_spo2_subscription_cb(PebbleHRMEvent *hrm_event, void *cont
 #endif // CONFIG_HRM
 
 // ---------------------------------------------------------------------------------------
-// Init blood oxygen (SpO2) support
+// Init SpO2 support
 static void prv_spo2_init(void) {
 #ifdef CONFIG_HRM
   s_activity_state.spo2.currently_sampling = false;
@@ -445,13 +446,13 @@ static void prv_spo2_init(void) {
   // Dormant until a measurement window opens (see prv_spo2_set_sampling).
   s_activity_state.spo2.hrm_session = hrm_manager_subscribe_with_callback(
       INSTALL_ID_INVALID, ACTIVITY_HRM_SUBSCRIPTION_OFF_PERIOD_SEC, 0 /*expire_s*/, (HRMFeature)0,
-      false /*low_latency*/, prv_spo2_subscription_cb, NULL);
+      false /*low_latency*/, prv_spo2_subscription_cb, nullptr);
   PBL_ASSERTN(s_activity_state.spo2.hrm_session != HRM_INVALID_SESSION_REF);
 #endif // CONFIG_HRM
 }
 
 // ---------------------------------------------------------------------------------------
-// De-init blood oxygen (SpO2) support
+// De-init SpO2 support
 static void prv_spo2_deinit(void) {
 #ifdef CONFIG_HRM
   sys_hrm_manager_unsubscribe(s_activity_state.spo2.hrm_session);
@@ -509,14 +510,14 @@ static bool prv_activity_spo2_can_start_attempt(void) {
 static void prv_activity_spo2_update(uint32_t now_ts) {
   ActivitySpO2ActivitySupport *as = &s_activity_state.activity_spo2;
 
-  // Run while the blood-oxygen-during-activities opt-in is on AND we're in an activity: either an
+  // Run while the SpO2-during-activities opt-in is on AND we're in an activity: either an
   // auto-detected one with a running HR session (which needs HR-during-activities), or a manually
   // started workout. The manual workout path only needs the SpO2 opt-in.
   const bool auto_active = activity_prefs_hrm_activity_tracking_is_enabled() &&
                            activity_algorithm_activity_hrm_is_active();
   const bool workout_active = workout_service_is_workout_ongoing();
   const bool eligible =
-      activity_prefs_blood_oxygen_activity_tracking_is_enabled() && (auto_active || workout_active);
+      activity_prefs_spo2_activity_tracking_is_enabled() && (auto_active || workout_active);
 
   if (!eligible) {
     if (as->phase != ActivitySpO2ActPhase_Idle) {
@@ -546,6 +547,7 @@ static void prv_activity_spo2_update(uint32_t now_ts) {
       if (as->got_reading) {
         // Success: resume HR and wait the full interval before the next point.
         prv_activity_spo2_set_sampling(false);
+        workout_service_handle_spo2(as->percent);
         as->phase = ActivitySpO2ActPhase_Wait;
         as->phase_started_ts = now_ts;
       } else if (now_ts - as->phase_started_ts >= ACTIVITY_SPO2_ACTIVITY_ATTEMPT_SEC) {
@@ -582,7 +584,7 @@ static void prv_activity_spo2_schedule_update(void) {
     return;
   }
   s_activity_state.activity_spo2.update_pending = true;
-  system_task_add_callback(prv_activity_spo2_update_system_cb, NULL);
+  system_task_add_callback(prv_activity_spo2_update_system_cb, nullptr);
 }
 
 // Kernel BG callback for the activity SpO2 session. Only fires while we are sampling (our session
@@ -600,6 +602,7 @@ PBL_T_STATIC void prv_activity_spo2_subscription_cb(PebbleHRMEvent *hrm_event, v
     s_activity_state.spo2.pending_percent = pct;
     s_activity_state.spo2.pending_quality = prv_spo2_health_quality(quality);
     s_activity_state.activity_spo2.got_reading = true;
+    s_activity_state.activity_spo2.percent = pct;
   }
 
   prv_activity_spo2_schedule_update();
@@ -615,7 +618,7 @@ static void prv_activity_spo2_init(void) {
   // Dormant until an attempt starts (see prv_activity_spo2_set_sampling).
   s_activity_state.activity_spo2.hrm_session = hrm_manager_subscribe_with_callback(
       INSTALL_ID_INVALID, ACTIVITY_HRM_SUBSCRIPTION_OFF_PERIOD_SEC, 0 /*expire_s*/, (HRMFeature)0,
-      false /*low_latency*/, prv_activity_spo2_subscription_cb, NULL);
+      false /*low_latency*/, prv_activity_spo2_subscription_cb, nullptr);
   PBL_ASSERTN(s_activity_state.activity_spo2.hrm_session != HRM_INVALID_SESSION_REF);
 #endif // CONFIG_HRM
 }
@@ -641,7 +644,7 @@ SettingsFile *activity_private_settings_open(void) {
       S_SUCCESS) {
     kernel_free(file);
     PBL_LOG_ERR("No settings file");
-    return NULL;
+    return nullptr;
   }
   return file;
 }
@@ -773,7 +776,7 @@ static SettingsFile *prv_settings_migrate(SettingsFile *file, uint16_t *written_
   if ((version == 1) || (version == 2)) {
     // Both older versions store metric values as uint16_t, so re-create the file (at the new,
     // bigger size in the version 1 case) while widening metric records to uint32_t.
-    result = settings_file_rewrite(file, prv_settings_rewrite_cb, NULL);
+    result = settings_file_rewrite(file, prv_settings_rewrite_cb, nullptr);
     if (result != S_SUCCESS) {
       PBL_LOG_ERR("Failure %" PRIi32 " while re-writing setting file", (int32_t)result);
     }
@@ -854,7 +857,7 @@ static void PBL_NOINLINE prv_update_storage(time_t utc_sec) {
 // Tail end of prv_process_minute_data, separated out to decrease stack requirements. This
 // portion of the logic handles activity process, saving prefs to our backing store, and
 // resetting metrics at midnight.
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 static void PBL_NOINLINE prv_process_minute_data_tail(time_t utc_sec) {
   bool need_history_update_event;
   uint16_t cur_day_index;
@@ -871,8 +874,8 @@ static void PBL_NOINLINE prv_process_minute_data_tail(time_t utc_sec) {
 
     // If we are starting a new day, reset all metrics
     if (cur_day_index != s_activity_state.cur_day_index) {
-      s_activity_state.step_data = (ActivityStepData){0};
-      s_activity_state.sleep_data = (ActivitySleepData){0};
+      s_activity_state.step_data = (ActivityStepData){};
+      s_activity_state.sleep_data = (ActivitySleepData){};
       memset(&s_activity_state.hr.metrics.minutes_in_zone, 0,
              sizeof(s_activity_state.hr.metrics.minutes_in_zone));
       s_activity_state.steps_per_minute_last_steps = 0;
@@ -921,7 +924,7 @@ static void PBL_NOINLINE prv_process_minute_data_tail(time_t utc_sec) {
 // ------------------------------------------------------------------------------------------------
 // Takes care of updating the history when we reach midnight as well as checking for changes in
 // sleep state. Returns true if the sleep metrics were updated
-// We use PBL_NOINLINE to reduce the stack requirements during the minute handler (see PBL-38130)
+// We use PBL_NOINLINE to reduce the stack requirements during the minute handler
 static void PBL_NOINLINE prv_process_minute_data(time_t utc_sec) {
   // Update the metrics
   activity_metrics_prv_minute_handler(utc_sec);
@@ -991,19 +994,19 @@ static void prv_collect_raw_samples(AccelRawData *accel_data, uint32_t num_sampl
   ActivitySampleCollectionData *data = s_activity_state.sample_collection_data;
 
   // Create the data logging session now, if needed
-  if (data->dls_session == NULL) {
+  if (data->dls_session == nullptr) {
     Uuid system_uuid = UUID_SYSTEM;
     data->dls_session = dls_create(DlsSystemTagActivityAccelSamples, DATA_LOGGING_BYTE_ARRAY,
                                    sizeof(ActivityRawSamplesRecord), true /*buffered*/,
                                    false /*resume*/, &system_uuid);
-    if (data->dls_session == NULL) {
+    if (data->dls_session == nullptr) {
       PBL_LOG_ERR("Unable to create DLS session");
       return;
     }
   }
 
   if (finish) {
-    PBL_ASSERTN(num_samples == 0 && accel_data == NULL);
+    PBL_ASSERTN(num_samples == 0 && accel_data == nullptr);
   }
 
   // Save the samples
@@ -1212,7 +1215,7 @@ static void prv_start_tracking_cb(void *context) {
     // Subscribe to the accelerometer from KernelBG
     s_activity_state.test_mode = test_mode;
     if (!test_mode) {
-      PBL_ASSERTN(s_activity_state.accel_session == NULL);
+      PBL_ASSERTN(s_activity_state.accel_session == nullptr);
       s_activity_state.accel_session = accel_session_create();
       accel_session_raw_data_subscribe(s_activity_state.accel_session, sampling_rate,
                                        CONFIG_SERVICE_ACTIVITY_BATCH_SAMPLES, prv_accel_cb);
@@ -1259,7 +1262,7 @@ static void prv_stop_tracking_cb(void *context) {
   if (s_activity_state.accel_session) {
     accel_session_data_unsubscribe(s_activity_state.accel_session);
     accel_session_delete(s_activity_state.accel_session);
-    s_activity_state.accel_session = NULL;
+    s_activity_state.accel_session = nullptr;
   }
 
   // Close down heart rate support
@@ -1296,14 +1299,14 @@ static void prv_set_enable_cb(void *context) {
     if (enable) {
       // We just got enabled, re-start activity tracking if it should be in the started state
       if (s_activity_state.should_be_started) {
-        prv_start_tracking_cb(NULL);
+        prv_start_tracking_cb(nullptr);
       }
 
     } else {
       // We just got disabled. Turn off activity tracking if necessary and set should_be_started
       // so that it gets restarted again once we get re-enabled.
       if (s_activity_state.started) {
-        prv_stop_tracking_cb(NULL);
+        prv_stop_tracking_cb(nullptr);
         // We want to turn tracking on again once we get re-enabled, so change the state of
         // should_be_started to true (prv_stop_tracking_cb() sets it to false).
         s_activity_state.should_be_started = true;
@@ -1324,7 +1327,7 @@ static void prv_handle_activity_enabled_change(void) {
   }
   pbl_mutex_unlock(&s_activity_state.mutex);
 
-  system_task_add_callback(prv_set_enable_cb, NULL);
+  system_task_add_callback(prv_set_enable_cb, nullptr);
 }
 
 static void prv_charger_event_cb(PebbleEvent *e, void *context) {
@@ -1340,33 +1343,68 @@ static void prv_charger_event_cb(PebbleEvent *e, void *context) {
 #endif
 }
 
-// -------------------------------------------------------------------------------------------
-// Wait for an activity_algorithm call executed on KernelBG to complete
-// The *context and *success booleans will be filled in by the callback.
-static bool prv_wait_system_task(SystemTaskEventCallback cb, void *context, bool *cb_success,
-                                 bool *cb_completed, uint32_t timeout_sec) {
+// ------------------------------------------------------------------------------------------------
+// Requests executed on KernelBG on behalf of an app or worker. They are heap allocated so that
+// KernelBG never writes into memory owned by the caller, which may give up waiting.
+typedef struct ActivityBgRequest ActivityBgRequest;
+typedef bool (*ActivityBgRequestHandler)(ActivityBgRequest *req);
+
+struct ActivityBgRequest {
+  ActivityBgRequestHandler handler;
+  bool success;
+  bool completed;
+  bool abandoned;
+};
+
+static void prv_bg_request_system_cb(void *data) {
+  ActivityBgRequest *req = data;
+  const bool success = s_activity_state.started && req->handler(req);
+
+  pbl_mutex_lock(&s_activity_state.mutex, PBL_FOREVER);
+  const bool abandoned = req->abandoned;
+  req->success = success;
+  req->completed = true;
+  pbl_mutex_unlock(&s_activity_state.mutex);
+
+  if (abandoned) {
+    kernel_free(req);
+  } else {
+    pbl_sem_give(&s_activity_state.bg_wait_semaphore);
+  }
+}
+
+// Returns true if the request completed, in which case the caller owns and must free it.
+// Otherwise ownership is gone: it was freed here or will be freed by KernelBG.
+static bool prv_bg_request_run(ActivityBgRequest *req, ActivityBgRequestHandler handler,
+                               uint32_t timeout_sec) {
   // This call blocks on KernelBG, so it should only be called from an app or worker
   PebbleTask task = pebble_task_get_current();
   PBL_ASSERTN(task == PebbleTask_App || task == PebbleTask_Worker);
 
-  // Enqueue it for KernelBG to process
-  bool success = system_task_add_callback(cb, context);
-  if (!success) {
+  req->handler = handler;
+  if (!system_task_add_callback(prv_bg_request_system_cb, req)) {
+    kernel_free(req);
     return false;
   }
 
-  RtcTicks end_ticks = rtc_get_ticks() + timeout_sec * PBL_TICK_HZ;
-  while (!(*cb_completed)) {
-    // NOTE: we use while (!completed) and wait in 1 second chunks just in case the semaphore was
-    // left set from an earlier call that timed out.
-    if (rtc_get_ticks() > end_ticks) {
-      return false; // Timed out
+  const RtcTicks end_ticks = rtc_get_ticks() + timeout_sec * PBL_TICK_HZ;
+  while (true) {
+    pbl_mutex_lock(&s_activity_state.mutex, PBL_FOREVER);
+    const bool completed = req->completed;
+    if (!completed && rtc_get_ticks() > end_ticks) {
+      req->abandoned = true;
     }
-    const pbl_tick_t k_timeout = PBL_TICK_HZ;
-    pbl_sem_take(&s_activity_state.bg_wait_semaphore, PBL_TICKS(k_timeout));
-  }
+    pbl_mutex_unlock(&s_activity_state.mutex);
 
-  return *cb_success;
+    if (completed) {
+      return true;
+    }
+    if (req->abandoned) {
+      return false;
+    }
+    // Wait in 1 second chunks, the semaphore may be left set by an earlier request
+    pbl_sem_take(&s_activity_state.bg_wait_semaphore, PBL_TICKS(PBL_TICK_HZ));
+  }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1474,7 +1512,7 @@ bool activity_stop_tracking(void) {
     prv_stop_tracking_early();
   }
   pbl_mutex_unlock(&s_activity_state.mutex);
-  return system_task_add_callback(prv_stop_tracking_cb, NULL);
+  return system_task_add_callback(prv_stop_tracking_cb, nullptr);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1510,7 +1548,7 @@ bool activity_get_sessions(uint32_t *session_entries, ActivitySession *sessions)
   if (!s_activity_initialized) {
     return false;
   }
-  if (sessions == NULL) {
+  if (sessions == nullptr) {
     return false;
   }
   pbl_mutex_lock(&s_activity_state.mutex, PBL_FOREVER);
@@ -1527,68 +1565,55 @@ bool activity_get_sessions(uint32_t *session_entries, ActivitySession *sessions)
 }
 
 // ------------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, sys_activity_get_sessions, uint32_t *session_entries,
-               ActivitySession *sessions) {
-  if (PRIVILEGE_WAS_ELEVATED) {
+PBL_SYSCALL(bool, sys_activity_get_sessions, (INOUT_OPT, uint32_t *, session_entries),
+            (VAL, ActivitySession *, sessions)) {
+  if (from_user) {
     if (!session_entries) {
       // The implementation dereferences session_entries unconditionally.
       return false;
     }
-    syscall_assert_userspace_buffer(session_entries, sizeof(*session_entries));
-    // Same pattern as sys_activity_get_minute_history: snapshot *session_entries
-    // so the inner activity_get_sessions can't race us into a larger memcpy than
-    // we validated, and reject sizes whose `requested * sizeof(*sessions)` would
-    // wrap and let a much-smaller validated buffer gate a much-larger write.
+    // session_entries is a kernel copy here, so the inner activity_get_sessions
+    // can't be raced into a larger memcpy than we validated. Reject sizes whose
+    // `requested * sizeof(*sessions)` would wrap and let a much-smaller validated
+    // buffer gate a much-larger write.
     const uint32_t requested = *session_entries;
-    if (requested > SIZE_MAX / sizeof(*sessions)) {
+    size_t num_bytes;
+    if (ckd_mul(&num_bytes, (size_t)requested, sizeof(*sessions))) {
       PBL_LOG_ERR("session_entries=%" PRIu32 " would overflow size", requested);
-      syscall_failed();
+      pbl_syscall_fail();
     }
     if (sessions) {
-      syscall_assert_userspace_buffer(sessions, requested * sizeof(*sessions));
+      pbl_syscall_verify_user(sessions, num_bytes);
     }
-    uint32_t entries_inout = requested;
-    bool result = activity_get_sessions(&entries_inout, sessions);
-    *session_entries = entries_inout;
-    return result;
   }
 
   return activity_get_sessions(session_entries, sessions);
 }
 
 // Expose whether Activity has been initialized to user/applib code via a syscall.
-DEFINE_SYSCALL(bool, sys_activity_is_initialized, void) {
+PBL_SYSCALL(bool, sys_activity_is_initialized) {
   return s_activity_initialized;
 }
 
 // ------------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, sys_activity_prefs_heart_rate_is_enabled, void) {
+PBL_SYSCALL(bool, sys_activity_prefs_heart_rate_is_enabled) {
   return activity_prefs_heart_rate_is_enabled();
 }
 
 // ------------------------------------------------------------------------------------------------
+#define ACTIVITY_MINUTE_HISTORY_CHUNK_RECORDS 60
+
 typedef struct {
-  HealthMinuteData *minute_data;
-  uint32_t *num_records;
-  time_t *utc_start;
-  bool success;
-  bool completed;
-} ActivityGetMinuteHistoryContext;
+  ActivityBgRequest base;
+  uint32_t num_records;
+  time_t utc_start;
+  HealthMinuteData minute_data[];
+} ActivityMinuteHistoryRequest;
 
-static void prv_get_minute_history_system_cb(void *context_param) {
-  ActivityGetMinuteHistoryContext *context = (ActivityGetMinuteHistoryContext *)context_param;
-
-  // Get the minute history
-  if (s_activity_state.started) {
-    context->success = activity_algorithm_get_minute_history(
-        context->minute_data, context->num_records, context->utc_start);
-  } else {
-    context->success = false;
-  }
-
-  // Unblock the caller
-  context->completed = true;
-  pbl_sem_give(&s_activity_state.bg_wait_semaphore);
+static bool prv_get_minute_history_handler(ActivityBgRequest *base) {
+  ActivityMinuteHistoryRequest *req = (ActivityMinuteHistoryRequest *)base;
+  return activity_algorithm_get_minute_history(req->minute_data, &req->num_records,
+                                               &req->utc_start);
 }
 
 bool activity_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_records,
@@ -1596,43 +1621,122 @@ bool activity_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_re
   if (!s_activity_initialized) {
     return false;
   }
-  // Fill in the context
-  ActivityGetMinuteHistoryContext context = (ActivityGetMinuteHistoryContext){
-    .minute_data = minute_data,
-    .num_records = num_records,
-    .utc_start = utc_start,
-  };
 
-  // Enqueue it for KernelBG to process
-  bool success = prv_wait_system_task(prv_get_minute_history_system_cb, &context, &context.success,
-                                      &context.completed, 30 /*timeout_sec*/);
+  const uint32_t requested = *num_records;
+  uint32_t written = 0;
+  time_t first_utc = 0;
+  time_t next_utc = *utc_start;
+  bool success = true;
+
+  // Fetch in bounded chunks into kernel memory, padding gaps between chunks with invalid records
+  while (written < requested) {
+    const uint32_t chunk = MIN(requested - written, ACTIVITY_MINUTE_HISTORY_CHUNK_RECORDS);
+    ActivityMinuteHistoryRequest *req =
+        kernel_zalloc(sizeof(*req) + chunk * sizeof(HealthMinuteData));
+    if (!req) {
+      success = (written > 0);
+      break;
+    }
+    req->num_records = chunk;
+    req->utc_start = next_utc;
+
+    if (!prv_bg_request_run(&req->base, prv_get_minute_history_handler, 30 /*timeout_sec*/)) {
+      success = (written > 0);
+      break;
+    }
+
+    bool done = !req->base.success || (req->num_records == 0);
+    if (!req->base.success) {
+      success = (written > 0);
+    } else if (req->num_records > 0) {
+      uint32_t gap = 0;
+      if (written == 0) {
+        first_utc = req->utc_start;
+      } else if (req->utc_start > next_utc) {
+        gap = (req->utc_start - next_utc) / PBL_SEC_PER_MIN;
+      }
+
+      if (req->utc_start < next_utc || gap >= requested - written) {
+        done = true;
+      } else {
+        memset(&minute_data[written], 0xFF, gap * sizeof(HealthMinuteData));
+        written += gap;
+        const uint32_t n = MIN(req->num_records, requested - written);
+        memcpy(&minute_data[written], req->minute_data, n * sizeof(HealthMinuteData));
+        written += n;
+        next_utc = first_utc + (time_t)written * PBL_SEC_PER_MIN;
+      }
+    }
+    kernel_free(req);
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (success) {
+    *num_records = written;
+    *utc_start = first_utc;
+  } else {
+    *num_records = 0;
+    *utc_start = 0;
+  }
   return success;
 }
 
 // ------------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, sys_activity_get_minute_history, HealthMinuteData *minute_data,
-               uint32_t *num_records, time_t *utc_start) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(utc_start, sizeof(*utc_start));
-    syscall_assert_userspace_buffer(num_records, sizeof(*num_records));
-    // Snapshot the requested count to a kernel-stack local so that:
-    //  - the size computation below can't be tricked by an app racing the
-    //    KernelBG callback to swap *num_records after we validated it (TOCTOU);
-    //  - we can bound the multiplication against SIZE_MAX before performing it
-    //    (otherwise `*num_records * sizeof(HealthMinuteData)` wraps in uint32_t
-    //    and a tiny validated size would gate a much larger kernel write).
+typedef struct {
+  ActivityBgRequest base;
+  uint32_t num_minutes;
+  time_t utc_start;
+  uint8_t heart_rate_bpm[];
+} ActivityMinuteHeartRateRequest;
+
+static bool prv_get_minute_heart_rate_handler(ActivityBgRequest *base) {
+  ActivityMinuteHeartRateRequest *req = (ActivityMinuteHeartRateRequest *)base;
+  return activity_algorithm_get_minute_heart_rate(req->heart_rate_bpm, req->num_minutes,
+                                                  req->utc_start);
+}
+
+bool activity_get_minute_heart_rate(uint8_t *heart_rate_bpm, uint32_t num_minutes,
+                                    time_t utc_start) {
+  if (!s_activity_initialized || num_minutes > ACTIVITY_MINUTE_HEART_RATE_MAX_MINUTES) {
+    return false;
+  }
+
+  ActivityMinuteHeartRateRequest *req = kernel_zalloc(sizeof(*req) + num_minutes);
+  if (!req) {
+    return false;
+  }
+  req->num_minutes = num_minutes;
+  req->utc_start = utc_start;
+
+  if (!prv_bg_request_run(&req->base, prv_get_minute_heart_rate_handler, 30 /*timeout_sec*/)) {
+    return false;
+  }
+
+  const bool success = req->base.success;
+  if (success) {
+    memcpy(heart_rate_bpm, req->heart_rate_bpm, num_minutes);
+  }
+  kernel_free(req);
+  return success;
+}
+
+// ------------------------------------------------------------------------------------------------
+PBL_SYSCALL(bool, sys_activity_get_minute_history, (VAL, HealthMinuteData *, minute_data),
+            (INOUT, uint32_t *, num_records), (INOUT, time_t *, utc_start)) {
+  if (from_user) {
+    // num_records is a kernel copy here, so an app racing the KernelBG callback
+    // can't swap it after it is validated (TOCTOU). An overflowing size would
+    // let a tiny validated buffer gate a much larger kernel write.
     const uint32_t requested = *num_records;
-    if (requested > SIZE_MAX / sizeof(HealthMinuteData)) {
+    size_t num_bytes;
+    if (ckd_mul(&num_bytes, (size_t)requested, sizeof(HealthMinuteData))) {
       PBL_LOG_ERR("num_records=%" PRIu32 " would overflow size", requested);
-      syscall_failed();
+      pbl_syscall_fail();
     }
-    syscall_assert_userspace_buffer(minute_data, requested * sizeof(HealthMinuteData));
-    uint32_t records_inout = requested;
-    time_t start_inout = *utc_start;
-    bool result = activity_get_minute_history(minute_data, &records_inout, &start_inout);
-    *num_records = records_inout;
-    *utc_start = start_inout;
-    return result;
+    pbl_syscall_verify_user(minute_data, num_bytes);
   }
 
   return activity_get_minute_history(minute_data, num_records, utc_start);
@@ -1647,10 +1751,10 @@ bool activity_get_step_averages(enum pbl_weekday day_of_week, ActivityMetricAver
 }
 
 // ------------------------------------------------------------------------------------------------
-DEFINE_SYSCALL(bool, sys_activity_get_step_averages, enum pbl_weekday day_of_week,
-               ActivityMetricAverages *averages) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(averages, sizeof(*averages));
+PBL_SYSCALL(bool, sys_activity_get_step_averages, (VAL, enum pbl_weekday, day_of_week),
+            (OUT_BUF, ActivityMetricAverages *, averages, sizeof(*averages))) {
+  if (from_user && (unsigned int)day_of_week > PBL_SATURDAY) {
+    pbl_syscall_fail();
   }
 
   return activity_get_step_averages(day_of_week, averages);
@@ -1698,13 +1802,13 @@ bool activity_raw_sample_collection(bool enable, bool disable, bool *enabled, ui
     if (disable && s_activity_state.sample_collection_enabled) {
       // Finish up the current record
       s_activity_state.sample_collection_enabled = false;
-      prv_collect_raw_samples(NULL, 0, true /*finish*/);
+      prv_collect_raw_samples(nullptr, 0, true /*finish*/);
       ActivitySampleCollectionData *data = s_activity_state.sample_collection_data;
       if (data->dls_session) {
         dls_finish(data->dls_session);
       }
       kernel_free(data);
-      s_activity_state.sample_collection_data = NULL;
+      s_activity_state.sample_collection_data = nullptr;
       s_activity_state.sample_collection_seconds =
           rtc_get_time() - s_activity_state.sample_collection_seconds;
     }
@@ -1723,36 +1827,23 @@ bool activity_raw_sample_collection(bool enable, bool disable, bool *enabled, ui
 
 // ------------------------------------------------------------------------------------------------
 // Get info on the sleep file
-typedef struct {
-  bool success;
-  bool completed;
-} ActivityDumpSleepLogContext;
-
-static void prv_dump_sleep_log_system_cb(void *context_param) {
-  ActivityDumpSleepLogContext *context = (ActivityDumpSleepLogContext *)context_param;
-
-  // Get the sleep info
-  if (s_activity_state.started) {
-    context->success = activity_algorithm_dump_minute_data_to_log();
-  } else {
-    context->success = false;
-  }
-
-  // Unblock the caller
-  context->completed = true;
-  pbl_sem_give(&s_activity_state.bg_wait_semaphore);
+static bool prv_dump_sleep_log_handler(ActivityBgRequest *req) {
+  return activity_algorithm_dump_minute_data_to_log();
 }
 
 bool activity_dump_sleep_log(void) {
   if (!s_activity_initialized) {
     return false;
   }
-  // Fill in the context
-  ActivityDumpSleepLogContext context = (ActivityDumpSleepLogContext){};
-
-  // Enqueue it for KernelBG to process
-  bool success = prv_wait_system_task(prv_dump_sleep_log_system_cb, &context, &context.success,
-                                      &context.completed, 30 /*timeout_sec*/);
+  ActivityBgRequest *req = kernel_zalloc(sizeof(*req));
+  if (!req) {
+    return false;
+  }
+  if (!prv_bg_request_run(req, prv_dump_sleep_log_handler, 30 /*timeout_sec*/)) {
+    return false;
+  }
+  const bool success = req->success;
+  kernel_free(req);
   return success;
 }
 
@@ -1799,7 +1890,7 @@ bool activity_test_run_minute_callback(void) {
   if (!s_activity_initialized) {
     return false;
   }
-  return system_task_add_callback(prv_minute_system_task_cb, NULL);
+  return system_task_add_callback(prv_minute_system_task_cb, nullptr);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1857,87 +1948,64 @@ bool activity_test_reset(bool reset_settings, bool tracking_on,
 // ------------------------------------------------------------------------------------------------
 // Get info on the sleep file
 typedef struct {
+  ActivityBgRequest base;
   bool compact_first;
   uint32_t num_records;
   uint32_t data_bytes;
   uint32_t minutes;
-  bool success;
-  bool completed;
-} ActivitySleepFileInfoContext;
+} ActivitySleepFileInfoRequest;
 
-static void prv_sleep_file_info_system_cb(void *context_param) {
-  ActivitySleepFileInfoContext *context = (ActivitySleepFileInfoContext *)context_param;
-
-  // Get the sleep info
-  if (s_activity_state.started) {
-    context->success = activity_algorithm_minute_file_info(
-        context->compact_first, &context->num_records, &context->data_bytes, &context->minutes);
-  } else {
-    context->success = false;
-  }
-
-  // Unblock the caller
-  context->completed = true;
-  pbl_sem_give(&s_activity_state.bg_wait_semaphore);
+static bool prv_sleep_file_info_handler(ActivityBgRequest *base) {
+  ActivitySleepFileInfoRequest *req = (ActivitySleepFileInfoRequest *)base;
+  return activity_algorithm_minute_file_info(req->compact_first, &req->num_records,
+                                             &req->data_bytes, &req->minutes);
 }
 
 bool activity_test_minute_file_info(bool compact_first, uint32_t *num_records, uint32_t *data_bytes,
                                     uint32_t *minutes) {
+  *num_records = 0;
+  *data_bytes = 0;
+  *minutes = 0;
   if (!s_activity_initialized) {
     return false;
   }
-  // Fill in the context
-  ActivitySleepFileInfoContext context = (ActivitySleepFileInfoContext){
-    .compact_first = compact_first,
-  };
-
-  // Enqueue it for KernelBG to process
-  bool success = prv_wait_system_task(prv_sleep_file_info_system_cb, &context, &context.success,
-                                      &context.completed, 30 /*timeout_sec*/);
-  if (success) {
-    *num_records = context.num_records;
-    *data_bytes = context.data_bytes;
-    *minutes = context.minutes;
-  } else {
-    *num_records = 0;
-    *data_bytes = 0;
-    *minutes = 0;
+  ActivitySleepFileInfoRequest *req = kernel_zalloc(sizeof(*req));
+  if (!req) {
+    return false;
   }
+  req->compact_first = compact_first;
+  if (!prv_bg_request_run(&req->base, prv_sleep_file_info_handler, 30 /*timeout_sec*/)) {
+    return false;
+  }
+  const bool success = req->base.success;
+  if (success) {
+    *num_records = req->num_records;
+    *data_bytes = req->data_bytes;
+    *minutes = req->minutes;
+  }
+  kernel_free(req);
   return success;
 }
 
 // ------------------------------------------------------------------------------------------------
 // Fill the sleep file
-typedef struct {
-  bool success;
-  bool completed;
-} ActivityFillSleepFileContext;
-
-static void prv_fill_minute_file_system_cb(void *context_param) {
-  ActivityFillSleepFileContext *context = (ActivityFillSleepFileContext *)context_param;
-
-  // Get the sleep info
-  if (s_activity_state.started) {
-    context->success = activity_algorithm_test_fill_minute_file();
-  } else {
-    context->success = false;
-  }
-
-  // Unblock the caller
-  context->completed = true;
-  pbl_sem_give(&s_activity_state.bg_wait_semaphore);
+static bool prv_fill_minute_file_handler(ActivityBgRequest *req) {
+  return activity_algorithm_test_fill_minute_file();
 }
 
 bool activity_test_fill_minute_file(void) {
   if (!s_activity_initialized) {
     return false;
   }
-  // Fill in the context
-  ActivitySleepFileInfoContext context = (ActivitySleepFileInfoContext){};
-
-  // Enqueue it for KernelBG to process
-  bool success = prv_wait_system_task(prv_fill_minute_file_system_cb, &context, &context.success,
-                                      &context.completed, 300 /*timeout_sec*/);
+  ActivityBgRequest *req = kernel_zalloc(sizeof(*req));
+  if (!req) {
+    return false;
+  }
+  if (!prv_bg_request_run(req, prv_fill_minute_file_handler, 300 /*timeout_sec*/)) {
+    return false;
+  }
+  const bool success = req->success;
+  kernel_free(req);
   return success;
 }
 
@@ -1969,7 +2037,7 @@ bool activity_test_send_fake_dls_records(void) {
     return false;
   }
   // Enqueue it for KernelBG to process
-  return system_task_add_callback(prv_send_fake_dls_records_system_cb, NULL);
+  return system_task_add_callback(prv_send_fake_dls_records_system_cb, nullptr);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1988,8 +2056,8 @@ void activity_test_set_steps_and_avg(int32_t new_steps, int32_t current_avg, int
     // current_avg. The last key is set to daily_avg - current_avg so that the total daily_avg will
     // always be at daily_avg
     const time_t now = rtc_get_time();
-    struct tm local_tm;
-    localtime_r(&now, &local_tm);
+    struct pbl_tm local_tm;
+    pbl_localtime_r(&now, &local_tm);
     enum pbl_weekday day_of_week = local_tm.tm_wday;
 
     uint16_t step_avg_array[ACTIVITY_STEP_AVERAGES_PER_KEY] = {};

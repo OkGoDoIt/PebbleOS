@@ -8,7 +8,6 @@
 #include "pbl/services/music.h"
 #include "pbl/util/size.h"
 
-#include "stubs_passert.h"
 #include "fake_event_service.h"
 
 static MusicServiceState s_music_service_state;
@@ -27,10 +26,6 @@ static MusicServiceCommand s_last_command;
 static bool s_command_supported;
 
 MusicServiceState *app_state_get_music_service_state(void) {
-  return &s_music_service_state;
-}
-
-MusicServiceState *worker_state_get_music_service_state(void) {
   return &s_music_service_state;
 }
 

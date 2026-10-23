@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/session.h>
 #include <pbl/services/phone_call_util.h>
@@ -12,7 +12,6 @@
 
 #include <kernel/events.h>
 #include <system/hexdump.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_phone_pp, CONFIG_SERVICE_PHONE_PP_LOG_LEVEL);
 
@@ -125,7 +124,7 @@ void pp_decline_call(uint32_t cookie) {
 }
 
 void pp_get_phone_state(void) {
-  prv_send_phone_command_to_handset(PhoneCmdGetStateRequest, NULL, 0);
+  prv_send_phone_command_to_handset(PhoneCmdGetStateRequest, nullptr, 0);
 }
 
 void pp_get_phone_state_set_enabled(bool enabled) {
@@ -141,14 +140,12 @@ static bool prv_parse_msg_to_event(const uint8_t *iter, size_t length, PebbleEve
   PebbleCallInfo call_info;
   call_info = (PebbleCallInfo){};
 
-  PebblePhoneCaller *caller = NULL;
+  PebblePhoneCaller *caller = nullptr;
   PhoneEventType type = ~0;
 
   switch (msg_type) {
     case PhoneCmdIncoming: {
-      // PBL-34640 Generating incoming call events for phone state responses just gives us a bad
-      // time. We can look at changing this later if iOS ever starts sending us cookies properly,
-      // but it's not really worth the effort since it only applies to iOS 8
+      // Incoming call events from phone state responses only apply to iOS 8 and cause trouble
       if (is_state_response) {
         return false;
       }

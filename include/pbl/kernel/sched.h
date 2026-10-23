@@ -9,7 +9,7 @@
 /**
  * @defgroup kernel_sched Scheduler
  * @ingroup kernel
- * @brief Scheduler start, preemption control and uptime.
+ * @brief Scheduler start and preemption control.
  *
  * pbl_sched_lock() keeps the calling thread running without masking interrupts: switches
  * requested meanwhile, e.g. by an ISR waking a higher priority thread, happen at the outermost
@@ -29,7 +29,7 @@
  * Creates the idle thread and switches to the highest priority thread. Called once from main(),
  * after the first threads have been created.
  */
-void pbl_kernel_start(void) PBL_NORETURN;
+[[noreturn]] void pbl_kernel_start(void);
 
 /**
  * @brief Check whether the scheduler has started.
@@ -59,12 +59,5 @@ void pbl_sched_unlock(void);
  * @return true while pbl_sched_lock() is in effect.
  */
 bool pbl_sched_is_locked(void);
-
-/**
- * @brief Get the time since the scheduler started.
- *
- * @return Ticks elapsed, including time spent in tickless sleep. Wraps around.
- */
-pbl_tick_t pbl_uptime_ticks(void);
 
 /** @} */

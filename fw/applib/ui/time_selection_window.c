@@ -188,7 +188,7 @@ static void prv_handle_dec(unsigned index, void *context) {
 
 // Public Functions
 void time_selection_window_set_to_current_time(TimeSelectionWindowData *time_selection_window) {
-  struct tm current_time;
+  struct pbl_tm current_time;
   clock_get_time_tm(&current_time);
   time_selection_window->time_data.hour = current_time.tm_hour;
   time_selection_window->time_data.minute = current_time.tm_min;
@@ -215,7 +215,7 @@ void time_selection_window_configure(TimeSelectionWindowData *time_selection_win
 }
 
 static void prv_text_layer_init(Layer *window_layer, TextLayer *text_layer, const GFont font) {
-  text_layer_init_with_parameters(text_layer, &GRectZero, NULL, font, GColorBlack, GColorClear,
+  text_layer_init_with_parameters(text_layer, &GRectZero, nullptr, font, GColorBlack, GColorClear,
                                   GTextAlignmentCenter, GTextOverflowModeTrailingEllipsis);
   layer_add_child(window_layer, &text_layer->layer);
   layer_set_hidden(&text_layer->layer, true);

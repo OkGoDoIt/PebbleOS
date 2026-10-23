@@ -8,10 +8,11 @@
 #include "option_menu.h"
 #include "window.h"
 
-#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/als.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/services/light.h>
 #include <pbl/util/size.h>
@@ -19,15 +20,19 @@
 #include <applib/ui/ui.h>
 #include <kernel/pbl_malloc.h>
 #include <process_state/app_state/app_state.h>
+#include <resource/language_pack.h>
 #include <shell/prefs.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 // Forward decl so the parent menu can push the Backlight submenu.
 static void prv_backlight_submenu_push(void);
 
 typedef struct SettingsDisplayData {
   SettingsCallbacks callbacks;
+  I18nPackInfo packs[LANGUAGE_PACK_COUNT];
+  uint8_t pack_slots[LANGUAGE_PACK_COUNT];
+  uint8_t pack_count;
+  const char *language_labels[LANGUAGE_PACK_COUNT + 1];
 } SettingsDisplayData;
 
 typedef struct SettingsBacklightData {
@@ -35,26 +40,52 @@ typedef struct SettingsBacklightData {
   char als_value_buffer[16];         // Buffer for ALS value display
   char backlight_percent_buffer[16]; // Buffer for backlight percentage display
   AppTimer *update_timer;            // Timer for live updating debug values
-  bool als_primed;                   // Whether we currently hold an ambient_light_prime() ref
+  bool als_primed;                   // Whether we currently hold a pbl_als_prime() ref
 } SettingsBacklightData;
 
-static const char *s_language_labels[] = {
-  [ShellLanguageInstalledPack] = i18n_noop("Custom"),
-  [ShellLanguageEnglish] = "English",
-};
-
 static void prv_language_menu_select(OptionMenu *option_menu, int selection, void *context) {
-  shell_prefs_set_language((ShellLanguage)selection);
+  SettingsDisplayData *data = settings_option_menu_get_context((SettingsOptionMenuData *)context);
+  if (selection > 0) {
+    const uint8_t slot = data->pack_slots[selection - 1];
+    I18nPackInfo current;
+    const I18nPackInfo *previous = &data->packs[slot];
+    if (!i18n_get_pack_info(slot, &current) || current.version != previous->version ||
+        strcmp(current.locale, previous->locale) != 0) {
+      app_window_stack_remove(&option_menu->window, true /* animated */);
+      return;
+    }
+  }
+  const ShellLanguage language =
+      selection == 0 ? ShellLanguageEnglish
+                     : shell_language_for_pack_slot(data->pack_slots[selection - 1]);
   app_window_stack_remove(&option_menu->window, true /* animated */);
+  shell_prefs_set_language(language);
 }
 
 static void prv_language_menu_push(SettingsDisplayData *data) {
+  data->pack_count = 0;
+  data->language_labels[0] = "English";
+  int selected = 0;
+  for (uint8_t slot = 0; slot < LANGUAGE_PACK_COUNT; ++slot) {
+    I18nPackInfo *pack = &data->packs[slot];
+    const bool valid = i18n_get_pack_info(slot, pack);
+    if (!valid) {
+      continue;
+    }
+    data->pack_slots[data->pack_count] = slot;
+    data->language_labels[++data->pack_count] = pack->name;
+    if (!shell_prefs_get_language_english() &&
+        shell_prefs_get_language() == shell_language_for_pack_slot(slot)) {
+      selected = data->pack_count;
+    }
+  }
+  const uint8_t count = data->pack_count + 1;
   const OptionMenuCallbacks callbacks = {
     .select = prv_language_menu_select,
   };
-  settings_option_menu_push(i18n_noop("Language"), OptionMenuContentType_SingleLine,
-                            shell_prefs_get_language(), &callbacks, ARRAY_LENGTH(s_language_labels),
-                            false /* icons_enabled */, s_language_labels, data);
+  settings_option_menu_push(i18n_noop("Language"), OptionMenuContentType_SingleLine, selected,
+                            &callbacks, count, false /* icons_enabled */, data->language_labels,
+                            data);
 }
 
 // Text Size
@@ -104,9 +135,6 @@ static uint8_t prv_get_scaled_brightness(void) {
 
 static int prv_intensity_get_selection_index() {
   const uint8_t intensity = prv_get_scaled_brightness();
-
-  // FIXME: PBL-22272 ... We will return idx 0 if someone has an old value for
-  // one of the intensity options
   for (int i = 0; i < (int)ARRAY_LENGTH(s_intensity_values); i++) {
     if (s_intensity_values[i] == intensity) {
       return i;
@@ -360,7 +388,7 @@ static uint16_t prv_backlight_item_from_row(uint16_t row) {
     }
     visible_row++;
   }
-  WTF;
+  pbl_panic();
 }
 
 static void prv_backlight_select_click_cb(SettingsCallbacks *context, uint16_t row) {
@@ -392,7 +420,7 @@ static void prv_backlight_select_click_cb(SettingsCallbacks *context, uint16_t r
       prv_timeout_menu_push(data);
       break;
     default:
-      WTF;
+      pbl_panic();
   }
   settings_menu_reload_data(SettingsMenuItemDisplay);
   settings_menu_mark_dirty(SettingsMenuItemDisplay);
@@ -401,8 +429,8 @@ static void prv_backlight_select_click_cb(SettingsCallbacks *context, uint16_t r
 static void prv_backlight_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
                                       const Layer *cell_layer, uint16_t row, bool selected) {
   SettingsBacklightData *data = (SettingsBacklightData *)context;
-  const char *title = NULL;
-  const char *subtitle = NULL;
+  const char *title = nullptr;
+  const char *subtitle = nullptr;
   switch (prv_backlight_item_from_row(row)) {
     case SettingsBacklightMode:
       title = i18n_noop("Backlight");
@@ -436,7 +464,7 @@ static void prv_backlight_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
     case SettingsBacklightAmbientSensor:
       title = i18n_noop("Ambient Sensor");
       if (backlight_is_ambient_sensor_enabled()) {
-        uint32_t als_value = light_get_ambient_lux();
+        uint32_t als_value = light_get_ambient_gate_lux();
         snprintf(data->als_value_buffer, sizeof(data->als_value_buffer), i18n_get("On (%d)", data),
                  (int)als_value);
         subtitle = data->als_value_buffer;
@@ -464,9 +492,9 @@ static void prv_backlight_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       subtitle = s_timeout_labels[prv_timeout_get_selection_index()];
       break;
     default:
-      WTF;
+      pbl_panic();
   }
-  menu_cell_basic_draw(ctx, cell_layer, i18n_get(title, data), i18n_get(subtitle, data), NULL);
+  menu_cell_basic_draw(ctx, cell_layer, i18n_get(title, data), i18n_get(subtitle, data), nullptr);
 }
 
 static uint16_t prv_backlight_num_rows_cb(SettingsCallbacks *context) {
@@ -497,7 +525,7 @@ static void prv_backlight_appear_cb(SettingsCallbacks *context) {
   // Hold the ALS in continuous mode while this submenu is visible so the
   // 500 ms refresh tick doesn't pay a full integration time per read.
   if (!data->als_primed) {
-    ambient_light_prime();
+    pbl_als_prime(ALS);
     data->als_primed = true;
   }
 }
@@ -506,10 +534,10 @@ static void prv_backlight_hide_cb(SettingsCallbacks *context) {
   SettingsBacklightData *data = (SettingsBacklightData *)context;
   if (data->update_timer) {
     app_timer_cancel(data->update_timer);
-    data->update_timer = NULL;
+    data->update_timer = nullptr;
   }
   if (data->als_primed) {
-    ambient_light_release();
+    pbl_als_release(ALS);
     data->als_primed = false;
   }
 }
@@ -518,10 +546,10 @@ static void prv_backlight_deinit_cb(SettingsCallbacks *context) {
   SettingsBacklightData *data = (SettingsBacklightData *)context;
   if (data->update_timer) {
     app_timer_cancel(data->update_timer);
-    data->update_timer = NULL;
+    data->update_timer = nullptr;
   }
   if (data->als_primed) {
-    ambient_light_release();
+    pbl_als_release(ALS);
     data->als_primed = false;
   }
   i18n_free_all(data);
@@ -595,7 +623,7 @@ static uint16_t prv_display_item_from_row(uint16_t row) {
     }
     visible_row++;
   }
-  WTF;
+  pbl_panic();
 }
 
 static void prv_display_select_click_cb(SettingsCallbacks *context, uint16_t row) {
@@ -633,7 +661,7 @@ static void prv_display_select_click_cb(SettingsCallbacks *context, uint16_t row
       break;
 #endif
     default:
-      WTF;
+      pbl_panic();
   }
   settings_menu_reload_data(SettingsMenuItemDisplay);
   settings_menu_mark_dirty(SettingsMenuItemDisplay);
@@ -642,8 +670,8 @@ static void prv_display_select_click_cb(SettingsCallbacks *context, uint16_t row
 static void prv_display_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
                                     const Layer *cell_layer, uint16_t row, bool selected) {
   SettingsDisplayData *data = (SettingsDisplayData *)context;
-  const char *title = NULL;
-  const char *subtitle = NULL;
+  const char *title = nullptr;
+  const char *subtitle = nullptr;
   switch (prv_display_item_from_row(row)) {
     case SettingsDisplayBacklight:
       title = i18n_noop("Backlight");
@@ -688,9 +716,9 @@ static void prv_display_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
       break;
 #endif
     default:
-      WTF;
+      pbl_panic();
   }
-  menu_cell_basic_draw(ctx, cell_layer, i18n_get(title, data), i18n_get(subtitle, data), NULL);
+  menu_cell_basic_draw(ctx, cell_layer, i18n_get(title, data), i18n_get(subtitle, data), nullptr);
 }
 
 static uint16_t prv_display_num_rows_cb(SettingsCallbacks *context) {

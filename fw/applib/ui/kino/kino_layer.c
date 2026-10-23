@@ -15,12 +15,8 @@ static void prv_invert_pdc_colors(GDrawCommandProcessor *processor, GDrawCommand
       processed_command, gcolor_invert(gdraw_command_get_fill_color((GDrawCommand *)command)));
 }
 
-GDrawCommandProcessor prv_gdraw_inv_processor = {
+static GDrawCommandProcessor s_invert_processor = {
   .command = prv_invert_pdc_colors,
-};
-
-KinoReelProcessor PRV_INVERT_COLORS_PROCESSOR = {
-  .draw_command_processor = &prv_gdraw_inv_processor
 };
 
 static void prv_update_proc(Layer *layer, GContext *ctx) {
@@ -34,14 +30,15 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
 
   // Draw Reel
   KinoReel *reel = kino_player_get_reel(&kino_layer->player);
-  if (reel == NULL) {
+  if (reel == nullptr) {
     return;
   }
 
   const GRect reel_bounds = kino_layer_get_reel_bounds(kino_layer);
 
-  KinoReelProcessor processor =
-      kino_layer->invert_colors ? PRV_INVERT_COLORS_PROCESSOR : (KinoReelProcessor){};
+  KinoReelProcessor processor = {
+    .draw_command_processor = kino_layer->draw_command_processor,
+  };
   kino_player_draw_processed(&kino_layer->player, ctx, reel_bounds.origin, &processor);
 }
 
@@ -96,7 +93,7 @@ KinoLayer *kino_layer_create(GRect frame) {
 }
 
 void kino_layer_destroy(KinoLayer *kino_layer) {
-  if (kino_layer == NULL) {
+  if (kino_layer == nullptr) {
     return;
   }
 
@@ -108,7 +105,7 @@ Layer *kino_layer_get_layer(KinoLayer *kino_layer) {
   if (kino_layer) {
     return &kino_layer->layer;
   } else {
-    return NULL;
+    return nullptr;
   }
 }
 
@@ -117,8 +114,13 @@ void kino_layer_set_reel(KinoLayer *kino_layer, KinoReel *reel, bool take_owners
 }
 
 void kino_layer_set_invert_colors(KinoLayer *kino_layer, bool invert) {
-  // Store the invert flag in the LSB of the context pointer
-  kino_layer->invert_colors = invert;
+  kino_layer->draw_command_processor = invert ? &s_invert_processor : nullptr;
+}
+
+void kino_layer_set_draw_command_processor(KinoLayer *kino_layer,
+                                           GDrawCommandProcessor *processor) {
+  kino_layer->draw_command_processor = processor;
+  layer_mark_dirty(&kino_layer->layer);
 }
 
 void kino_layer_set_reel_with_resource(KinoLayer *kino_layer, uint32_t resource_id) {
@@ -185,7 +187,7 @@ GAlign kino_layer_get_alignment(KinoLayer *kino_layer) {
 
 GRect kino_layer_get_reel_bounds(KinoLayer *kino_layer) {
   KinoPlayer *player = kino_layer_get_player(kino_layer);
-  KinoReel *reel = player ? kino_player_get_reel(player) : NULL;
+  KinoReel *reel = player ? kino_player_get_reel(player) : nullptr;
   if (!reel) {
     return GRectZero;
   }

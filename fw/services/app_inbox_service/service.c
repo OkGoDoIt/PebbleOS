@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/app_inbox_service.h>
 #include <pbl/util/list.h>
@@ -9,8 +10,6 @@
 #include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
 #include <process_management/process_manager.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_app_inbox_service, CONFIG_SERVICE_APP_INBOX_SERVICE_LOG_LEVEL);
 
@@ -57,8 +56,8 @@ typedef struct AppInboxConsumerInfo {
   uint8_t *end;
 } AppInboxConsumerInfo;
 
-_Static_assert(sizeof(AppInboxServiceTag) <= sizeof(void *),
-               "AppInboxServiceTag should fit inside a void *");
+static_assert(sizeof(AppInboxServiceTag) <= sizeof(void *),
+              "AppInboxServiceTag should fit inside a void *");
 
 static AppInboxNode *s_app_inbox_head;
 
@@ -115,10 +114,13 @@ static AppInboxServiceTag prv_tag_for_event_handlers(const AppInboxMessageHandle
   return AppInboxServiceTagInvalid;
 }
 
-DEFINE_SYSCALL(bool, sys_app_inbox_service_register, uint8_t *storage, size_t storage_size,
-               AppInboxMessageHandler message_handler, AppInboxDroppedHandler dropped_handler) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(storage, storage_size);
+static bool prv_is_inbox_owned_by_current_task(uint8_t *storage, AppInboxServiceTag tag);
+
+PBL_SYSCALL(bool, sys_app_inbox_service_register, (OUT_BUF, uint8_t *, storage, storage_size),
+            (VAL, size_t, storage_size), (VAL, AppInboxMessageHandler, message_handler),
+            (VAL, AppInboxDroppedHandler, dropped_handler)) {
+  if (from_user && pebble_task_get_current() != PebbleTask_App) {
+    pbl_syscall_fail();
   }
   const AppInboxServiceTag service_tag =
       prv_tag_for_event_handlers(message_handler, dropped_handler);
@@ -126,25 +128,31 @@ DEFINE_SYSCALL(bool, sys_app_inbox_service_register, uint8_t *storage, size_t st
     PBL_LOG_ERR("AppInbox event handlers not allowed <0x%" PRIx32 ", 0x%" PRIx32 ">",
                 // Ugh.. no more format signature slots free for %p %p...
                 (uint32_t)(uintptr_t)message_handler, (uint32_t)(uintptr_t)dropped_handler);
-    syscall_failed();
+    pbl_syscall_fail();
   }
 
   return app_inbox_service_register(storage, storage_size, message_handler, dropped_handler,
                                     service_tag);
 }
 
-DEFINE_SYSCALL(uint32_t, sys_app_inbox_service_unregister, uint8_t *storage) {
+PBL_SYSCALL(uint32_t, sys_app_inbox_service_unregister, (VAL, uint8_t *, storage)) {
   // No check is needed on the value of `storage `, we're not going to dereference it.
+  if (from_user && !prv_is_inbox_owned_by_current_task(storage, AppInboxServiceTagInvalid)) {
+    return 0;
+  }
   return app_inbox_service_unregister_by_storage(storage);
 }
 
 static bool prv_get_consumer_info(AppInboxServiceTag tag, AppInboxConsumerInfo *info_in_out);
 
-DEFINE_SYSCALL(bool, sys_app_inbox_service_get_consumer_info, AppInboxServiceTag tag,
-               AppInboxConsumerInfo *info_out) {
-  if (PRIVILEGE_WAS_ELEVATED) {
+PBL_SYSCALL(bool, sys_app_inbox_service_get_consumer_info, (VAL, AppInboxServiceTag, tag),
+            (VAL, AppInboxConsumerInfo *, info_out)) {
+  if (from_user) {
     if (info_out) {
-      syscall_assert_userspace_buffer(info_out, sizeof(*info_out));
+      pbl_syscall_verify_user(info_out, sizeof(*info_out));
+    }
+    if (!prv_is_inbox_owned_by_current_task(nullptr, tag)) {
+      return false;
     }
   }
   return prv_get_consumer_info(tag, info_out);
@@ -152,9 +160,12 @@ DEFINE_SYSCALL(bool, sys_app_inbox_service_get_consumer_info, AppInboxServiceTag
 
 static void prv_consume(AppInboxConsumerInfo *consumer_info);
 
-DEFINE_SYSCALL(void, sys_app_inbox_service_consume, AppInboxConsumerInfo *consumer_info) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(consumer_info, sizeof(*consumer_info));
+PBL_SYSCALL(void, sys_app_inbox_service_consume,
+            (OUT_BUF, AppInboxConsumerInfo *, consumer_info, sizeof(*consumer_info))) {
+  if (from_user) {
+    if (!prv_is_inbox_owned_by_current_task(nullptr, consumer_info->tag)) {
+      pbl_syscall_fail();
+    }
   }
   prv_consume(consumer_info);
 }
@@ -187,6 +198,14 @@ static bool prv_list_filter_by_tag(ListNode *found_node, void *data) {
 static AppInboxNode *prv_find_inbox_by_tag(AppInboxServiceTag tag) {
   return (AppInboxNode *)list_find((ListNode *)s_app_inbox_head, prv_list_filter_by_tag,
                                    (void *)(uintptr_t)tag);
+}
+
+static bool prv_is_inbox_owned_by_current_task(uint8_t *storage, AppInboxServiceTag tag) {
+  prv_lock();
+  AppInboxNode *inbox = storage ? prv_find_inbox_by_storage(storage) : prv_find_inbox_by_tag(tag);
+  const bool owned = inbox && (inbox->event_handler_task == pebble_task_get_current());
+  prv_unlock();
+  return owned;
 }
 
 static AppInboxNode *prv_find_inbox_by_tag_and_log_if_not_found(AppInboxServiceTag tag) {
@@ -345,7 +364,7 @@ bool app_inbox_service_register(uint8_t *storage, size_t storage_size,
 
     if (has_error) {
       kernel_free(new_node);
-      new_node = NULL;
+      new_node = nullptr;
     } else {
       new_node->tag = tag;
       new_node->message_handler = message_handler;
@@ -359,7 +378,7 @@ bool app_inbox_service_register(uint8_t *storage, size_t storage_size,
   }
   prv_unlock();
 
-  return (new_node != NULL);
+  return (new_node != nullptr);
 }
 
 uint32_t app_inbox_service_unregister_by_storage(uint8_t *storage) {
@@ -368,7 +387,7 @@ uint32_t app_inbox_service_unregister_by_storage(uint8_t *storage) {
   {
     AppInboxNode *node = prv_find_inbox_by_storage(storage);
     if (node) {
-      list_remove((ListNode *)node, (ListNode **)&s_app_inbox_head, NULL);
+      list_remove((ListNode *)node, (ListNode **)&s_app_inbox_head, nullptr);
       num_messages_lost = node->num_failed + node->num_success + (node->writer ? 1 : 0);
       kernel_free(node);
     }
@@ -386,13 +405,13 @@ void app_inbox_service_unregister_all(void) {
       kernel_free(node);
       node = next;
     }
-    s_app_inbox_head = NULL;
+    s_app_inbox_head = nullptr;
   }
   prv_unlock();
 }
 
 static bool prv_is_inbox_being_written(AppInboxNode *inbox) {
-  return (inbox->writer != NULL);
+  return (inbox->writer != nullptr);
 }
 
 static size_t prv_get_space_remaining(AppInboxNode *inbox) {
@@ -430,7 +449,6 @@ static void prv_send_event_if_needed(AppInboxNode *inbox) {
 
 static void prv_mark_failed_if_no_writer(AppInboxNode *inbox) {
   if (!inbox->writer) {
-    // See PBL-41464
     // App message has been reset (closed and opened again) while a message was being received.
     // Fail it because our state got lost.
     inbox->write_failed = true;
@@ -499,7 +517,7 @@ unlock:
 }
 
 static void prv_finish(AppInboxNode *inbox) {
-  inbox->writer = NULL;
+  inbox->writer = nullptr;
   inbox->buffer.current_offset = 0;
 }
 
@@ -556,7 +574,7 @@ unlock:
 bool app_inbox_service_has_inbox_for_tag(AppInboxServiceTag tag) {
   bool has_inbox;
   prv_lock();
-  has_inbox = (prv_find_inbox_by_tag(tag) != NULL);
+  has_inbox = (prv_find_inbox_by_tag(tag) != nullptr);
   prv_unlock();
   return has_inbox;
 }
@@ -564,7 +582,7 @@ bool app_inbox_service_has_inbox_for_tag(AppInboxServiceTag tag) {
 bool app_inbox_service_has_inbox_for_storage(uint8_t *storage) {
   bool has_inbox;
   prv_lock();
-  has_inbox = (prv_find_inbox_by_storage(storage) != NULL);
+  has_inbox = (prv_find_inbox_by_storage(storage) != nullptr);
   prv_unlock();
   return has_inbox;
 }
@@ -574,7 +592,7 @@ bool app_inbox_service_is_being_written_for_tag(AppInboxServiceTag tag) {
   prv_lock();
   AppInboxNode *inbox = prv_find_inbox_by_tag(tag);
   if (inbox) {
-    is_written = (inbox->writer != NULL);
+    is_written = (inbox->writer != nullptr);
   }
   prv_unlock();
   return is_written;

@@ -6,7 +6,7 @@
 
 #include "kernel/pbl_malloc.h"
 #include "pbl/logging/logging.h"
-#include "system/passert.h"
+#include "pbl/kernel/assert.h"
 #include <pbl/kernel/compiler.h>
 
 #ifndef UNITTEST

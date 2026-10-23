@@ -2,7 +2,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <inttypes.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/bluetooth/conn_event_stats.h>
@@ -125,8 +124,8 @@ static void prv_protocol_send_next_chunk(void *raw_state) {
 
   SendBuffer *sb;
   if (packet_len == 0 ||
-      !(sb = comm_session_send_buffer_begin_write(state->session, GET_BYTES_ENDPOINT_ID, packet_len,
-                                                  COMM_SESSION_DEFAULT_TIMEOUT))) {
+      !(sb = comm_session_send_buffer_begin_write_bulk(state->session, GET_BYTES_ENDPOINT_ID,
+                                                       packet_len, COMM_SESSION_DEFAULT_TIMEOUT))) {
     // If timeout, try again
     // MT: What if the session got disconnected?
     system_task_add_callback(prv_protocol_send_next_chunk, state);
@@ -195,12 +194,12 @@ cleanup:
 //! was successful.
 bool prv_setup_state_for_command(GetBytesCmd cmd, GetBytesState *state, const uint8_t *data,
                                  uint32_t len) {
-  GetBytesStorageInfo info = {0};
+  GetBytesStorageInfo info = {};
 
   switch (cmd) {
     case GET_BYTES_CMD_GET_NEW_COREDUMP:
       info.only_get_new_coredump = true;
-      /* FALLTHROUGH */
+      [[fallthrough]];
     case GET_BYTES_CMD_GET_COREDUMP:
       state->object_type = GetBytesObjectCoredump;
       return gb_storage_setup(&state->storage, state->object_type, &info);

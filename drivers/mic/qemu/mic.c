@@ -5,11 +5,11 @@
 
 #include <pbl/drivers/mic.h>
 #include <pbl/drivers/mic/qemu/mic_definitions.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 
 #include <board/board.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(driver_mic_qemu, CONFIG_DRIVER_MIC_LOG_LEVEL);
 
@@ -94,9 +94,9 @@ void mic_stop(MicDevice *this) {
 
   state->is_running = false;
   new_timer_stop(state->timer);
-  state->data_handler = NULL;
-  state->handler_context = NULL;
-  state->audio_buffer = NULL;
+  state->data_handler = nullptr;
+  state->handler_context = nullptr;
+  state->audio_buffer = nullptr;
   state->audio_buffer_len = 0;
 }
 

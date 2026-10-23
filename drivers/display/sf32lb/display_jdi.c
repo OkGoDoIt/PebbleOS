@@ -5,7 +5,10 @@
 #include <pbl/drivers/display/sf32lb/display_jdi.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/delay.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/logging/logging.h>
@@ -18,8 +21,6 @@
 #include <bf0_hal_rtc.h>
 #include <board/board.h>
 #include <kernel/events.h>
-#include <kernel/util/delay.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(driver_display_jdi, CONFIG_DRIVER_DISPLAY_LOG_LEVEL);
 
@@ -46,6 +47,7 @@ static uint16_t s_update_y0;
 static uint16_t s_update_y1;
 static bool s_initialized;
 static bool s_updating;
+static bool s_update_failed;
 static UpdateCompleteCallback s_uccb;
 static PBL_SEM_DEFINE(s_sem, 0, 1);
 static TimerID s_silent_loss_timer = TIMER_INVALID_ID;
@@ -88,7 +90,7 @@ static volatile bool s_lcdc_eof_cb_fired;
 #ifndef CONFIG_RELEASE
 // Test hook: arm a one-shot drop of the next LCDC transfer-complete callback,
 // simulating the silent-loss failure mode. The silent-loss timer should fire
-// ~DISPLAY_SILENT_LOSS_TIMEOUT_MS later and PBL_CROAK.
+// ~DISPLAY_SILENT_LOSS_TIMEOUT_MS later and a panic.
 static volatile bool s_test_drop_next_complete;
 #endif
 
@@ -98,46 +100,32 @@ static bool s_rotated_180 = true;
 static bool s_rotated_180 = false;
 #endif
 
-static void prv_power_cycle(void) {
-  OutputConfig cfg = {
-    .gpio = hwp_gpio1,
-    .active_high = true,
-  };
+static void prv_drive_low(const Pinmux *pinmux) {
+  const struct pbl_gpio gpio = PBL_GPIO(SF32LB_GPIO1, pinmux->pad - PAD_PA00, 0);
 
+  pbl_gpio_configure(&gpio, PBL_GPIO_OUTPUT_LOW);
+}
+
+static void prv_power_cycle(void) {
   // This will disable all JDI pull-ups/downs so that VLCD can fully turn off,
   // allowing for a clean power cycle.
+  prv_drive_low(&DISPLAY->pinmux.b1);
+  prv_drive_low(&DISPLAY->pinmux.vck);
+  prv_drive_low(&DISPLAY->pinmux.xrst);
+  prv_drive_low(&DISPLAY->pinmux.hck);
+  prv_drive_low(&DISPLAY->pinmux.r2);
 
-  cfg.gpio_pin = DISPLAY->pinmux.b1.pad - PAD_PA00;
-  gpio_output_init(&cfg, GPIO_OType_PP);
-  gpio_output_set(&cfg, false);
+  pbl_gpio_set(&DISPLAY->vddp, false);
+  pbl_gpio_set(&DISPLAY->vlcd, false);
 
-  cfg.gpio_pin = DISPLAY->pinmux.vck.pad - PAD_PA00;
-  gpio_output_init(&cfg, GPIO_OType_PP);
-  gpio_output_set(&cfg, false);
-
-  cfg.gpio_pin = DISPLAY->pinmux.xrst.pad - PAD_PA00;
-  gpio_output_init(&cfg, GPIO_OType_PP);
-  gpio_output_set(&cfg, false);
-
-  cfg.gpio_pin = DISPLAY->pinmux.hck.pad - PAD_PA00;
-  gpio_output_init(&cfg, GPIO_OType_PP);
-  gpio_output_set(&cfg, false);
-
-  cfg.gpio_pin = DISPLAY->pinmux.r2.pad - PAD_PA00;
-  gpio_output_init(&cfg, GPIO_OType_PP);
-  gpio_output_set(&cfg, false);
-
-  gpio_output_set(&DISPLAY->vddp, false);
-  gpio_output_set(&DISPLAY->vlcd, false);
-
-  delay_us(POWER_RESET_CYCLE_DELAY_TIME_US);
+  pbl_busy_wait_us(POWER_RESET_CYCLE_DELAY_TIME_US);
 }
 
 static void prv_display_on() {
-  gpio_output_set(&DISPLAY->vlcd, true);
-  delay_us(POWER_SEQ_DELAY_TIME_US);
-  gpio_output_set(&DISPLAY->vddp, true);
-  delay_us(POWER_SEQ_DELAY_TIME_US);
+  pbl_gpio_set(&DISPLAY->vlcd, true);
+  pbl_busy_wait_us(POWER_SEQ_DELAY_TIME_US);
+  pbl_gpio_set(&DISPLAY->vddp, true);
+  pbl_busy_wait_us(POWER_SEQ_DELAY_TIME_US);
 
   LPTIM_TypeDef *lptim = DISPLAY->vcom.lptim;
 
@@ -157,10 +145,10 @@ static void prv_display_off() {
   lptim->CR &= ~LPTIM_CR_ENABLE;
   lptim->CR &= ~LPTIM_CR_CNTSTRT;
 
-  delay_us(POWER_SEQ_DELAY_TIME_US);
-  gpio_output_set(&DISPLAY->vddp, false);
-  delay_us(POWER_SEQ_DELAY_TIME_US);
-  gpio_output_set(&DISPLAY->vlcd, false);
+  pbl_busy_wait_us(POWER_SEQ_DELAY_TIME_US);
+  pbl_gpio_set(&DISPLAY->vddp, false);
+  pbl_busy_wait_us(POWER_SEQ_DELAY_TIME_US);
+  pbl_gpio_set(&DISPLAY->vlcd, false);
 }
 
 #define ROW_WORDS (PBL_DISPLAY_WIDTH / 4)
@@ -261,12 +249,12 @@ static void prv_silent_loss_handler(void *data) {
   // hal_sifli/sf32lb52 system_bf0_ap.c), so the snapshot stores above land
   // in D-cache. PebbleOS captures coredump RAM after the crash path may
   // have already invalidated the cache, so flush the dirty lines back to
-  // physical SRAM before we trip PBL_CROAK.
+  // physical SRAM before we trip a panic.
   uintptr_t snap_addr = (uintptr_t)s_lcdc_pre_crash_regs;
   size_t snap_size = sizeof(s_lcdc_pre_crash_regs);
   dcache_align(&snap_addr, &snap_size);
   dcache_flush((const void *)snap_addr, snap_size);
-  PBL_CROAK("LCDC silent loss: no EOF in %ums (State=%d Err=0x%lx y=%u..%u)",
+  pbl_panic("LCDC silent loss: no EOF in %ums (State=%d Err=0x%lx y=%u..%u)",
             (unsigned)DISPLAY_SILENT_LOSS_TIMEOUT_MS, (int)state->hlcdc.State,
             (unsigned long)state->hlcdc.ErrorCode, (unsigned)s_update_y0, (unsigned)s_update_y1);
 }
@@ -286,7 +274,7 @@ static void prv_display_update_terminate(void *data) {
   }
 
   s_updating = false;
-  s_uccb();
+  s_uccb(!s_update_failed);
   soc_sf32lb_sleep_release(SOC_SF32LB_DEEPWFI);
 }
 
@@ -323,7 +311,7 @@ void HAL_LCDC_SendLayerDataCpltCbk(LCDC_HandleTypeDef *lcdc) {
     s_test_drop_next_complete = false;
     // Simulate the lost-completion failure mode: leave s_eof_observed false
     // and don't post the terminate event. The silent-loss timer should fire
-    // ~DISPLAY_SILENT_LOSS_TIMEOUT_MS later and PBL_CROAK.
+    // ~DISPLAY_SILENT_LOSS_TIMEOUT_MS later and a panic.
     return;
   }
 #endif
@@ -354,8 +342,13 @@ void display_init(void) {
 
   DisplayJDIState *state = DISPLAY->state;
 
-  gpio_output_init(&DISPLAY->vddp, GPIO_OType_PP);
-  gpio_output_init(&DISPLAY->vlcd, GPIO_OType_PP);
+  // Runs from the boot splash, before pbl_device_init_all()
+  PBL_ASSERTN(pbl_device_init(&SF32LB_GPIO1->dev) == 0 &&
+              pbl_device_init(&DISPLAY->vddp.port->dev) == 0 &&
+              pbl_device_init(&DISPLAY->vlcd.port->dev) == 0);
+
+  pbl_gpio_configure(&DISPLAY->vddp, PBL_GPIO_OUTPUT);
+  pbl_gpio_configure(&DISPLAY->vlcd, PBL_GPIO_OUTPUT);
 
   prv_power_cycle();
 
@@ -437,7 +430,7 @@ void display_update(NextRowCallback nrcb, UpdateCompleteCallback uccb) {
 
   if (first_row) {
     // No rows to update
-    uccb();
+    uccb(true);
     return;
   }
 
@@ -454,6 +447,7 @@ void display_update(NextRowCallback nrcb, UpdateCompleteCallback uccb) {
 
   s_uccb = uccb;
   s_updating = true;
+  s_update_failed = false;
   s_eof_observed = false;
 
   soc_sf32lb_sleep_block(SOC_SF32LB_DEEPWFI);
@@ -463,11 +457,12 @@ void display_update(NextRowCallback nrcb, UpdateCompleteCallback uccb) {
   // completion path; the kickoff-failure path below stops it via the same
   // terminate call.
   new_timer_start(s_silent_loss_timer, DISPLAY_SILENT_LOSS_TIMEOUT_MS, prv_silent_loss_handler,
-                  NULL, 0);
+                  nullptr, 0);
   HAL_StatusTypeDef status = prv_display_update_start();
   if (status != HAL_OK) {
     prv_handle_send_failure("update", status);
-    prv_display_update_terminate(NULL);
+    s_update_failed = true;
+    prv_display_update_terminate(nullptr);
   }
 }
 

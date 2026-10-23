@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/services/blob_db/pin_db.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/i18n/i18n.h>
@@ -39,7 +40,6 @@
 #include <resource/resource_ids.auto.h>
 #include <shell/prefs.h>
 #include <shell/system_theme.h>
-#include <system/passert.h>
 
 typedef struct LoadedNotificationNode {
   ListNode node;
@@ -77,7 +77,7 @@ struct NotificationGroupWindow {
   char time_buffer[TIME_STRING_REQUIRED_LENGTH];
 };
 
-static NotificationsData *s_data = NULL;
+static NotificationsData *s_data = nullptr;
 
 static const unsigned int MAX_ACTIVE_NOTIFICATIONS = 6;
 
@@ -139,8 +139,8 @@ static void prv_unload_loaded_notification(LoadedNotificationNode *loaded_notif)
 
 static PBL_NOINLINE LoadedNotificationNode *prv_loaded_notification_list_load_item(
     LoadedNotificationNode **loaded_list, const Uuid *id) {
-  if (id == NULL) {
-    return NULL;
+  if (id == nullptr) {
+    return nullptr;
   }
 
   LoadedNotificationNode *loaded_node = prv_find_loaded_notification(*loaded_list, (Uuid *)id);
@@ -152,14 +152,14 @@ static PBL_NOINLINE LoadedNotificationNode *prv_loaded_notification_list_load_it
   if (list_count((ListNode *)*loaded_list) >= MAX_ACTIVE_NOTIFICATIONS) {
     LoadedNotificationNode *old_node =
         (LoadedNotificationNode *)list_get_tail((ListNode *)*loaded_list);
-    list_remove((ListNode *)old_node, (ListNode **)loaded_list, NULL);
+    list_remove((ListNode *)old_node, (ListNode **)loaded_list, nullptr);
     prv_unload_loaded_notification(old_node);
   }
 
   // load the notification
   TimelineItem notification;
   if (!notification_storage_get((Uuid *)id, &notification)) {
-    return NULL;
+    return nullptr;
   }
 
   // track the loaded notification
@@ -223,21 +223,33 @@ static void prv_notifications_history_init(NotificationsData *data) {
   notifications_history_init(&data->history, range != NotificationGroupingRange_Never, cutoff);
 }
 
-static bool prv_push_single_notification_window(const Uuid *id) {
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
-  // Muse's notifications open the conversation they belong to.
-  if (audio_companion_assistant_open_notification(id)) {
-    return true;
+// The presented list prepends, so add oldest first to keep it newest-first
+static void prv_add_row_notifications(const NotificationHistoryRow *row) {
+  if (!row->is_group) {
+    notification_window_add_notification_by_id((Uuid *)&row->notification.id);
+    return;
   }
-#endif
+
+  NotificationHistoryMember *member =
+      (NotificationHistoryMember *)list_get_tail(&row->group.members->node);
+  while (member) {
+    notification_window_add_notification_by_id(&member->entry.id);
+    member = (NotificationHistoryMember *)list_get_prev(&member->node);
+  }
+}
+
+static bool prv_push_group_notification_window(const NotificationGroupWindow *group_window,
+                                               uint16_t index) {
   notification_window_init_history(false);
   if (notification_window_is_modal()) {
     return false;
   }
 
-  notification_window_add_notification_by_id((Uuid *)id);
+  for (int i = group_window->count - 1; i >= 0; i--) {
+    notification_window_add_notification_by_id(&group_window->notification_ids[i]);
+  }
   notification_window_show();
-  notification_window_focus_notification((Uuid *)id, false);
+  notification_window_focus_notification(&group_window->notification_ids[index], false);
   return true;
 }
 
@@ -282,15 +294,23 @@ static void prv_group_window_draw_row(GContext *ctx, const Layer *cell_layer, Me
   clock_get_since_time(group_window->time_buffer, sizeof(group_window->time_buffer),
                        notification->header.timestamp);
   menu_cell_basic_draw_custom(ctx, cell_layer, system_theme_get_font(TextStyleFont_MenuCellTitle),
-                              message, NULL, NULL, system_theme_get_font(TextStyleFont_Caption),
-                              group_window->time_buffer, NULL, false, GTextOverflowModeFill);
+                              message, nullptr, nullptr,
+                              system_theme_get_font(TextStyleFont_Caption),
+                              group_window->time_buffer, nullptr, false, GTextOverflowModeFill);
 }
 
 static void prv_group_window_select(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
   NotificationGroupWindow *group_window = context;
-  if (cell_index->row < group_window->count) {
-    prv_push_single_notification_window(&group_window->notification_ids[cell_index->row]);
+  if (cell_index->row >= group_window->count) {
+    return;
   }
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  // Muse's notifications open the conversation they belong to.
+  if (audio_companion_assistant_open_notification(&group_window->notification_ids[cell_index->row])) {
+    return;
+  }
+#endif
+  prv_push_group_notification_window(group_window, cell_index->row);
 }
 
 static void prv_group_window_load(Window *window) {
@@ -329,7 +349,7 @@ static void prv_group_window_unload(Window *window) {
   NotificationGroupWindow *group_window = window_get_user_data(window);
   menu_layer_deinit(&group_window->menu_layer);
   text_layer_deinit(&group_window->sender_layer);
-  group_window->notifications_data->group_window = NULL;
+  group_window->notifications_data->group_window = nullptr;
   app_free(group_window->notification_ids);
   app_free(group_window->sender);
   app_free(group_window);
@@ -361,8 +381,7 @@ static void prv_push_group_window(NotificationsData *data, const NotificationHis
 }
 
 // Return true if successful
-static bool prv_push_notification_window(NotificationsData *data,
-                                         NotificationHistoryRow *selected_row) {
+static bool prv_push_notification_window(NotificationsData *data) {
   const bool has_collapsed_groups = notifications_history_has_collapsed_groups(&data->history);
   notification_window_init_history(!has_collapsed_groups);
 
@@ -372,17 +391,10 @@ static bool prv_push_notification_window(NotificationsData *data,
     return false;
   }
 
-  if (has_collapsed_groups) {
-    notification_window_add_notification_by_id(
-        (Uuid *)notifications_history_row_get_latest_id(selected_row));
-  } else {
-    NotificationHistoryRow *row =
-        (NotificationHistoryRow *)list_get_tail(&data->history.rows->node);
-    while (row) {
-      notification_window_add_notification_by_id(
-          (Uuid *)notifications_history_row_get_latest_id(row));
-      row = (NotificationHistoryRow *)list_get_prev(&row->node);
-    }
+  NotificationHistoryRow *row = (NotificationHistoryRow *)list_get_tail(&data->history.rows->node);
+  while (row) {
+    prv_add_row_notifications(row);
+    row = (NotificationHistoryRow *)list_get_prev(&row->node);
   }
 
   notification_window_show();
@@ -394,14 +406,14 @@ static bool prv_push_notification_window(NotificationsData *data,
 
 static void prv_dialog_unloaded(void *context) {
   NotificationsData *data = context;
-  data->actionable_dialog = NULL;
+  data->actionable_dialog = nullptr;
 }
 
 static void prv_confirmed_handler(ClickRecognizerRef recognizer, void *context) {
   NotificationsData *data = context;
   notification_storage_reset_and_init();
   prv_loaded_notification_list_deinit(data->loaded_notification_list);
-  data->loaded_notification_list = NULL;
+  data->loaded_notification_list = nullptr;
   notifications_history_deinit(&data->history);
   prv_notifications_history_init(data);
   prv_load_notification_storage(data);
@@ -434,7 +446,7 @@ static void prv_dialog_click_config(void *context) {
 static void prv_settings_clear_history_window_push(NotificationsData *data) {
   ActionableDialog *actionable_dialog = actionable_dialog_create("Clear Notifications");
   actionable_dialog_set_click_config_provider(actionable_dialog, prv_dialog_click_config);
-  actionable_dialog_set_action_bar_type(actionable_dialog, DialogActionBarConfirm, NULL);
+  actionable_dialog_set_action_bar_type(actionable_dialog, DialogActionBarConfirm, nullptr);
   Dialog *dialog = actionable_dialog_get_dialog(actionable_dialog);
   dialog_set_text(dialog, i18n_get("Clear history?", data));
   TimelineResourceInfo timeline_res = {
@@ -520,8 +532,8 @@ static void prv_draw_notification_cell_rect(GContext *ctx, const Layer *cell_lay
 
   const GFont title_font = system_theme_get_font(TextStyleFont_MenuCellTitle);
   const GFont subtitle_font = system_theme_get_font(TextStyleFont_Caption);
-  menu_cell_basic_draw_custom(ctx, cell_layer, title_font, title, NULL /* value_font */,
-                              NULL /* value */, subtitle_font, subtitle, NULL /* icon */,
+  menu_cell_basic_draw_custom(ctx, cell_layer, title_font, title, nullptr /* value_font */,
+                              nullptr /* value */, subtitle_font, subtitle, nullptr /* icon */,
                               false /* icon_on_right */, GTextOverflowModeTrailingEllipsis);
 
   // Restore the cell layer's bounds
@@ -541,7 +553,7 @@ static int16_t prv_draw_centered_text_line_in(GContext *ctx, GFont font, const G
   grect_align(&text_box, outer_box, align, true);
 
   graphics_draw_text(ctx, text, font, text_box, GTextOverflowModeTrailingEllipsis,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 
   return text_box.size.h;
 }
@@ -615,7 +627,7 @@ static void prv_draw_notification_cell_round_unselected(GContext *ctx, const Lay
   // Spalding's default content size (medium) while still being a little robust for any future round
   // watches that have a default content size larger than medium
   const GFont font = system_theme_get_font(TextStyleFont_Header);
-  prv_draw_notification_cell_round(ctx, cell_layer, &frame, font, title, NULL, NULL, NULL);
+  prv_draw_notification_cell_round(ctx, cell_layer, &frame, font, title, nullptr, nullptr, nullptr);
 }
 #endif
 
@@ -649,7 +661,7 @@ static void prv_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, vo
   }
 #endif
 
-  bool success = prv_push_notification_window(notifications_data, row);
+  bool success = prv_push_notification_window(notifications_data);
   if (!success) {
     // Bail if a notification came in ahead of us and created a modal window
     // before we had a chance to react to the select button event.
@@ -704,7 +716,7 @@ static const char *prv_get_group_title(NotificationsData *data, const Notificati
   const char *sender = row->group.sender;
   /// Notification sender followed by the number of grouped notifications
   const char *format = i18n_get("%s (%u)", data);
-  const int title_length = snprintf(NULL, 0, format, sender, (unsigned int)row->group.count);
+  const int title_length = snprintf(nullptr, 0, format, sender, (unsigned int)row->group.count);
   if (title_length < 0) {
     return sender;
   }
@@ -742,7 +754,7 @@ static void prv_draw_row_callback(GContext *ctx, const Layer *cell_layer, MenuIn
   if (first_row) {
     // Draw "Clear all" box and exit
 #if PBL_ROUND
-    draw_cell(ctx, cell_layer, i18n_get("Clear All", data), NULL, NULL);
+    draw_cell(ctx, cell_layer, i18n_get("Clear All", data), nullptr, nullptr);
 #else
     const GFont font = system_theme_get_font(TextStyleFont_MenuCellTitle);
     GRect box = cell_layer->bounds;
@@ -750,7 +762,7 @@ static void prv_draw_row_callback(GContext *ctx, const Layer *cell_layer, MenuIn
         (box.size.h - fonts_get_font_height(font)) / 2 - fonts_get_font_cap_offset(font);
 
     graphics_draw_text(ctx, i18n_get("Clear All", data), font, box,
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, nullptr);
 #endif
     return;
   }
@@ -801,7 +813,7 @@ static void prv_draw_row_callback(GContext *ctx, const Layer *cell_layer, MenuIn
     // no subtitle, but yes title
     subtitle = body;
   } else {
-    WTF;
+    pbl_panic();
   }
 
   if (notifications_history_row_is_collapsed_group(row)) {
@@ -817,7 +829,7 @@ static void prv_update_text_layer_visibility(NotificationsData *data) {
   NotificationHistoryRow *row = data->history.rows;
 
   // Toggle which layer is visible
-  if (row == NULL) {
+  if (row == nullptr) {
     layer_set_hidden((Layer *)&data->menu_layer, true);
     layer_set_hidden((Layer *)&data->text_layer, false);
   } else {
@@ -963,7 +975,7 @@ static void prv_window_appear(Window *window) {
 static void prv_window_disappear(Window *window) {
   NotificationsData *data = window_get_user_data(window);
   prv_loaded_notification_list_deinit(data->loaded_notification_list);
-  data->loaded_notification_list = NULL;
+  data->loaded_notification_list = nullptr;
 }
 
 static void prv_window_load(Window *window) {
@@ -1054,21 +1066,23 @@ static NotificationHistoryRow *prv_find_history_row(NotificationsData *data, con
     }
     row = (NotificationHistoryRow *)list_get_next(&row->node);
   }
-  return NULL;
+  return nullptr;
 }
 
 static bool prv_launch_into_notification(NotificationsData *data, Uuid id) {
   // The notification may have been dismissed or aged out of storage between the widget being
   // shown and the button press; fall back to the list rather than opening nothing.
-  NotificationHistoryRow *row = prv_find_history_row(data, &id);
-  if (!row) {
+  if (!prv_find_history_row(data, &id)) {
     return false;
   }
-  // A collapsed sender group opens the notification alone, as picking it in the group does.
-  if (notifications_history_row_is_collapsed_group(row)) {
-    return prv_push_single_notification_window(&id);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  // Muse's notifications open the conversation they belong to.
+  if (audio_companion_assistant_open_notification(&id)) {
+    return true;
   }
-  if (!prv_push_notification_window(data, row)) {
+#endif
+  // The window holds every notification, group members included, so focusing works either way.
+  if (!prv_push_notification_window(data)) {
     return false;
   }
   notification_window_focus_notification(&id, false /* animated */);
@@ -1114,7 +1128,7 @@ static void prv_handle_deinit(void) {
 
   i18n_free_all(data);
   app_free(data);
-  s_data = NULL;
+  s_data = nullptr;
 }
 
 static void prv_s_main(void) {

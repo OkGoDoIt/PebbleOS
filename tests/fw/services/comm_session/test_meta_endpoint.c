@@ -8,12 +8,6 @@
 // Stubs
 ///////////////////////////////////////////////////////////
 
-#include <stubs_bt_lock.h>
-#include <stubs_hexdump.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_print.h>
-
 // Fakes
 ///////////////////////////////////////////////////////////
 
@@ -42,7 +36,7 @@ void test_meta_endpoint__initialize(void) {
   fake_kernel_malloc_mark();
   fake_comm_session_init();
 
-  s_transport = fake_transport_create(TransportDestinationSystem, NULL, NULL);
+  s_transport = fake_transport_create(TransportDestinationSystem, nullptr, nullptr);
   s_session = fake_transport_set_connected(s_transport, true);
 }
 

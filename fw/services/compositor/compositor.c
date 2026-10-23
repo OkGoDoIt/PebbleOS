@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/compositor/compositor.h>
 #include <pbl/services/compositor/compositor_display.h>
@@ -15,6 +16,7 @@
 #include <applib/ui/animation_private.h>
 #include <kernel/event_loop.h>
 #include <kernel/kernel_applib_state.h>
+#include <kernel/pebble_tasks.h>
 #include <kernel/ui/kernel_ui.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <popups/timeline/peek.h>
@@ -22,7 +24,6 @@
 #include <process_management/process_manager.h>
 #include <process_state/app_state/app_state.h>
 #include <shell/prefs.h>
-#include <system/passert.h>
 #include <system/profiler.h>
 
 PBL_LOG_MODULE_DEFINE(service_compositor, CONFIG_SERVICE_COMPOSITOR_LOG_LEVEL);
@@ -32,6 +33,26 @@ PBL_LOG_MODULE_DEFINE(service_compositor, CONFIG_SERVICE_COMPOSITOR_LOG_LEVEL);
 
 //! This is our root framebuffer that everything gets composited into.
 static FrameBuffer s_framebuffer;
+
+//! True while the system framebuffer still holds the last app frame as it was copied, so the
+//! next app frame can copy only its dirty rectangle.
+static bool s_app_framebuffer_mirrored;
+
+//! The area a transparent modal drew over the last app frame, restored before it draws again.
+static GRect s_modal_rect;
+
+//! How the app framebuffer maps onto the display, looked up once per app frame.
+typedef struct {
+  bool matches_display; //!< the app framebuffer is the display's size
+  bool squish_for_peek; //!< scaled to fit above the timeline peek
+  bool shift_for_peek;  //!< shifted up above the timeline peek
+} AppFrameFit;
+
+//! Whether the current app frame's fit copies pixels one to one.
+static bool s_app_frame_verbatim;
+
+//! Set by the completion of a flush whose rows did not reach the panel.
+static bool s_flush_failed;
 
 typedef enum {
   //! Render the app with no transparent modals straight through
@@ -89,20 +110,27 @@ static void prv_animation_update(Animation *animation, const AnimationProgress d
 //! states (CompositorState_App or CompositorState_Modal).
 static void prv_finish_transition(void);
 
+static AppFrameFit prv_get_app_frame_fit(void);
+static bool prv_app_frame_fit_is_verbatim(const AppFrameFit *fit);
+static void prv_scaled_app_fb_copy(const GRect update_rect, bool copy_relative_to_origin,
+                                   int16_t offset_y, const AppFrameFit *fit);
+
 void compositor_init(void) {
   const GSize fb_size = GSize(DISP_COLS, DISP_ROWS);
   framebuffer_init(&s_framebuffer, &fb_size);
   framebuffer_clear(&s_framebuffer);
 
   s_state = CompositorState_App;
+  s_app_framebuffer_mirrored = false;
+  s_modal_rect = GRectZero;
 
   s_deferred_render = (DeferredRender){.animation.pending = false, .app.pending = false};
 
-  s_animation_state = (CompositorTransitionState){0};
+  s_animation_state = (CompositorTransitionState){};
 
   s_framebuffer_frozen = false;
-  s_frozen_callback = NULL;
-  s_frozen_callback_data = NULL;
+  s_frozen_callback = nullptr;
+  s_frozen_callback_data = nullptr;
 }
 
 // Helper functions to make implementing transitions easier
@@ -128,10 +156,155 @@ void compositor_set_modal_transition_offset(GPoint modal_offset) {
   s_animation_state.modal_offset = modal_offset;
 }
 
+//! Clears the app framebuffer's dirty rectangle. Written directly: framebuffer_reset_dirty()
+//! asserts on the size field, which lives in app memory.
+static void prv_reset_app_framebuffer_dirty(FrameBuffer *app_framebuffer) {
+  app_framebuffer->dirty_rect = GRectZero;
+  app_framebuffer->is_dirty = false;
+}
+
+//! Renders the transparent modal over the app frame and remembers the area it drew.
+static void prv_render_modal_over_app(void) {
+  const bool was_dirty = s_framebuffer.is_dirty;
+  const GRect dirty_rect = s_framebuffer.dirty_rect;
+  framebuffer_reset_dirty(&s_framebuffer);
+  compositor_render_modal();
+  s_modal_rect = s_framebuffer.is_dirty ? s_framebuffer.dirty_rect : GRectZero;
+  if (was_dirty) {
+    framebuffer_mark_dirty_rect(&s_framebuffer, dirty_rect);
+  }
+}
+
+#ifdef CONFIG_SERVICE_COMPOSITOR_PARTIAL_FRAMES
+#if CONFIG_SCREEN_COLOR_DEPTH_BITS == 8
+//! The two alpha bits never reach the panel, and a driver converting rows in place for the panel
+//! may clear them, so they are left out of the comparison.
+#define PIXEL_COMPARE_MASK 0x3F3F3F3Fu
+#else
+#define PIXEL_COMPARE_MASK 0xFFFFFFFFu
+#endif
+
+//! Whether two rows differ over the bytes [byte0, byte1], a word at a time once aligned.
+//! Nothing outside that range is read.
+static bool prv_rows_differ(const uint8_t *a, const uint8_t *b, size_t byte0, size_t byte1) {
+  const uint8_t byte_mask = PIXEL_COMPARE_MASK & 0xFFu;
+  const uint8_t *pa = a + byte0;
+  const uint8_t *pb = b + byte0;
+  size_t n = byte1 - byte0 + 1;
+  if ((((uintptr_t)pa ^ (uintptr_t)pb) & 3) == 0) {
+    for (; n > 0 && ((uintptr_t)pa & 3) != 0; n--) {
+      if (((*pa++ ^ *pb++) & byte_mask) != 0) {
+        return true;
+      }
+    }
+    const uint32_t *wa = (const uint32_t *)pa;
+    const uint32_t *wb = (const uint32_t *)pb;
+    for (; n >= 4; n -= 4) {
+      if (((*wa++ ^ *wb++) & PIXEL_COMPARE_MASK) != 0) {
+        return true;
+      }
+    }
+    pa = (const uint8_t *)wa;
+    pb = (const uint8_t *)wb;
+  }
+  for (; n > 0; n--) {
+    if (((*pa++ ^ *pb++) & byte_mask) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+//! Narrows rect to the rows where the app framebuffer differs from the system framebuffer, which
+//! still holds the previous frame. False when no row differs.
+static bool prv_narrow_to_changed_rows(GRect *rect) {
+  const GBitmap app_bitmap = compositor_get_app_framebuffer_as_bitmap();
+  const GBitmap sys_bitmap = compositor_get_framebuffer_as_bitmap();
+  const int16_t x_max = grect_get_max_x(rect) - 1;
+  int16_t first = -1;
+  int16_t last = -1;
+  for (int16_t y = rect->origin.y; y < grect_get_max_y(rect); y++) {
+    const GBitmapDataRowInfo app_row = gbitmap_get_data_row_info(&app_bitmap, y);
+    const GBitmapDataRowInfo sys_row = gbitmap_get_data_row_info(&sys_bitmap, y);
+    const int16_t x0 = MAX(rect->origin.x, app_row.min_x);
+    const int16_t x1 = MIN(x_max, app_row.max_x);
+    if (x0 > x1) {
+      continue;
+    }
+    // Only the bytes holding those columns are read; round displays pack each row to its extent
+    const size_t byte0 = ((size_t)x0 * CONFIG_SCREEN_COLOR_DEPTH_BITS) / 8;
+    const size_t byte1 =
+        ((size_t)x1 * CONFIG_SCREEN_COLOR_DEPTH_BITS + CONFIG_SCREEN_COLOR_DEPTH_BITS - 1) / 8;
+    if (prv_rows_differ(app_row.data, sys_row.data, byte0, byte1)) {
+      if (first < 0) {
+        first = y;
+      }
+      last = y;
+    }
+  }
+  if (first < 0) {
+    return false;
+  }
+  rect->origin.y = first;
+  rect->size.h = last - first + 1;
+  return true;
+}
+
+//! Copies only what changed within what the app marked dirty plus what a transparent modal drew
+//! over the last frame, while the system framebuffer still holds that frame. False when a full
+//! composite is needed.
+static bool prv_render_app_dirty_rect(const AppFrameFit *fit) {
+  if ((s_state != CompositorState_App && s_state != CompositorState_AppAndModal) ||
+      !s_app_framebuffer_mirrored || !prv_app_frame_fit_is_verbatim(fit)) {
+    return false;
+  }
+
+  FrameBuffer *app_framebuffer = app_state_get_framebuffer();
+  GRect rect = app_framebuffer->is_dirty ? app_framebuffer->dirty_rect : GRectZero;
+  prv_reset_app_framebuffer_dirty(app_framebuffer);
+
+  // The rectangle comes from app memory and is not trusted until clipped
+  const GRect display_rect = GRect(0, 0, DISP_COLS, DISP_ROWS);
+  grect_standardize(&rect);
+  grect_clip(&rect, &display_rect);
+  if (rect.size.w <= 0 || rect.size.h <= 0) {
+    rect = GRectZero;
+  }
+  if (!grect_is_empty(&s_modal_rect)) {
+    rect = grect_is_empty(&rect) ? s_modal_rect : grect_union(&rect, &s_modal_rect);
+    grect_clip(&rect, &display_rect);
+  }
+#ifdef CONFIG_SERVICE_COMPOSITOR_PARTIAL_FRAMES_WHOLE_SCREEN
+  // The comparison alone decides what changed, whatever the app marked
+  rect = display_rect;
+#endif
+  if (!grect_is_empty(&rect) && prv_narrow_to_changed_rows(&rect)) {
+    prv_scaled_app_fb_copy(rect, false /* copy_relative_to_origin */, 0 /* offset_y */, fit);
+    framebuffer_mark_dirty_rect(&s_framebuffer, rect);
+  }
+
+  if (s_state == CompositorState_AppAndModal) {
+    prv_render_modal_over_app();
+  }
+  return true;
+}
+#else
+static bool prv_render_app_dirty_rect(const AppFrameFit *fit) {
+  return false;
+}
+#endif
+
 void compositor_render_app(void) {
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
 
   PROFILER_NODE_START(compositor);
+
+  const AppFrameFit fit = prv_get_app_frame_fit();
+  s_app_frame_verbatim = prv_app_frame_fit_is_verbatim(&fit);
+  if (prv_render_app_dirty_rect(&fit)) {
+    PROFILER_NODE_STOP(compositor);
+    return;
+  }
 
   // Don't trust the size field within the app framebuffer as the app could modify it.
   GSize app_framebuffer_size;
@@ -141,11 +314,12 @@ void compositor_render_app(void) {
   GBitmap dest_bitmap = compositor_get_framebuffer_as_bitmap();
   memset(dest_bitmap.addr, GColorBlack.argb, framebuffer_get_size_bytes(&s_framebuffer));
 
-  compositor_scaled_app_fb_copy(GRect(0, 0, DISP_COLS, DISP_ROWS),
-                                false /* copy_relative_to_origin */);
+  prv_scaled_app_fb_copy(GRect(0, 0, DISP_COLS, DISP_ROWS), false /* copy_relative_to_origin */,
+                         0 /* offset_y */, &fit);
+  prv_reset_app_framebuffer_dirty(app_state_get_framebuffer());
 
   if (s_state == CompositorState_AppAndModal) {
-    compositor_render_modal();
+    prv_render_modal_over_app();
   }
 
   PROFILER_NODE_STOP(compositor);
@@ -176,11 +350,16 @@ static void prv_notify_frozen(void) {
     return;
   }
   CompositorFrozenCallback callback = s_frozen_callback;
-  s_frozen_callback = NULL;
+  s_frozen_callback = nullptr;
   callback(s_frozen_callback_data);
 }
 
-PBL_T_STATIC void prv_handle_display_update_complete(void) {
+PBL_T_STATIC void prv_handle_display_update_complete(bool success) {
+  if (!success) {
+    // The rows never reached the panel, so the next app frame must be sent whole
+    s_flush_failed = true;
+    s_app_framebuffer_mirrored = false;
+  }
   if (s_deferred_render.transition_complete.pending) {
     s_deferred_render.transition_complete.pending = false;
     prv_finish_transition();
@@ -264,7 +443,10 @@ void compositor_app_render_ready(void) {
     // compositor_render_app also renders modals if the CompositorState_AppAndModal as that state
     // indicates that there are transparent modals that allow the app framebuffer to show through
     compositor_render_app();
+    s_flush_failed = false;
     prv_compositor_flush();
+    // The flush dropped the mirror; an app frame copied one to one and sent restores it
+    s_app_framebuffer_mirrored = s_app_frame_verbatim && !s_flush_failed;
   }
 
   // Draw the modal if in the Modal state
@@ -371,7 +553,7 @@ static void prv_animation_teardown(Animation *animation) {
   if (s_animation_state.impl->teardown) {
     s_animation_state.impl->teardown(animation);
   }
-  s_animation_state = (CompositorTransitionState){0};
+  s_animation_state = (CompositorTransitionState){};
 
   s_deferred_render.animation.pending = false;
   if (!prv_should_render()) {
@@ -383,12 +565,16 @@ static void prv_animation_teardown(Animation *animation) {
 }
 
 void compositor_transition(const CompositorTransition *compositor_animation) {
-  if (s_animation_state.animation != NULL) {
+  // Whatever comes next, its first frame has to be composited in full.
+  s_app_framebuffer_mirrored = false;
+  s_modal_rect = GRectZero;
+
+  if (s_animation_state.animation != nullptr) {
     PBL_LOG_DBG("Animation <%u> in progress, cancelling",
                 (unsigned)(uintptr_t)s_animation_state.animation);
 
     animation_destroy(s_animation_state.animation);
-    s_animation_state = (CompositorTransitionState){0};
+    s_animation_state = (CompositorTransitionState){};
 
     s_deferred_render.animation.pending = false;
     s_deferred_render.transition_complete.pending = false;
@@ -465,6 +651,10 @@ FrameBuffer *compositor_get_framebuffer(void) {
   return &s_framebuffer;
 }
 
+void compositor_app_framebuffer_mirror_invalidate(void) {
+  s_app_framebuffer_mirrored = false;
+}
+
 GBitmap compositor_get_framebuffer_as_bitmap(void) {
   return framebuffer_get_as_bitmap(&s_framebuffer, &s_framebuffer.size);
 }
@@ -497,18 +687,18 @@ void compositor_freeze(CompositorFrozenCallback callback, void *data) {
   s_frozen_callback = callback;
   s_frozen_callback_data = data;
 
-  launcher_task_add_callback(prv_compositor_freeze_cb, NULL);
+  launcher_task_add_callback(prv_compositor_freeze_cb, nullptr);
 }
 
 static void prv_compositor_unfreeze_cb(void *ignored) {
   // Run deferred draws
-  prv_handle_display_update_complete();
+  prv_handle_display_update_complete(true /* success */);
 }
 
 void compositor_unfreeze(void) {
   s_framebuffer_frozen = false;
 
-  launcher_task_add_callback(prv_compositor_unfreeze_cb, NULL);
+  launcher_task_add_callback(prv_compositor_unfreeze_cb, nullptr);
 }
 
 static bool prv_app_framebuffer_matches_display(void) {
@@ -544,29 +734,36 @@ static TimelinePeekUnsupportedFaceMode prv_get_unsupported_face_mode_for_timelin
 }
 #endif
 
+static AppFrameFit prv_get_app_frame_fit(void) {
+  AppFrameFit fit = {.matches_display = prv_app_framebuffer_matches_display()};
+#if TIMELINE_PEEK_WATCHFACE_FIT_SUPPORTED && !defined(CONFIG_RECOVERY_FW)
+  const TimelinePeekUnsupportedFaceMode mode = prv_get_unsupported_face_mode_for_timeline_peek();
+  fit.squish_for_peek = (mode == TimelinePeekUnsupportedFaceMode_SquishUp);
+  fit.shift_for_peek = (mode == TimelinePeekUnsupportedFaceMode_ShiftUp);
+#endif
+  return fit;
+}
+
+static bool prv_app_frame_fit_is_verbatim(const AppFrameFit *fit) {
+  return fit->matches_display && !fit->squish_for_peek && !fit->shift_for_peek;
+}
+
 void compositor_scaled_app_fb_copy(const GRect update_rect, bool copy_relative_to_origin) {
   compositor_scaled_app_fb_copy_offset(update_rect, copy_relative_to_origin, 0 /* offset_y */);
 }
 
 void compositor_scaled_app_fb_copy_offset(const GRect update_rect, bool copy_relative_to_origin,
                                           int16_t offset_y) {
+  const AppFrameFit fit = prv_get_app_frame_fit();
+  prv_scaled_app_fb_copy(update_rect, copy_relative_to_origin, offset_y, &fit);
+}
+
+static void prv_scaled_app_fb_copy(const GRect update_rect, bool copy_relative_to_origin,
+                                   int16_t offset_y, const AppFrameFit *fit) {
   GBitmap src_bitmap = compositor_get_app_framebuffer_as_bitmap();
   GBitmap dst_bitmap = compositor_get_framebuffer_as_bitmap();
 
-#if TIMELINE_PEEK_WATCHFACE_FIT_SUPPORTED && !defined(CONFIG_RECOVERY_FW)
-  const TimelinePeekUnsupportedFaceMode unsupported_face_mode =
-      prv_get_unsupported_face_mode_for_timeline_peek();
-  const bool squish_watchface_for_peek =
-      (unsupported_face_mode == TimelinePeekUnsupportedFaceMode_SquishUp);
-  const bool shift_watchface_for_peek =
-      (unsupported_face_mode == TimelinePeekUnsupportedFaceMode_ShiftUp);
-#else
-  const bool squish_watchface_for_peek = false;
-  const bool shift_watchface_for_peek = false;
-#endif
-
-  if (prv_app_framebuffer_matches_display() && !squish_watchface_for_peek &&
-      !shift_watchface_for_peek) {
+  if (prv_app_frame_fit_is_verbatim(fit)) {
     GBitmap sub_bitmap;
     gbitmap_init_as_sub_bitmap(&sub_bitmap, &src_bitmap, update_rect);
     bitblt_bitmap_into_bitmap(&dst_bitmap, &sub_bitmap, update_rect.origin, GCompOpAssign,
@@ -584,13 +781,12 @@ void compositor_scaled_app_fb_copy_offset(const GRect update_rect, bool copy_rel
   // Check if we should use scaling mode for legacy apps
   const LegacyAppRenderMode render_mode = shell_prefs_get_legacy_app_render_mode();
   const bool should_scale_app = (render_mode >= LegacyAppRenderMode_ScalingNearest) ||
-                                squish_watchface_for_peek ||
-                                (shift_watchface_for_peek && prv_app_framebuffer_matches_display());
+                                fit->squish_for_peek ||
+                                (fit->shift_for_peek && fit->matches_display);
   if (should_scale_app) {
     const bool bilinear = (render_mode == LegacyAppRenderMode_ScalingBilinear);
-    const bool shift_scaled_watchface_for_peek =
-        shift_watchface_for_peek && !squish_watchface_for_peek;
-    const GRect scale_to = squish_watchface_for_peek
+    const bool shift_scaled_watchface_for_peek = fit->shift_for_peek && !fit->squish_for_peek;
+    const GRect scale_to = fit->squish_for_peek
                                ? GRect(0, 0, disp_width, timeline_peek_get_origin_y())
                                : GRect(0, 0, disp_width, disp_height);
 
@@ -618,14 +814,14 @@ void compositor_scaled_app_fb_copy_offset(const GRect update_rect, bool copy_rel
       const int16_t dst_y_offset = dst_y + update_rect.origin.y + offset_y;
       if (dst_y_offset < 0 || dst_y_offset >= disp_height)
         continue;
-      if ((squish_watchface_for_peek && (dst_y_offset < scale_to.origin.y ||
-                                         dst_y_offset >= scale_to.origin.y + scale_to.size.h)) ||
+      if ((fit->squish_for_peek && (dst_y_offset < scale_to.origin.y ||
+                                    dst_y_offset >= scale_to.origin.y + scale_to.size.h)) ||
           (shift_scaled_watchface_for_peek && (dst_y_offset >= timeline_peek_get_origin_y()))) {
         continue;
       }
 
       uint16_t dst_y_coord;
-      if (squish_watchface_for_peek) {
+      if (fit->squish_for_peek) {
         dst_y_coord = dst_y_offset - scale_to.origin.y;
       } else if (shift_scaled_watchface_for_peek) {
         const int16_t shifted_y = dst_y_offset - app_shift_y;
@@ -664,12 +860,12 @@ void compositor_scaled_app_fb_copy_offset(const GRect update_rect, bool copy_rel
         if (dst_x_offset < dst_row_info.min_x || dst_x_offset > dst_row_info.max_x) {
           continue;
         }
-        if (squish_watchface_for_peek && (dst_x_offset < scale_to.origin.x ||
-                                          dst_x_offset >= scale_to.origin.x + scale_to.size.w)) {
+        if (fit->squish_for_peek && (dst_x_offset < scale_to.origin.x ||
+                                     dst_x_offset >= scale_to.origin.x + scale_to.size.w)) {
           continue;
         }
 
-        const uint16_t dst_x_coord = squish_watchface_for_peek ? (dst_x_offset - scale_to.origin.x)
+        const uint16_t dst_x_coord = fit->squish_for_peek ? (dst_x_offset - scale_to.origin.x)
                                      : copy_relative_to_origin
                                          ? CLIP(dst_x_offset, 0, disp_width - 1)
                                          : dst_x;
@@ -726,7 +922,7 @@ void compositor_scaled_app_fb_copy_offset(const GRect update_rect, bool copy_rel
         }
       }
     }
-  } else if (shift_watchface_for_peek) {
+  } else if (fit->shift_for_peek) {
     const int16_t app_offset_x = (disp_width - app_width) / 2;
     const int16_t app_offset_y = timeline_peek_get_origin_y() - app_height;
     const GRect shifted_region = GRect(app_offset_x, app_offset_y, app_width, app_height);

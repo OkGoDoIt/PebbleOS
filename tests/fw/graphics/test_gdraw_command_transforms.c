@@ -21,23 +21,13 @@
 ////////////////////////////////////
 #include <stdio.h>
 
-#include <stubs_app_state.h>
-#include <stubs_applib_resource.h>
-#include <stubs_heap.h>
-#include <stubs_logging.h>
-#include <stubs_memory_layout.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_resources.h>
-#include <stubs_syscalls.h>
-
 // stubs
 
 InterpolateInt64Function animation_private_current_interpolate_override(void) {
-  return NULL;
+  return nullptr;
 }
 
-static FrameBuffer *fb = NULL;
+static FrameBuffer *fb = nullptr;
 
 // Setup
 void test_gdraw_command_transforms__initialize(void) {
@@ -153,7 +143,7 @@ void test_gdraw_command_transforms__segmented_scale(void) {
 
   int32_t dt = ANIMATION_NORMALIZED_MAX / 5;
   int32_t t = 0;
-  InterpolateInt64Function interp = NULL;
+  InterpolateInt64Function interp = nullptr;
 
   int16_t s = 48;
   GRect from = GRect(0, 0, s, s);
@@ -199,7 +189,7 @@ void _test_gdraw_command_transforms__scale_segmented_sequence(void) {
 
   int32_t dt = ANIMATION_NORMALIZED_MAX / 16;
   int32_t t = 0;
-  InterpolateInt64Function interp = NULL;
+  InterpolateInt64Function interp = nullptr;
 
   int16_t s = 48;
   GRect from = GRect(144 - s * 3 / 4, s / 4, s / 2, s / 2);

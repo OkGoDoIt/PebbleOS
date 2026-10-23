@@ -4,11 +4,11 @@
 #include <stdint.h>
 
 #include <pbl/drivers/pwm.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/soc/sf32lb/sleep.h>
 
 #include <bf0_hal_tim.h>
 #include <board/board.h>
-#include <system/passert.h>
 
 #define MAX_PERIOD_GPT 0xFFFFU
 #define MAX_PERIOD_ATM 0xFFFFFFFFU
@@ -77,7 +77,7 @@ void pwm_enable(const PwmConfig *pwm, bool enable) {
   channel = (pwm->state->channel - 1U) << 2U;
 
   if (enable) {
-    GPT_OC_InitTypeDef oc_config = {0};
+    GPT_OC_InitTypeDef oc_config = {};
 
     oc_config.OCMode = GPT_OCMODE_PWM1;
     oc_config.Pulse = __HAL_GPT_GET_COMPARE(htim, channel);

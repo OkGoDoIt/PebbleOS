@@ -8,10 +8,6 @@
 #include <pebble_asserts.h>
 
 // stubs
-#include <stubs_app_state.h>
-#include <stubs_heap.h>
-#include <stubs_passert.h>
-#include <stubs_process_manager.h>
 
 /////////////////////////////
 
@@ -126,13 +122,13 @@ void test_gtypes__grect_inset_returns_zero_rect_for_large_insets(void) {
 void test_gtypes__grect_crop_asserts_for_large_insets(void) {
   GRect rect = GRect(10, 20, 30, 40);
   cl_assert_equal_grect(GRect(25, 35, 0, 10), grect_crop(rect, 15));
-  cl_assert_passert(grect_crop(rect, 16));
+  cl_assert_panic(grect_crop(rect, 16));
 }
 
 void test_gtypes__pbl_if_rect_else(void) {
-#if defined(CONFIG_BOARD_ASTERIX) || defined(CONFIG_BOARD_OBELIX)
+#if defined(CONFIG_PLATFORM_FLINT) || defined(CONFIG_PLATFORM_EMERY)
   cl_assert_equal_i(1, PBL_IF_RECT_ELSE(1, 2));
-#elif defined(CONFIG_PLATFORM_GABBRO)
+#elifdef CONFIG_PLATFORM_GABBRO
   cl_assert_equal_i(2, PBL_IF_RECT_ELSE(1, 2));
 #else
 #error "unknown platform"
@@ -140,9 +136,9 @@ void test_gtypes__pbl_if_rect_else(void) {
 }
 
 void test_gtypes__pbl_if_round_else(void) {
-#if defined(CONFIG_BOARD_ASTERIX) || defined(CONFIG_BOARD_OBELIX)
+#if defined(CONFIG_PLATFORM_FLINT) || defined(CONFIG_PLATFORM_EMERY)
   cl_assert_equal_i(2, PBL_IF_ROUND_ELSE(1, 2));
-#elif defined(CONFIG_PLATFORM_GABBRO)
+#elifdef CONFIG_PLATFORM_GABBRO
   cl_assert_equal_i(1, PBL_IF_ROUND_ELSE(1, 2));
 #else
 #error "unknown platform"
@@ -150,9 +146,9 @@ void test_gtypes__pbl_if_round_else(void) {
 }
 
 void test_gtypes__pbl_if_bw_else(void) {
-#if defined(CONFIG_BOARD_ASTERIX)
+#if defined(CONFIG_PLATFORM_FLINT)
   cl_assert_equal_i(1, PBL_IF_BW_ELSE(1, 2));
-#elif defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_PLATFORM_GABBRO)
+#elif defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
   cl_assert_equal_i(2, PBL_IF_BW_ELSE(1, 2));
 #else
 #error "unknown platform"
@@ -160,9 +156,9 @@ void test_gtypes__pbl_if_bw_else(void) {
 }
 
 void test_gtypes__pbl_if_color_else(void) {
-#if defined(CONFIG_BOARD_ASTERIX)
+#if defined(CONFIG_PLATFORM_FLINT)
   cl_assert_equal_i(2, PBL_IF_COLOR_ELSE(1, 2));
-#elif defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_PLATFORM_GABBRO)
+#elif defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
   cl_assert_equal_i(1, PBL_IF_COLOR_ELSE(1, 2));
 #else
 #error "unknown platform"
@@ -170,9 +166,9 @@ void test_gtypes__pbl_if_color_else(void) {
 }
 
 void test_gtypes__color_fallback(void) {
-#if defined(CONFIG_BOARD_ASTERIX)
+#if defined(CONFIG_PLATFORM_FLINT)
   cl_assert_equal_i(2, COLOR_FALLBACK(1, 2));
-#elif defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_PLATFORM_GABBRO)
+#elif defined(CONFIG_PLATFORM_EMERY) || defined(CONFIG_PLATFORM_GABBRO)
   cl_assert_equal_i(1, COLOR_FALLBACK(1, 2));
 #else
 #error "unknown platform"

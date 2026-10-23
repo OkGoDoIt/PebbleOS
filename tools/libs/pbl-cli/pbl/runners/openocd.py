@@ -9,7 +9,7 @@ import socket
 import subprocess
 import sys
 
-from .core import Runner, RunnerCaps, RunnerError
+from .core import Runner, RunnerCaps, RunnerError, UnsupportedOperation
 
 OPENOCD_TELNET_PORT = 4444
 OPENOCD_GDB_PORT = 3333
@@ -33,15 +33,54 @@ class OpenOcdRunner(Runner):
     @classmethod
     def capabilities(cls):
         return RunnerCaps(
-            commands={"flash", "run", "reset", "erase", "debug", "debugserver"}
+            commands={"flash", "run", "reset", "erase", "debug", "debugserver"},
+            flash_resources=True,
+            erase_ranges=True,
         )
 
     @property
     def _cfg_file(self):
         return os.path.join(self.cfg.board_dir, "support", "openocd.cfg")
 
+    @property
+    def _flash_cfg(self):
+        return os.path.join(self.cfg.board_dir, "support", "flash.cfg")
+
+    def _check_flash_cfg(self, what):
+        if not os.path.exists(self._flash_cfg):
+            raise UnsupportedOperation(f"the board has no support/flash.cfg to {what}")
+
+    def _erase_ranges(self):
+        self._check_flash_cfg("erase ranges")
+        erase = "".join(f"pbl_erase {a:#x} {s:#x}; " for a, s in self.cfg.erase_ranges)
+        self._run_command(
+            f"init; reset halt; source {{{self._flash_cfg}}}; {erase}"
+            "echo {Erase Finished}; reset;",
+            expect=["Erase Finished", "shutdown"],
+            enforce_expect=True,
+        )
+
+    def _flash_resources(self):
+        self._check_flash_cfg("flash resources")
+        self._run_command(
+            f"init; reset halt; program {self.cfg.hex_file}; "
+            f"source {{{self._flash_cfg}}}; "
+            f"pbl_flash_resources {{{self.cfg.resources_file}}} "
+            f"{self.cfg.resources_address:#x}; "
+            "echo {Resources Finished}; reset;",
+            expect=[
+                "Programming Started",
+                "Programming Finished",
+                "Resources Finished",
+                "shutdown",
+            ],
+            enforce_expect=True,
+        )
+
     def do_run(self, command):
-        if command == "flash":
+        if command == "flash" and self.cfg.resources_file:
+            self._flash_resources()
+        elif command == "flash":
             self._run_command(
                 f"init; reset halt; program {self.cfg.hex_file} reset;",
                 expect=["Programming Started", "Programming Finished", "shutdown"],
@@ -51,6 +90,8 @@ class OpenOcdRunner(Runner):
             self._run_command("init; reset run;", expect=["found"])
         elif command == "reset":
             self._run_command("init; reset;", expect=["found"])
+        elif command == "erase" and self.cfg.erase_ranges:
+            self._erase_ranges()
         elif command == "erase":
             self._run_command("init; reset halt;", ignore_fail=True)
             self._run_command("init; flash erase_sector 0 0 1;", ignore_fail=True)

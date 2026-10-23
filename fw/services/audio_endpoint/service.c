@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/audio_endpoint.h>
 #include <pbl/services/audio_endpoint_private.h>
@@ -10,7 +11,6 @@
 #include <pbl/util/circular_buffer.h>
 
 #include <comm/bt_lock.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(service_audio_endpoint, CONFIG_SERVICE_AUDIO_ENDPOINT_LOG_LEVEL);
 
@@ -19,8 +19,8 @@ PBL_LOG_MODULE_DEFINE(service_audio_endpoint, CONFIG_SERVICE_AUDIO_ENDPOINT_LOG_
 #define ACTIVE_MODE_TIMEOUT      (10000)
 #define ACTIVE_MODE_START_BUFFER (100)
 
-_Static_assert(ACTIVE_MODE_TIMEOUT > ACTIVE_MODE_START_BUFFER,
-               "ACTIVE_MODE_TIMEOUT must be greater than ACTIVE_MODE_START_BUFFER");
+static_assert(ACTIVE_MODE_TIMEOUT > ACTIVE_MODE_START_BUFFER,
+              "ACTIVE_MODE_TIMEOUT must be greater than ACTIVE_MODE_START_BUFFER");
 
 typedef struct {
   AudioEndpointSessionId id;
@@ -47,7 +47,7 @@ static void prv_session_deinit(bool call_stop_handler) {
   }
 
   s_session.id = AUDIO_ENDPOINT_SESSION_INVALID_ID;
-  s_session.stop_transfer = NULL;
+  s_session.stop_transfer = nullptr;
   bt_unlock();
 
   if (s_dropped_frames > 0) {
@@ -72,13 +72,13 @@ static void prv_start_active_mode(void *data) {
   CommSession *comm_session = comm_session_get_system_session();
   comm_session_set_responsiveness_ext(
       comm_session, PBL_BT_CONSUMER_PP_AUDIO_ENDPOINT, PBL_BT_RESPONSE_TIME_MIN,
-      PBL_BT_MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS, NULL /* granted_handler */);
+      PBL_BT_MIN_LATENCY_MODE_TIMEOUT_AUDIO_SECS, nullptr /* granted_handler */);
 }
 
 //! Never block on bt_lock from the timer task (comm_session_set_responsiveness_ext
 //! takes it); defer to KernelBG.
 static void prv_active_mode_timer_cb(void *data) {
-  system_task_add_callback(prv_start_active_mode, NULL);
+  system_task_add_callback(prv_start_active_mode, nullptr);
 }
 
 AudioEndpointSessionId audio_endpoint_setup_transfer(
@@ -96,11 +96,11 @@ AudioEndpointSessionId audio_endpoint_setup_transfer(
 
   // restart active mode before it expires, this way it will never be off during the transfer
   new_timer_start(s_session.active_mode_trigger, ACTIVE_MODE_TIMEOUT - ACTIVE_MODE_START_BUFFER,
-                  prv_active_mode_timer_cb, NULL, TIMER_START_FLAG_REPEATING);
+                  prv_active_mode_timer_cb, nullptr, TIMER_START_FLAG_REPEATING);
 
   bt_unlock();
 
-  prv_start_active_mode(NULL);
+  prv_start_active_mode(nullptr);
 
   return s_session.id;
 }
@@ -114,9 +114,9 @@ void audio_endpoint_add_frame(AudioEndpointSessionId session_id, uint8_t *frame,
   }
 
   CommSession *comm_session = comm_session_get_system_session();
-  SendBuffer *sb = comm_session_send_buffer_begin_write(comm_session, AUDIO_ENDPOINT,
-                                                        sizeof(DataTransferMsg) + frame_size + 1,
-                                                        0 /* timeout_ms, never block */);
+  SendBuffer *sb = comm_session_send_buffer_begin_write_bulk(
+      comm_session, AUDIO_ENDPOINT, sizeof(DataTransferMsg) + frame_size + 1,
+      0 /* timeout_ms, never block */);
   if (!sb) {
     s_dropped_frames++;
     PBL_LOG_DBG("Dropping a frame...");

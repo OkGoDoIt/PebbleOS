@@ -24,6 +24,8 @@ choice BT_HCI
 config BT_HCI_NRF52
     bool "NimBLE controller on the nRF52 radio"
     depends on SOC_NRF52
+    select NIMBLE_CONTROLLER
+    select NIMBLE_DRIVER_NRF5X
     help
       Run the NimBLE link layer in the same image, on the nRF52 radio.
 
@@ -98,12 +100,7 @@ config BT_HRM_SERVICE
       The backend implements the Heart Rate Service
       (pbl/bluetooth/hrm_service.h).
 
-config BT_GH3X2X_TUNING_SERVICE
-    bool "GH3X2X tuning service"
-    depends on HRM_GH3X2X
-    help
-      Build the GH3X2X heart-rate sensor tuning GATT service, used to
-      tune the sensor over BLE. Off by default.
+rsource "services/Kconfig"
 
 config BT_AUDIO_COMPANION_SERVICE
     bool "Audio Companion GATT service"

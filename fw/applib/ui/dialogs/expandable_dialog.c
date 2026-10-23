@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <pbl/kernel/assert.h>
+
 #include <applib/applib_malloc.auto.h>
 #include <applib/fonts/fonts.h>
 #include <applib/graphics/gtypes.h>
@@ -17,7 +19,6 @@
 #include <kernel/ui/kernel_ui.h>
 #include <resource/resource.h>
 #include <resource/resource_ids.auto.h>
-#include <system/passert.h>
 
 static void prv_show_action_bar_icon(ExpandableDialog *expandable_dialog, ButtonId button_id) {
   ActionBarLayer *action_bar = &expandable_dialog->action_bar;
@@ -170,7 +171,7 @@ static void prv_expandable_dialog_load(Window *window) {
     // We account for a header that may be larger than the available space
     // by adjusting our height variable that is passed to the body layer
     GSize header_size = text_layer_get_content_size(ctx, header_layer);
-    header_size.h += 4; // See PBL-1741
+    header_size.h += 4;
     header_size.w = w;
     header_content_height = header_size.h;
     text_layer_set_size(header_layer, header_size);
@@ -198,7 +199,7 @@ static void prv_expandable_dialog_load(Window *window) {
 #endif
 
   int32_t text_content_height = text_layer_get_content_size(ctx, text_layer).h;
-  text_content_height += 4; // See PBL-1741
+  text_content_height += 4;
   text_layer_set_size(text_layer, GSize(w, text_content_height));
 
   uint16_t scroll_height = icon_offset + icon_size.h + header_content_height + text_content_height +
@@ -405,7 +406,7 @@ void expandable_dialog_set_select_action(ExpandableDialog *expandable_dialog, ui
                                          ClickHandler select_click_handler) {
   if (expandable_dialog->select_icon) {
     gbitmap_destroy(expandable_dialog->select_icon);
-    expandable_dialog->select_icon = NULL;
+    expandable_dialog->select_icon = nullptr;
   }
 
   if (resource_id != RESOURCE_ID_INVALID) {

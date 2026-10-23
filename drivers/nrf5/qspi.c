@@ -5,7 +5,9 @@
 
 #include <pbl/drivers/flash/qspi_flash.h>
 #include <pbl/drivers/qspi_definitions.h>
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/delay.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/logging/logging.h>
@@ -15,10 +17,7 @@
 #include <board/board.h>
 #include <flash_region/flash_region.h>
 #include <hal/nrf_qspi.h>
-#include <kernel/util/delay.h>
-#include <kernel/util/sleep.h>
 #include <nrfx.h>
-#include <system/passert.h>
 
 // NOTE: This driver does not cover anomaly 244, which may cause data corruption
 // if HF clock source is switching between HFXO and HFINT (e.g. by BLE). This
@@ -104,7 +103,7 @@ static void prv_cinstr_write_read(QSPIFlash *dev, uint8_t instr, const void *dat
   nrf_qspi_int_disable(NRF_QSPI, NRF_QSPI_INT_READY_MASK);
   // Accessing registers with offset > 0x600 below, requires workaround for Anomaly 215
   prv_workaround_215_apply();
-  if (data != NULL) {
+  if (data != nullptr) {
     nrf_qspi_cinstrdata_set(NRF_QSPI, conf.length, data);
   }
   nrf_qspi_event_clear(NRF_QSPI, NRF_QSPI_EVENT_READY);
@@ -113,21 +112,21 @@ static void prv_cinstr_write_read(QSPIFlash *dev, uint8_t instr, const void *dat
   }
   nrf_qspi_event_clear(NRF_QSPI, NRF_QSPI_EVENT_READY);
 
-  if (buf != NULL) {
+  if (buf != nullptr) {
     nrf_qspi_cinstrdata_get(NRF_QSPI, conf.length, buf);
   }
 }
 
 static inline void prv_cinstr(QSPIFlash *dev, uint8_t instr) {
-  prv_cinstr_write_read(dev, instr, NULL, NULL, 0U);
+  prv_cinstr_write_read(dev, instr, nullptr, nullptr, 0U);
 }
 
 static inline void prv_cinstr_read(QSPIFlash *dev, uint8_t instr, void *buf, size_t len) {
-  prv_cinstr_write_read(dev, instr, NULL, buf, len);
+  prv_cinstr_write_read(dev, instr, nullptr, buf, len);
 }
 
 static inline void prv_cinstr_write(QSPIFlash *dev, uint8_t instr, const void *data, size_t len) {
-  prv_cinstr_write_read(dev, instr, data, NULL, len);
+  prv_cinstr_write_read(dev, instr, data, nullptr, len);
 }
 
 static void prv_read(QSPIFlash *dev, void *buf, size_t len, uint32_t addr) {
@@ -374,7 +373,7 @@ void qspi_flash_init(QSPIFlash *dev, QSPIFlashPart *part, bool coredump_mode) {
   prv_cinstr(dev, part->instructions.reset_enable);
   prv_cinstr(dev, part->instructions.reset);
 
-  psleep(part->reset_latency_ms);
+  pbl_sleep_ms(part->reset_latency_ms);
 
   // Enable 4-byte addressing if needed
   if (conf_prot.addrmode == NRF_QSPI_ADDRMODE_32BIT) {
@@ -441,7 +440,7 @@ status_t qspi_flash_erase_suspend(QSPIFlash *dev, uint32_t addr) {
   prv_cinstr(dev, part->instructions.erase_suspend);
 
   if (part->suspend_to_read_latency_us) {
-    delay_us(part->suspend_to_read_latency_us);
+    pbl_busy_wait_us(part->suspend_to_read_latency_us);
   }
 
   return S_SUCCESS;
@@ -582,7 +581,7 @@ void qspi_flash_set_lower_power_mode(QSPIFlash *dev, bool active) {
   if (active) {
     prv_cinstr(dev, part->instructions.enter_low_power);
     if (part->standby_to_low_power_latency_us) {
-      delay_us(part->standby_to_low_power_latency_us);
+      pbl_busy_wait_us(part->standby_to_low_power_latency_us);
     }
 
     nrf_qspi_int_disable(NRF_QSPI, NRF_QSPI_INT_READY_MASK);
@@ -602,7 +601,7 @@ void qspi_flash_set_lower_power_mode(QSPIFlash *dev, bool active) {
 
     prv_cinstr(dev, part->instructions.exit_low_power);
     if (part->low_power_to_standby_latency_us) {
-      delay_us(part->low_power_to_standby_latency_us);
+      pbl_busy_wait_us(part->low_power_to_standby_latency_us);
     }
   }
 }

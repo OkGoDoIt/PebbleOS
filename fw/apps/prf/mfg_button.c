@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -41,7 +40,7 @@ typedef struct {
   bool test_complete;
 } AppData;
 
-static void prv_handle_second_tick(struct tm *tick_time, TimeUnits units_changed) {
+static void prv_handle_second_tick(struct pbl_tm *tick_time, TimeUnits units_changed) {
   AppData *data = app_state_get_user_data();
 
   if (data->test_complete) {

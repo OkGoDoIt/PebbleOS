@@ -2,17 +2,20 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/services/app_glances/app_glance_service.h>
 #include <pbl/services/blob_db/app_glance_db.h>
 #include <pbl/util/math.h>
+#include <pbl/util/size.h>
+#include <pbl/util/uuid.h>
 
 #include <applib/app_glance.h>
 #include <applib/event_service_client.h>
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
 #include <process_management/app_install_manager.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
+#include <syscall/syscall.h>
 #include <system/status_codes.h>
 
 //! Return true to continue iteration and false to stop it.
@@ -183,12 +186,39 @@ cleanup:
   return success;
 }
 
-DEFINE_SYSCALL(bool, sys_app_glance_update, const Uuid *uuid, const AppGlance *glance) {
-  if (PRIVILEGE_WAS_ELEVATED) {
-    syscall_assert_userspace_buffer(uuid, sizeof(*uuid));
-    syscall_assert_userspace_buffer(glance, sizeof(*glance));
+static AppGlance *prv_copy_user_glance(const AppGlance *glance) {
+  AppGlance *copy = kernel_malloc(sizeof(*copy));
+  if (!copy) {
+    return nullptr;
   }
+
+  *copy = *glance;
+  for (size_t i = 0; i < ARRAY_LENGTH(copy->slices); i++) {
+    char *template_string = copy->slices[i].icon_and_subtitle.template_string;
+    template_string[sizeof(copy->slices[i].icon_and_subtitle.template_string) - 1] = '\0';
+  }
+  return copy;
+}
+
+PBL_SYSCALL(bool, sys_app_glance_update, (IN, const Uuid *, uuid),
+            (IN_BUF, const AppGlance *, glance, sizeof(*glance))) {
+  AppGlance *user_glance = nullptr;
+
+  if (from_user) {
+    const PebbleProcessMd *md = sys_process_manager_get_current_process_md();
+    if (md == nullptr || !uuid_equal(uuid, &md->uuid)) {
+      pbl_syscall_fail();
+    }
+
+    user_glance = prv_copy_user_glance(glance);
+    if (!user_glance) {
+      return false;
+    }
+    glance = user_glance;
+  }
+
   const bool success = (app_glance_db_insert_glance(uuid, glance) == S_SUCCESS);
+  kernel_free(user_glance);
   if (success) {
     prv_glance_event_put(uuid);
   }

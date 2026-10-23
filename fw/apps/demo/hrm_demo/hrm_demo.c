@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+#include <pbl/kernel/fatal.h>
+#include <pbl/logging/logging.h>
 #include <pbl/services/hrm/hrm_manager.h>
 #include <pbl/util/units.h>
 
@@ -16,7 +18,6 @@
 #include <mfg/mfg_info.h>
 #include <mfg/mfg_serials.h>
 #include <process_state/app_state/app_state.h>
-#include <system/passert.h>
 
 #define BPM_STRING_LEN 10
 
@@ -73,7 +74,7 @@ static char *prv_get_quality_string(HRMQuality quality) {
     case HRMQuality_Excellent:
       return "Excellent";
   }
-  WTF;
+  pbl_panic();
 }
 
 static char *prv_translate_error(AppMessageResult result) {
@@ -281,7 +282,7 @@ static void prv_init(void) {
   app_message_register_outbox_sent(prv_message_sent_cb);
   app_message_register_outbox_failed(prv_message_failed_cb);
 
-  app_timer_register(1000, prv_remote_notify_timer_cb, NULL);
+  app_timer_register(1000, prv_remote_notify_timer_cb, nullptr);
 
   app_window_stack_push(window, true);
 }
@@ -306,5 +307,6 @@ const PebbleProcessMd *hrm_demo_get_app_info(void) {
     .common.main_func = &prv_main,
   };
   // Only show in launcher if HRM is present
-  return (sys_hrm_manager_is_hrm_present()) ? (const PebbleProcessMd *)&s_hrm_demo_app_info : NULL;
+  return (sys_hrm_manager_is_hrm_present()) ? (const PebbleProcessMd *)&s_hrm_demo_app_info
+                                            : nullptr;
 }

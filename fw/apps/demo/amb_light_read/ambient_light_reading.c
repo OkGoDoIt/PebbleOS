@@ -1,10 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 
-#include <pbl/drivers/ambient_light.h>
+#include <pbl/drivers/als.h>
 
 #include <applib/app.h>
 #include <applib/ui/app_window_stack.h>
@@ -21,8 +22,10 @@ typedef struct {
 } AmbientLightAppData;
 
 static void prv_populate_amb_read_str(char *str) {
-  int level = ambient_light_get_light_level();
-  snprintf(str, AMBIENT_READING_STR_LEN, "Amb Level:\n %d", level);
+  uint32_t level = 0U;
+
+  (void)pbl_als_read(ALS, &level);
+  snprintf(str, AMBIENT_READING_STR_LEN, "Amb Level:\n %" PRIu32, level);
 }
 
 static void timer_callback(void *cb_data) {
@@ -31,7 +34,7 @@ static void timer_callback(void *cb_data) {
   prv_populate_amb_read_str(&data->ambient_reading[0]);
   layer_mark_dirty(window_get_root_layer(data->window));
 
-  app_timer_register(500, timer_callback, NULL);
+  app_timer_register(500, timer_callback, nullptr);
 }
 
 static void handle_init(void) {
@@ -54,7 +57,7 @@ static void handle_init(void) {
   app_state_set_user_data(data);
   app_window_stack_push(data->window, true);
 
-  app_timer_register(10, timer_callback, NULL);
+  app_timer_register(10, timer_callback, nullptr);
 }
 
 static void handle_deinit(void) {

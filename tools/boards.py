@@ -9,16 +9,19 @@ NO_REVISION = "_"
 
 
 class BoardSpec:
-    def __init__(self, target, name, revision=None, runners=None, qemu=None):
+    def __init__(
+        self, target, name, revision=None, variant=None, runners=None, qemu=None
+    ):
         self.target = target
         self.name = name
         self.revision = revision
+        self.variant = variant
         self.runners = runners or []
         self.qemu = qemu or {}
 
     @property
     def normalized(self):
-        return self.target.replace("@", "_")
+        return self.target.replace("@", "_").replace("/", "_")
 
 
 def _boards_dir(srcdir):
@@ -93,6 +96,15 @@ def load_revisions(board_dir, board):
     return revisions
 
 
+def load_variants(board_dir, board):
+    """Other ways to build the board, e.g. for another toolchain."""
+    manifest, data = _load_manifest(board_dir, board)
+    if manifest is None:
+        return []
+
+    return _validate_string_list(manifest, data, "variants")
+
+
 def load_runners(board_dir, board):
     manifest, data = _load_manifest(board_dir, board)
     if manifest is None:
@@ -127,21 +139,27 @@ def available_boards(srcdir):
             continue
 
         revisions = load_revisions(board_dir, board)
-        if revisions:
-            choices.extend(f"{board}@{revision}" for revision in revisions)
-        else:
-            choices.append(board)
+        targets = [f"{board}@{revision}" for revision in revisions] or [board]
+        for target in targets:
+            choices.append(target)
+            choices.extend(
+                f"{target}/{variant}" for variant in load_variants(board_dir, board)
+            )
 
     return choices
 
 
 def parse_board(srcdir, target):
-    if "@" in target:
-        board, revision = target.split("@", 1)
+    board, _, variant = target.partition("/")
+    if variant == "" and target.endswith("/"):
+        raise ValueError(f"Invalid board '{target}': expected BOARD/VARIANT")
+    variant = variant or None
+
+    if "@" in board:
+        board, revision = board.split("@", 1)
         if not board or not revision:
             raise ValueError(f"Invalid board '{target}': expected BOARD@REVISION")
     else:
-        board = target
         revision = None
 
     board_dir = os.path.join(_boards_dir(srcdir), board)
@@ -167,10 +185,19 @@ def parse_board(srcdir, target):
     elif revision is not None:
         raise ValueError(f"Board '{board}' does not define revisions")
 
+    if variant is not None:
+        variants = load_variants(board_dir, board)
+        if variant not in variants:
+            raise ValueError(
+                f"Unknown variant '{variant}' for board '{board}': "
+                f"{', '.join(variants) or 'none'}"
+            )
+
     return BoardSpec(
         target,
         board,
         revision,
+        variant,
         load_runners(board_dir, board),
         load_qemu(board_dir, board),
     )

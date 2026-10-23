@@ -17,7 +17,7 @@
 #include "pbl/services/i18n/i18n.h"
 #include "services/audio_companion/reboot_trace.h"
 #include "resource/resource_ids.auto.h"
-#include "system/passert.h"
+#include "pbl/kernel/assert.h"
 
 #include <inttypes.h>
 #include <stdio.h>

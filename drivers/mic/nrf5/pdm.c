@@ -4,6 +4,8 @@
 #include <pbl/drivers/clocksource.h>
 #include <pbl/drivers/mic.h>
 #include <pbl/drivers/mic/nrf5/pdm_definitions.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/delay.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/system_task.h>
@@ -14,9 +16,7 @@
 #include <kernel/events.h>
 #include <kernel/kernel_heap.h>
 #include <kernel/pbl_malloc.h>
-#include <kernel/util/sleep.h>
 #include <nrfx_pdm.h>
-#include <system/passert.h>
 
 PBL_LOG_MODULE_DEFINE(driver_mic_nrf5, CONFIG_DRIVER_MIC_LOG_LEVEL);
 
@@ -35,11 +35,24 @@ static bool prv_is_valid_buffer(MicDeviceState *state, int16_t *buffer) {
 }
 
 static bool prv_allocate_buffers(MicDeviceState *state) {
+  // The DMA buffers have a fixed size, so take them first and let the queue
+  // shrink to what is left.
+  for (int i = 0; i < PDM_BUFFER_COUNT; i++) {
+    size_t buffer_size = PDM_BUFFER_SIZE_SAMPLES * sizeof(int16_t);
+    state->pdm_buffers[i] = kernel_malloc(buffer_size);
+    if (!state->pdm_buffers[i]) {
+      PBL_LOG_ERR("Failed to allocate PDM buffer %d", i);
+      prv_free_buffers(state);
+      return false;
+    }
+    memset(state->pdm_buffers[i], 0, buffer_size);
+  }
+
   // The kernel heap fragments over time, so a single 10 KB contiguous alloc
   // can fail even when plenty of memory is free. Shrink the request in 32 ms
   // steps until it fits or we hit the 128 ms floor.
   uint16_t try_size = CIRCULAR_BUF_SIZE_BYTES;
-  uint8_t *storage = NULL;
+  uint8_t *storage = nullptr;
 
   while (try_size >= CIRCULAR_BUF_MIN_SIZE_BYTES) {
     storage = kernel_malloc(try_size);
@@ -54,6 +67,7 @@ static bool prv_allocate_buffers(MicDeviceState *state) {
     heap_calc_totals(kernel_heap_get(), &used, &free_bytes, &max_free);
     PBL_LOG_ERR("Failed to allocate PDM circular buffer (min %u B, max_free %u B)",
                 (unsigned)CIRCULAR_BUF_MIN_SIZE_BYTES, max_free);
+    prv_free_buffers(state);
     return false;
   }
 
@@ -66,22 +80,6 @@ static bool prv_allocate_buffers(MicDeviceState *state) {
 
   state->circ_buffer_storage = storage;
   state->circ_buffer_size = try_size;
-
-  // Allocate PDM buffers
-  for (int i = 0; i < PDM_BUFFER_COUNT; i++) {
-    size_t buffer_size = PDM_BUFFER_SIZE_SAMPLES * sizeof(int16_t);
-    state->pdm_buffers[i] = kernel_malloc(buffer_size);
-    if (!state->pdm_buffers[i]) {
-      PBL_LOG_ERR("Failed to allocate PDM buffer %d", i);
-      // Free any previously allocated buffers
-      prv_free_buffers(state);
-      return false;
-    }
-    // Clear the buffer
-    memset(state->pdm_buffers[i], 0, buffer_size);
-  }
-
-  // Initialize circular buffer with allocated storage
   circular_buffer_init(&state->circ_buffer, state->circ_buffer_storage, try_size);
 
   return true;
@@ -91,7 +89,7 @@ static void prv_free_buffers(MicDeviceState *state) {
   // Free circular buffer storage
   if (state->circ_buffer_storage) {
     kernel_free(state->circ_buffer_storage);
-    state->circ_buffer_storage = NULL;
+    state->circ_buffer_storage = nullptr;
   }
   state->circ_buffer_size = 0;
 
@@ -99,7 +97,7 @@ static void prv_free_buffers(MicDeviceState *state) {
   for (int i = 0; i < PDM_BUFFER_COUNT; i++) {
     if (state->pdm_buffers[i]) {
       kernel_free(state->pdm_buffers[i]);
-      state->pdm_buffers[i] = NULL;
+      state->pdm_buffers[i] = nullptr;
     }
   }
 }
@@ -172,7 +170,7 @@ static void prv_process_pdm_buffer(MicDeviceState *state, int16_t *pdm_data) {
     // Dispatch to low-priority system task instead of kernel event queue.
     // A drop is retried on the next PDM buffer event; losing samples beats
     // resetting the system over a full queue.
-    if (!system_task_add_callback_from_isr_droppable(prv_dispatch_samples_system_task, NULL)) {
+    if (!system_task_add_callback_from_isr_droppable(prv_dispatch_samples_system_task, nullptr)) {
       state->main_pending = false;
     }
   }
@@ -296,7 +294,7 @@ static void prv_dispatch_samples_system_task(void *data) {
     uint16_t remaining_data = circular_buffer_get_read_space_remaining(&state->circ_buffer);
     if (remaining_data >= frame_size_bytes && state->is_running && !state->main_pending) {
       state->main_pending = true;
-      if (!system_task_add_callback(prv_dispatch_samples_system_task, NULL)) {
+      if (!system_task_add_callback(prv_dispatch_samples_system_task, nullptr)) {
         state->main_pending = false;
       }
     } else {
@@ -444,7 +442,7 @@ void mic_stop(const MicDevice *this) {
 
   // Give the PDM hardware a moment to finish any pending operations
   // This helps ensure no DMA operations are still accessing our buffers
-  psleep(1); // 1ms delay to let hardware settle
+  pbl_sleep_ms(1); // 1ms delay to let hardware settle
 
   // Release high frequency oscillator
   clocksource_hfxo_release();
@@ -453,9 +451,9 @@ void mic_stop(const MicDevice *this) {
   prv_free_buffers(state);
 
   // Clear state
-  state->data_handler = NULL;
-  state->handler_context = NULL;
-  state->audio_buffer = NULL;
+  state->data_handler = nullptr;
+  state->handler_context = nullptr;
+  state->audio_buffer = nullptr;
   state->audio_buffer_len = 0;
   state->main_pending = false;
 

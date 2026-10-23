@@ -1,13 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <pbl/drivers/touch/touch_sensor.h>
+#include <pbl/input/input.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/services/system_task.h>
-#include <pbl/services/touch/touch.h>
 
 #include <board/board.h>
 #include <cmsis_core.h>
@@ -33,18 +32,16 @@ static void prv_process_touch_update(void *unused) {
   const int16_t x = (int16_t)REG32(base + TOUCH_X);
   const int16_t y = (int16_t)REG32(base + TOUCH_Y);
 
-  if (state & INT_TOUCH_EVENT) {
-    touch_handle_update(TouchState_FingerDown, x, y);
-  } else {
-    touch_handle_update(TouchState_FingerUp, x, y);
-  }
+  pbl_input_report_key(PBL_INPUT_BTN_TOUCH, (state & INT_TOUCH_EVENT) != 0, false);
+  pbl_input_report_abs(PBL_INPUT_ABS_X, x, false);
+  pbl_input_report_abs(PBL_INPUT_ABS_Y, y, true);
 }
 
 static void prv_touch_irq_handler(void) {
   REG32(QEMU_TOUCH_BASE + TOUCH_INTSTAT) = INT_TOUCH_EVENT;
 
   if (!s_callback_scheduled) {
-    if (system_task_add_callback_from_isr(prv_process_touch_update, NULL)) {
+    if (system_task_add_callback_from_isr(prv_process_touch_update, nullptr)) {
       s_callback_scheduled = true;
     }
   }

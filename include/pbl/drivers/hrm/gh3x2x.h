@@ -2,11 +2,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #pragma once
-#include <stdbool.h>
 
-#include <pbl/drivers/exti.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
+#include <pbl/drivers/intc.h>
 
 #include <applib/app_timer.h>
 
@@ -18,12 +17,6 @@
  * Also exposes the hooks used by the vendor library and the manufacturing tests.
  * @{
  */
-
-#ifdef CONFIG_BOARD_OBELIX
-// FIXME(OBELIX): Provide proper GPIO layer abstraction
-/** @brief The sensor reset line is driven by an nPM1300 GPIO instead of an MCU pin. */
-#define GH3X2X_RESET_PIN_CTRLBY_NPM1300 1
-#endif
 
 /** @brief Number of PPG channels. */
 #define HRM_PPG_CH_NUM 6
@@ -58,19 +51,19 @@ typedef const struct HRMDevice {
   /** Driver runtime state. */
   HRMDeviceState *state;
   /** Sensor I2C port. */
-  I2CSlavePort *i2c;
+  const struct pbl_i2c_dev *i2c;
   /** Sensor interrupt line. */
-  ExtiConfig int_exti;
+  struct pbl_irq_spec int_irq;
   /** Sensor interrupt line, as an input. */
-  InputConfig int_input;
-  /** Sensor reset line. */
-  OutputConfig reset_gpio;
+  struct pbl_gpio int_input;
+  /** Sensor reset line, optional. */
+  struct pbl_gpio reset;
 } HRMDevice;
 
 /**
  * @brief Queue tuning protocol data received over BLE for processing on the system task.
  *
- * Only with @c CONFIG_BT_GH3X2X_TUNING_SERVICE.
+ * Only with @c CONFIG_BT_SERVICE_GH3X2X_TUNING.
  *
  * @param context Heap buffer holding a 32-bit length followed by the data; freed once processed.
  * @return True if queued.

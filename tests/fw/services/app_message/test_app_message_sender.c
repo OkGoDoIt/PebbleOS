@@ -11,6 +11,8 @@
 
 #include <applib/app_message/app_message_internal.h>
 #include <clar.h>
+#include <fff.h>
+#include <kernel/pbl_malloc.h>
 #include <process_management/app_install_manager.h>
 
 extern const SessionSendJobImpl s_app_message_send_job_impl;
@@ -19,16 +21,7 @@ extern void comm_session_send_queue_cleanup(CommSession *session);
 // Fakes & Stubs
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include <stubs_analytics.h>
-#include <stubs_bt_lock.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-
-static int s_app_install_timestamp_update_count;
-void app_install_mark_prioritized(AppInstallId install_id, bool can_expire) {
-  ++s_app_install_timestamp_update_count;
-}
+FAKE_VOID_FUNC(app_install_mark_prioritized, AppInstallId, bool);
 
 AppInstallId app_manager_get_current_app_id(void) {
   return INSTALL_ID_INVALID;
@@ -39,22 +32,13 @@ const PebbleProcessMd *app_manager_get_current_app_md(void) {
   return &s_process_md;
 }
 
-static int s_consumed_count;
-static AppOutboxStatus s_last_status_code;
-void app_outbox_service_consume_message(AppOutboxMessage *message, AppOutboxStatus status) {
-  s_last_status_code = status;
-  ++s_consumed_count;
+FAKE_VOID_FUNC(app_outbox_service_consume_message, AppOutboxMessage *, AppOutboxStatus);
+static void prv_consume_message(AppOutboxMessage *message, AppOutboxStatus status) {
   kernel_free(message);
 }
 
-static AppOutboxMessageHandler s_outbox_message_handler;
-static size_t s_service_data_size;
-void app_outbox_service_register(AppOutboxServiceTag service_tag,
-                                 AppOutboxMessageHandler message_handler, PebbleTask consumer_task,
-                                 size_t service_data_size) {
-  s_outbox_message_handler = message_handler;
-  s_service_data_size = service_data_size;
-}
+FAKE_VOID_FUNC(app_outbox_service_register, AppOutboxServiceTag, AppOutboxMessageHandler,
+               PebbleTask, size_t);
 
 static bool s_is_message_cancelled;
 bool app_outbox_service_is_message_cancelled(AppOutboxMessage *message) {
@@ -88,10 +72,7 @@ bool comm_session_is_valid(const CommSession *session) {
           session == comm_session_get_system_session());
 }
 
-static int s_send_next_count = 0;
-void comm_session_send_next(CommSession *session) {
-  ++s_send_next_count;
-}
+FAKE_VOID_FUNC(comm_session_send_next, CommSession *);
 
 void comm_session_set_responsiveness(CommSession *session, enum pbl_bt_consumer consumer,
                                      enum pbl_bt_response_time_state state,
@@ -101,18 +82,19 @@ void comm_session_set_responsiveness(CommSession *session, enum pbl_bt_consumer 
 void comm_session_sanitize_app_session(CommSession **session_in_out) {
   CommSession *permitted_session = comm_session_get_current_app_session();
   *session_in_out =
-      ((!*session_in_out) || (*session_in_out == permitted_session)) ? permitted_session : NULL;
+      ((!*session_in_out) || (*session_in_out == permitted_session)) ? permitted_session : nullptr;
 }
 
 // Helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void prv_send_outbox_raw_data(const uint8_t *data, size_t length) {
-  AppOutboxMessage *outbox_message = kernel_zalloc(sizeof(AppOutboxMessage) + s_service_data_size);
+  AppOutboxMessage *outbox_message =
+      kernel_zalloc(sizeof(AppOutboxMessage) + app_outbox_service_register_fake.arg3_val);
   cl_assert(outbox_message);
   outbox_message->data = data;
   outbox_message->length = length;
-  s_outbox_message_handler(outbox_message);
+  app_outbox_service_register_fake.arg1_val(outbox_message);
 }
 
 static AppMessageAppOutboxData *prv_create_and_send_outbox_message(CommSession *session,
@@ -137,13 +119,15 @@ static void prv_process_send_queue(CommSession *session) {
   }
 }
 
-#define assert_consumed(expected_last_status, expected_consumed_count) \
-  {                                                                    \
-    cl_assert_equal_i(expected_last_status, s_last_status_code);       \
-    cl_assert_equal_i(expected_consumed_count, s_consumed_count);      \
+#define assert_consumed(expected_last_status, expected_consumed_count)                         \
+  {                                                                                            \
+    cl_assert_equal_i(expected_last_status, app_outbox_service_consume_message_fake.arg1_val); \
+    cl_assert_equal_i(expected_consumed_count,                                                 \
+                      app_outbox_service_consume_message_fake.call_count);                     \
   }
 
-#define assert_not_consumed() cl_assert_equal_i(0, s_consumed_count);
+#define assert_not_consumed() \
+  cl_assert_equal_i(0, app_outbox_service_consume_message_fake.call_count);
 
 // Tests
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -157,17 +141,13 @@ static uint8_t TEST_EXPECTED_PP_MSG[sizeof(PebbleProtocolHeader) + sizeof(TEST_P
 void test_app_message_sender__initialize(void) {
   s_system_session_ptr = &s_system_session;
   s_app_session_ptr = &s_app_session;
-  s_send_next_count = 0;
-
-  s_outbox_message_handler = NULL;
-  s_service_data_size = 0;
+  RESET_FAKE(app_install_mark_prioritized);
+  RESET_FAKE(app_outbox_service_consume_message);
+  RESET_FAKE(app_outbox_service_register);
+  RESET_FAKE(comm_session_send_next);
+  app_outbox_service_consume_message_fake.custom_fake = prv_consume_message;
 
   s_is_message_cancelled = false;
-
-  s_last_status_code = AppOutboxStatusUserRangeEnd;
-  s_consumed_count = 0;
-
-  s_app_install_timestamp_update_count = 0;
 
   s_process_md.allow_js = false;
 
@@ -177,7 +157,7 @@ void test_app_message_sender__initialize(void) {
   memcpy(TEST_EXPECTED_PP_MSG + sizeof(*header), TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
 
   app_message_sender_init();
-  cl_assert(s_outbox_message_handler);
+  cl_assert(app_outbox_service_register_fake.arg1_val);
 }
 
 void test_app_message_sender__cleanup(void) {
@@ -223,17 +203,17 @@ void test_app_message_sender__app_session_but_js_app(void) {
 }
 
 void test_app_message_sender__no_sessions_connected(void) {
-  s_system_session_ptr = NULL;
-  s_app_session_ptr = NULL;
+  s_system_session_ptr = nullptr;
+  s_app_session_ptr = nullptr;
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
   assert_consumed(AppMessageSenderErrorDisconnected, 1);
   app_free(outbox_data);
 }
 
 void test_app_message_sender__auto_select_not_js_app(void) {
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
   prv_process_send_queue(s_system_session_ptr);
   assert_not_consumed();
 
@@ -246,7 +226,7 @@ void test_app_message_sender__auto_select_not_js_app(void) {
 void test_app_message_sender__auto_select_js_app(void) {
   s_process_md.allow_js = true;
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
   prv_process_send_queue(s_app_session_ptr);
   assert_not_consumed();
 
@@ -263,7 +243,7 @@ void test_app_message_sender__system_session_and_js_app(void) {
   assert_not_consumed();
   prv_process_send_queue(s_system_session_ptr);
   assert_consumed(AppMessageSenderErrorSuccess, 1);
-  cl_assert_equal_i(s_app_install_timestamp_update_count, 1);
+  cl_assert_equal_i(app_install_mark_prioritized_fake.call_count, 1);
   app_free(outbox_data);
 }
 
@@ -272,18 +252,18 @@ void test_app_message_sender__system_session_and_js_app(void) {
 
 void test_app_message_sender__freed_but_not_sent_entirely(void) {
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
   size_t length = comm_session_send_queue_get_length(s_app_session_ptr);
   comm_session_send_queue_consume(s_app_session_ptr, length - 1);
   comm_session_send_queue_cleanup(s_app_session_ptr);
   assert_consumed(AppMessageSenderErrorDisconnected, 1);
-  cl_assert_equal_i(s_app_install_timestamp_update_count, 0);
+  cl_assert_equal_i(app_install_mark_prioritized_fake.call_count, 0);
   app_free(outbox_data);
 }
 
 void test_app_message_sender__byte_by_byte_consume(void) {
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
   size_t length = comm_session_send_queue_get_length(s_app_session_ptr);
   cl_assert_equal_i(length, sizeof(PebbleProtocolHeader) + sizeof(TEST_PAYLOAD));
 
@@ -292,7 +272,7 @@ void test_app_message_sender__byte_by_byte_consume(void) {
     cl_assert_equal_i(length - i, comm_session_send_queue_get_length(s_app_session_ptr));
 
     // Test the `read_pointer` implementation:
-    const uint8_t *read_pointer = NULL;
+    const uint8_t *read_pointer = nullptr;
     size_t length_available =
         comm_session_send_queue_get_read_pointer(s_app_session_ptr, &read_pointer);
     cl_assert(read_pointer);
@@ -314,13 +294,13 @@ void test_app_message_sender__byte_by_byte_consume(void) {
   }
 
   assert_consumed(AppMessageSenderErrorSuccess, 1);
-  cl_assert_equal_i(s_app_install_timestamp_update_count, 1);
+  cl_assert_equal_i(app_install_mark_prioritized_fake.call_count, 1);
   app_free(outbox_data);
 }
 
 void test_app_message_sender__byte_by_byte_copy_with_offset(void) {
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
   size_t length = comm_session_send_queue_get_length(s_app_session_ptr);
   cl_assert_equal_i(length, sizeof(PebbleProtocolHeader) + sizeof(TEST_PAYLOAD));
 
@@ -341,7 +321,7 @@ void test_app_message_sender__byte_by_byte_copy_with_offset(void) {
   }
 
   assert_consumed(AppMessageSenderErrorSuccess, 1);
-  cl_assert_equal_i(s_app_install_timestamp_update_count, 1);
+  cl_assert_equal_i(app_install_mark_prioritized_fake.call_count, 1);
   app_free(outbox_data);
 }
 
@@ -352,7 +332,7 @@ void test_app_message_sender__byte_by_byte_copy_with_offset(void) {
 
 static void prv_quit_app_after_pp_msg_byte(uint32_t num_bytes) {
   AppMessageAppOutboxData *outbox_data = prv_create_and_send_outbox_message(
-      NULL /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
+      nullptr /* auto-select */, ALLOWED_ENDPOINT_ID, TEST_PAYLOAD, sizeof(TEST_PAYLOAD));
 
   size_t length = comm_session_send_queue_get_length(s_app_session_ptr);
   uint8_t bytes_out[length];

@@ -12,17 +12,13 @@
 //
 // NEW PREFERENCES DO __NOT__ BELONG HERE WITHOUT A VERY GOOD REASON.
 
-#include <stdbool.h>
-
 #include <pbl/util/uuid.h>
 
 #include <applib/graphics/gtypes.h>
 #include <process_management/app_install_types.h>
 #include <shell/system_theme.h>
 
-#if defined(CONFIG_APP_SCALING) &&                                       \
-    (defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_QEMU_EMERY) || \
-     defined(CONFIG_BOARD_NATIVE_EMERY))
+#if defined(CONFIG_APP_SCALING) && defined(CONFIG_PLATFORM_EMERY)
 #define TIMELINE_PEEK_WATCHFACE_FIT_SUPPORTED 1
 #else
 #define TIMELINE_PEEK_WATCHFACE_FIT_SUPPORTED 0
@@ -63,6 +59,8 @@ typedef enum UnitsWind {
   UnitsWind_FromDistance,
   UnitsWind_KmH,
   UnitsWind_Mph,
+  UnitsWind_MetersPerSecond,
+  UnitsWind_Knots,
   UnitsWindCount
 } UnitsWind;
 
@@ -100,6 +98,18 @@ void backlight_set_intensity(uint8_t intensity);
 // Packed 0x00RRGGBB. Matches the BACKLIGHT_COLOR_* constants in drivers/backlight.h.
 uint32_t backlight_get_default_color(void);
 void backlight_set_default_color(uint32_t rgb_color);
+
+bool backlight_day_night_color_is_enabled(void);
+void backlight_day_night_color_set_enabled(bool enabled);
+
+uint32_t backlight_get_night_color(void);
+void backlight_set_night_color(uint32_t rgb_color);
+
+uint16_t backlight_get_sunrise_minute(void);
+void backlight_set_sunrise_minute(uint16_t minute);
+
+uint16_t backlight_get_sunset_minute(void);
+void backlight_set_sunset_minute(uint16_t minute);
 #endif
 
 // The backlight motion enabled setting is used by the kernel event loop.
@@ -196,8 +206,21 @@ void shell_prefs_toggle_language_english(void);
 typedef enum ShellLanguage {
   ShellLanguageInstalledPack = 0,
   ShellLanguageEnglish,
+  ShellLanguagePack1,
+  ShellLanguagePack2,
+  ShellLanguagePack3,
   ShellLanguageCount,
 } ShellLanguage;
+
+// Pack slot zero keeps the legacy ShellLanguageInstalledPack value.
+static inline ShellLanguage shell_language_for_pack_slot(uint8_t slot) {
+  return slot == 0 ? ShellLanguageInstalledPack : (ShellLanguage)(ShellLanguagePack1 + slot - 1);
+}
+
+// English, which has no pack, maps to slot zero.
+static inline uint8_t shell_language_pack_slot(ShellLanguage language) {
+  return language >= ShellLanguagePack1 ? language - ShellLanguagePack1 + 1 : 0;
+}
 
 ShellLanguage shell_prefs_get_language(void);
 uint32_t shell_prefs_get_language_resource_id(void);

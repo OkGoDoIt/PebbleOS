@@ -9,22 +9,10 @@
 
 // Stubs
 ////////////////////////////////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_i18n.h>
-#include <stubs_layout_layer.h>
-#include <stubs_logging.h>
-#include <stubs_nexmo.h>
-#include <stubs_notifications.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pin_db.h>
-#include <stubs_regular_timer.h>
-#include <stubs_reminder_db.h>
-#include <stubs_timeline.h>
 #include <stubs_uuid.h>
 
 iOSNotifPrefs *ios_notif_pref_db_get_prefs(const uint8_t *app_id, int length) {
-  return NULL;
+  return nullptr;
 }
 
 void ios_notif_pref_db_free_prefs(iOSNotifPrefs *prefs) {

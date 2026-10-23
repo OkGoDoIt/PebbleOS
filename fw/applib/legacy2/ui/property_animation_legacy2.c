@@ -106,11 +106,19 @@ struct PropertyAnimationLegacy2 *property_animation_legacy2_create(
 }
 
 void property_animation_legacy2_destroy(struct PropertyAnimationLegacy2 *property_animation) {
-  if (property_animation == NULL) {
+  if (property_animation == nullptr) {
     return;
   }
   animation_legacy2_unschedule(&property_animation->animation);
   task_free(property_animation);
+}
+
+static void prv_set_frame(void *subject, GRect frame) {
+  layer_set_frame_by_value(subject, frame);
+}
+
+static GRect prv_get_frame(void *subject) {
+  return layer_get_frame_by_value(subject);
 }
 
 void property_animation_legacy2_init_layer_frame(PropertyAnimationLegacy2 *property_animation,
@@ -124,10 +132,10 @@ void property_animation_legacy2_init_layer_frame(PropertyAnimationLegacy2 *prope
     .accessors = {
       .setter =
           {
-            .grect = (const GRectSetter)layer_set_frame_by_value,
+            .grect = prv_set_frame,
           },
       .getter = {
-        .grect = (const GRectGetter)layer_get_frame_by_value,
+        .grect = prv_get_frame,
       },
     },
   };

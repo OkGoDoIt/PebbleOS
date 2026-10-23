@@ -12,6 +12,7 @@
 #include <applib/ui/action_menu_window.h>
 #include <applib/ui/action_menu_window_private.h>
 #include <applib/ui/dialogs/simple_dialog.h>
+#include <applib/ui/preferred_durations.h>
 #include <kernel/pbl_malloc.h>
 #include <popups/health_tracking_ui.h>
 #include <resource/resource_ids.auto.h>
@@ -66,7 +67,7 @@ static SimpleDialog *prv_snooze_set_confirm_dialog(void) {
   dialog_set_text(dialog, snooze_buf);
   dialog_set_icon(dialog, RESOURCE_ID_GENERIC_CONFIRMATION_LARGE);
   dialog_set_background_color(dialog, GColorJaegerGreen);
-  dialog_set_timeout(dialog, DIALOG_TIMEOUT_DEFAULT);
+  dialog_set_timeout(dialog, preferred_result_display_duration());
   return simple_dialog;
 }
 
@@ -168,7 +169,7 @@ static void prv_sound_highlight_handler(const ActionMenuItem *item, void *contex
     return;
   }
 
-  const SpeakerNote *notes = NULL;
+  const SpeakerNote *notes = nullptr;
   uint32_t count = 0;
   alarm_tones_get((AlarmTone)(uintptr_t)item->action_data, &notes, &count);
   if (!notes || count == 0) {
@@ -177,8 +178,8 @@ static void prv_sound_highlight_handler(const ActionMenuItem *item, void *contex
   }
 
   prv_stop_sound_preview();
-  speaker_service_set_owner_task(PebbleTask_App);
-  speaker_service_play_note_seq(notes, count, SpeakerPriorityApp, ALARM_SPEAKER_VOLUME);
+  speaker_service_play_note_seq_owned(notes, count, SpeakerPriorityApp, ALARM_SPEAKER_VOLUME,
+                                      PebbleTask_App);
 }
 #endif
 
@@ -186,10 +187,10 @@ static ActionMenuLevel *prv_create_main_menu(void) {
   ActionMenuLevel *level =
       task_malloc(sizeof(ActionMenuLevel) + DetailMenuItemIndexNum * sizeof(ActionMenuItem));
   if (!level)
-    return NULL;
+    return nullptr;
   *level = (ActionMenuLevel){
     .num_items = DetailMenuItemIndexNum,
-    .parent_level = NULL,
+    .parent_level = nullptr,
     .display_mode = ActionMenuLevelDisplayModeWide,
   };
   return level;
@@ -199,7 +200,7 @@ static ActionMenuLevel *prv_create_snooze_menu(ActionMenuLevel *parent_level) {
   ActionMenuLevel *level =
       task_malloc(sizeof(ActionMenuLevel) + NUM_SNOOZE_MENU_ITEMS * sizeof(ActionMenuItem));
   if (!level)
-    return NULL;
+    return nullptr;
   *level = (ActionMenuLevel){
     .num_items = NUM_SNOOZE_MENU_ITEMS,
     .parent_level = parent_level,
@@ -213,7 +214,7 @@ static ActionMenuLevel *prv_create_sound_menu(ActionMenuLevel *parent_level) {
   ActionMenuLevel *level =
       task_malloc(sizeof(ActionMenuLevel) + NUM_SOUND_MENU_ITEMS * sizeof(ActionMenuItem));
   if (!level)
-    return NULL;
+    return nullptr;
   *level = (ActionMenuLevel){
     .num_items = NUM_SOUND_MENU_ITEMS,
     .parent_level = parent_level,
@@ -246,7 +247,7 @@ void prv_cleanup_alarm_detail_menu(ActionMenu *action_menu, const ActionMenuItem
 #endif
   task_free((void *)root_level);
   task_free(data);
-  data = NULL;
+  data = nullptr;
 }
 
 void alarm_detail_window_push(AlarmId alarm_id, AlarmInfo *alarm_info,

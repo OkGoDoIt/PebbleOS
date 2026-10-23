@@ -17,6 +17,7 @@
 #include <applib/ui/kino/kino_reel.h>
 #include <apps/system/timeline/text_node.h>
 #include <board/display.h>
+#include <kernel/pbl_malloc.h>
 #include <resource/resource_ids.auto.h>
 
 // Compile-time display offset calculations
@@ -119,8 +120,8 @@ static void prv_render_bpm(GContext *ctx, Layer *base_layer) {
 
   graphics_text_node_draw(
       &container->node, ctx,
-      &GRect(0, offset_y, base_layer->bounds.size.w, fonts_get_font_height(data->bpm_font)), NULL,
-      NULL);
+      &GRect(0, offset_y, base_layer->bounds.size.w, fonts_get_font_height(data->bpm_font)),
+      nullptr, nullptr);
   graphics_text_node_destroy(&container->node);
 }
 
@@ -144,7 +145,7 @@ static void prv_render_timstamp(GContext *ctx, Layer *base_layer) {
 
   graphics_context_set_text_color(ctx, TEXT_COLOR);
   graphics_draw_text(ctx, buffer, data->timestamp_font, rect, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 }
 
 static void prv_render_hrm_disabled(GContext *ctx, Layer *base_layer) {
@@ -159,7 +160,7 @@ static void prv_render_hrm_disabled(GContext *ctx, Layer *base_layer) {
 
   graphics_context_set_text_color(ctx, TEXT_COLOR);
   graphics_draw_text(ctx, text, data->timestamp_font, rect, GTextOverflowModeWordWrap,
-                     GTextAlignmentCenter, NULL);
+                     GTextAlignmentCenter, nullptr);
 }
 
 static void prv_base_layer_update_proc(Layer *base_layer, GContext *ctx) {
@@ -225,8 +226,16 @@ Layer *health_hr_summary_card_create(HealthData *health_data) {
 
 void health_hr_summary_card_select_click_handler(Layer *layer) {
   HealthHrSummaryCardData *data = layer_get_data(layer);
-  HealthData *health_data = data->health_data;
-  Window *window = health_hr_detail_card_create(health_data);
+  // Only needed while the detail card builds its chart; with monitoring off there's none to show
+  uint8_t *minute_bpm = nullptr;
+  uint16_t num_minutes = 0;
+  if (activity_prefs_heart_rate_is_enabled()) {
+    minute_bpm = app_malloc_check(PBL_MIN_PER_DAY);
+    num_minutes = health_data_hr_get_today_bpm(minute_bpm);
+  }
+  const HealthHrChartData today = {.minute_bpm = minute_bpm, .num_minutes = num_minutes};
+  Window *window = health_hr_detail_card_create(data->health_data, &today);
+  app_free(minute_bpm);
   window_set_window_handlers(window, &(WindowHandlers){
                                        .unload = prv_hr_detail_card_unload_callback,
                                      });

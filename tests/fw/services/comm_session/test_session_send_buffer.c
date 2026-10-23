@@ -13,21 +13,18 @@
 #include <pbl/util/testing.h>
 
 #include <clar.h>
+#include <fff.h>
 
 extern SendBuffer *comm_session_send_buffer_create(bool is_system);
 extern void comm_session_send_buffer_destroy(SendBuffer *sb);
 extern struct pbl_sem *comm_session_send_buffer_write_semaphore(void);
+extern struct pbl_sem *comm_session_send_buffer_bulk_write_semaphore(void);
 extern PBL_T_STATIC const SessionSendJobImpl s_default_kernel_send_job_impl;
 extern void comm_default_kernel_sender_deinit(void);
 extern void comm_session_send_queue_cleanup(CommSession *session);
 
 // Stubs
 ///////////////////////////////////////////////////////////
-
-#include <stubs_analytics.h>
-#include <stubs_bt_lock.h>
-#include <stubs_logging.h>
-#include <stubs_passert.h>
 
 // Fakes
 ///////////////////////////////////////////////////////////
@@ -51,10 +48,7 @@ bool comm_session_is_valid(const CommSession *session) {
   return (s_valid_session == session);
 }
 
-static int s_send_next_count = 0;
-void comm_session_send_next(CommSession *session) {
-  ++s_send_next_count;
-}
+FAKE_VOID_FUNC(comm_session_send_next, CommSession *);
 
 void comm_session_send_next_immediately(CommSession *session) {
   // Pretend to send out all the data:
@@ -79,7 +73,7 @@ void test_session_send_buffer__initialize(void) {
   fake_kernel_malloc_init();
   fake_kernel_malloc_enable_stats(true);
   fake_kernel_malloc_mark();
-  s_send_next_count = 0;
+  RESET_FAKE(comm_session_send_next);
   comm_default_kernel_sender_init();
 }
 
@@ -92,7 +86,8 @@ void test_session_send_buffer__cleanup(void) {
 }
 
 void test_session_send_buffer__null_session(void) {
-  cl_assert_equal_p(NULL, comm_session_send_buffer_begin_write(NULL, ENDPOINT_ID, 1, TIMEOUT_MS));
+  cl_assert_equal_p(nullptr,
+                    comm_session_send_buffer_begin_write(nullptr, ENDPOINT_ID, 1, TIMEOUT_MS));
 }
 
 void test_session_send_buffer__begin_write_with_more_than_max_payload(void) {
@@ -101,13 +96,13 @@ void test_session_send_buffer__begin_write_with_more_than_max_payload(void) {
   size_t max_length = comm_session_send_buffer_get_max_payload_length(&s_session);
   SendBuffer *write_sb =
       comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID, max_length + 1, TIMEOUT_MS);
-  cl_assert_equal_p(write_sb, NULL);
+  cl_assert_equal_p(write_sb, nullptr);
 }
 
 pbl_tick_t prv_session_closed_yield_cb(struct pbl_sem *handle) {
   if (s_valid_session) {
     comm_session_send_queue_cleanup(s_valid_session);
-    s_valid_session = NULL;
+    s_valid_session = nullptr;
   }
   return 10;
 }
@@ -138,7 +133,7 @@ void test_session_send_buffer__not_enough_space_in_time(void) {
   // Try to begin writing again, requesting only one byte:
   SendBuffer *write_sb2 = comm_session_send_buffer_begin_write(
       &s_session, ENDPOINT_ID, 1 /* required_free_length */, TIMEOUT_MS);
-  cl_assert_equal_p(write_sb2, NULL);
+  cl_assert_equal_p(write_sb2, nullptr);
 
   prv_cleanup_send_buffer(write_sb);
 }
@@ -174,8 +169,8 @@ void test_session_send_buffer__multiple_smaller_messages(void) {
   }
 
   // Can't write another message:
-  cl_assert_equal_p(NULL, comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID,
-                                                               1 /* length */, TIMEOUT_MS));
+  cl_assert_equal_p(nullptr, comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID,
+                                                                  1 /* length */, TIMEOUT_MS));
 
   for (int i = 0; i < ARRAY_LENGTH(write_sb); ++i) {
     if (!write_sb[i]) {
@@ -238,7 +233,7 @@ void test_session_send_buffer__writing_but_then_session_closed(void) {
   // Try to begin writing again, requesting only one byte:
   write_sb = comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID,
                                                   1 /* required_free_length */, TIMEOUT_MS);
-  cl_assert_equal_p(write_sb, NULL);
+  cl_assert_equal_p(write_sb, nullptr);
 
   // ..send_buffer_destroy() is already called in the yield cb
 }
@@ -281,10 +276,10 @@ void test_session_send_buffer__send_queue_interface(void) {
                         write_sb, fake_data_payload + second_write_length, second_write_length),
                     true);
 
-  cl_assert_equal_i(s_send_next_count, 0);
+  cl_assert_equal_i(comm_session_send_next_fake.call_count, 0);
   comm_session_send_buffer_end_write(write_sb);
   // Expect comm_session_send_next to be called to trigger the transport:
-  cl_assert_equal_i(s_send_next_count, 1);
+  cl_assert_equal_i(comm_session_send_next_fake.call_count, 1);
 
   // Exercise the transport interface:
   const SessionSendQueueJob *job = (const SessionSendQueueJob *)write_sb;
@@ -343,4 +338,64 @@ void test_session_send_buffer__send_queue_interface(void) {
   cl_assert_equal_i(comm_session_send_queue_get_length(s_valid_session), 0);
 
   prv_cleanup_send_buffer(write_sb);
+}
+
+static SendBuffer *prv_fill(bool bulk, size_t length) {
+  SendBuffer *sb =
+      bulk ? comm_session_send_buffer_begin_write_bulk(&s_session, ENDPOINT_ID, length, TIMEOUT_MS)
+           : comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID, length, TIMEOUT_MS);
+  cl_assert(sb);
+  uint8_t fake_data[length];
+  memset(fake_data, 0, length);
+  comm_session_send_buffer_write(sb, fake_data, length);
+  comm_session_send_buffer_end_write(sb);
+  return sb;
+}
+
+void test_session_send_buffer__bulk_leaves_room_for_interactive(void) {
+  s_valid_session = &s_session;
+
+  const size_t max_length = comm_session_send_buffer_get_max_payload_length(&s_session);
+  SendBuffer *bulk_sb = prv_fill(true /* bulk */, max_length);
+
+  fake_sem_set_yield_callback(comm_session_send_buffer_bulk_write_semaphore(),
+                              prv_receive_but_no_bytes_freed_yield_cb);
+
+  // A small interactive message gets a buffer right away...
+  SendBuffer *sb = comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID, 19, 0);
+  cl_assert(sb);
+  comm_session_send_buffer_end_write(sb);
+
+  // ...while more bulk data has to wait for the transfer to drain.
+  cl_assert_equal_p(
+      comm_session_send_buffer_begin_write_bulk(&s_session, ENDPOINT_ID, 1, TIMEOUT_MS), nullptr);
+
+  prv_cleanup_send_buffer(sb);
+  prv_cleanup_send_buffer(bulk_sb);
+}
+
+void test_session_send_buffer__interactive_limit_is_unchanged(void) {
+  s_valid_session = &s_session;
+
+  // Interactive messages alone still share the same limit as before.
+  const size_t max_length = comm_session_send_buffer_get_max_payload_length(&s_session);
+  SendBuffer *full_sb = prv_fill(false /* bulk */, max_length);
+
+  fake_sem_set_yield_callback(comm_session_send_buffer_write_semaphore(),
+                              prv_receive_but_no_bytes_freed_yield_cb);
+  cl_assert_equal_p(comm_session_send_buffer_begin_write(&s_session, ENDPOINT_ID, 1, TIMEOUT_MS),
+                    nullptr);
+
+  prv_cleanup_send_buffer(full_sb);
+}
+
+void test_session_send_buffer__freeing_wakes_both_classes(void) {
+  s_valid_session = &s_session;
+
+  SendBuffer *sb = prv_fill(true /* bulk */, 10);
+  prv_cleanup_send_buffer(sb);
+
+  // A bulk sender retrying must not take the only wakeup an interactive sender waits for.
+  cl_assert_equal_i(pbl_sem_take(comm_session_send_buffer_write_semaphore(), PBL_NO_WAIT), 0);
+  cl_assert_equal_i(pbl_sem_take(comm_session_send_buffer_bulk_write_semaphore(), PBL_NO_WAIT), 0);
 }

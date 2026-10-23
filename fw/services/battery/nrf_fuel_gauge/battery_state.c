@@ -5,7 +5,10 @@
 
 #include <pbl/drivers/battery.h>
 #include <pbl/drivers/pmic.h>
+#include <pbl/drivers/pmic/npm1300.h>
 #include <pbl/drivers/rtc.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/battery/battery_state.h>
@@ -15,8 +18,6 @@
 
 #include <board/board.h>
 #include <kernel/events.h>
-#include <syscall/syscall_internal.h>
-#include <system/passert.h>
 
 #ifndef CONFIG_RECOVERY_FW
 #include <pbl/services/settings/settings_file.h>
@@ -52,9 +53,9 @@ PBL_LOG_MODULE_DECLARE(service_battery, CONFIG_SERVICE_BATTERY_LOG_LEVEL);
 static const struct battery_model prv_battery_model = {
 #ifdef CONFIG_BOARD_ASTERIX
 #include <battery_asterix.inc>
-#elif defined(CONFIG_BOARD_OBELIX)
+#elifdef CONFIG_BOARD_OBELIX
 #include <battery_obelix.inc>
-#elif defined(CONFIG_BOARD_GETAFIX)
+#elifdef CONFIG_BOARD_GETAFIX
 #include <battery_getafix.inc>
 #else
 #error "Battery model not defined for this platform"
@@ -226,7 +227,7 @@ static void prv_save_state(void) {
 static void prv_schedule_update(uint32_t delay, bool force_update);
 
 static int prv_fuel_gauge_init_common(const BatteryConstants *constants, bool load_state) {
-  struct nrf_fuel_gauge_init_parameters parameters = {0};
+  struct nrf_fuel_gauge_init_parameters parameters = {};
   int ret;
 
   parameters.model = &prv_battery_model;
@@ -244,15 +245,15 @@ static int prv_fuel_gauge_init_common(const BatteryConstants *constants, bool lo
   }
 #endif
 
-  ret = nrf_fuel_gauge_init(&parameters, NULL);
+  ret = nrf_fuel_gauge_init(&parameters, nullptr);
 #if FUEL_GAUGE_STATEFUL
-  if (ret != 0 && parameters.state != NULL) {
+  if (ret != 0 && parameters.state != nullptr) {
     PBL_LOG_WRN("Failed to initialize fuel gauge with saved state, erasing");
 
     prv_erase_state();
 
-    parameters.state = NULL;
-    ret = nrf_fuel_gauge_init(&parameters, NULL);
+    parameters.state = nullptr;
+    ret = nrf_fuel_gauge_init(&parameters, nullptr);
   }
 #endif
 
@@ -308,7 +309,7 @@ static void prv_update_state(void *force_update) {
   int ret;
 
   s_update_pending = false;
-  update = (force_update != NULL) || s_pending_force_update;
+  update = (force_update != nullptr) || s_pending_force_update;
   s_pending_force_update = false;
 
   ret = battery_get_constants(&constants);
@@ -322,7 +323,7 @@ static void prv_update_state(void *force_update) {
     ret = nrf_fuel_gauge_ext_state_update(is_plugged
                                               ? NRF_FUEL_GAUGE_EXT_STATE_INFO_VBUS_CONNECTED
                                               : NRF_FUEL_GAUGE_EXT_STATE_INFO_VBUS_DISCONNECTED,
-                                          NULL);
+                                          nullptr);
     PBL_ASSERTN(ret == 0);
     s_last_battery_charge_state.is_plugged = is_plugged;
     if (is_plugged) {
@@ -364,7 +365,7 @@ static void prv_update_state(void *force_update) {
   prv_ref_time = now;
 
   pct = nrf_fuel_gauge_process((float)constants.v_mv / 1000.0f, (float)constants.i_ua / 1000000.0f,
-                               (float)constants.t_mc / 1000.0f, (float)delta, NULL);
+                               (float)constants.t_mc / 1000.0f, (float)delta, nullptr);
 
   pct_int = (uint8_t)ceilf(pct);
   s_last_soc_cpct = (uint32_t)(pct * 100.0f);
@@ -433,14 +434,14 @@ static void prv_enqueue_update(bool force) {
   if (s_update_pending) {
     return;
   }
-  if (system_task_add_callback(prv_update_state, NULL)) {
+  if (system_task_add_callback(prv_update_state, nullptr)) {
     s_update_pending = true;
   }
 }
 
 static void prv_update_callback(void *data) {
   new_timer_stop(s_periodic_timer_id);
-  prv_enqueue_update(data != NULL);
+  prv_enqueue_update(data != nullptr);
 }
 
 static void prv_callback_from_regular_timer(void *data) {
@@ -460,7 +461,7 @@ void battery_state_force_update(void) {
 
 void battery_state_init(void) {
   int ret;
-  struct nrf_fuel_gauge_runtime_parameters runtime_parameters = {0};
+  struct nrf_fuel_gauge_runtime_parameters runtime_parameters = {};
   BatteryConstants constants;
 
   ret = battery_get_constants(&constants);
@@ -507,7 +508,7 @@ void battery_state_init(void) {
 
   float pct =
       nrf_fuel_gauge_process((float)constants.v_mv / 1000.0f, (float)constants.i_ua / 1000000.0f,
-                             (float)constants.t_mc / 1000.0f, 0.0f, NULL);
+                             (float)constants.t_mc / 1000.0f, 0.0f, nullptr);
 #if FUEL_GAUGE_STATEFUL
   if ((uint8_t)ceilf(pct) == 0 && constants.v_mv >= BATTERY_MIN_VALID_VOLTAGE_MV) {
     PBL_LOG_WRN("Invalid state detected, reloading without state");
@@ -516,7 +517,7 @@ void battery_state_init(void) {
     PBL_ASSERTN(ret == 0);
     pct =
         nrf_fuel_gauge_process((float)constants.v_mv / 1000.0f, (float)constants.i_ua / 1000000.0f,
-                               (float)constants.t_mc / 1000.0f, 0.0f, NULL);
+                               (float)constants.t_mc / 1000.0f, 0.0f, nullptr);
   }
 #endif
 
@@ -548,7 +549,7 @@ void battery_state_handle_connection_event(bool is_connected) {
   prv_schedule_update(RECONNECTION_DELAY_MS, true);
 }
 
-DEFINE_SYSCALL(BatteryChargeState, sys_battery_get_charge_state, void) {
+PBL_SYSCALL(BatteryChargeState, sys_battery_get_charge_state) {
   return battery_get_charge_state();
 }
 
@@ -643,7 +644,7 @@ static int prv_cmd_chargeopt(const struct pbl_shell *sh, size_t argc, char **arg
   return 0;
 }
 
-PBL_SHELL_SUBCMD_ADD(sub_battery, status, NULL, "Print the battery state", prv_cmd_status, 0, 0);
-PBL_SHELL_SUBCMD_ADD(sub_battery, chargeopt, NULL, "Force charging <enable|disable>",
+PBL_SHELL_SUBCMD_ADD(sub_battery, status, nullptr, "Print the battery state", prv_cmd_status, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_battery, chargeopt, nullptr, "Force charging <enable|disable>",
                      prv_cmd_chargeopt, 2, 0);
 #endif

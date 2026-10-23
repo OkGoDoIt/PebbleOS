@@ -1,19 +1,20 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/syscall.h>
+
 #include <applib/app_worker.h>
 #include <kernel/event_loop.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <popups/switch_worker_ui.h>
 #include <process_management/app_manager.h>
 #include <process_management/worker_manager.h>
-#include <syscall/syscall_internal.h>
 
 // ---------------------------------------------------------------------------------------------------------------
 // Determine if the worker for the current app is running
-DEFINE_SYSCALL(bool, sys_app_worker_is_running, void) {
+PBL_SYSCALL(bool, sys_app_worker_is_running) {
   const PebbleProcessMd *md = worker_manager_get_current_worker_md();
-  if (md == NULL) {
+  if (md == nullptr) {
     return false;
   }
   return (uuid_equal(&md->uuid, &app_manager_get_current_app_md()->uuid));
@@ -29,7 +30,7 @@ static void prv_switch_worker(void *data) {
 }
 
 // Launch the worker for the current app
-DEFINE_SYSCALL(AppWorkerResult, sys_app_worker_launch, void) {
+PBL_SYSCALL(AppWorkerResult, sys_app_worker_launch) {
   AppInstallId install_id = app_manager_get_task_context()->install_id;
 
   // Make sure there is a worker for this app
@@ -39,7 +40,7 @@ DEFINE_SYSCALL(AppWorkerResult, sys_app_worker_launch, void) {
 
   // Is there a worker already running?
   const PebbleProcessMd *md = worker_manager_get_current_worker_md();
-  if (md != NULL) {
+  if (md != nullptr) {
     const PebbleProcessMd *app_process = app_manager_get_current_app_md();
     if (uuid_equal(&md->uuid, &app_process->uuid)) {
       return APP_WORKER_RESULT_ALREADY_RUNNING;
@@ -57,9 +58,9 @@ DEFINE_SYSCALL(AppWorkerResult, sys_app_worker_launch, void) {
 
 // ---------------------------------------------------------------------------------------------------------------
 // Kill the worker for the current app
-DEFINE_SYSCALL(AppWorkerResult, sys_app_worker_kill, void) {
+PBL_SYSCALL(AppWorkerResult, sys_app_worker_kill) {
   const PebbleProcessMd *md = worker_manager_get_current_worker_md();
-  if (md == NULL) {
+  if (md == nullptr) {
     return APP_WORKER_RESULT_NOT_RUNNING;
   }
   if (!uuid_equal(&md->uuid, &app_manager_get_current_app_md()->uuid)) {
@@ -72,7 +73,11 @@ DEFINE_SYSCALL(AppWorkerResult, sys_app_worker_kill, void) {
 
 // ---------------------------------------------------------------------------------------------------------------
 // Launch the app for the current worker
-DEFINE_SYSCALL(void, sys_launch_app_for_worker, void) {
+PBL_SYSCALL(void, sys_launch_app_for_worker) {
+  if (from_user && pebble_task_get_current() != PebbleTask_Worker) {
+    pbl_syscall_fail();
+  }
+
   app_manager_put_launch_app_event(&(AppLaunchEventConfig){
     .id = worker_manager_get_task_context()->install_id,
     .common.reason = APP_LAUNCH_WORKER,

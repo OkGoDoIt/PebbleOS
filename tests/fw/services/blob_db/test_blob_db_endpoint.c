@@ -18,29 +18,6 @@
 
 // Stubs
 ////////////////////////////////////
-#include <stubs_analytics.h>
-#include <stubs_app_cache.h>
-#include <stubs_app_db.h>
-#include <stubs_app_glance_db.h>
-#include <stubs_bt_lock.h>
-#include <stubs_contacts_db.h>
-#include <stubs_evented_timer.h>
-#include <stubs_events.h>
-#include <stubs_health_db.h>
-#include <stubs_hexdump.h>
-#include <stubs_ios_notif_pref_db.h>
-#include <stubs_logging.h>
-#include <stubs_notif_db.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_pin_db.h>
-#include <stubs_prefs_db.h>
-#include <stubs_regular_timer.h>
-#include <stubs_reminder_db.h>
-#include <stubs_reminders.h>
-#include <stubs_settings_blob_db.h>
-#include <stubs_watch_app_prefs_db.h>
-#include <stubs_weather_db.h>
 
 void bt_persistent_storage_set_unfaithful(bool is_unfaithful) {
   return;
@@ -96,7 +73,8 @@ extern void blob_db_set_accepting_messages(bool enabled);
 void test_blob_db_endpoint__initialize(void) {
   blob_db_set_accepting_messages(true);
   fake_comm_session_init();
-  Transport *transport = fake_transport_create(TransportDestinationSystem, NULL, prv_sent_data_cb);
+  Transport *transport =
+      fake_transport_create(TransportDestinationSystem, nullptr, prv_sent_data_cb);
   s_session = fake_transport_set_connected(transport, true /* connected */);
   system_task_set_available_space(system_task_queue_size);
 }
@@ -931,7 +909,7 @@ static const uint8_t s_dirty_dbs_response[] = {
 
 void test_blob_db_endpoint__handle_dirty_dbs_request(void) {
   s_expected_data = s_dirty_dbs_response;
-  blob_db_protocol_msg_callback(NULL, s_dirty_dbs_request, sizeof(s_dirty_dbs_request));
+  blob_db_protocol_msg_callback(nullptr, s_dirty_dbs_request, sizeof(s_dirty_dbs_request));
 }
 
 static const uint8_t s_start_sync_request[] = {
@@ -949,5 +927,5 @@ static const uint8_t s_start_sync_response[] = {
 
 void test_blob_db_endpoint__handle_start_sync_request(void) {
   s_expected_data = s_start_sync_response;
-  blob_db_protocol_msg_callback(NULL, s_start_sync_request, sizeof(s_start_sync_request));
+  blob_db_protocol_msg_callback(nullptr, s_start_sync_request, sizeof(s_start_sync_request));
 }

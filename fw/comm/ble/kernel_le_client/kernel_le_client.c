@@ -16,7 +16,9 @@
 #include <comm/ble/kernel_le_client/test/test_definition.h>
 #endif
 
+#include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/logging/logging.h>
 
 #include <comm/ble/gap_le_connect.h>
@@ -28,7 +30,6 @@
 #include <kernel/event_loop.h>
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
-#include <system/passert.h>
 
 #define MAX_SERVICE_INSTANCES (8)
 
@@ -117,7 +118,7 @@ static const KernelLEClient s_clients[KernelLEClientNum] = {
         .handle_service_removed = ppogatt_handle_service_removed,
         .invalidate_all_references = ppogatt_invalidate_all_references,
         .can_handle_characteristic = ppogatt_can_handle_characteristic,
-        .handle_write_response = NULL,
+        .handle_write_response = nullptr,
         .handle_subscribe = ppogatt_handle_subscribe,
         .handle_read_or_notification = ppogatt_handle_read_or_notification,
       },
@@ -163,7 +164,7 @@ static const KernelLEClient s_clients[KernelLEClientNum] = {
         .handle_service_removed = app_launch_handle_service_removed,
         .invalidate_all_references = app_launch_invalidate_all_references,
         .can_handle_characteristic = app_launch_can_handle_characteristic,
-        .handle_read_or_notification = NULL,
+        .handle_read_or_notification = nullptr,
       },
   [KernelLEClientDIS] = {
     .debug_name = "DIS",
@@ -173,8 +174,8 @@ static const KernelLEClient s_clients[KernelLEClientNum] = {
     .handle_service_discovered = dis_handle_service_discovered,
     .handle_service_removed = dis_handle_service_removed,
     .invalidate_all_references = dis_invalidate_all_references,
-    .can_handle_characteristic = NULL,
-    .handle_read_or_notification = NULL,
+    .can_handle_characteristic = nullptr,
+    .handle_read_or_notification = nullptr,
   },
 #endif // UNITTEST
 };
@@ -267,7 +268,7 @@ static void prv_handle_gatt_service_discovery_event(const PebbleBLEGATTClientSer
       prv_handle_services_added(&event_info->services_added_data, &event_info->device);
       break;
     default:
-      WTF;
+      pbl_panic();
   }
 }
 
@@ -278,11 +279,8 @@ static const KernelLEClient *prv_client_for_characteristic(pbl_bt_characteristic
       return client;
     }
   }
-  return NULL;
+  return nullptr;
 }
-
-typedef void (*ConsumeFuncPtr)(pbl_bt_characteristic_t characteristic_ref, uint8_t *value_out,
-                               uint16_t value_length, GAPLEClient client);
 
 typedef void (*ReadNotifyHandler)(pbl_bt_characteristic_t characteristic, const uint8_t *value,
                                   size_t value_length, enum pbl_bt_gatt_error error);
@@ -290,17 +288,16 @@ typedef void (*ReadNotifyHandler)(pbl_bt_characteristic_t characteristic, const 
 static void prv_consume_read_response(const PebbleBLEGATTClientEvent *event,
                                       const KernelLEClient *client) {
   const uint16_t value_length = event->value_length;
-  uint8_t *buffer = NULL;
+  uint8_t *buffer = nullptr;
 
   if (value_length) {
-    // This is ugly and causes double-copying the data...
-    // TODO: https://pebbletechnology.atlassian.net/browse/PBL-14164
+    // TODO: avoid double-copying the data
     buffer = (uint8_t *)kernel_malloc(value_length);
     if (PBL_UNLIKELY(!buffer)) {
       PBL_LOG_ERR("OOM for GATT read response - %d bytes", (int)value_length);
       return;
     }
-    gatt_client_consume_read_response(event->object_ref, buffer, value_length, GAPLEClientKernel);
+    PBL_ASSERTN(gatt_client_consume_read_response(event->object_ref, buffer, value_length));
   }
 
   if (client->handle_read_or_notification) {
@@ -311,7 +308,7 @@ static void prv_consume_read_response(const PebbleBLEGATTClientEvent *event,
 
 static void prv_consume_notifications(const PebbleBLEGATTClientEvent *event) {
   GATTBufferedNotificationHeader header = {};
-  bool has_more = gatt_client_subscriptions_get_notification_header(GAPLEClientKernel, &header);
+  bool has_more = gatt_client_subscriptions_get_notification_header(&header);
   const RtcTicks start_ticks = rtc_get_ticks();
   while (has_more) {
     const uint32_t ticks_spent = rtc_get_ticks() - start_ticks;
@@ -323,12 +320,11 @@ static void prv_consume_notifications(const PebbleBLEGATTClientEvent *event) {
       // Doing this might actually cause an issue if the characteristic(s) for which there are still
       // notifications pending in the buffer become invalid before the time they are processed.
       // Probably not a big deal.
-      gatt_client_subscriptions_reschedule(GAPLEClientKernel);
+      gatt_client_subscriptions_reschedule();
       return; // yield
     }
 
-    // This is ugly and causes double-copying the data...
-    // TODO: https://pebbletechnology.atlassian.net/browse/PBL-14164
+    // TODO: avoid double-copying the data
     uint8_t *buffer = (uint8_t *)kernel_malloc(header.value_length);
     if (PBL_UNLIKELY(header.value_length && !buffer)) {
       PBL_LOG_ERR("OOM for GATT notification");
@@ -338,7 +334,7 @@ static void prv_consume_notifications(const PebbleBLEGATTClientEvent *event) {
     pbl_bt_characteristic_t characteristic;
     uint16_t value_length = header.value_length;
     const uint16_t next_value_length = gatt_client_subscriptions_consume_notification(
-        &characteristic, buffer, &value_length, GAPLEClientKernel, &has_more);
+        &characteristic, buffer, &value_length, &has_more);
     header.characteristic = characteristic;
     header.value_length = value_length;
 
@@ -356,11 +352,7 @@ static void prv_consume_notifications(const PebbleBLEGATTClientEvent *event) {
 }
 
 static void prv_handle_gatt_event(const PebbleBLEGATTClientEvent *event) {
-  if (event->subtype == PebbleBLEGATTClientEventTypeBufferEmpty) {
-    // Taking a shortcut here:
-    ppogatt_handle_buffer_empty();
-    return;
-  } else if (event->subtype == PebbleBLEGATTClientEventTypeNotification) {
+  if (event->subtype == PebbleBLEGATTClientEventTypeNotification) {
     prv_consume_notifications(event);
     return;
   }
@@ -369,8 +361,8 @@ static void prv_handle_gatt_event(const PebbleBLEGATTClientEvent *event) {
   if (!client) {
     // Read responses still need to be consumed, even if the client has disappeared:
     if (event->subtype == PebbleBLEGATTClientEventTypeCharacteristicRead && event->value_length) {
-      gatt_client_consume_read_response(event->object_ref, NULL, event->value_length,
-                                        GAPLEClientKernel);
+      PBL_ASSERTN(
+          gatt_client_consume_read_response(event->object_ref, nullptr, event->value_length));
     }
     goto log_error;
   }
@@ -412,13 +404,8 @@ static void prv_handle_connection_event(const PebbleBLEConnectionEvent *event) {
               event->connected, event->bonding_id);
 
   const bool connected = event->connected;
-  // FIXME: When PPoGATT is supported add a check for active gateway
-  // https://pebbletechnology.atlassian.net/browse/PBL-15277
-  //
-  // For now, we just assume that the Kernel LE client is _always_ bonded for
-  // ANCS. Note that we cannot use bt_persistent_storage calls in this routine because
-  // we could be getting this call as a result of a disconnect due to
-  // forgetting a pairing key
+  // Assume the Kernel LE client is always bonded for ANCS. bt_persistent_storage can't be used
+  // here: this may run as a result of a disconnect due to forgetting a pairing key.
 
   const struct pbl_bt_device_internal device = PebbleEventToBTDeviceInternal(event);
   if (connected) {
@@ -446,17 +433,13 @@ static void prv_handle_connection_event(const PebbleBLEConnectionEvent *event) {
 #endif
     app_launch_handle_disconnection();
     gap_le_slave_reconnect_start();
-    gatt_client_op_cleanup(GAPLEClientKernel);
+    gatt_client_op_cleanup();
   }
 }
 
 // -------------------------------------------------------------------------------------------------
 void kernel_le_client_handle_event(const PebbleEvent *e) {
   switch (e->type) {
-    case PEBBLE_BLE_SCAN_EVENT:
-      PBL_LOG_DBG("PEBBLE_BLE_SCAN_EVENT");
-      return;
-
     case PEBBLE_BLE_CONNECTION_EVENT:
       prv_handle_connection_event(&e->bluetooth.le.connection);
       return;
@@ -478,7 +461,7 @@ void kernel_le_client_handle_event(const PebbleEvent *e) {
 static void prv_connect_gateway_bonding(pbl_bt_bonding_id_t gateway_bonding) {
   gap_le_slave_reconnect_start();
   gap_le_connect_connect_by_bonding(gateway_bonding, true /* auto_reconnect */,
-                                    true /* is_pairing_required */, GAPLEClientKernel);
+                                    true /* is_pairing_required */);
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -499,7 +482,7 @@ void kernel_le_client_handle_bonding_change(pbl_bt_bonding_id_t bonding, BtPersi
         !bt_persistent_storage_has_ble_ancs_bonding()) {
       gap_le_slave_reconnect_stop();
     }
-    gap_le_connect_cancel_by_bonding(bonding, GAPLEClientKernel);
+    gap_le_connect_cancel_by_bonding(bonding);
   } else if (op == BtPersistBondingOpDidAdd && bt_persistent_storage_is_ble_ancs_bonding(bonding)) {
     prv_connect_gateway_bonding(bonding);
   }
@@ -519,9 +502,9 @@ void kernel_le_client_init(void) {
 // -------------------------------------------------------------------------------------------------
 void kernel_le_client_deinit(void) {
   // Cleanup clients: their code must execute on KernelMain, so add callback:
-  launcher_task_add_callback(prv_cleanup_clients_kernel_main_cb, NULL);
+  launcher_task_add_callback(prv_cleanup_clients_kernel_main_cb, nullptr);
 
   gap_le_slave_reconnect_stop();
-  gap_le_connect_cancel_all(GAPLEClientKernel);
+  gap_le_connect_cancel_all();
   ppogatt_destroy();
 }

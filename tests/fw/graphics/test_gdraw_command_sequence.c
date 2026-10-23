@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <string.h>
+
 #include <pbl/util/size.h>
 
 #include <applib/graphics/gdraw_command.h>
@@ -12,12 +14,6 @@
 #include <applib/graphics/graphics.h>
 #include <applib/graphics/gtypes.h>
 #include <clar.h>
-#include <stubs_applib_resource.h>
-#include <stubs_memory_layout.h>
-#include <stubs_passert.h>
-#include <stubs_pbl_malloc.h>
-#include <stubs_resources.h>
-#include <stubs_syscalls.h>
 
 // Stubs
 void graphics_context_set_stroke_color(GContext *ctx, GColor color) {
@@ -47,7 +43,7 @@ void gpath_draw_outline_precise_internal(GContext *ctx, GPointPrecise *points, s
 typedef uint16_t ResourceId;
 const uint8_t *resource_get_builtin_bytes(ResAppNum app_num, uint32_t resource_id,
                                           uint32_t *num_bytes_out) {
-  return NULL;
+  return nullptr;
 }
 
 // setup and teardown
@@ -231,13 +227,13 @@ void test_gdraw_command_sequence__get_frame_by_index(void) {
   cl_assert_equal_i(command->fill_color.argb, GColorBlackARGB8);
   cl_assert_equal_i(command->points[0].x, 7);
 
-  cl_assert_equal_p(gdraw_command_sequence_get_frame_by_index(sequence, 2), NULL);
+  cl_assert_equal_p(gdraw_command_sequence_get_frame_by_index(sequence, 2), nullptr);
 
   free(sequence);
 }
 
 void test_gdraw_command_sequence__clone(void) {
-  cl_assert_equal_p(gdraw_command_sequence_clone(NULL), NULL);
+  cl_assert_equal_p(gdraw_command_sequence_clone(nullptr), nullptr);
 
   GDrawCommandSequence *sequence;
   prv_create_test_sequence(&sequence);
