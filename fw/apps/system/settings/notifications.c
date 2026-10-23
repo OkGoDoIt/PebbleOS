@@ -450,11 +450,10 @@ static uint16_t prv_get_items(enum NotificationsItem items_out[NotificationsItem
   }
   // The duration goes with the mode when the mode peeks, otherwise after the muted toggle
   const QuickViewNotifStyle style = settings_quick_view_notif_effective_style();
-  const bool mode_peeks =
-      settings_quick_view_notif_show_as_visible() &&
-      ((style == QuickViewNotifStyle_Peek) ||
-       (settings_quick_view_notif_missed_visible() &&
-        (style == QuickViewNotifStyle_FullScreenPeekIfMissed)));
+  const bool mode_peeks = settings_quick_view_notif_show_as_visible() &&
+                          ((style == QuickViewNotifStyle_Peek) ||
+                           (settings_quick_view_notif_missed_visible() &&
+                            (style == QuickViewNotifStyle_FullScreenPeekIfMissed)));
   const bool duration = settings_quick_view_notif_seconds_visible();
   if (duration && mode_peeks) {
     items_out[n++] = NotificationsItemPeekDuration;

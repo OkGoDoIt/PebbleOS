@@ -431,8 +431,8 @@ bool music_get_ms_until_track_end(int64_t *ms_out) {
   pbl_mutex_lock(&s_music_ctx.mutex, PBL_FOREVER);
   const int32_t rate_percent = s_music_ctx.playback_rate_percent;
   const int64_t time_elapsed_ms = music_get_ms_since_pos_last_updated();
-  const int64_t remaining_track_ms = (int64_t)s_music_ctx.track_length_ms -
-                                     s_music_ctx.track_pos_ms;
+  const int64_t remaining_track_ms =
+      (int64_t)s_music_ctx.track_length_ms - s_music_ctx.track_pos_ms;
   pbl_mutex_unlock(&s_music_ctx.mutex);
 
   if (rate_percent <= 0) {

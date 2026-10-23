@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "popups/audio_companion_actions_ui.h"
 #include "notifications.h"
 
 #include "notifications_history.h"
+#include "popups/audio_companion_actions_ui.h"
 
 #include <stdio.h>
 #include <time.h>
@@ -306,7 +306,8 @@ static void prv_group_window_select(MenuLayer *menu_layer, MenuIndex *cell_index
   }
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
   // Muse's notifications open the conversation they belong to.
-  if (audio_companion_assistant_open_notification(&group_window->notification_ids[cell_index->row])) {
+  if (audio_companion_assistant_open_notification(
+          &group_window->notification_ids[cell_index->row])) {
     return;
   }
 #endif

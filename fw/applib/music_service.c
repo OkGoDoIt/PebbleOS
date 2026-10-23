@@ -14,8 +14,8 @@
 #include "kernel/pebble_tasks.h"
 
 // ----------------------------------------------------------------------------------------------------
-//! Events are delivered to apps only: WorkerState must fit CONFIG_WORKER_RAM_RUNTIME_SIZE and has no
-//! room left. Workers can still read the state through the getters.
+//! Events are delivered to apps only: WorkerState must fit CONFIG_WORKER_RAM_RUNTIME_SIZE and has
+//! no room left. Workers can still read the state through the getters.
 static MusicServiceState *prv_get_state(void) {
   const PebbleTask task = pebble_task_get_current();
   if (task == PebbleTask_App) {

@@ -34,9 +34,10 @@
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
 #include <pbl/services/peek_widgets.h>
 #endif
+#include "popups/audio_companion_actions_ui.h"
+
 #include <pbl/services/regular_timer.h>
 #include <pbl/services/timeline/actions_endpoint.h>
-#include "popups/audio_companion_actions_ui.h"
 #include <pbl/services/timeline/attribute.h>
 #include <pbl/services/timeline/notification_layout.h>
 #include <pbl/services/timeline/swap_layer.h>
@@ -595,10 +596,9 @@ static void prv_pop_timer_callback(void *data) {
     // An inactivity timeout with no button press or scroll since the newest notification
     // arrived means it may not have been seen. A final timer follows an action, which was seen.
     Uuid missed_id = window_data->newest_mobile_id;
-    const bool missed =
-        window_data->is_modal && !window_data->pop_timer_is_final &&
-        !window_data->touched_since_newest &&
-        (notifications_presented_list_get_type(&missed_id) == NotificationMobile);
+    const bool missed = window_data->is_modal && !window_data->pop_timer_is_final &&
+                        !window_data->touched_since_newest &&
+                        (notifications_presented_list_get_type(&missed_id) == NotificationMobile);
 #endif
     prv_pop_notification_window(window_data);
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS

@@ -3,6 +3,7 @@
 
 #include <inttypes.h>
 
+#include <pbl/kernel/assert.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/soc/sf32lb/sleep.h>
 #include <pbl/util/math.h>
@@ -12,7 +13,6 @@
 #include <drivers/rtc.h>
 #include <drivers/sf32lb52/rc10k.h>
 #include <kernel/util/idle.h>
-#include <pbl/kernel/assert.h>
 
 #ifdef CONFIG_SHELL
 #include <pbl/shell/shell.h>
