@@ -482,6 +482,9 @@ static void prv_update_enable_timer_cb(void *context) {
   system_task_add_callback(prv_update_hrm_enable_system_cb, NULL);
 }
 
+// KernelBG callback subscribers today: activity HR, SpO2 and workout SpO2, the step algorithm.
+#define HRM_MAX_KERNELBG_CALLS 8
+
 //! The system task needs its own handler for HRM data since we can't queue up generic events.
 static void prv_system_task_hrm_handler(void *context) {
   time_t utc_now = rtc_get_time();
@@ -505,7 +508,17 @@ static void prv_system_task_hrm_handler(void *context) {
   PebbleHRMEvent event;
   prv_read_event_from_buffer_and_consume(&s_manager_state.system_task_event_buffer, &event);
 
-  // Send event to all KernelBG subscribers that asked for this feature
+  // Call subscribers with the lock released: their callbacks take their own service's lock,
+  // which KernelMain holds while unsubscribing (lock-order deadlock with activity).
+  struct {
+    HRMSubscriberCallback handler;
+    void *context;
+    HRMSessionRef session_ref;
+    bool send_expiring;
+    bool send_event;
+  } calls[HRM_MAX_KERNELBG_CALLS];
+  size_t num_calls = 0;
+
   HRMSubscriberState *state = (HRMSubscriberState *)s_manager_state.subscribers;
   for (; state != NULL; state = (HRMSubscriberState *)state->list_node.next) {
     if (!state->callback_handler) {
@@ -513,13 +526,19 @@ static void prv_system_task_hrm_handler(void *context) {
       continue;
     }
 
+    if (num_calls >= HRM_MAX_KERNELBG_CALLS) {
+      PBL_LOG_WRN("HRM: more KernelBG subscribers than %d", HRM_MAX_KERNELBG_CALLS);
+      break;
+    }
+    calls[num_calls] = (typeof(calls[0])){
+      .handler = state->callback_handler,
+      .context = state->callback_context,
+      .session_ref = state->session_ref,
+    };
+
     // If this subscription is ready to expire, send an "expiring" event
     if (prv_needs_expiring_event(state, utc_now)) {
-      PebbleHRMEvent expiring_event = (PebbleHRMEvent){
-        .event_type = HRMEvent_SubscriptionExpiring,
-        .expiring.session_ref = state->session_ref,
-      };
-      state->callback_handler(&expiring_event, state->callback_context);
+      calls[num_calls].send_expiring = true;
       state->sent_expiration_event = true;
     }
 
@@ -527,39 +546,54 @@ static void prv_system_task_hrm_handler(void *context) {
     switch (event.event_type) {
       case HRMEvent_BPM:
         if (!(state->features & HRMFeature_BPM)) {
-          continue;
+          goto next;
         }
         break;
       case HRMEvent_HRV:
         if (!(state->features & HRMFeature_HRV)) {
-          continue;
+          goto next;
         }
         break;
       case HRMEvent_SpO2:
         if (!(state->features & HRMFeature_SpO2)) {
-          continue;
+          goto next;
         }
         break;
 #ifdef CONFIG_MFG
       case HRMEvent_CTR:
         if (!(state->features & HRMFeature_CTR)) {
-          continue;
+          goto next;
         }
         break;
       case HRMEvent_Leakage:
         if (!(state->features & HRMFeature_Leakage)) {
-          continue;
+          goto next;
         }
         break;
 #endif
       case HRMEvent_SubscriptionExpiring:
-        continue;
+        goto next;
     }
-
-    // Send the event to the subscriber
-    state->callback_handler(&event, state->callback_context);
+    calls[num_calls].send_event = true;
+  next:
+    if (calls[num_calls].send_expiring || calls[num_calls].send_event) {
+      num_calls++;
+    }
   }
   pbl_mutex_unlock(&s_manager_state.lock);
+
+  for (size_t i = 0; i < num_calls; i++) {
+    if (calls[i].send_expiring) {
+      PebbleHRMEvent expiring_event = (PebbleHRMEvent){
+        .event_type = HRMEvent_SubscriptionExpiring,
+        .expiring.session_ref = calls[i].session_ref,
+      };
+      calls[i].handler(&expiring_event, calls[i].context);
+    }
+    if (calls[i].send_event) {
+      calls[i].handler(&event, calls[i].context);
+    }
+  }
 }
 
 // Assumes that s_manager_state.lock is held

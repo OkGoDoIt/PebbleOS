@@ -15,6 +15,7 @@
 #include <clar.h>
 #include <fake_app_manager.h>
 #include <fake_events.h>
+#include <fake_mutex.h>
 #include <fake_new_timer.h>
 #include <fake_pbl_malloc.h>
 #include <fake_rtc.h>
@@ -23,7 +24,6 @@
 #include <stubs_analytics.h>
 #include <stubs_event_service_client.h>
 #include <stubs_logging.h>
-#include <stubs_mutex.h>
 #include <stubs_passert.h>
 #include <stubs_worker_manager.h>
 
@@ -785,6 +785,30 @@ void test_hrm_manager__system_task_data_callback(void) {
   cl_assert_equal_i(s_cb_events_1[0].bpm.bpm, s_hrm_event_data.hrm_bpm);
   cl_assert_equal_i(s_cb_events_1[0].bpm.quality, s_hrm_event_data.hrm_quality);
 
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+static bool s_cb_ran_with_locks_held;
+static void prv_lock_checking_hrm_cb(PebbleHRMEvent *event, void *context) {
+  if (!fake_mutex_all_unlocked()) {
+    s_cb_ran_with_locks_held = true;
+  }
+}
+
+// KernelBG callbacks take their own service's lock (activity's mutex), and KernelMain holds that
+// lock while unsubscribing. Calling them under the manager lock deadlocked the two.
+void test_hrm_manager__system_task_callback_runs_unlocked(void) {
+  stub_pebble_tasks_set_current(PebbleTask_KernelBackground);
+  s_cb_ran_with_locks_held = false;
+
+  HRMSessionRef session_ref = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, 1, PBL_SEC_PER_MIN, HRMFeature_BPM, false /*low_latency*/,
+      prv_lock_checking_hrm_cb, NULL);
+  fake_system_task_callbacks_invoke_pending();
+  prv_fake_send_new_data();
+  fake_system_task_callbacks_invoke_pending();
+
+  cl_assert_equal_b(s_cb_ran_with_locks_held, false);
   sys_hrm_manager_unsubscribe(session_ref);
 }
 
