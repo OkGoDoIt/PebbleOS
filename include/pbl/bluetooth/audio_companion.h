@@ -15,13 +15,10 @@
  *
  * UUID base 7C2B0000-9E4D-4FC2-A2B3-1D6E8A1C9F50; the wire protocol is in
  * fw/services/audio_companion/PROTOCOL.md. The @c pbl_bt_audio_companion_* functions are
- * implemented by subsys/bluetooth/audio_companion_service.c; the @c audio_companion_handle_*
+ * implemented by subsys/bluetooth/services/audio_companion/; the @c audio_companion_handle_*
  * callbacks by the OS service in fw/services/audio_companion/audio_companion.c.
  * @{
  */
-
-/** @brief Register the GATT service. Called on every pbl_bt_start(). */
-void pbl_bt_audio_companion_service_init(void);
 
 /**
  * @brief Notify one message on the Data characteristic.

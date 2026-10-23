@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "nimble_type_conversions.h"
+#include <bluetooth/nimble_type_conversions.h>
+#include <bluetooth/services/services.h>
 
 #include <pbl/bluetooth/audio_companion.h>
 #include <pbl/logging/logging.h>
@@ -198,7 +199,7 @@ static int prv_handle_gap_event(struct ble_gap_event *event, void *arg) {
 
 static struct ble_gap_event_listener s_gap_event_listener;
 
-void pbl_bt_audio_companion_service_init(void) {
+void pbl_bt__audio_companion_init(void) {
   int rc = ble_gatts_count_cfg(s_audio_companion_svcs);
   if (rc != 0) {
     PBL_LOG_ERR("Audio companion GATT count failed: 0x%04x", (uint16_t)rc);

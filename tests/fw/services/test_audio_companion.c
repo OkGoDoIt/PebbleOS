@@ -257,9 +257,6 @@ void pbl_bt_audio_companion_set_response_time(enum pbl_bt_response_time_state st
   s_response_time_period_secs = max_period_secs;
 }
 
-void pbl_bt_audio_companion_service_init(void) {
-}
-
 static EventServiceInfo *s_battery_event_subscription;
 
 void event_service_client_subscribe(EventServiceInfo *service_info) {

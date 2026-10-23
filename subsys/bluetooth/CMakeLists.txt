@@ -2,12 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(excludes)
-if(NOT CONFIG_BT_AUDIO_COMPANION_SERVICE)
-  list(APPEND excludes audio_companion_service.c)
-endif()
-if(NOT CONFIG_BT_MUSE_SETUP_SERVICE)
-  list(APPEND excludes muse_setup_service.c)
-endif()
 if(NOT CONFIG_BT_ID_ADDR_SF32LB52_EFUSE)
   list(APPEND excludes id_addr_sf32lb52.c)
 endif()

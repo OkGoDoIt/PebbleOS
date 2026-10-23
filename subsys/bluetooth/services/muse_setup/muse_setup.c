@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "nimble_type_conversions.h"
+#include <bluetooth/nimble_type_conversions.h>
+#include <bluetooth/services/services.h>
 
 #include <string.h>
 
@@ -205,7 +206,7 @@ bool pbl_bt_muse_setup_notify(const uint8_t *data, size_t length) {
     bt_unlock();
     return false;
   }
-  // ble_gatts_notify_custom() consumes `om` on every path (see audio_companion_service.c).
+  // ble_gatts_notify_custom() consumes `om` on every path (see services/audio_companion/audio_companion.c).
   const int rc = ble_gatts_notify_custom(conn_handle, s_tx_attr_handle, om);
   bt_lock();
   if (rc == 0) {
@@ -604,7 +605,7 @@ static int prv_gap_event(struct ble_gap_event *event, void *arg) {
   return rc;
 }
 
-void pbl_bt_muse_setup_service_init(void) {
+void pbl_bt__muse_setup_init(void) {
   // A stack restart drops every link and the advertiser.
   bt_lock();
   s_state.open = false;

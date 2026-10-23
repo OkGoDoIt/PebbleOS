@@ -4,10 +4,8 @@
 #include "nimble_store.h"
 #include "services/services.h"
 
-#include <pbl/bluetooth/audio_companion.h>
 #include <pbl/bluetooth/id_addr.h>
 #include <pbl/bluetooth/init.h>
-#include <pbl/bluetooth/muse_setup.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/fatal.h>
 #include <pbl/kernel/sem.h>
@@ -177,15 +175,6 @@ bool pbl_bt_start(struct pbl_bt_config *config) {
     s_driver_state = DriverStateStopped;
     return false;
   }
-
-#ifdef CONFIG_BT_AUDIO_COMPANION_SERVICE
-  pbl_bt_audio_companion_service_init();
-#endif
-
-#ifdef CONFIG_BT_MUSE_SETUP_SERVICE
-  // Last, so adding it moves no existing attribute handle.
-  pbl_bt_muse_setup_service_init();
-#endif
 
   ble_hs_sched_start();
   f_rc = (pbl_sem_take(&s_host_started, PBL_MSEC(s_bt_stack_start_stop_timeout_ms)) == 0);

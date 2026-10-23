@@ -2,7 +2,7 @@
 
 config DEMO_APP_MUSE_SETUP_TEST
     bool "Muse Setup Test"
-    depends on BT_MUSE_SETUP_SERVICE
+    depends on BT_SERVICE_MUSE_SETUP
     help
       Opens the Muse gadget setup window from the watch and shows what the
       second, private link does (discovery, connection, identity, MTU,

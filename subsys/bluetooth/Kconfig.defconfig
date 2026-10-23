@@ -57,6 +57,6 @@ config NIMBLE_BLE_GATT_MAX_PROCS
 
 # The Muse setup window's private link is a second connection from the same phone.
 config NIMBLE_BLE_MAX_CONNECTIONS
-    default 2 if BT_MUSE_SETUP_SERVICE
+    default 2 if BT_SERVICE_MUSE_SETUP
 
 endif # BT

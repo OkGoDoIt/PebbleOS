@@ -74,10 +74,6 @@ typedef struct {
 //! task. NULL (the default) echoes it back on TX, for testing the link without a phone app.
 typedef void (*PblBtMuseSetupRxHandler)(const uint8_t *data, size_t length);
 
-//! Registers the setup GATT service. Call from the stack's service init, after every other
-//! service, so no existing attribute handle moves.
-void pbl_bt_muse_setup_service_init(void);
-
 //! Opens the window for `duration_ms`, advertising as "MuseGadget" + `suffix`. Returns false (and
 //! records last_error) if it could not start; true if it started or was already open.
 bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uint32_t duration_ms);

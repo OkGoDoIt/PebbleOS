@@ -171,7 +171,7 @@ static void prv_handle_disconnection_event(struct ble_gap_event *event) {
   // A link dropped mid-pairing raises no pairing complete event.
   prv_end_pairing(event->disconnect.conn.conn_handle, false);
   nimble_conn_clear_phone_link(event->disconnect.conn.conn_handle);
-#ifdef CONFIG_BT_MUSE_SETUP_SERVICE
+#ifdef CONFIG_BT_SERVICE_MUSE_SETUP
   // The window only exists alongside a phone link, and its borrowed advertiser must be back before
   // reconnect advertising starts.
   pbl_bt_muse_setup_phone_link_lost();

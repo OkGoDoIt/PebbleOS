@@ -32,6 +32,14 @@ int pbl_bt__services_init(const struct pbl_bt_dis_info *dis_info) {
     return rc;
   }
 #endif
+  // Fork services register last, so they move no upstream attribute handle, and log their own
+  // failures rather than failing the stack the official app's link needs.
+#ifdef CONFIG_BT_SERVICE_AUDIO_COMPANION
+  pbl_bt__audio_companion_init();
+#endif
+#ifdef CONFIG_BT_SERVICE_MUSE_SETUP
+  pbl_bt__muse_setup_init();
+#endif
 
   return 0;
 }

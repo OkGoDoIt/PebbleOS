@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config BT_SERVICE_AUDIO_COMPANION
+    bool "Audio Companion GATT service"
+    help
+      Build the dedicated watch-hosted Audio Companion GATT service used by
+      custom firmware to stream background microphone audio to a separate
+      third-party mobile app.

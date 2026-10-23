@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 //! The Muse gadget setup relay: the companion app asks the watch to open a pairing window, the
-//! watch hosts Meta's Muse setup service for the Muse app (subsys/bluetooth/muse_setup_service.c)
+//! watch hosts Meta's Muse setup service for the Muse app (subsys/bluetooth/services/muse_setup/)
 //! and relays every byte between the two apps over the audio companion's control channel. The
 //! watch never parses the setup messages; the companion app holds every key. Everything here runs
 //! on the system task except the Bluetooth-side callbacks, which only queue work.

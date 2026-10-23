@@ -3,13 +3,13 @@
 config SERVICE_AUDIO_COMPANION
     bool "Audio companion background streaming"
     depends on MIC && SERVICE_VOICE
-    select BT_AUDIO_COMPANION_SERVICE if BT
+    select BT_SERVICE_AUDIO_COMPANION if BT
     select MBEDTLS
     select MIC_SF32LB_CAPTURE_DEEP_WFI if MIC_SF32LB
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service
-      (subsys/bluetooth/audio_companion_service.c).
+      (subsys/bluetooth/services/audio_companion/).
 
       MBEDTLS is selected for the receiver registry's SHA-256 (see
       pebble_mbedtls_config.h, which enables the primitive only when this
@@ -37,7 +37,7 @@ config SERVICE_AUDIO_COMPANION
 # watch's GATT-client traffic to the phone). The port's 12 blocks are sized
 # for a stack with no steady producer; the drain takes up to 6 per slice and
 # 12 while catching up, and its notify path refuses to allocate below a floor
-# (audio_companion_service.c) so the rest of the stack always has blocks.
+# (subsys/bluetooth/services/audio_companion/) so the rest of the stack always has blocks.
 # Doubling the pool keeps the drain its full catch-up burst above that floor:
 # 12 x 292 B = 3.5 KB of RAM. This default is read before the one in
 # third_party/nimble/Kconfig.port because fw/ is sourced first.
@@ -51,7 +51,7 @@ config SERVICE_AUDIO_COMPANION_MUSE
     bool "Muse gadget pairing through the watch"
     default y
     depends on BT
-    select BT_MUSE_SETUP_SERVICE
+    select BT_SERVICE_MUSE_SETUP
     help
       Lets the companion app pair itself with Meta's Muse as a gadget by
       having the watch host Muse's setup service for a short window and
