@@ -181,6 +181,12 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! retrying hard under that makes it worse.
 #define CAPTURE_RETRY_MIN_MS (1000)
 #define CAPTURE_RETRY_MAX_MS (30 * 1000)
+
+//! How long an Info read waits for s_lock. It runs on the NimBLE host thread, which the task
+//! watchdog resets after CONFIG_TASK_WDT_TIMEOUT_MS (5 s); a read that times out fails and the
+//! phone reads again.
+#define INFO_READ_LOCK_TIMEOUT_MS (2000)
+
 //! How long a continuously suppressed silence runs before the watch probes its receiver.
 //!
 //! While suppressing, the watch deliberately sends nothing at all -- which is exactly why
@@ -3496,7 +3502,11 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   if (!buf || !length_in_out) {
     return;
   }
-  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (pbl_mutex_lock(&s_lock, PBL_MSEC(INFO_READ_LOCK_TIMEOUT_MS)) != 0) {
+    *length_in_out = 0;
+    PBL_LOG_WRN("Audio companion info read: service busy");
+    return;
+  }
   uint8_t flags = AUDIO_COMPANION_INFO_FLAG_BACKPRESSURE_COUNTER;
   if (audio_companion_auth_receiver_exists()) {
     flags |= AUDIO_COMPANION_INFO_FLAG_RECEIVER_BOUND;
