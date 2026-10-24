@@ -129,10 +129,12 @@ typedef enum {
   AudioCompanionMarkNotRecording,
   //! No receiver has been set up, so there is nowhere for a mark to go.
   AudioCompanionMarkNoReceiver,
+  AudioCompanionMarkQueueFull,
+  AudioCompanionMarkSaveFailed,
 } AudioCompanionMarkResult;
 
 //! The wearer marked this moment as important (MOMENT_MARK). Goes to the receiver now, or is
-//! kept until it is back (the most recent few). Any task.
+//! kept durably until the phone confirms it saved it. Refuses when the queue is full. Any task.
 AudioCompanionMarkResult audio_companion_mark_moment(void);
 //! User revoke from watch Settings: wipes identity, notifies the app, stops.
 void audio_companion_forget_receiver(void);

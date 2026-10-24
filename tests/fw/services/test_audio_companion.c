@@ -181,6 +181,9 @@ static AudioCompanionAuthEval s_auth_eval;
 static bool s_auth_receiver_exists;
 static bool s_auth_store_succeeds;
 static bool s_auth_forget_called;
+static uint8_t s_saved_marks[256];
+static size_t s_saved_marks_length;
+static bool s_save_marks_succeeds;
 static char s_auth_name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES + 1];
 static bool s_enable_prompted;
 static bool s_consent_prompted;
@@ -398,6 +401,21 @@ PebbleTask pebble_task_get_task_for_thread(const struct pbl_thread *thread) {
 }
 
 void audio_companion_auth_init(void) {
+}
+
+bool audio_companion_auth_load_marks(void *data, size_t length) {
+  if (!length || length != s_saved_marks_length)
+    return false;
+  memcpy(data, s_saved_marks, length);
+  return true;
+}
+
+bool audio_companion_auth_save_marks(const void *data, size_t length) {
+  if (!s_save_marks_succeeds || length > sizeof(s_saved_marks))
+    return false;
+  memcpy(s_saved_marks, data, length);
+  s_saved_marks_length = length;
+  return true;
 }
 
 bool audio_companion_auth_receiver_exists(void) {
@@ -786,6 +804,8 @@ void test_audio_companion__initialize(void) {
   s_auth_receiver_exists = true;
   s_auth_store_succeeds = true;
   s_auth_forget_called = false;
+  s_saved_marks_length = 0;
+  s_save_marks_succeeds = true;
   strcpy(s_auth_name, "Audio App");
   s_enable_prompted = false;
   s_consent_prompted = false;
@@ -948,7 +968,7 @@ void test_audio_companion__a_moment_marked_while_the_phone_is_away_waits_for_it(
   fake_system_task_callbacks_invoke_pending();
   cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdMomentMark));
 
-  // Back: both go, oldest first, once.
+  // Back: both go, oldest first; another subscription does not immediately flood duplicates.
   prv_subscribe(true, true);
   prv_authenticate();
   fake_system_task_callbacks_invoke_pending();
@@ -966,6 +986,26 @@ void test_audio_companion__a_moment_marked_while_the_phone_is_away_waits_for_it(
   prv_subscribe(true, true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdMomentMark));
+}
+
+void test_audio_companion__an_unreceipted_mark_retries_without_a_reconnect(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  audio_companion_mark_moment();
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg original = prv_last_moment();
+  s_control_count = 0;
+  s_uptime_seconds += 31;
+  const AudioCompanionReceiverHealthMsg health = {
+    .msg_id = AudioCompanionCtrlMsgIdReceiverHealth,
+    .request_token = 19,
+  };
+  audio_companion_handle_control_write((const uint8_t *)&health, sizeof(health));
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg retry = prv_last_moment();
+  cl_assert_equal_i(original.mark_id, retry.mark_id);
+  cl_assert(original.wall_ms == retry.wall_ms);
 }
 
 void test_audio_companion__a_refused_mark_is_kept_for_the_next_try(void) {
@@ -986,6 +1026,67 @@ void test_audio_companion__nothing_is_marked_without_a_receiver(void) {
   s_auth_receiver_exists = false;
   audio_companion_set_enabled(true);
   cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkNoReceiver);
+}
+
+void test_audio_companion__marks_are_kept_until_the_phone_confirms_the_exact_one(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  for (int i = 0; i < 8; i++) {
+    cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkRecorded);
+  }
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg last = prv_last_moment();
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkQueueFull);
+  AudioCompanionMomentSavedMsg receipt = {
+    .msg_id = AudioCompanionCtrlMsgIdMomentSaved,
+    .request_token = 42,
+    .mark_id = last.mark_id,
+    .wall_ms = last.wall_ms + 1,
+  };
+  audio_companion_handle_control_write((const uint8_t *)&receipt, sizeof(receipt));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkQueueFull);
+  receipt.wall_ms = last.wall_ms;
+  s_save_marks_succeeds = false;
+  audio_companion_handle_control_write((const uint8_t *)&receipt, sizeof(receipt));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkQueueFull);
+  s_save_marks_succeeds = true;
+  audio_companion_handle_control_write((const uint8_t *)&receipt, sizeof(receipt));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkRecorded);
+}
+
+void test_audio_companion__a_mark_is_not_confirmed_when_flash_refuses_it(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  s_save_marks_succeeds = false;
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkSaveFailed);
+  s_save_marks_succeeds = true;
+  cl_assert_equal_i(audio_companion_mark_moment(), AudioCompanionMarkRecorded);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_last_moment().mark_id, 1);
+}
+
+void test_audio_companion__unconfirmed_marks_survive_service_restart(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  audio_companion_mark_moment();
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg saved = prv_last_moment();
+  audio_companion_test_reset();
+  audio_companion_init();
+  audio_companion_set_enabled(true);
+  s_control_count = 0;
+  prv_subscribe(true, true);
+  prv_authenticate();
+  fake_system_task_callbacks_invoke_pending();
+  const AudioCompanionMomentMarkMsg replayed = prv_last_moment();
+  cl_assert_equal_i(saved.mark_id, replayed.mark_id);
+  cl_assert(saved.wall_ms == replayed.wall_ms);
 }
 
 void test_audio_companion__denies_auth_while_disabled(void) {

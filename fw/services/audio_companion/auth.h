@@ -40,3 +40,7 @@ bool audio_companion_auth_store_receiver(
 
 //! Wipe the stored identity (user revoke on watch or AUTH_REVOKE from the app).
 void audio_companion_auth_forget_receiver(void);
+
+//! Pending marks are bound to the persisted receiver's hash, including across a reboot.
+bool audio_companion_auth_load_marks(void *data, size_t length);
+bool audio_companion_auth_save_marks(const void *data, size_t length);

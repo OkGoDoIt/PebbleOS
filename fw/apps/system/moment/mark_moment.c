@@ -18,9 +18,13 @@
 static const char *prv_text(AudioCompanionMarkResult result) {
   switch (result) {
     case AudioCompanionMarkRecorded:
-      return "Marked";
+      return "Moment saved\nFind it in Pebble Audio";
     case AudioCompanionMarkNotRecording:
       return "Marked\nNot recording right now";
+    case AudioCompanionMarkQueueFull:
+      return "Not marked\nOpen Pebble Audio to sync saved moments";
+    case AudioCompanionMarkSaveFailed:
+      return "Couldn't save moment\nPlease try again";
     case AudioCompanionMarkNoReceiver:
     default:
       return "Set up Pebble Audio on your phone first";
@@ -30,7 +34,8 @@ static const char *prv_text(AudioCompanionMarkResult result) {
 static void prv_main(void) {
   // Marked the moment the button was held, before anything is drawn.
   const AudioCompanionMarkResult result = audio_companion_mark_moment();
-  const bool marked = result != AudioCompanionMarkNoReceiver;
+  const bool marked =
+      result == AudioCompanionMarkRecorded || result == AudioCompanionMarkNotRecording;
   if (marked) {
     vibes_short_pulse();
     app_exit_reason_set(APP_EXIT_ACTION_PERFORMED_SUCCESSFULLY);

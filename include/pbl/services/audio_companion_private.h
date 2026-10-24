@@ -45,6 +45,7 @@ typedef enum {
   AudioCompanionCtrlMsgIdMuseSetupDisconnect = 0x0C,
   AudioCompanionCtrlMsgIdAssistantUpdate = 0x0D,
   AudioCompanionCtrlMsgIdWatchAction = 0x0E,
+  AudioCompanionCtrlMsgIdMomentSaved = 0x0F,
 } AudioCompanionCtrlMsgId;
 
 //! Watch -> phone control message ids (notifications on the Control characteristic).
@@ -170,6 +171,7 @@ typedef enum {
 //! while the screen is closed becomes a notification, options come with the answer (Option) and
 //! are picked with PTT_EVENT Pick, and the receiver can begin a turn of its own (Begin).
 #define AUDIO_COMPANION_CAPABILITY_CONVERSATION (1u << 5)
+#define AUDIO_COMPANION_CAPABILITY_DURABLE_MOMENTS (1u << 6)
 
 // ---- Push-to-talk (Section 4.4) ----
 
@@ -557,6 +559,13 @@ typedef struct PBL_PACKED {
 
 typedef struct PBL_PACKED {
   uint8_t msg_id;
+  uint8_t request_token;
+  uint8_t mark_id;
+  uint64_t wall_ms;
+} AudioCompanionMomentSavedMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
   uint8_t turn;
   //! Index of the first frame in this message, from 0 at the press.
   uint16_t first_frame;
@@ -711,6 +720,7 @@ typedef struct {
   union {
     AudioCompanionAssistantUpdate assistant_update;
     AudioCompanionWatchActionFragment watch_action;
+    AudioCompanionMomentSavedMsg moment_saved;
     AudioCompanionMuseSetupOpenMsg muse_setup_open;
     AudioCompanionMuseSetupCloseMsg muse_setup_close;
     AudioCompanionMuseSetupTx muse_setup_tx;

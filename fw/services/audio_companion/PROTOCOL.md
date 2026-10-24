@@ -51,7 +51,7 @@ A fixed 20-byte snapshot:
 | 4 | 1 | `codec_bitmap` | bit0 = Speex wideband |
 | 5 | 1 | `flags` | bit0 = a receiver authorization exists, bit1 = enabled pref on, bit2 = consent prompt pending, bit3 = `send_backpressure_events` is meaningful |
 | 6 | 2 | `reserved0` | 0 |
-| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4), bit4 follow-up (4.4), bit5 conversation (4.4); other bits 0 |
+| 8 | 4 | `watch_capabilities` | bit0 Muse setup relay (4.3), bit1 push-to-talk (4.4), bit2 watch actions (4.5), bit3 answer restart (4.4), bit4 follow-up (4.4), bit5 conversation (4.4), bit6 durable moments (4.6); other bits 0 |
 | 12 | 4 | `fw_version_packed` | `(major << 24) \| (minor << 16) \| patch`, diagnostics only |
 | 16 | 4 | `send_backpressure_events` | notifications the transport refused since service init; 0 unless `flags` bit3 is set |
 
@@ -89,6 +89,7 @@ flight; the watch answers every request with a response notification carrying th
 | `0x0C` | `MUSE_SETUP_DISCONNECT` | 4 |
 | `0x0D` | `ASSISTANT_UPDATE` | 6 + text |
 | `0x0E` | `WATCH_ACTION` | 5 + payload |
+| `0x0F` | `MOMENT_SAVED` | 11 |
 
 `AUTH_REQUEST` (`0x01`):
 
@@ -393,9 +394,24 @@ again; never 0), `u8 flags` (bit0 `RECORDING`), `u8 reserved` (0), `u32 stream_i
 - `RECORDING` clear: nothing was recording; `stream_id` and `sample_index` are 0, and only
   `wall_ms` (the watch's clock, UTC ms, the same clock as `start_time_ms`) places the moment.
 
-A mark made while the receiver is away waits on the watch (the latest 8) and is sent when it
-is authorized and subscribed again, oldest first. The same mark may arrive twice; `mark_id`
-with `wall_ms` names it. Nothing answers it.
+Watches advertising `watch_capabilities` bit6 (`DURABLE_MOMENTS`) persist up to eight
+unconfirmed marks, bound to the authorized receiver. They survive restart. A full queue refuses
+a new mark visibly; it never discards an older mark. Forgetting the receiver clears its queue.
+On authorization/subscription marks are sent oldest first, and pending marks are retried on
+subsequent control activity at most once per 30 seconds (a new mark triggers immediate delivery).
+No polling timer or microphone activation is needed.
+
+`MOMENT_SAVED` (`0x0F`, phone → watch): `u8 msg_id`, `u8 request_token`, `u8 mark_id`,
+`u64 wall_ms` (11 bytes). Send only when bit6 is present, **after** the app durably stores the
+mark or recognizes a durable duplicate/deletion tombstone. Echo the original wire `wall_ms`,
+not an audio-clock correction. Only an authorized receiver may acknowledge. The watch removes
+only the matching `(mark_id, wall_ms)` and returns `ACK`: OK after durable removal (or if already
+absent), BUSY when storage failed. Bluetooth acceptance alone never removes a mark.
+
+The notification format remains unchanged. Older firmware has an eight-item RAM queue with
+one-shot delivery and no receipts. New apps continue accepting those marks but cannot recover
+ones already lost. Install a receipt-capable companion before new firmware: an older app can
+receive notifications but cannot drain the durable watch queue.
 
 ## 5. Data Channel
 

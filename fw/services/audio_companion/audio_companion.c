@@ -432,14 +432,23 @@ static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while
 static bool s_receiver_presumed_gone;  //!< liveness watchdog tripped; treat session as not ready
 static TimerID s_silence_probe_timer = TIMER_INVALID_ID;
 
-//! Moments marked on the watch and not yet sent (MOMENT_MARK), oldest first. A mark made while
-//! the receiver is away waits here; past this many the oldest goes.
+//! Pending durable marks, oldest first. Only MOMENT_SAVED removes one.
 #define MOMENTS_MAX_QUEUED (8)
 static AudioCompanionMomentMarkMsg s_moments[MOMENTS_MAX_QUEUED];
 static uint8_t s_moments_count;
 static uint8_t s_moment_counter;
 static bool s_moments_flush_posted;
+static uint32_t s_moments_last_sent_ms;
+static bool s_moments_sent;
+typedef struct PBL_PACKED {
+  uint8_t version;
+  uint8_t count;
+  uint8_t counter;
+  AudioCompanionMomentMarkMsg marks[MOMENTS_MAX_QUEUED];
+} StoredMomentQueue;
 static void prv_moments_post_flush_locked(void);
+static bool prv_moments_persist_locked(void);
+static void prv_moments_saved_locked(const AudioCompanionMomentSavedMsg *msg);
 
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
 // ---- Push-to-talk state (PROTOCOL.md 4.4), all guarded by s_lock ----
@@ -3190,6 +3199,7 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
           memcmp(msg->auth_revoke.receiver_id, s_session.receiver_id,
                  AUDIO_COMPANION_RECEIVER_ID_BYTES) == 0) {
         audio_companion_auth_forget_receiver();
+        s_moments_count = 0;
         prv_end_stream_locked(AudioCompanionStopReasonPolicy);
         s_session.authorized = false;
         prv_send_revoked_locked(AudioCompanionRevokedReasonAppRequested);
@@ -3207,6 +3217,13 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
       break;
     case AudioCompanionCtrlMsgIdCheckpoint:
       prv_handle_checkpoint_locked(&msg->checkpoint);
+      break;
+    case AudioCompanionCtrlMsgIdMomentSaved:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      prv_moments_saved_locked(&msg->moment_saved);
       break;
     case AudioCompanionCtrlMsgIdPauseRequest:
       if (!s_session.authorized) {
@@ -3381,6 +3398,7 @@ static void prv_control_write_system_task_cb(void *data) {
       const bool was_presumed_gone = s_receiver_presumed_gone;
       prv_note_receiver_activity_locked();
       prv_handle_control_msg_locked(&msg);
+      prv_moments_post_flush_locked();
       if (was_presumed_gone) {
         // Receiver came back after the liveness watchdog tripped; resume streaming.
         prv_reevaluate_locked();
@@ -3519,7 +3537,7 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   }
   const AudioCompanionRebootTraceEntry *newest =
       audio_companion_reboot_trace_newest(&s_reboot_trace);
-  uint32_t capabilities = 0;
+  uint32_t capabilities = AUDIO_COMPANION_CAPABILITY_DURABLE_MOMENTS;
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
   capabilities |= AUDIO_COMPANION_CAPABILITY_MUSE_SETUP;
 #endif
@@ -3738,6 +3756,13 @@ void audio_companion_init(void) {
   audio_companion_auth_init();
 
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  StoredMomentQueue moments;
+  if (audio_companion_auth_load_marks(&moments, sizeof(moments)) && moments.version == 1 &&
+      moments.count <= MOMENTS_MAX_QUEUED) {
+    s_moments_count = moments.count;
+    s_moment_counter = moments.counter;
+    memcpy(s_moments, moments.marks, sizeof(s_moments));
+  }
   audio_companion_reboot_trace_clear(&s_reboot_trace);
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
   audio_companion_muse_init();
@@ -3990,8 +4015,33 @@ bool audio_companion_relay_notify_control(const uint8_t *data, size_t length) {
 
 // ---- Marked moments (PROTOCOL.md 4.6) ----
 
-//! Sends what is queued, oldest first, while the receiver takes it. Whatever it refuses stays
-//! for the next time the receiver is ready.
+static bool prv_moments_persist_locked(void) {
+  StoredMomentQueue queue = {.version = 1, .count = s_moments_count, .counter = s_moment_counter};
+  memcpy(queue.marks, s_moments, sizeof(s_moments));
+  return audio_companion_auth_save_marks(&queue, sizeof(queue));
+}
+
+static void prv_moments_saved_locked(const AudioCompanionMomentSavedMsg *msg) {
+  for (uint8_t i = 0; i < s_moments_count; i++) {
+    if (s_moments[i].mark_id != msg->mark_id || s_moments[i].wall_ms != msg->wall_ms) {
+      continue;
+    }
+    const AudioCompanionMomentMarkMsg removed = s_moments[i];
+    memmove(&s_moments[i], &s_moments[i + 1], sizeof(s_moments[0]) * (s_moments_count - i - 1));
+    s_moments_count--;
+    if (!prv_moments_persist_locked()) {
+      memmove(&s_moments[i + 1], &s_moments[i], sizeof(s_moments[0]) * (s_moments_count - i));
+      s_moments[i] = removed;
+      s_moments_count++;
+      prv_send_ack_locked(msg->request_token, AudioCompanionAckStatusBusy);
+      return;
+    }
+    break;
+  }
+  prv_send_ack_locked(msg->request_token, AudioCompanionAckStatusOk);
+}
+
+//! Bluetooth acceptance is not a durable receipt. Retry until the phone confirms its commit.
 static void prv_moments_flush_system_task_cb(void *data) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   s_moments_flush_posted = false;
@@ -4004,16 +4054,15 @@ static void prv_moments_flush_system_task_cb(void *data) {
     PBL_LOG_DBG("Moment %u sent", s_moments[sent].mark_id);
     sent++;
   }
-  if (sent) {
-    memmove(&s_moments[0], &s_moments[sent], sizeof(s_moments[0]) * (s_moments_count - sent));
-    s_moments_count -= sent;
-  }
+  s_moments_sent = sent > 0;
+  s_moments_last_sent_ms = prv_uptime_ms();
   pbl_mutex_unlock(&s_lock);
 }
 
 static void prv_moments_post_flush_locked(void) {
   if (s_moments_count == 0 || s_moments_flush_posted || !s_session.authorized ||
-      !s_session.control_subscribed) {
+      !s_session.control_subscribed ||
+      (s_moments_sent && prv_uptime_ms() - s_moments_last_sent_ms < 30000)) {
     return;
   }
   s_moments_flush_posted = true;
@@ -4030,16 +4079,24 @@ AudioCompanionMarkResult audio_companion_mark_moment(void) {
     return AudioCompanionMarkNoReceiver;
   }
   const bool recording = s_owns_mic && s_record_capture && s_stream_active;
-  s_moment_counter = (uint8_t)(s_moment_counter + 1) ? (uint8_t)(s_moment_counter + 1) : 1;
   if (s_moments_count == MOMENTS_MAX_QUEUED) {
-    memmove(&s_moments[0], &s_moments[1], sizeof(s_moments[0]) * (MOMENTS_MAX_QUEUED - 1));
-    s_moments_count--;
+    pbl_mutex_unlock(&s_lock);
+    return AudioCompanionMarkQueueFull;
   }
+  const uint8_t old_counter = s_moment_counter;
+  s_moment_counter = (uint8_t)(s_moment_counter + 1) ? (uint8_t)(s_moment_counter + 1) : 1;
   audio_companion_protocol_build_moment_mark(
       (uint8_t *)&s_moments[s_moments_count++], sizeof(s_moments[0]), s_moment_counter,
       recording ? AUDIO_COMPANION_MOMENT_FLAG_RECORDING : 0, recording ? s_stream_id : 0,
       recording ? s_next_sample_index : 0, prv_wall_clock_ms());
-  PBL_LOG_INFO("Moment %u marked%s", s_moment_counter, recording ? "" : " (not recording)");
+  if (!prv_moments_persist_locked()) {
+    s_moments_count--;
+    s_moment_counter = old_counter;
+    pbl_mutex_unlock(&s_lock);
+    return AudioCompanionMarkSaveFailed;
+  }
+  s_moments_sent = false;
+  PBL_LOG_DBG("Moment %u saved%s", s_moment_counter, recording ? "" : " (not recording)");
   prv_moments_post_flush_locked();
   pbl_mutex_unlock(&s_lock);
   return recording ? AudioCompanionMarkRecorded : AudioCompanionMarkNotRecording;
@@ -4069,6 +4126,7 @@ bool audio_companion_get_receiver_name(char *buf, size_t buf_size) {
 void audio_companion_forget_receiver(void) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   audio_companion_auth_forget_receiver();
+  s_moments_count = 0;
   prv_end_stream_locked(AudioCompanionStopReasonPolicy);
   if (s_session.authorized) {
     s_session.authorized = false;
@@ -4126,6 +4184,8 @@ void audio_companion_test_reset(void) {
   s_moments_count = 0;
   s_moment_counter = 0;
   s_moments_flush_posted = false;
+  s_moments_sent = false;
+  s_moments_last_sent_ms = 0;
   s_consent_handler = NULL;
   s_enable_handler = NULL;
   s_consent_timer = TIMER_INVALID_ID;

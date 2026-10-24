@@ -76,6 +76,19 @@ void test_audio_companion_auth__forget_allows_rebind(void) {
                     AudioCompanionAuthEvalMismatch);
 }
 
+void test_audio_companion_auth__marks_persist_and_are_wiped_when_the_receiver_changes(void) {
+  cl_assert(audio_companion_auth_store_receiver(s_receiver_a, "Audio Companion"));
+  const uint8_t marks[] = {1, 2, 3, 4};
+  uint8_t restored[sizeof(marks)] = {0};
+  cl_assert(audio_companion_auth_save_marks(marks, sizeof(marks)));
+  audio_companion_auth_init();
+  cl_assert(audio_companion_auth_load_marks(restored, sizeof(restored)));
+  cl_assert_equal_m(marks, restored, sizeof(marks));
+  audio_companion_auth_forget_receiver();
+  cl_assert(audio_companion_auth_store_receiver(s_receiver_b, "New phone"));
+  cl_assert(!audio_companion_auth_load_marks(restored, sizeof(restored)));
+}
+
 void test_audio_companion_auth__persists_across_reinit(void) {
   cl_assert(audio_companion_auth_store_receiver(s_receiver_a, "Audio Companion"));
 

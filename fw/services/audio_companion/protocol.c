@@ -25,6 +25,7 @@ _Static_assert(sizeof(AudioCompanionPttAudioHeader) == 5, "ptt audio header size
 _Static_assert(sizeof(AudioCompanionAssistantUpdateHeader) == 6, "assistant update header size");
 _Static_assert(sizeof(AudioCompanionWatchActionHeader) == 5, "watch action header size");
 _Static_assert(sizeof(AudioCompanionWatchActionResultMsg) == 4, "watch action result size");
+_Static_assert(sizeof(AudioCompanionMomentSavedMsg) == 11, "moment saved size");
 _Static_assert(sizeof(AudioCompanionAuthResultMsg) == 4, "auth result size");
 _Static_assert(sizeof(AudioCompanionRevokedMsg) == 2, "revoked size");
 _Static_assert(sizeof(AudioCompanionAckMsg) == 3, "ack size");
@@ -43,6 +44,12 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
 
   const uint8_t msg_id = data[0];
   switch (msg_id) {
+    case AudioCompanionCtrlMsgIdMomentSaved:
+      if (length != sizeof(AudioCompanionMomentSavedMsg)) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->moment_saved, data, sizeof(msg_out->moment_saved));
+      break;
     case AudioCompanionCtrlMsgIdAuthRequest: {
       if (length < sizeof(AudioCompanionAuthRequestHeader)) {
         return AudioCompanionParseResultMalformed;
