@@ -425,7 +425,9 @@ static bool s_catch_up_burst;
 static uint32_t s_drain_burst_cap = DRAIN_MAX_BATCHES_PER_CALL;
 static bool s_drain_cb_pending;        //!< a drain callback is queued; coalesces drain posts
 static bool s_capture_parked;          //!< capture stopped after offline overflow
-static uint32_t s_pause_started_ms;    //!< uptime when a gap-producing pause began
+//! Tick at which the last frame counted into the stream ended: a pause's gap runs from here to
+//! the first frame after it.
+static RtcTicks s_last_frame_end_ticks;
 static uint8_t s_pending_resume_gap_reason;
 static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control message received
 static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while a receiver is ready
@@ -1379,20 +1381,29 @@ static void prv_apply_pending(void) {
 //! Begin a pause that will become a STREAM_GAP when capture resumes.
 static void prv_begin_gap_pause_locked(uint8_t gap_reason) {
   if (s_pending_resume_gap_reason == 0) {
-    s_pause_started_ms = prv_uptime_ms();
     s_pending_resume_gap_reason = gap_reason;
   }
 }
 
-//! Record the gap for an elapsed pause; consumes sequence numbers so gap
-//! ranges and subsequent data stay self-consistent.
-static void prv_finish_gap_pause_locked(void) {
+//! Record the gap for an elapsed pause; consumes sequence numbers so gap ranges and subsequent
+//! data stay self-consistent. Called with the first frame after the pause, which ended at
+//! `frame_end_ticks`: the gap is all the time since the last frame before it, mic start-up
+//! included, because the sample counter is the recording's clock.
+static void prv_finish_gap_pause_locked(RtcTicks frame_end_ticks) {
   if (s_pending_resume_gap_reason == 0 || !s_stream_active) {
     s_pending_resume_gap_reason = 0;
     return;
   }
-  const uint32_t elapsed_ms = prv_uptime_ms() - s_pause_started_ms;
-  uint32_t missing = elapsed_ms / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS;
+  const uint64_t paused_ms = (frame_end_ticks - s_last_frame_end_ticks) * 1000 / RTC_TICKS_HZ;
+  const uint64_t gap_ms = (paused_ms > AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
+                              ? paused_ms - AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS
+                              : 0;
+  uint64_t frames = (gap_ms + AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS / 2) /
+                    AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS;
+  if (frames > UINT32_MAX) {
+    frames = UINT32_MAX;
+  }
+  uint32_t missing = (uint32_t)frames;
   if (missing == 0) {
     missing = 1;
   }
@@ -2249,6 +2260,9 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   bool schedule_drain = false;
   bool suppressed = false;
   if (recording) {
+    const RtcTicks now = rtc_get_ticks();
+    prv_finish_gap_pause_locked(now);
+    s_last_frame_end_ticks = now;
     suppressed = prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain);
   }
   if (recording && suppressed && !ptt) {
@@ -2792,6 +2806,7 @@ static void prv_begin_stream_locked(void) {
   s_offline_baseline_dropped = 0;
   s_alert_baseline_dropped = 0;
   s_pending_resume_gap_reason = 0;  // a fresh stream carries no pending gap
+  s_last_frame_end_ticks = rtc_get_ticks();
   prv_reset_silence_suppression_locked();
   audio_companion_spool_reset();
   s_stream_active = true;
@@ -2924,9 +2939,8 @@ static void prv_reevaluate_recording_locked(void) {
       prv_begin_stream_locked();
     } else {
       // A fresh session's re-announcement (reconnect or liveness revival) was requested above,
-      // ahead of the pause branches. Finish the disconnect gap (if capture had parked) so loss
-      // is reported exactly once.
-      prv_finish_gap_pause_locked();
+      // ahead of the pause branches. A pending pause gap (a parked disconnect, power save) is
+      // recorded with the first frame capture delivers, so it covers the mic's start too.
     }
     s_stream_attached = true;
     // Capture intent only; prv_apply_capture() takes the mic once s_lock is dropped, and parks on
@@ -4228,7 +4242,7 @@ void audio_companion_test_reset(void) {
   s_drain_burst_cap = DRAIN_MAX_BATCHES_PER_CALL;
   s_drain_cb_pending = false;
   s_capture_parked = false;
-  s_pause_started_ms = 0;
+  s_last_frame_end_ticks = 0;
   s_pending_resume_gap_reason = 0;
   s_last_receiver_activity_ms = 0;
   s_offline_since_ms = 0;

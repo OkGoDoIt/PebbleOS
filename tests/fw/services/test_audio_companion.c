@@ -14,6 +14,7 @@
 #include "system/reboot_reason.h"
 
 #include <pbl/drivers/mic.h>
+#include <pbl/drivers/rtc.h>
 #include <pbl/drivers/watchdog.h>
 #include <pbl/task_wdt/task_wdt.h>
 
@@ -170,6 +171,8 @@ static uint16_t s_response_time_period_secs;
 static bool s_pref_enabled;
 static BatteryChargeState s_battery_state;
 static uint32_t s_uptime_seconds;
+//! Milliseconds past `s_uptime_seconds` on the monotonic tick clock, which counts in ms.
+static uint32_t s_ticks_extra_ms;
 static time_t s_rtc_time;
 static uint16_t s_rtc_ms;
 static bool s_pref_pause_stationary;
@@ -277,6 +280,10 @@ BatteryChargeState battery_get_charge_state(void) {
 
 uint32_t time_get_uptime_seconds(void) {
   return s_uptime_seconds;
+}
+
+RtcTicks rtc_get_ticks(void) {
+  return ((RtcTicks)s_uptime_seconds * 1000 + s_ticks_extra_ms) * RTC_TICKS_HZ / 1000;
 }
 
 time_t rtc_get_time(void) {
@@ -794,6 +801,7 @@ void test_audio_companion__initialize(void) {
   s_pref_enabled = false;
   s_battery_state = (BatteryChargeState){ .charge_percent = 80 };
   s_uptime_seconds = 100;
+  s_ticks_extra_ms = 0;
   s_rtc_time = 1000;
   s_rtc_ms = 123;
   s_pref_pause_stationary = true;
@@ -1537,6 +1545,41 @@ void test_audio_companion__pause_resume_records_explicit_gap(void) {
   memcpy(&gap_msg, gap->data, sizeof(gap_msg));
   cl_assert_equal_i(gap_msg.reason, AudioCompanionGapReasonUserDisabled);
   cl_assert(gap_msg.missing_frame_count >= 1);
+}
+
+//! The sample counter is the recording's clock, so a pause must advance it by all the time that
+//! passed until audio flows again -- not to the moment the pause was lifted, and not in whole
+//! seconds. The microphone takes a moment to deliver its first frame after a restart, and the
+//! stationary power-save mute restarts it every two minutes: counting only to the restart lost
+//! about two seconds a cycle, a minute an hour, 15 minutes over a night (G17, 2026-10-26).
+void test_audio_companion__a_pause_advances_the_counter_until_the_first_frame_after_it(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  s_ticks_extra_ms = 300;
+  prv_feed_frames(1);
+
+  uint8_t buf[sizeof(AudioCompanionPauseRequestMsg)];
+  size_t length = 0;
+  prv_build_pause(buf, &length, 0x30, AudioCompanionPauseReasonPolicy);
+  prv_send_control(buf, length);
+  cl_assert(!s_mic_running);
+
+  // Two minutes and 400 ms off, then the mic takes 900 ms to fill its first frame.
+  s_uptime_seconds += 120;
+  s_ticks_extra_ms += 400;
+  prv_build_resume(buf, &length, 0x31);
+  prv_send_control(buf, length);
+  cl_assert(s_mic_running);
+  s_ticks_extra_ms += 900;
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+
+  // The first frame after the pause began 20 ms before it arrived: everything from the end of the
+  // last frame before it to there is the gap.
+  AudioCompanionStreamGapMsg gap;
+  cl_assert(prv_last_gap_with_reason(AudioCompanionGapReasonUserDisabled, &gap));
+  cl_assert_equal_i(gap.missing_frame_count, (120000 + 400 + 900 - 20) / 20);
+  cl_assert_equal_i(gap.first_missing_sample_index, AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES);
 }
 
 void test_audio_companion__forget_receiver_stops_and_revokes(void) {
@@ -2657,6 +2700,66 @@ void test_audio_companion__short_quiet_runs_do_not_renegotiate_the_connection(vo
 //! The fix is on the verdict rather than the window: arming windows are 5-20 s and stretching
 //! every listen to fit the longest would leave the microphone on for a sixth of each cycle, which
 //! is most of what the mute saves. The mute asks the narrower question over what it did hear.
+//! Frames delivered in real time: each one ends 20 ms after the last on the tick clock.
+static void prv_feed_timed_frames_at_level(uint32_t amplitude, uint32_t count) {
+  for (uint32_t i = 0; i < count; i++) {
+    s_ticks_extra_ms += AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS;
+    prv_feed_frame_at_level(amplitude);
+  }
+}
+
+//! A night on the nightstand: the stationary mute switches the mic off for two minutes and back
+//! on for a listen window, over and over, and the mic takes most of a second to deliver its first
+//! frame each time. Through all of it the sample counter has to stay on the clock -- the phone
+//! files every recording by it. It lost about two seconds a cycle before (G17, 2026-10-26).
+void test_audio_companion__stationary_listen_cycles_keep_the_counter_on_time(void) {
+  prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
+  const RtcTicks born = rtc_get_ticks();
+  prv_feed_timed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
+  audio_companion_set_runlevel(RunLevel_Stationary);
+  cl_assert(!s_mic_running);
+
+  const TimerID listen = audio_companion_test_get_power_save_listen_timer();
+  const uint32_t cycles = 10;
+  for (uint32_t cycle = 0; cycle < cycles; cycle++) {
+    s_data_count = 0;
+    s_uptime_seconds += 120;
+    s_ticks_extra_ms += 37 * cycle;  // the windows open at no particular point of a second
+    prv_send_receiver_health((uint8_t)cycle);  // the phone keeps the link alive meanwhile
+    cl_assert_equal_b(stub_new_timer_fire(listen), true);  // the window opens
+    fake_system_task_callbacks_invoke_pending();
+    cl_assert(s_mic_running);
+    s_ticks_extra_ms += 900;  // the mic starting up
+    const uint32_t window_frames =
+        stub_new_timer_timeout(listen) / AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS;
+    prv_feed_timed_frames_at_level(TEST_QUIET_LEVEL, window_frames);
+    cl_assert_equal_b(stub_new_timer_fire(listen), true);  // the window closes, still quiet
+    fake_system_task_callbacks_invoke_pending();
+    cl_assert(!s_mic_running);
+  }
+
+  // The wrist moves, and the first frame after the last pause is the clock to check: it lands
+  // right after the power-save gap, and it began just after this.
+  prv_send_receiver_health(0x40);
+  audio_companion_set_runlevel(RunLevel_Normal);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  s_ticks_extra_ms += 900;
+  const uint64_t began_ms = (rtc_get_ticks() - born) * 1000 / RTC_TICKS_HZ;
+  s_data_count = 0;
+  prv_feed_timed_frames_at_level(900, TEST_DRAIN_PUSH_FRAMES);
+  fake_system_task_callbacks_invoke_pending();
+
+  AudioCompanionStreamGapMsg gap;
+  cl_assert(prv_last_gap_with_reason(AudioCompanionGapReasonPowerSave, &gap));
+  const uint64_t counted = gap.first_missing_sample_index +
+                           (uint64_t)gap.missing_frame_count * AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES;
+  const int64_t behind_ms = (int64_t)began_ms - (int64_t)(counted / 16);
+  // Within a frame either way, after twenty minutes and ten restarts.
+  cl_assert(behind_ms <= AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS);
+  cl_assert(behind_ms >= -AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS);
+}
+
 void test_audio_companion__the_power_save_listen_window_can_reach_a_verdict(void) {
   prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
   prv_feed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
