@@ -103,6 +103,7 @@ typedef struct PBL_PACKED FileMetaData {
 } FileMetaData;
 
 #define TMP_STATE_DONE    0x0
+#define TMP_STATE_COMMITTING 0x1
 #define CREATE_STATE_DONE 0x0
 #define DELETE_STATE_DONE 0x0
 
@@ -192,12 +193,14 @@ typedef struct GCBlock {
 } GCBlock;
 
 static GCBlock s_gc_block;
+static uint16_t s_cleanup_page;
 
 // This is used by unit tests to clear out static state and simulate a reboot.
 void pfs_reset_all_state(void) {
   s_gc_block = (GCBlock){};
   memset(s_pfs_avail_fd, 0, sizeof(s_pfs_avail_fd));
   time_closed_counter = 0;
+  s_cleanup_page = 0;
 }
 
 #define FD_VALID(fd)                                                             \
@@ -1237,9 +1240,8 @@ bool pfs_active(void) {
 // Scans through the filesystem to see if we rebooted while a file was in the
 // middle of being created and cleans up these partial files.
 void pfs_reboot_cleanup(void) {
-  static uint16_t curr_pg = 0;
-
-  for (; curr_pg < s_pfs_page_count; curr_pg++) {
+  for (; s_cleanup_page < s_pfs_page_count; s_cleanup_page++) {
+    const uint16_t curr_pg = s_cleanup_page;
     uint8_t page_flags = prv_get_page_flags(curr_pg);
 
     if (IS_PAGE_TYPE(page_flags, PAGE_FLAG_START_PAGE)) {
@@ -1247,8 +1249,26 @@ void pfs_reboot_cleanup(void) {
         PBL_LOG_WRN("File at %d creation did not complete ", curr_pg);
         unlink_flash_file(curr_pg);
       } else if (is_tmp_file(curr_pg)) { // make sure this isn't a temp file
-        PBL_LOG_WRN("Removing temp file at %d", curr_pg);
-        unlink_flash_file(curr_pg);
+        bool recover = false;
+        if (get_curr_state(curr_pg, TMP_STATE_OFFSET, TMP_STATE_COMMITTING)) {
+          FileHeader hdr;
+          prv_flash_read((uint8_t *)&hdr, sizeof(hdr),
+                         prv_page_to_flash_offset(curr_pg) + FILEHEADER_OFFSET);
+          if (hdr.file_namelen > 0 && hdr.file_namelen <= FILE_MAX_NAME_LEN) {
+            char name[FILE_MAX_NAME_LEN + 1];
+            prv_flash_read((uint8_t *)name, hdr.file_namelen,
+                           prv_page_to_flash_offset(curr_pg) + FILE_NAME_OFFSET);
+            name[hdr.file_namelen] = 0;
+            uint16_t original;
+            recover = locate_flash_file(name, &original) == E_DOES_NOT_EXIST;
+          }
+        }
+        if (recover) {
+          update_curr_state(curr_pg, TMP_STATE_OFFSET, TMP_STATE_DONE);
+        } else {
+          PBL_LOG_DBG("Removing temp file at %d", curr_pg);
+          unlink_flash_file(curr_pg);
+        }
       }
     } else if (page_type_bits_set(page_flags, DELETED_START_PAGE_MASK) &&
                !is_delete_complete(curr_pg)) {
@@ -1417,6 +1437,29 @@ status_t pfs_close(int fd) {
 cleanup:
   pbl_mutex_unlock(&s_pfs_mutex);
   return (res);
+}
+
+status_t pfs_abort_overwrite(int fd) {
+  pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
+  status_t status = E_INVALID_ARGUMENT;
+  if (FD_VALID(fd) && PFS_FD(fd).file.is_tmp) {
+    const uint16_t page = PFS_FD(fd).file.start_page;
+    mark_fd_free(fd);
+    status = unlink_flash_file(page);
+  }
+  pbl_mutex_unlock(&s_pfs_mutex);
+  return status;
+}
+
+status_t pfs_prepare_overwrite_commit(int fd) {
+  pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
+  status_t status = E_INVALID_ARGUMENT;
+  if (FD_VALID(fd) && PFS_FD(fd).file.is_tmp) {
+    update_curr_state(PFS_FD(fd).file.start_page, TMP_STATE_OFFSET, TMP_STATE_COMMITTING);
+    status = S_SUCCESS;
+  }
+  pbl_mutex_unlock(&s_pfs_mutex);
+  return status;
 }
 
 status_t pfs_close_and_remove(int fd) {

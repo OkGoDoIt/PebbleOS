@@ -683,7 +683,27 @@ static bool prv_rewrite_cb(SettingsFile *file, SettingsRecordInfo *info, void *c
   cb_ctx->cb(file, cb_ctx->new_file, info, cb_ctx->user_context);
   return true; // continue iterating
 }
+static status_t prv_rewrite_transaction(SettingsFile *old_file, SettingsFile *new_file,
+                                         void *context) {
+  RewriteCbContext *cb_ctx = context;
+  cb_ctx->new_file = new_file;
+  return settings_file_each(old_file, prv_rewrite_cb, cb_ctx);
+}
+
+static status_t prv_transaction(SettingsFile *file, SettingsFileTransaction cb, void *context,
+                                bool recover_commit);
+
 status_t settings_file_rewrite(SettingsFile *file, SettingsFileRewriteCallback cb, void *context) {
+  RewriteCbContext cb_ctx = {.cb = cb, .user_context = context};
+  return prv_transaction(file, prv_rewrite_transaction, &cb_ctx, false);
+}
+
+status_t settings_file_transaction(SettingsFile *file, SettingsFileTransaction cb, void *context) {
+  return prv_transaction(file, cb, context, true);
+}
+
+static status_t prv_transaction(SettingsFile *file, SettingsFileTransaction cb, void *context,
+                                bool recover_commit) {
   char *name = kernel_strdup(file->name);
   if (!name) {
     PBL_LOG_ERR("Could not allocate name to rewrite settings file %s", file->name);
@@ -697,12 +717,16 @@ status_t settings_file_rewrite(SettingsFile *file, SettingsFileRewriteCallback c
     kernel_free(name);
     return status;
   }
-  RewriteCbContext cb_ctx = (RewriteCbContext){
-    .cb = cb,
-    .new_file = &new_file,
-    .user_context = context,
-  };
-  settings_file_each(file, prv_rewrite_cb, &cb_ctx);
+  status = cb(file, &new_file, context);
+  if (status >= 0 && recover_commit) {
+    status = pfs_prepare_overwrite_commit(new_file.iter.fd);
+  }
+  if (status < 0) {
+    pfs_abort_overwrite(new_file.iter.fd);
+    kernel_free(new_file.name);
+    kernel_free(name);
+    return status;
+  }
   settings_file_close(file);
   // We have to close and reopen the new_file so that it's temp flag is cleared.
   // Before the close succeeds, if we reboot, we will just end up reading the

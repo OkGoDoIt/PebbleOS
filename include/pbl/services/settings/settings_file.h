@@ -350,6 +350,12 @@ typedef void (*SettingsFileRewriteCallback)(SettingsFile *old_file, SettingsFile
  */
 status_t settings_file_rewrite(SettingsFile *file, SettingsFileRewriteCallback cb, void *context);
 
+//! Builds a replacement from the old file. A negative callback result discards the replacement;
+//! the original stays open and unchanged. The callback must copy every record it wants to keep.
+typedef status_t (*SettingsFileTransaction)(SettingsFile *old_file, SettingsFile *new_file,
+                                            void *context);
+status_t settings_file_transaction(SettingsFile *file, SettingsFileTransaction cb, void *context);
+
 /**
  * @brief Filter callback for settings_file_rewrite_filtered().
  *

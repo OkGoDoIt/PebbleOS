@@ -40,6 +40,68 @@ void test_settings_file__cleanup(void) {
       (byte & 0x08 ? 1 : 0), (byte & 0x04 ? 1 : 0), (byte & 0x02 ? 1 : 0), (byte & 0x01 ? 1 : 0)
 
 extern void pfs_debug_dump(int fd, int num_bytes);
+
+static status_t prv_refused_transaction(SettingsFile *old, SettingsFile *replacement, void *data) {
+  uint32_t key = 1, changed = 99;
+  cl_must_pass(settings_file_set(replacement, &key, sizeof(key), &changed, sizeof(changed)));
+  return E_OUT_OF_STORAGE;
+}
+
+void test_settings_file__failed_transaction_preserves_original_after_reopen(void) {
+  SettingsFile file;
+  uint32_t key = 1, original = 42, read = 0;
+  cl_must_pass(settings_file_open(&file, "test-transaction", 4096));
+  cl_must_pass(settings_file_set(&file, &key, sizeof(key), &original, sizeof(original)));
+  cl_assert_equal_i(settings_file_transaction(&file, prv_refused_transaction, NULL), E_OUT_OF_STORAGE);
+  cl_must_pass(settings_file_get(&file, &key, sizeof(key), &read, sizeof(read)));
+  cl_assert_equal_i(read, original);
+  settings_file_close(&file);
+  cl_must_pass(settings_file_open(&file, "test-transaction", 4096));
+  cl_must_pass(settings_file_get(&file, &key, sizeof(key), &read, sizeof(read)));
+  cl_assert_equal_i(read, original);
+  settings_file_close(&file);
+}
+
+typedef struct {
+  int after_bytes;
+  jmp_buf recovery;
+} TransactionPowerLoss;
+
+static status_t prv_power_loss_transaction(SettingsFile *old, SettingsFile *replacement, void *data) {
+  TransactionPowerLoss *test = data;
+  uint32_t key = 1, changed = 99;
+  cl_must_pass(settings_file_set(replacement, &key, sizeof(key), &changed, sizeof(changed)));
+  fake_spi_flash_force_future_failure(test->after_bytes, &test->recovery);
+  return S_SUCCESS;
+}
+
+void test_settings_file__transaction_commit_survives_power_loss(void) {
+  // Interrupt every byte of the prepare/delete/promote sequence. On reboot,
+  // the whole old or new value must survive, including the original-delete window.
+  for (int after_bytes = 0; after_bytes < 40; ++after_bytes) {
+    fake_spi_flash_init(0, 0x1000000);
+    extern void pfs_reset_all_state(void);
+    pfs_reset_all_state();
+    pfs_init(false);
+    SettingsFile file;
+    uint32_t key = 1, value = 42;
+    cl_must_pass(settings_file_open(&file, "power-loss", 4096));
+    cl_must_pass(settings_file_set(&file, &key, sizeof(key), &value, sizeof(value)));
+    TransactionPowerLoss test = {.after_bytes = after_bytes};
+    if (setjmp(test.recovery) == 0) {
+      cl_must_pass(settings_file_transaction(&file, prv_power_loss_transaction, &test));
+      settings_file_close(&file);
+    }
+    fake_spi_flash_force_future_failure(0, NULL);
+    pfs_reset_all_state();
+    pfs_init(false);
+    pfs_reboot_cleanup();
+    cl_must_pass(settings_file_open(&file, "power-loss", 4096));
+    cl_must_pass(settings_file_get(&file, &key, sizeof(key), &value, sizeof(value)));
+    cl_assert(value == 42 || value == 99);
+    settings_file_close(&file);
+  }
+}
 void settings_file_hexdump(SettingsFile *file) {
   pfs_seek(file->iter.fd, 0, FSeekSet);
   pfs_debug_dump(file->iter.fd, 4096);

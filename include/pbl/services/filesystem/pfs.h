@@ -182,6 +182,14 @@ extern status_t pfs_close(int fd);
  */
 extern status_t pfs_close_and_remove(int fd);
 
+//! Discard an uncommitted OP_FLAG_OVERWRITE file without replacing or closing its original.
+//! Refuses descriptors that are not temporary replacements.
+extern status_t pfs_abort_overwrite(int fd);
+
+//! Mark a fully written replacement recoverable before closing it. After interruption during
+//! close, reboot cleanup keeps the original if present, otherwise the complete replacement.
+extern status_t pfs_prepare_overwrite_commit(int fd);
+
 /**
  * @brief Remove a file.
  *
