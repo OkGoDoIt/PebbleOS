@@ -3,7 +3,7 @@
 Status: normative. This document is the single source of truth for the wire protocol between
 custom Pebble firmware (the Audio Companion GATT service) and the third-party audio companion
 app. The firmware tree carries a verbatim copy at
-`PebbleOS/src/fw/services/audio_companion/PROTOCOL.md`; the version stamps must match.
+`PebbleOS/fw/services/audio_companion/PROTOCOL.md`; the version stamps must match.
 
 Protocol version: **1**
 Spec revision: 2026-06-11
@@ -371,6 +371,23 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
   in 110 bytes. Empty text means no alarms. Smart wake uses the native fixed 30-minute
   window BEFORE the given time. Labels are not stored. Older firmware returns Unsupported;
   the phone may fall back to kind 2 only for regular one-time creation.
+
+
+- `11 Timers`: `u8 operation` (0 list, 1 create, 2 get, 3 pause, 4 resume, 5 update,
+  6 restart, 7 cancel), `u32 id`, `u32 seconds`, `u8 label_present`, `str label` (48 bytes).
+  List/create require id=0; others require a nonzero id returned by the watch. Create requires
+  seconds 1–86400. Update uses seconds=0 to preserve remaining time and duration; otherwise
+  it sets both remaining time and restart duration, preserving paused state. label_present=0
+  preserves the label (and requires an empty label); 1 replaces it, including clearing it.
+  Update needs at least one changed field. Other operations require seconds=0 and no label.
+  List returns up to four decimal ids separated by newlines. Get/create/pause/resume/update/
+  restart return `id,state,remaining_ms,duration_seconds\nlabel`: state 1 running, 2 paused,
+  3 finished. Cancel returns no text. Read failures must never be interpreted as an empty list.
+  Resume does not restart a finished timer; restart explicitly resets it to its duration.
+  Four live or paused timers fit; finished records can be reused by create. IDs are random,
+  not slot numbers. Kind 1 timers use the same store and appear in kind 11 lists. Timers keep
+  running after receiver disconnect but are volatile across watch reboot. No flash writes or
+  polling timers are added. Only a definitive Unsupported permits a kind 1 creation fallback.
 
 
 `WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,

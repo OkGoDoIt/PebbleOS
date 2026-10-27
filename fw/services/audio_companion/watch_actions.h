@@ -23,6 +23,13 @@ typedef struct {
       char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
     } timer;
     struct {
+      uint8_t operation; // 0 list, 1 create, 2 get, 3 pause, 4 resume, 5 update, 6 restart, 7 cancel
+      uint32_t id;
+      uint32_t seconds; // 0 preserves duration/remaining time on update
+      uint8_t label_present;
+      char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
+    } timers;
+    struct {
       uint8_t hour;
       uint8_t minute;
       char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
