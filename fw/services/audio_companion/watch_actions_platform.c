@@ -302,6 +302,10 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
     return false;
   }
   text[0] = '\0';
+  if (!activity_tracking_on()) {
+    snprintf(text, text_size, "health_off: Activity tracking is disabled.");
+    return false;
+  }
   if (metric == AudioCompanionWatchHealthHeartRate) {
     int32_t bpm = -1;
     int32_t updated_utc = 0;
@@ -310,10 +314,13 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
       return false;
     }
     if (!activity_get_metric(ActivityMetricHeartRateFilteredBPM, 1, &bpm) || bpm <= 0) {
+      snprintf(text, text_size, "no_data: No heart rate sample is available.");
       return false;
     }
     activity_get_metric(ActivityMetricHeartRateFilteredUpdatedTimeUTC, 1, &updated_utc);
-    const int32_t age = updated_utc > 0 ? (int32_t)(rtc_get_time() - updated_utc) : -1;
+    const time_t now = rtc_get_time();
+    const int32_t age = updated_utc > 0 && now >= updated_utc
+                            ? (int32_t)(now - updated_utc) : -1;
     snprintf(text, text_size, "%" PRId32 ",%" PRId32, bpm, age);
     return true;
   }
@@ -339,6 +346,7 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
   int32_t values[AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS];
   if (days == 0 || days > AUDIO_COMPANION_WATCH_ACTION_HEALTH_MAX_DAYS ||
       !activity_get_metric(activity_metric, days, values)) {
+    snprintf(text, text_size, "no_data: No activity history is available.");
     return false;
   }
   size_t used = 0;
@@ -352,6 +360,9 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
   }
   return true;
 #else
+  if (text && text_size) {
+    snprintf(text, text_size, "unsupported: This firmware has no activity service.");
+  }
   return false;
 #endif
 }
@@ -412,9 +423,7 @@ static void prv_hr_finish(HeartRateDays *job) {
   PBL_LOG_INFO("Watch action %u: heart rate for %u day(s) %s", job->action_id, job->days,
                job->any ? "read" : "unavailable");
   audio_companion_send_watch_action_result(
-      job->action_id,
-      job->any ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
-      job->any ? text : NULL);
+      job->action_id, AudioCompanionWatchActionStatusDone, 0, text);
   kernel_free(job);
 }
 
@@ -468,10 +477,15 @@ void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days) {
                                              AUDIO_COMPANION_WATCH_HEALTH_HEART_RATE_OFF);
     return;
   }
-  HeartRateDays *job = activity_tracking_on() ? kernel_zalloc(sizeof(*job)) : NULL;
+  if (!activity_tracking_on()) {
+    audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
+                                             "health_off: Activity tracking is disabled.");
+    return;
+  }
+  HeartRateDays *job = kernel_zalloc(sizeof(*job));
   if (!job) {
     audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
-                                             NULL);
+                                             "busy: Health history could not be allocated.");
     return;
   }
   job->action_id = action_id;
@@ -479,7 +493,7 @@ void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days) {
   prv_hr_start_day(job);
   system_task_add_callback(prv_hr_step_system_task_cb, job);
 #else
-  audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
-                                           NULL);
+  audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusUnsupported, 0,
+                                           "unsupported: This firmware has no activity service.");
 #endif
 }

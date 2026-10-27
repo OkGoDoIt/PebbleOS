@@ -88,6 +88,12 @@ void test_audio_companion_platform__find_stop_is_scoped_and_zero_never_underflow
   cl_assert_equal_i(s_pulses, 19);
 }
 
+void test_audio_companion_platform__missing_activity_service_is_explicitly_unsupported(void) {
+  char text[161];
+  cl_assert(!watch_actions_health(AudioCompanionWatchHealthSteps, 1, text, sizeof(text)));
+  cl_assert(strstr(text, "unsupported:") == text);
+}
+
 AlarmId alarm_create(const AlarmInfo *info) { return ALARM_INVALID_ID; }
 AudioCompanionServiceState audio_companion_get_state(void) { return AudioCompanionServiceStateIdle; }
 bool audio_companion_send_watch_action_result(uint8_t id, uint8_t status, uint8_t value, const char *text) { return true; }
