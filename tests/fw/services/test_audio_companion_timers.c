@@ -7,6 +7,7 @@
 #include <pbl/services/settings/settings_file.h>
 #include <pbl/services/wakeup.h>
 #include <process_management/app_manager.h>
+#include <process_management/worker_manager.h>
 #include <services/audio_companion/watch_actions.h>
 #include <fake_pbl_malloc.h>
 #include <fake_rtc.h>
@@ -15,6 +16,7 @@
 static SettingsFile s_file;
 static bool s_installed;
 static bool s_running;
+static bool s_worker_running;
 static bool s_wakeup_ok;
 static time_t s_deadline;
 static Uuid s_uuid;
@@ -28,7 +30,10 @@ const PebbleProcessMd *app_manager_get_current_app_md(void) {
   s_md.uuid = s_uuid;
   return s_running ? &s_md : NULL;
 }
-const PebbleProcessMd *app_manager_get_current_worker(void) { return NULL; }
+const PebbleProcessMd *worker_manager_get_current_worker_md(void) {
+  s_md.uuid = s_uuid;
+  return s_worker_running ? &s_md : NULL;
+}
 void persist_service_client_open(const Uuid *uuid) {
   cl_must_pass(settings_file_open(&s_file, "native-timers", 4096));
 }
@@ -47,6 +52,7 @@ void test_audio_companion_timers__initialize(void) {
   fake_rtc_init(0, 1800000000);
   s_installed = true;
   s_running = false;
+  s_worker_running = false;
   s_wakeup_ok = true;
   s_deadline = 0;
 }
@@ -138,6 +144,10 @@ void test_audio_companion_timers__refuses_unavailable_running_labels_corruption_
   s_running = true;
   cl_assert(!run(1, 0, 60, NULL, text));
   s_running = false;
+  s_worker_running = true;
+  cl_assert(!run(1, 0, 60, NULL, text));
+  cl_assert(strstr(text, "busy:"));
+  s_worker_running = false;
   cl_assert(!run(1, 0, 60, "Tea", text));
   s_wakeup_ok = false;
   cl_assert(!run(1, 0, 60, NULL, text));

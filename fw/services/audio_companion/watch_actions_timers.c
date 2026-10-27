@@ -14,6 +14,7 @@
 #include <pbl/services/wakeup.h>
 #include <process_management/app_install_manager.h>
 #include <process_management/app_manager.h>
+#include <process_management/worker_manager.h>
 
 // Saved format verified against Core Devices pebble-timer v1.2.7.
 // Never read or write while that app owns a live in-memory copy.
@@ -167,9 +168,9 @@ bool watch_actions_native_timers(const WatchActionRequest *request, char *text, 
     return false;
   }
   const PebbleProcessMd *current = app_manager_get_current_app_md();
+  const PebbleProcessMd *worker = worker_manager_get_current_worker_md();
   if ((current && uuid_equal(&current->uuid, &s_timer_uuid)) ||
-      (app_manager_get_current_worker() &&
-       uuid_equal(&app_manager_get_current_worker()->uuid, &s_timer_uuid))) {
+      (worker && uuid_equal(&worker->uuid, &s_timer_uuid))) {
     snprintf(text, size, "busy: Close Timer before managing its timers with Muse.");
     return false;
   }
