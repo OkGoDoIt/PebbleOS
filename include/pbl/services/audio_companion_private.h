@@ -296,6 +296,8 @@ typedef enum {
   AudioCompanionWatchActionAlarms = 10,
   //! u8 operation, u32 id, u32 seconds, u8 label_present, str label.
   AudioCompanionWatchActionTimers = 11,
+  //! Native Core Devices Timer app; same payload as kind 11, durable and watch-app visible.
+  AudioCompanionWatchActionNativeTimers = 12,
 } AudioCompanionWatchActionKind;
 
 typedef enum {

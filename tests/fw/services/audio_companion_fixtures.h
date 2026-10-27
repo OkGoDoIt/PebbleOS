@@ -870,6 +870,54 @@ static const uint8_t s_fx_watch_action_music_now_playing[] = {
   0x0e, 0x4e, 0x07, 0x00, 0x02, 0x04, 0x08,
 };
 
+// Core Devices Timer app management: cancel
+static const uint8_t s_fx_watch_action_native_timers_cancel[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x07, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Core Devices Timer app management: create
+static const uint8_t s_fx_watch_action_native_timers_create[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x11, 0x0c, 0x01, 0x00, 0x00, 0x00, 0x00, 0x58,
+  0x02, 0x00, 0x00, 0x01, 0x05, 0x50, 0x61, 0x73, 0x74, 0x61,
+};
+
+// Core Devices Timer app management: get
+static const uint8_t s_fx_watch_action_native_timers_get[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x02, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Core Devices Timer app management: list
+static const uint8_t s_fx_watch_action_native_timers_list[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Core Devices Timer app management: pause
+static const uint8_t s_fx_watch_action_native_timers_pause[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x03, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Core Devices Timer app management: restart
+static const uint8_t s_fx_watch_action_native_timers_restart[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x06, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Core Devices Timer app management: resume
+static const uint8_t s_fx_watch_action_native_timers_resume[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x04, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Core Devices Timer app management: update
+static const uint8_t s_fx_watch_action_native_timers_update[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0c, 0x05, 0x78, 0x56, 0x34, 0x12, 0x78,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
 // A message from the receiver itself, shown on the watch
 static const uint8_t s_fx_watch_action_notice[] = {
   0x0e, 0x4e, 0x07, 0x00, 0x46, 0x09, 0x44, 0x4f, 0x70, 0x65, 0x6e, 0x20,
@@ -1079,6 +1127,14 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "watch_action_launch_app", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_launch_app, 14 },
   { "watch_action_music_next", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_music_next, 7 },
   { "watch_action_music_now_playing", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_music_now_playing, 7 },
+  { "watch_action_native_timers_cancel", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_cancel, 17 },
+  { "watch_action_native_timers_create", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_create, 22 },
+  { "watch_action_native_timers_get", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_get, 17 },
+  { "watch_action_native_timers_list", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_list, 17 },
+  { "watch_action_native_timers_pause", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_pause, 17 },
+  { "watch_action_native_timers_restart", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_restart, 17 },
+  { "watch_action_native_timers_resume", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_resume, 17 },
+  { "watch_action_native_timers_update", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_native_timers_update, 17 },
   { "watch_action_notice", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_notice, 75 },
   { "watch_action_quiet_time", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_quiet_time, 9 },
   { "watch_action_result_chosen", FixtureChannelControlOut, FixtureExpectParse, s_fx_watch_action_result_chosen, 4 },

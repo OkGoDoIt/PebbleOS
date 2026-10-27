@@ -593,6 +593,14 @@ pbl_clar_test(test_audio_companion_alarms
   OVERRIDES dummy_board
 )
 
+pbl_clar_test(test_audio_companion_timers
+  MODULES settings
+  SOURCES
+    fw/services/audio_companion/watch_actions_timers.c
+    tests/fakes/fake_rtc.c
+  OVERRIDES dummy_board
+)
+
 pbl_clar_test(test_system_task
   SOURCES
     fw/services/system_task/service.c

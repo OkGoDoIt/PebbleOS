@@ -8,25 +8,11 @@
 #include "pbl/logging/logging.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/system_task.h"
-#include "pbl/drivers/rtc.h"
-#include "pbl/util/rand32.h"
 
 #include <stdio.h>
 #include <string.h>
 
 PBL_LOG_MODULE_DECLARE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LOG_LEVEL);
-
-typedef struct {
-  TimerID timer;
-  bool active;
-  bool running;
-  bool alert_pending;
-  uint32_t id;
-  uint32_t seconds;
-  uint32_t remaining_ms;
-  RtcTicks deadline;
-  char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
-} WatchTimer;
 
 typedef struct {
   uint8_t action_id;
@@ -38,11 +24,9 @@ static uint8_t s_assembly_id;
 static uint16_t s_assembly_length;
 static uint8_t s_assembly[AUDIO_COMPANION_WATCH_ACTION_PAYLOAD_MAX_BYTES];
 static uint8_t s_choice_action_id;
-static WatchTimer s_timers[WATCH_ACTIONS_MAX_TIMERS];
 //! Turns Quiet Time back off when the assistant set it for a while.
 static TimerID s_quiet_time_timer = TIMER_INVALID_ID;
 static WatchActionsChooseHandler s_choose_handler;
-static WatchActionsTimerDoneHandler s_timer_done_handler;
 static WatchActionsChooseDismissHandler s_dismiss_handler;
 static WatchActionsNoticeHandler s_notice_handler;
 
@@ -104,6 +88,7 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       prv_string(&r, out->timer.label, AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES);
       return r.ok && out->timer.seconds >= 1 && out->timer.seconds <= 86400;
     case AudioCompanionWatchActionTimers:
+    case AudioCompanionWatchActionNativeTimers:
       out->timers.operation = prv_u8(&r);
       out->timers.id = prv_u32(&r);
       out->timers.seconds = prv_u32(&r);
@@ -190,183 +175,15 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
   }
 }
 
-// ---- timers ----
-
-static WatchTimer *prv_timer_with_id(uint32_t id) {
-  for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
-    if (id && s_timers[i].id == id) {
-      return &s_timers[i];
-    }
-  }
-  return NULL;
-}
-
-static uint32_t prv_remaining_ms(const WatchTimer *timer) {
-  if (!timer->running) {
-    return timer->remaining_ms;
-  }
-  const RtcTicks now = rtc_get_ticks();
-  return now >= timer->deadline ? 0 :
-      (uint32_t)((timer->deadline - now) * 1000 / RTC_TICKS_HZ);
-}
-
-static void prv_timer_done_kernel_main_cb(void *data) {
-  char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
-  pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  WatchTimer *timer = prv_timer_with_id((uint32_t)(uintptr_t)data);
-  const bool finished = timer && !timer->active && timer->alert_pending;
-  const WatchActionsTimerDoneHandler handler = s_timer_done_handler;
-  if (finished) {
-    memcpy(label, timer->label, sizeof(label));
-    timer->alert_pending = false;
-  }
-  pbl_mutex_unlock(&s_lock);
-  if (finished && handler) {
-    handler(label);
-  }
-}
-
-static void prv_timer_fired_cb(void *data) {
-  pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  WatchTimer *timer = prv_timer_with_id((uint32_t)(uintptr_t)data);
-  if (!timer || !timer->running) {
-    pbl_mutex_unlock(&s_lock);
-    return;
-  }
-  timer->active = false;
-  timer->running = false;
-  timer->remaining_ms = 0;
-  timer->alert_pending = true;
-  pbl_mutex_unlock(&s_lock);
-  PBL_LOG_DBG("Watch action: timer done");
-  launcher_task_add_callback(prv_timer_done_kernel_main_cb, data);
-}
-
-static bool prv_schedule_timer(WatchTimer *timer, uint32_t id, uint32_t ms) {
-  if (timer->timer == TIMER_INVALID_ID) {
-    timer->timer = new_timer_create();
-  }
-  // The callback takes s_lock. Never wait for it while holding that lock.
-  if (!new_timer_start(timer->timer, ms, prv_timer_fired_cb, (void *)(uintptr_t)id,
-                       TIMER_START_FLAG_FAIL_IF_EXECUTING)) {
-    return false;
-  }
-  timer->deadline = rtc_get_ticks() + (RtcTicks)ms * RTC_TICKS_HZ / 1000;
-  timer->remaining_ms = ms;
-  timer->running = true;
-  timer->active = true;
-  timer->alert_pending = false;
-  return true;
-}
-
-static WatchTimer *prv_start_timer(uint32_t seconds, const char *label) {
-  // Caller holds s_lock. Finished records can be replaced; live and paused timers cannot.
-  for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
-    WatchTimer *timer = &s_timers[i];
-    if (timer->active || timer->alert_pending) {
-      continue;
-    }
-    uint32_t id;
-    do {
-      id = pbl_rand32();
-    } while (!id || prv_timer_with_id(id));
-    if (!prv_schedule_timer(timer, id, seconds * 1000)) {
-      continue;
-    }
-    timer->id = id;
-    timer->seconds = seconds;
-    strncpy(timer->label, label, sizeof(timer->label) - 1);
-    timer->label[sizeof(timer->label) - 1] = '\0';
-    return timer;
-  }
-  return NULL;
-}
-
-static void prv_timer_text(const WatchTimer *timer, char *text, size_t size) {
-  snprintf(text, size, "%lu,%u,%lu,%lu\n%s", (unsigned long)timer->id,
-           timer->running ? 1 : (timer->active ? 2 : 3),
-           (unsigned long)prv_remaining_ms(timer), (unsigned long)timer->seconds, timer->label);
-}
-
-static bool prv_timers(const WatchActionRequest *request, char *text, size_t size) {
-  const uint8_t operation = request->timers.operation;
-  pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  bool ok = false;
-  WatchTimer *timer = prv_timer_with_id(request->timers.id);
-  if (operation == 0) {
-    size_t used = 0;
-    for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
-      if (s_timers[i].id) {
-        used += snprintf(text + used, size - used, "%lu\n", (unsigned long)s_timers[i].id);
-      }
-    }
-    ok = true;
-  } else if (operation == 1) {
-    timer = prv_start_timer(request->timers.seconds, request->timers.label);
-    ok = timer != NULL;
-    if (!ok) {
-      snprintf(text, size, "Timer capacity reached or busy; list timers before trying again.");
-    }
-  } else if (!timer) {
-    snprintf(text, size, "Timer not found; list timers again.");
-  } else if (operation == 2) {
-    ok = true;
-  } else if (operation == 3) {
-    if (timer->active) {
-      if (timer->running) {
-        timer->remaining_ms = prv_remaining_ms(timer);
-        new_timer_stop(timer->timer);
-        timer->running = false;
-      }
-      ok = true;
-    }
-  } else if (operation == 4) {
-    ok = timer->running || (timer->active &&
-        prv_schedule_timer(timer, timer->id, timer->remaining_ms));
-  } else if (operation == 5) {
-    // A label-only edit preserves the clock; changing seconds sets time remaining now.
-    ok = true;
-    if (request->timers.seconds) {
-      if (!timer->active) {
-        ok = false; // Use restart explicitly for a finished timer.
-      } else if (timer->running) {
-        ok = prv_schedule_timer(timer, timer->id, request->timers.seconds * 1000);
-      }
-      if (ok) {
-        timer->seconds = request->timers.seconds;
-        timer->remaining_ms = request->timers.seconds * 1000;
-      }
-    }
-    if (ok && request->timers.label_present) {
-      memcpy(timer->label, request->timers.label, sizeof(timer->label));
-    }
-  } else if (operation == 6) {
-    ok = prv_schedule_timer(timer, timer->id, timer->seconds * 1000);
-  } else if (operation == 7) {
-    new_timer_stop(timer->timer);
-    timer->active = false;
-    timer->running = false;
-    timer->id = 0;
-    timer->alert_pending = false;
-    ok = true;
-  }
-  if (ok && timer && operation != 7) {
-    prv_timer_text(timer, text, size);
-  } else if (!ok && !text[0]) {
-    snprintf(text, size, "Timer finished or busy; get its status before trying again.");
-  }
-  pbl_mutex_unlock(&s_lock);
-  return ok;
-}
-
-uint32_t watch_actions_active_timer_count(void) {
-  pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  uint32_t count = 0;
-  for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
-    count += s_timers[i].active ? 1 : 0;
-  }
-  pbl_mutex_unlock(&s_lock);
-  return count;
+// Timer records belong to the native Timer app. Run on KernelMain so the ownership check
+// and storage transaction cannot race an app launch.
+static void prv_native_timers_kernel_main_cb(void *data) {
+  PendingAction *pending = data;
+  char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
+  const bool ok = watch_actions_native_timers(&pending->request, text, sizeof(text));
+  audio_companion_send_watch_action_result(pending->action_id,
+      ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0, text);
+  kernel_free(pending);
 }
 
 // ---- A notice ----
@@ -427,27 +244,22 @@ static void prv_run_system_task_cb(void *data) {
   const WatchActionRequest *request = &pending->request;
   switch (request->kind) {
     case AudioCompanionWatchActionTimer: {
-      pbl_mutex_lock(&s_lock, PBL_FOREVER);
-      const bool ok = prv_start_timer(request->timer.seconds, request->timer.label) != NULL;
-      pbl_mutex_unlock(&s_lock);
-      PBL_LOG_INFO("Watch action %u: timer %lus %s", pending->action_id,
-                   (unsigned long)request->timer.seconds, ok ? "set" : "failed");
-      audio_companion_send_watch_action_result(
-          pending->action_id,
-          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
-          NULL);
-      kernel_free(pending);
+      const uint32_t seconds = request->timer.seconds;
+      char label[sizeof(request->timer.label)];
+      memcpy(label, request->timer.label, sizeof(label));
+      pending->request.kind = AudioCompanionWatchActionNativeTimers;
+      memset(&pending->request.timers, 0, sizeof(pending->request.timers));
+      pending->request.timers.operation = 1;
+      pending->request.timers.seconds = seconds;
+      pending->request.timers.label_present = label[0] != 0;
+      memcpy(pending->request.timers.label, label, sizeof(label));
+      launcher_task_add_callback(prv_native_timers_kernel_main_cb, pending);
       return;
     }
-    case AudioCompanionWatchActionTimers: {
-      char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
-      const bool ok = prv_timers(request, text, sizeof(text));
-      audio_companion_send_watch_action_result(pending->action_id,
-          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed,
-          0, text);
-      kernel_free(pending);
+    case AudioCompanionWatchActionTimers:
+    case AudioCompanionWatchActionNativeTimers:
+      launcher_task_add_callback(prv_native_timers_kernel_main_cb, pending);
       return;
-    }
     case AudioCompanionWatchActionAlarm: {
       const bool ok = watch_actions_create_alarm(request->alarm.hour, request->alarm.minute);
       PBL_LOG_INFO("Watch action %u: alarm %02u:%02u %s", pending->action_id,
@@ -648,7 +460,7 @@ void watch_actions_set_ui_handlers(WatchActionsChooseHandler choose,
                                    WatchActionsChooseDismissHandler dismiss) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   s_choose_handler = choose;
-  s_timer_done_handler = timer_done;
+  (void)timer_done; // Expiry is shown by the native Timer app.
   s_dismiss_handler = dismiss;
   pbl_mutex_unlock(&s_lock);
 }
@@ -660,9 +472,6 @@ void watch_actions_set_notice_handler(WatchActionsNoticeHandler notice) {
 }
 
 void watch_actions_init(void) {
-  for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
-    s_timers[i].timer = TIMER_INVALID_ID;
-  }
   s_quiet_time_timer = TIMER_INVALID_ID;
 }
 
@@ -672,9 +481,7 @@ void watch_actions_test_reset(void) {
   s_assembly_length = 0;
   s_choice_action_id = 0;
   s_choose_handler = NULL;
-  s_timer_done_handler = NULL;
   s_dismiss_handler = NULL;
   s_notice_handler = NULL;
-  memset(s_timers, 0, sizeof(s_timers));
   watch_actions_init();
 }

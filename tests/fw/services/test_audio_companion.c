@@ -61,6 +61,15 @@ static void prv_run_launcher_callbacks(void) {
   }
 }
 
+static int s_native_timer_calls;
+static WatchActionRequest s_native_timer_request;
+bool watch_actions_native_timers(const WatchActionRequest *request, char *text, size_t size) {
+  s_native_timer_calls++;
+  s_native_timer_request = *request;
+  snprintf(text, size, "42,1,90000,90\n");
+  return true;
+}
+
 static bool s_alarm_succeeds;
 static int s_alarm_hour;
 static int s_alarm_minute;
@@ -3823,6 +3832,7 @@ static void prv_watch_actions_ready(void) {
   prv_ptt_receiver_ready(false);
   s_choose_calls = 0;
   s_timer_done_calls = 0;
+  s_native_timer_calls = 0;
   s_dismiss_calls = 0;
   s_timer_done_label[0] = '\0';
   watch_actions_set_ui_handlers(prv_test_choose_handler, prv_test_timer_done_handler,
@@ -3891,22 +3901,19 @@ static bool prv_last_watch_action_result(AudioCompanionWatchActionResultMsg *out
 void test_audio_companion__watch_action_timer_is_set_and_rings(void) {
   prv_watch_actions_ready();
   uint8_t payload[64];
-  const size_t length = prv_wa_timer(payload, 90, "Pasta");
+  const size_t length = prv_wa_timer(payload, 90, "");
   prv_send_watch_action(0x11, payload, length);
   fake_system_task_callbacks_invoke_pending();
-
+  cl_assert_equal_i(s_native_timer_calls, 0);
+  prv_run_launcher_callbacks();
+  cl_assert_equal_i(s_native_timer_calls, 1);
+  cl_assert_equal_i(s_native_timer_request.timers.operation, 1);
+  cl_assert_equal_i(s_native_timer_request.timers.seconds, 90);
   AudioCompanionWatchActionResultMsg result;
   cl_assert(prv_last_watch_action_result(&result));
   cl_assert_equal_i(result.action_id, 0x11);
   cl_assert_equal_i(result.status, AudioCompanionWatchActionStatusDone);
-  cl_assert_equal_i(watch_actions_active_timer_count(), 1);
-
-  // Ninety seconds later the watch says so, under the name it was given.
-  stub_new_timer_invoke(1);
-  prv_run_launcher_callbacks();
-  cl_assert_equal_i(s_timer_done_calls, 1);
-  cl_assert_equal_s(s_timer_done_label, "Pasta");
-  cl_assert_equal_i(watch_actions_active_timer_count(), 0);
+  cl_assert_equal_i(s_timer_done_calls, 0); // The native app owns expiry alerts.
 }
 
 void test_audio_companion__watch_action_alarm_goes_to_the_alarm_service(void) {
@@ -4048,7 +4055,7 @@ void test_audio_companion__watch_actions_need_authorization(void) {
   fake_system_task_callbacks_invoke_pending();
   cl_assert(prv_last_control_msg(AudioCompanionCtrlMsgIdError));
   cl_assert(!prv_last_control_msg(AudioCompanionCtrlMsgIdAck));
-  cl_assert_equal_i(watch_actions_active_timer_count(), 0);
+  cl_assert_equal_i(s_native_timer_calls, 0);
 }
 
 //! The result's text, when it carries one.
@@ -4235,97 +4242,11 @@ void test_audio_companion__alarm_management_payload_validation(void) {
 #endif
 }
 
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
-static uint8_t prv_manage_timer(uint8_t operation, uint32_t id, uint32_t seconds,
-                                const char *label, char *text) {
-  uint8_t payload[64] = {AudioCompanionWatchActionTimers, operation};
-  memcpy(payload + 2, &id, 4);
-  memcpy(payload + 6, &seconds, 4);
-  payload[10] = label != NULL;
-  const size_t length = 11 + prv_wa_string(payload + 11, label ? label : "");
-  prv_send_watch_action(0x61, payload, length);
-  fake_system_task_callbacks_invoke_pending();
-  const CapturedNotification *n = prv_last_control_msg(AudioCompanionCtrlMsgIdWatchActionResult);
-  cl_assert(n != NULL);
-  AudioCompanionWatchActionResultMsg result;
-  memcpy(&result, n->data, sizeof(result));
-  const uint8_t length_out = n->length > sizeof(result) ? n->data[sizeof(result)] : 0;
-  memcpy(text, n->data + sizeof(result) + 1, length_out);
-  text[length_out] = '\0';
-  return result.status;
-}
-
-static uint32_t prv_create_managed_timer(const char *label) {
-  char text[161];
-  cl_assert_equal_i(prv_manage_timer(1, 0, 90, label, text), AudioCompanionWatchActionStatusDone);
-  return (uint32_t)strtoul(text, NULL, 10);
-}
-#endif
-
-void test_audio_companion__timer_lifecycle_and_remaining_time(void) {
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
-  prv_watch_actions_ready();
-  char text[161];
-  const uint32_t id = prv_create_managed_timer("Pasta");
-  cl_assert(id != 0);
-  s_uptime_seconds += 10;
-  cl_assert_equal_i(prv_manage_timer(3, id, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert(strstr(text, ",2,80000,90\nPasta") != NULL);
-  s_uptime_seconds += 10;
-  cl_assert_equal_i(prv_manage_timer(2, id, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert(strstr(text, ",2,80000,90\nPasta") != NULL);
-  cl_assert_equal_i(prv_manage_timer(5, id, 0, "Tea", text), AudioCompanionWatchActionStatusDone);
-  cl_assert(strstr(text, ",2,80000,90\nTea") != NULL);
-  cl_assert_equal_i(prv_manage_timer(5, id, 120, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert(strstr(text, ",2,120000,120\nTea") != NULL);
-  cl_assert_equal_i(prv_manage_timer(4, id, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert(strstr(text, ",1,120000,120\nTea") != NULL);
-  cl_assert_equal_i(prv_manage_timer(7, id, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert_equal_i(watch_actions_active_timer_count(), 0);
-  cl_assert_equal_i(prv_manage_timer(2, id, 0, NULL, text), AudioCompanionWatchActionStatusFailed);
-#endif
-}
-
-void test_audio_companion__timer_capacity_disconnect_expiry_restart_and_stale_id(void) {
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
-  prv_watch_actions_ready();
-  char text[161];
-  const uint32_t first = prv_create_managed_timer("First");
-  const TimerID handle = s_new_timer_start_param_timer_id;
-  const uint32_t second = prv_create_managed_timer("Second");
-  prv_create_managed_timer("Third");
-  prv_create_managed_timer("Fourth");
-  cl_assert_equal_i(prv_manage_timer(1, 0, 60, NULL, text), AudioCompanionWatchActionStatusFailed);
-  watch_actions_receiver_gone();
-  cl_assert_equal_i(watch_actions_active_timer_count(), 4);
-  cl_assert_equal_i(prv_manage_timer(3, second, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert_equal_i(prv_manage_timer(1, 0, 60, NULL, text), AudioCompanionWatchActionStatusFailed);
-  stub_new_timer_fire(handle);
-  // A new timer cannot reuse the expired record before its alert reaches KernelMain.
-  cl_assert_equal_i(prv_manage_timer(1, 0, 60, NULL, text), AudioCompanionWatchActionStatusFailed);
-  prv_run_launcher_callbacks();
-  cl_assert_equal_i(s_timer_done_calls, 1);
-  cl_assert_equal_s(s_timer_done_label, "First");
-  cl_assert_equal_i(prv_manage_timer(2, first, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  cl_assert(strstr(text, ",3,0,90\nFirst") != NULL);
-  cl_assert_equal_i(prv_manage_timer(6, first, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  stub_new_timer_fire(handle);
-  // Cancelling before the queued alert suppresses it.
-  cl_assert_equal_i(prv_manage_timer(7, first, 0, NULL, text), AudioCompanionWatchActionStatusDone);
-  prv_run_launcher_callbacks();
-  cl_assert_equal_i(s_timer_done_calls, 1);
-  const uint32_t replacement = prv_create_managed_timer("Replacement");
-  cl_assert(replacement != first);
-  cl_assert_equal_i(prv_manage_timer(7, first, 0, NULL, text), AudioCompanionWatchActionStatusFailed);
-  cl_assert_equal_i(watch_actions_active_timer_count(), 4);
-#endif
-}
-
 void test_audio_companion__timer_management_payload_validation(void) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
   WatchActionRequest request;
   uint8_t status;
-  uint8_t payload[] = {11, 1, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0};
+  uint8_t payload[] = {12, 1, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0};
   cl_assert(watch_actions_parse(payload, sizeof(payload), &request, &status));
   cl_assert(!watch_actions_parse(payload, sizeof(payload) - 1, &request, &status));
   payload[1] = 5;

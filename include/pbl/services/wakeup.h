@@ -4,6 +4,9 @@
 #pragma once
 
 #include <stdint.h>
+#include <time.h>
+#include <pbl/util/uuid.h>
+#include <system/status_codes.h>
 
 #include <pbl/services/new_timer/new_timer.h>
 
@@ -95,5 +98,9 @@ void wakeup_handle_significant_clock_change(void);
  * Reschedules the next event without deleting events or showing popups.
  */
 void wakeup_handle_clock_change(void);
+
+//! Kernel-owned integration for an installed app with one next deadline. Replaces only this
+//! app's wakeups atomically; timestamp 0 cancels them. Timestamp is UTC.
+status_t wakeup_replace_app_deadline(const Uuid *uuid, time_t timestamp);
 
 /** @} */

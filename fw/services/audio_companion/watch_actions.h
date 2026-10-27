@@ -13,7 +13,7 @@
 //! run on the system task, outside the service lock; the outcome goes back as
 //! WATCH_ACTION_RESULT.
 
-#define WATCH_ACTIONS_MAX_TIMERS (4)
+#define WATCH_ACTIONS_MAX_TIMERS (8)
 
 typedef struct {
   uint8_t kind;  // AudioCompanionWatchActionKind
@@ -106,8 +106,8 @@ void watch_actions_choice_result(uint8_t action_id, uint8_t status, uint8_t inde
 //! Timers and alarms already set stay.
 void watch_actions_receiver_gone(void);
 
-//! Timers still counting, for tests and diagnostics.
-uint32_t watch_actions_active_timer_count(void);
+//! Native Timer app records. KernelMain only, while Timer is not running.
+bool watch_actions_native_timers(const WatchActionRequest *request, char *text, size_t size);
 
 //! Provided by audio_companion.c: sends WATCH_ACTION_RESULT to the attached receiver. `text` may be
 //! NULL.

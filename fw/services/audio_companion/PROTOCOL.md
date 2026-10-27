@@ -373,21 +373,31 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
   the phone may fall back to kind 2 only for regular one-time creation.
 
 
-- `11 Timers`: `u8 operation` (0 list, 1 create, 2 get, 3 pause, 4 resume, 5 update,
-  6 restart, 7 cancel), `u32 id`, `u32 seconds`, `u8 label_present`, `str label` (48 bytes).
-  List/create require id=0; others require a nonzero id returned by the watch. Create requires
-  seconds 1–86400. Update uses seconds=0 to preserve remaining time and duration; otherwise
-  it sets both remaining time and restart duration, preserving paused state. label_present=0
-  preserves the label (and requires an empty label); 1 replaces it, including clearing it.
-  Update needs at least one changed field. Other operations require seconds=0 and no label.
-  List returns up to four decimal ids separated by newlines. Get/create/pause/resume/update/
-  restart return `id,state,remaining_ms,duration_seconds\nlabel`: state 1 running, 2 paused,
-  3 finished. Cancel returns no text. Read failures must never be interpreted as an empty list.
-  Resume does not restart a finished timer; restart explicitly resets it to its duration.
-  Four live or paused timers fit; finished records can be reused by create. IDs are random,
-  not slot numbers. Kind 1 timers use the same store and appear in kind 11 lists. Timers keep
-  running after receiver disconnect but are volatile across watch reboot. No flash writes or
-  polling timers are added. Only a definitive Unsupported permits a kind 1 creation fallback.
+- `11 Timers` (legacy) and `12 NativeTimers`: `u8 operation` (0 list, 1 create, 2 get,
+  3 pause, 4 resume, 5 update, 6 restart, 7 cancel), `u32 id`, `u32 seconds`,
+  `u8 label_present`, `str label`. List/create require id 0; other operations require a
+  nonzero id. Create seconds are 1–86400; update seconds 0 preserves the duration. Update
+  needs seconds or label_present; other operations cannot carry a duration or label.
+  A nonempty label is rejected because Core Devices Timer does not support labels.
+  New receivers MUST use kind 12 and MUST NOT fall back to kinds 1 or 11: older firmware's
+  private countdowns are not visible in the Timer app. On this firmware, all three kinds
+  route to the native app's records; kind 1 maps to create.
+
+  Core Devices Timer UUID is `c64aae42-b822-4d6d-995b-bc7c38e843f4`. The app must be installed
+  and closed, and its saved format must match the checked version-1 41-byte records. An
+  incompatible store, duplicate id, unknown version, full list, storage failure, or running
+  app is refused without guessing. The official phone app is unchanged.
+
+  List returns newline-separated decimal ids; get/create/pause/resume/update/restart return
+  `id,state,remaining_ms,duration_seconds\n` (empty label), state 1 running, 2 paused, 3 finished.
+  Cancel returns empty text. Eight stored timers fit, including paused/finished timers; create
+  never evicts one. Muse ids use a durable sequence below native UI timestamp ids. Native UI
+  edits may change an id; list again when not found. Pause preserves remaining time; update
+  seconds changes remaining/restart duration, preserving paused state. Restart starts the
+  saved duration. Native Timer owns alerts and UI, and the records survive reboot/disconnect.
+  Its normal wakeup is armed before an atomic record rewrite; a reset between the two files
+  can open Timer early but cannot strand a committed running timer without a wakeup.
+
 
 
 `WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,

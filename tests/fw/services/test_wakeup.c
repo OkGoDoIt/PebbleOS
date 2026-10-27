@@ -266,6 +266,24 @@ void test_wakeup__time_jump(void) {
   cl_assert_equal_b((stub_new_timer_timeout(gap_timer) / 1000) > WAKEUP_CATCHUP_WINDOW, true);
 }
 
+void test_wakeup__native_app_deadline_replaces_only_its_own_events(void) {
+  const Uuid owner = TEST_UUID;
+  const Uuid other = OTHER_UUID;
+  const time_t now = rtc_get_time();
+  cl_must_pass(wakeup_replace_app_deadline(&owner, now + 90));
+  WakeupId first = wakeup_get_next_scheduled();
+  cl_assert_equal_i(sys_wakeup_query(first), now + 90);
+  cl_must_pass(wakeup_replace_app_deadline(&other, now + 180));
+  cl_must_pass(wakeup_replace_app_deadline(&owner, now + 120));
+  WakeupId next = wakeup_get_next_scheduled();
+  cl_assert(next != first);
+  cl_assert_equal_i(sys_wakeup_query(next), now + 120);
+  cl_must_pass(wakeup_replace_app_deadline(&owner, 0));
+  cl_assert(wakeup_get_next_scheduled() != next);
+  cl_assert(wakeup_replace_app_deadline(&other, now - 1) < 0);
+  cl_must_pass(wakeup_replace_app_deadline(&other, 0));
+}
+
 void test_wakeup__handle_clock_change_not_scheduled(void) {
   // Test clock change without wakeup event scheduled
   wakeup_handle_clock_change();

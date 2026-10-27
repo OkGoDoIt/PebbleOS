@@ -505,6 +505,64 @@ static WakeupId prv_wakeup_id_alloc(SettingsFile *file) {
   return wakeup_id;
 }
 
+typedef struct {
+  const Uuid *uuid;
+  time_t timestamp;
+  SettingsFile *destination;
+  status_t status;
+} ReplaceDeadline;
+
+static bool prv_copy_other_wakeups(SettingsFile *file, SettingsRecordInfo *info, void *data) {
+  ReplaceDeadline *context = data;
+  if (info->key_len != sizeof(WakeupId) || info->val_len != sizeof(WakeupEntry)) {
+    context->status = E_INVALID_ARGUMENT;
+    return false;
+  }
+  WakeupId id;
+  WakeupEntry entry;
+  info->get_key(file, &id, sizeof(id));
+  info->get_val(file, &entry, sizeof(entry));
+  if (!uuid_equal(&entry.uuid, context->uuid)) {
+    context->status = settings_file_set(context->destination, &id, sizeof(id), &entry,
+                                        sizeof(entry));
+  }
+  return context->status >= 0;
+}
+
+static status_t prv_replace_deadline(SettingsFile *old, SettingsFile *replacement, void *data) {
+  ReplaceDeadline *context = data;
+  context->destination = replacement;
+  settings_file_each(old, prv_copy_other_wakeups, context);
+  if (context->status < 0 || !context->timestamp) {
+    return context->status;
+  }
+  WakeupId id = prv_wakeup_id_alloc(old);
+  WakeupEntry entry = {
+    .uuid = *context->uuid,
+    .timestamp = context->timestamp,
+    .notify_if_missed = true,
+    .utc = true,
+  };
+  return settings_file_set(replacement, &id, sizeof(id), &entry, sizeof(entry));
+}
+
+status_t wakeup_replace_app_deadline(const Uuid *uuid, time_t timestamp) {
+  if (!uuid || (timestamp && timestamp <= rtc_get_time())) {
+    return E_INVALID_ARGUMENT;
+  }
+  ReplaceDeadline context = {.uuid = uuid, .timestamp = timestamp};
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  SettingsFile file;
+  status_t status = settings_file_open(&file, SETTINGS_FILE_NAME, SETTINGS_FILE_SIZE);
+  if (status >= 0) {
+    status = settings_file_transaction(&file, prv_replace_deadline, &context);
+    settings_file_close(&file);
+  }
+  pbl_mutex_unlock(&s_mutex);
+  prv_wakeup_timer_next_pending();
+  return status;
+}
+
 static WakeupId prv_wakeup_settings_add_entry(WakeupEntry entry) {
   WakeupId status;
 
