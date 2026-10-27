@@ -13,6 +13,7 @@ _Static_assert(sizeof(AudioCompanionResumeRequestMsg) == 2, "resume request size
 _Static_assert(sizeof(AudioCompanionEnableRequestMsg) == 2, "enable request size");
 _Static_assert(sizeof(AudioCompanionReceiverHealthMsg) == 8, "receiver health size");
 _Static_assert(sizeof(AudioCompanionPhoneMediaStateMsg) == 3, "phone media state size");
+_Static_assert(sizeof(AudioCompanionPhoneFocusStateMsg) == 3, "phone focus state size");
 _Static_assert(sizeof(AudioCompanionPhoneMediaQueryMsg) == 1, "phone media query size");
 _Static_assert(sizeof(AudioCompanionMuseSetupOpenMsg) == 11, "muse setup open size");
 _Static_assert(sizeof(AudioCompanionMuseSetupCloseMsg) == 3, "muse setup close size");
@@ -44,6 +45,12 @@ AudioCompanionParseResult audio_companion_protocol_parse_control(
 
   const uint8_t msg_id = data[0];
   switch (msg_id) {
+    case AudioCompanionCtrlMsgIdPhoneFocusState:
+      if (length != sizeof(AudioCompanionPhoneFocusStateMsg) || data[2] > 1) {
+        return AudioCompanionParseResultMalformed;
+      }
+      memcpy(&msg_out->phone_focus_state, data, sizeof(msg_out->phone_focus_state));
+      break;
     case AudioCompanionCtrlMsgIdMomentSaved:
       if (length != sizeof(AudioCompanionMomentSavedMsg)) {
         return AudioCompanionParseResultMalformed;

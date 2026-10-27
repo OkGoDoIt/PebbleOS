@@ -273,6 +273,16 @@ static const uint8_t s_fx_moment_mark_truncated[] = {
   0x00, 0x00, 0x00, 0x00, 0xe2, 0x42, 0xa7, 0x58, 0xa0, 0x01, 0x00,
 };
 
+// A durable phone receipt for exactly one watch mark
+static const uint8_t s_fx_moment_saved[] = {
+  0x0f, 0x09, 0x03, 0xe2, 0x42, 0xa7, 0x58, 0xa0, 0x01, 0x00, 0x00,
+};
+
+// MOMENT_SAVED one byte short
+static const uint8_t s_fx_moment_saved_truncated[] = {
+  0x0f, 0x09, 0x03, 0xe2, 0x42, 0xa7, 0x58, 0xa0, 0x01, 0x00,
+};
+
 // App gave up on the pairing
 static const uint8_t s_fx_muse_setup_close_failed[] = {
   0x0a, 0x34, 0x03,
@@ -453,6 +463,31 @@ static const uint8_t s_fx_muse_setup_tx_truncated[] = {
 // Receiver requests pause for low storage
 static const uint8_t s_fx_pause_request[] = {
   0x04, 0x2a, 0x01,
+};
+
+// Connection-scoped phone Focus contribution
+static const uint8_t s_fx_phone_focus_state_0[] = {
+  0x10, 0x1b, 0x00,
+};
+
+// Connection-scoped phone Focus contribution
+static const uint8_t s_fx_phone_focus_state_1[] = {
+  0x10, 0x1b, 0x01,
+};
+
+// Invalid phone Focus message
+static const uint8_t s_fx_phone_focus_state_invalid[] = {
+  0x10, 0x1b, 0x02,
+};
+
+// Invalid phone Focus message
+static const uint8_t s_fx_phone_focus_state_long[] = {
+  0x10, 0x1b, 0x01, 0x00,
+};
+
+// Invalid phone Focus message
+static const uint8_t s_fx_phone_focus_state_short[] = {
+  0x10, 0x1b,
 };
 
 // Watch asks the receiver whether the phone is actually playing audio
@@ -880,6 +915,54 @@ static const uint8_t s_fx_watch_action_timer[] = {
   0x61, 0x73, 0x74, 0x61,
 };
 
+// Watch countdown management: cancel
+static const uint8_t s_fx_watch_action_timers_cancel[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x07, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Watch countdown management: create
+static const uint8_t s_fx_watch_action_timers_create[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x11, 0x0b, 0x01, 0x00, 0x00, 0x00, 0x00, 0x58,
+  0x02, 0x00, 0x00, 0x01, 0x05, 0x50, 0x61, 0x73, 0x74, 0x61,
+};
+
+// Watch countdown management: get
+static const uint8_t s_fx_watch_action_timers_get[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x02, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Watch countdown management: list
+static const uint8_t s_fx_watch_action_timers_list[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Watch countdown management: pause
+static const uint8_t s_fx_watch_action_timers_pause[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x03, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Watch countdown management: restart
+static const uint8_t s_fx_watch_action_timers_restart[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x06, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Watch countdown management: resume
+static const uint8_t s_fx_watch_action_timers_resume[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x04, 0x78, 0x56, 0x34, 0x12, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Watch countdown management: update
+static const uint8_t s_fx_watch_action_timers_update[] = {
+  0x0e, 0x53, 0x09, 0x00, 0x0c, 0x0b, 0x05, 0x78, 0x56, 0x34, 0x12, 0x78,
+  0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
 static const ProtocolFixture s_protocol_fixtures[] = {
   { "ack_ok", FixtureChannelControlOut, FixtureExpectParse, s_fx_ack_ok, 3 },
   { "assistant_update_answer", FixtureChannelControlIn, FixtureExpectParse, s_fx_assistant_update_answer, 73 },
@@ -918,6 +1001,8 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "moment_mark_not_recording", FixtureChannelControlOut, FixtureExpectParse, s_fx_moment_mark_not_recording, 24 },
   { "moment_mark_recording", FixtureChannelControlOut, FixtureExpectParse, s_fx_moment_mark_recording, 24 },
   { "moment_mark_truncated", FixtureChannelControlOut, FixtureExpectReject, s_fx_moment_mark_truncated, 23 },
+  { "moment_saved", FixtureChannelControlIn, FixtureExpectParse, s_fx_moment_saved, 11 },
+  { "moment_saved_truncated", FixtureChannelControlIn, FixtureExpectReject, s_fx_moment_saved_truncated, 10 },
   { "muse_setup_close_failed", FixtureChannelControlIn, FixtureExpectParse, s_fx_muse_setup_close_failed, 3 },
   { "muse_setup_close_paired", FixtureChannelControlIn, FixtureExpectParse, s_fx_muse_setup_close_paired, 3 },
   { "muse_setup_disconnect", FixtureChannelControlIn, FixtureExpectParse, s_fx_muse_setup_disconnect, 4 },
@@ -939,6 +1024,11 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "muse_setup_tx_too_long", FixtureChannelControlIn, FixtureExpectReject, s_fx_muse_setup_tx_too_long, 244 },
   { "muse_setup_tx_truncated", FixtureChannelControlIn, FixtureExpectReject, s_fx_muse_setup_tx_truncated, 13 },
   { "pause_request", FixtureChannelControlIn, FixtureExpectParse, s_fx_pause_request, 3 },
+  { "phone_focus_state_0", FixtureChannelControlIn, FixtureExpectParse, s_fx_phone_focus_state_0, 3 },
+  { "phone_focus_state_1", FixtureChannelControlIn, FixtureExpectParse, s_fx_phone_focus_state_1, 3 },
+  { "phone_focus_state_invalid", FixtureChannelControlIn, FixtureExpectReject, s_fx_phone_focus_state_invalid, 3 },
+  { "phone_focus_state_long", FixtureChannelControlIn, FixtureExpectReject, s_fx_phone_focus_state_long, 4 },
+  { "phone_focus_state_short", FixtureChannelControlIn, FixtureExpectReject, s_fx_phone_focus_state_short, 2 },
   { "phone_media_query", FixtureChannelControlOut, FixtureExpectParse, s_fx_phone_media_query, 1 },
   { "phone_media_state_idle", FixtureChannelControlIn, FixtureExpectParse, s_fx_phone_media_state_idle, 3 },
   { "phone_media_state_playing", FixtureChannelControlIn, FixtureExpectParse, s_fx_phone_media_state_playing, 3 },
@@ -996,6 +1086,14 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "watch_action_result_text", FixtureChannelControlOut, FixtureExpectParse, s_fx_watch_action_result_text, 26 },
   { "watch_action_result_text_truncated", FixtureChannelControlOut, FixtureExpectReject, s_fx_watch_action_result_text_truncated, 23 },
   { "watch_action_timer", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timer, 16 },
+  { "watch_action_timers_cancel", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_cancel, 17 },
+  { "watch_action_timers_create", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_create, 22 },
+  { "watch_action_timers_get", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_get, 17 },
+  { "watch_action_timers_list", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_list, 17 },
+  { "watch_action_timers_pause", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_pause, 17 },
+  { "watch_action_timers_restart", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_restart, 17 },
+  { "watch_action_timers_resume", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_resume, 17 },
+  { "watch_action_timers_update", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_timers_update, 17 },
 };
 
 #define PROTOCOL_FIXTURE_COUNT (sizeof(s_protocol_fixtures) / sizeof(s_protocol_fixtures[0]))

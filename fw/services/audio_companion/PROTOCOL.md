@@ -430,6 +430,20 @@ one-shot delivery and no receipts. New apps continue accepting those marks but c
 ones already lost. Install a receipt-capable companion before new firmware: an older app can
 receive notifications but cannot drain the durable watch queue.
 
+### 4.7 Phone Focus Quiet Time
+
+Info `watch_capabilities` bit 7 (`CAPABILITY_PHONE_FOCUS`) advertises this extension.
+`PHONE_FOCUS_STATE` is phone → watch, exactly 3 bytes: `u8 msg_id=0x10`, `u8 request_token`,
+`u8 enabled` (0 or 1 only). Other lengths or values are malformed. An authorized receiver is
+required, independently of Muse. The system task applies the state before sending the normal ACK.
+
+This is a separate, volatile Quiet Time source, ORed with manual, scheduled, and calendar-aware
+Quiet Time. `enabled=0` never disables another source or changes saved preferences. Manual Off
+on the watch may override this source until its next off/on transition; duplicate On requests do
+not clear that override. Disconnect, receiver revocation, and reboot clear the phone source.
+The phone reasserts the current value on reconnect. Receivers must capability-check before sending;
+older firmware must never receive a legacy manual Quiet Time fallback for Focus synchronization.
+
 ## 5. Data Channel
 
 One-byte `msg_id` (`0x80–0x9F`) plus packed struct per notification.

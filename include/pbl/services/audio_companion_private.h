@@ -46,6 +46,7 @@ typedef enum {
   AudioCompanionCtrlMsgIdAssistantUpdate = 0x0D,
   AudioCompanionCtrlMsgIdWatchAction = 0x0E,
   AudioCompanionCtrlMsgIdMomentSaved = 0x0F,
+  AudioCompanionCtrlMsgIdPhoneFocusState = 0x10,
 } AudioCompanionCtrlMsgId;
 
 //! Watch -> phone control message ids (notifications on the Control characteristic).
@@ -172,6 +173,7 @@ typedef enum {
 //! are picked with PTT_EVENT Pick, and the receiver can begin a turn of its own (Begin).
 #define AUDIO_COMPANION_CAPABILITY_CONVERSATION (1u << 5)
 #define AUDIO_COMPANION_CAPABILITY_DURABLE_MOMENTS (1u << 6)
+#define AUDIO_COMPANION_CAPABILITY_PHONE_FOCUS (1u << 7)
 
 // ---- Push-to-talk (Section 4.4) ----
 
@@ -482,6 +484,12 @@ typedef struct PBL_PACKED {
 
 typedef struct PBL_PACKED {
   uint8_t msg_id;
+  uint8_t request_token;
+  uint8_t enabled; // 0 releases phone Focus; 1 requests Quiet Time for this connection
+} AudioCompanionPhoneFocusStateMsg;
+
+typedef struct PBL_PACKED {
+  uint8_t msg_id;
 } AudioCompanionPhoneMediaQueryMsg;
 
 typedef struct PBL_PACKED {
@@ -735,6 +743,7 @@ typedef struct {
     AudioCompanionReceiverHealthMsg receiver_health;
     AudioCompanionEnableRequestMsg enable_request;
     AudioCompanionPhoneMediaStateMsg phone_media_state;
+    AudioCompanionPhoneFocusStateMsg phone_focus_state;
   };
 } AudioCompanionControlMsg;
 

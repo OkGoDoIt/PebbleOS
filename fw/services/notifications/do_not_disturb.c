@@ -33,6 +33,10 @@ typedef struct DoNotDisturbData {
   bool is_in_schedule_period;
   bool manually_override_dnd;
   bool was_active;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  bool phone_focus;
+  bool phone_focus_overridden;
+#endif
 } DoNotDisturbData;
 
 static DoNotDisturbData s_data;
@@ -245,6 +249,11 @@ PBL_SYSCALL(bool, sys_do_not_disturb_is_active) {
 }
 
 bool do_not_disturb_is_active(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  if (s_data.phone_focus && !s_data.phone_focus_overridden) {
+    return true;
+  }
+#endif
   if (do_not_disturb_is_manually_enabled() || prv_is_schedule_active() ||
       prv_is_smart_dnd_active()) {
     return true;
@@ -256,7 +265,23 @@ bool do_not_disturb_is_manually_enabled(void) {
   return alerts_preferences_dnd_is_manually_enabled();
 }
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+void do_not_disturb_set_phone_focus(bool enabled) {
+  if (s_data.phone_focus == enabled) {
+    return;
+  }
+  s_data.phone_focus = enabled;
+  s_data.phone_focus_overridden = false;
+  prv_do_update();
+}
+#endif
+
 void do_not_disturb_set_manually_enabled(bool enable) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  if (!enable && s_data.phone_focus) {
+    s_data.phone_focus_overridden = true;
+  }
+#endif
   const bool is_auto_dnd =
       prv_is_current_schedule_enabled() || do_not_disturb_is_smart_dnd_enabled();
   const bool was_active = do_not_disturb_is_active();

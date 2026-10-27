@@ -715,3 +715,45 @@ void test_do_not_disturb__toggle_manually_enabled(void) {
   active = do_not_disturb_is_active();
   cl_assert(active == false);
 }
+
+void test_do_not_disturb__phone_focus_preserves_manual_and_schedule(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  do_not_disturb_set_phone_focus(true);
+  cl_assert(do_not_disturb_is_active());
+  cl_assert(!do_not_disturb_is_manually_enabled());
+  cl_assert_equal_i(s_num_dnd_events_put, 1);
+  do_not_disturb_set_phone_focus(true);
+  cl_assert_equal_i(s_num_dnd_events_put, 1);
+  do_not_disturb_set_manually_enabled(true);
+  do_not_disturb_set_phone_focus(false);
+  cl_assert(do_not_disturb_is_manually_enabled());
+  cl_assert(do_not_disturb_is_active());
+  do_not_disturb_set_manually_enabled(false);
+
+  DoNotDisturbSchedule schedule = {.from_hour = 0, .to_hour = 1};
+  do_not_disturb_set_schedule(WeekdaySchedule, &schedule);
+  do_not_disturb_set_schedule_enabled(WeekdaySchedule, true);
+  do_not_disturb_set_phone_focus(true);
+  do_not_disturb_set_phone_focus(false);
+  cl_assert(do_not_disturb_is_active());
+  do_not_disturb_set_schedule_enabled(WeekdaySchedule, false);
+  cl_assert(!do_not_disturb_is_active());
+#endif
+}
+
+void test_do_not_disturb__phone_focus_manual_override_lasts_until_focus_ends(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  do_not_disturb_set_phone_focus(true);
+  do_not_disturb_set_manually_enabled(false);
+  cl_assert(!do_not_disturb_is_active());
+  do_not_disturb_set_phone_focus(true); // a duplicate write cannot undo the wearer's choice
+  cl_assert(!do_not_disturb_is_active());
+  do_not_disturb_handle_clock_change();
+  cl_assert(!do_not_disturb_is_active());
+  do_not_disturb_set_phone_focus(false);
+  do_not_disturb_set_phone_focus(true);
+  cl_assert(do_not_disturb_is_active());
+  do_not_disturb_set_phone_focus(false);
+  cl_assert(!do_not_disturb_is_active());
+#endif
+}

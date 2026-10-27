@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "pbl/services/audio_companion.h"
+#include <pbl/services/notifications/do_not_disturb.h>
 
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
 #include "muse_setup_relay.h"
@@ -3216,6 +3217,7 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
         s_moments_count = 0;
         prv_end_stream_locked(AudioCompanionStopReasonPolicy);
         s_session.authorized = false;
+        do_not_disturb_set_phone_focus(false);
         prv_send_revoked_locked(AudioCompanionRevokedReasonAppRequested);
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
         audio_companion_muse_receiver_gone();
@@ -3277,6 +3279,14 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
       break;
     case AudioCompanionCtrlMsgIdEnableRequest:
       prv_handle_enable_request_locked(&msg->enable_request);
+      break;
+    case AudioCompanionCtrlMsgIdPhoneFocusState:
+      if (!s_session.authorized) {
+        prv_send_error_locked(AudioCompanionErrorCodeUnauthorized, 0);
+        break;
+      }
+      do_not_disturb_set_phone_focus(msg->phone_focus_state.enabled != 0);
+      prv_send_ack_locked(msg->phone_focus_state.request_token, AudioCompanionAckStatusOk);
       break;
     case AudioCompanionCtrlMsgIdPhoneMediaState: {
       if (!s_session.authorized) {
@@ -3480,6 +3490,7 @@ static void prv_disconnect_system_task_cb(void *data) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   PBL_LOG_INFO("Audio companion: receiver disconnected; session reset");
   s_session.authorized = false;
+  do_not_disturb_set_phone_focus(false);
   s_session.data_subscribed = false;
   s_session.control_subscribed = false;
   memset(s_session.receiver_id, 0, sizeof(s_session.receiver_id));
@@ -3551,7 +3562,8 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
   }
   const AudioCompanionRebootTraceEntry *newest =
       audio_companion_reboot_trace_newest(&s_reboot_trace);
-  uint32_t capabilities = AUDIO_COMPANION_CAPABILITY_DURABLE_MOMENTS;
+  uint32_t capabilities = AUDIO_COMPANION_CAPABILITY_DURABLE_MOMENTS |
+                          AUDIO_COMPANION_CAPABILITY_PHONE_FOCUS;
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
   capabilities |= AUDIO_COMPANION_CAPABILITY_MUSE_SETUP;
 #endif
@@ -4144,6 +4156,7 @@ void audio_companion_forget_receiver(void) {
   prv_end_stream_locked(AudioCompanionStopReasonPolicy);
   if (s_session.authorized) {
     s_session.authorized = false;
+    do_not_disturb_set_phone_focus(false);
     prv_send_revoked_locked(AudioCompanionRevokedReasonUserOnWatch);
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_MUSE
     audio_companion_muse_receiver_gone();

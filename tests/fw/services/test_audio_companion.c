@@ -871,6 +871,33 @@ void test_audio_companion__cleanup(void) {
   fake_pbl_malloc_clear_tracking();
 }
 
+static bool s_phone_focus;
+void do_not_disturb_set_phone_focus(bool enabled) {
+  s_phone_focus = enabled;
+}
+
+void test_audio_companion__phone_focus_authorized_connection_only(void) {
+  s_phone_focus = false;
+  const uint8_t on[] = {AudioCompanionCtrlMsgIdPhoneFocusState, 0x65, 1};
+  const uint8_t off[] = {AudioCompanionCtrlMsgIdPhoneFocusState, 0x66, 0};
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_send_control(on, sizeof(on));
+  cl_assert(!s_phone_focus);
+  cl_assert(prv_last_control_msg(AudioCompanionCtrlMsgIdError));
+  prv_authenticate();
+  prv_send_control(on, sizeof(on));
+  cl_assert(s_phone_focus);
+  const CapturedNotification *ack = prv_last_control_msg(AudioCompanionCtrlMsgIdAck);
+  cl_assert(ack && ack->data[1] == 0x65 && ack->data[2] == AudioCompanionAckStatusOk);
+  prv_send_control(off, sizeof(off));
+  cl_assert(!s_phone_focus);
+  prv_send_control(on, sizeof(on));
+  audio_companion_handle_disconnect();
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_phone_focus);
+}
+
 static void prv_send_phone_media_state(uint8_t token, uint8_t flags) {
   const AudioCompanionPhoneMediaStateMsg msg = {
     .msg_id = AudioCompanionCtrlMsgIdPhoneMediaState,

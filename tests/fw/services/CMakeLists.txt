@@ -369,6 +369,18 @@ pbl_clar_test(test_do_not_disturb
   OVERRIDES dummy_board
 )
 
+pbl_clar_test(test_do_not_disturb_focus
+  SOURCE test_do_not_disturb.c
+  MODULES settings time
+  SOURCES
+    fw/services/notifications/alerts_preferences.c
+    fw/services/notifications/do_not_disturb.c
+    subsys/cron/cron.c
+    tests/fakes/fake_rtc.c
+  DEFINES CONFIG_SERVICE_AUDIO_COMPANION=1
+  OVERRIDES dummy_board
+)
+
 pbl_clar_test(test_weather_service
   MODULES settings time
   SOURCES
@@ -500,7 +512,7 @@ pbl_clar_test(test_audio_companion
     fw/services/audio_companion/reboot_trace.c
     fw/services/audio_companion/spool.c
   # Real watchdog API declarations, so the test can fake the SoC's reset cause.
-  DEFINES CONFIG_WATCHDOG=1
+  DEFINES CONFIG_WATCHDOG=1 CONFIG_SERVICE_AUDIO_COMPANION=1
   OVERRIDES dummy_board
 )
 
@@ -518,6 +530,7 @@ pbl_clar_test(test_audio_companion_ptt
   DEFINES
     CONFIG_WATCHDOG=1
     CONFIG_SERVICE_AUDIO_COMPANION_PTT=1
+    CONFIG_SERVICE_AUDIO_COMPANION=1
   OVERRIDES dummy_board
 )
 

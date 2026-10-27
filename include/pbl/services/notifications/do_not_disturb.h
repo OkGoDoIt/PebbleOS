@@ -83,6 +83,11 @@ bool do_not_disturb_is_manually_enabled(void);
  */
 void do_not_disturb_set_manually_enabled(bool enable);
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+/** Set the connection-scoped phone Focus contribution without changing stored preferences. */
+void do_not_disturb_set_phone_focus(bool enabled);
+#endif
+
 /**
  * @brief Toggle manual DND, showing the first use dialog the first time.
  *
