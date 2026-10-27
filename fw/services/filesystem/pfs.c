@@ -1254,7 +1254,8 @@ void pfs_reboot_cleanup(void) {
           FileHeader hdr;
           prv_flash_read((uint8_t *)&hdr, sizeof(hdr),
                          prv_page_to_flash_offset(curr_pg) + FILEHEADER_OFFSET);
-          if (hdr.file_namelen > 0 && hdr.file_namelen <= FILE_MAX_NAME_LEN) {
+          _Static_assert(FILE_MAX_NAME_LEN >= UINT8_MAX, "Filename buffer must fit stored length");
+          if (hdr.file_namelen > 0) {
             char name[FILE_MAX_NAME_LEN + 1];
             prv_flash_read((uint8_t *)name, hdr.file_namelen,
                            prv_page_to_flash_offset(curr_pg) + FILE_NAME_OFFSET);
