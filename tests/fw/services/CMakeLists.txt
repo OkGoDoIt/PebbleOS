@@ -588,6 +588,13 @@ pbl_clar_test(test_audio_companion_speex
   OVERRIDES dummy_board
 )
 
+pbl_clar_test(test_audio_companion_platform
+  MODULES rand
+  SOURCES fw/services/audio_companion/watch_actions_platform.c
+  DEFINES CONFIG_SERVICE_AUDIO_COMPANION
+  OVERRIDES dummy_board
+)
+
 pbl_clar_test(test_audio_companion_alarms
   SOURCES fw/services/audio_companion/watch_actions_alarms.c
   OVERRIDES dummy_board

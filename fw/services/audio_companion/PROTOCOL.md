@@ -400,6 +400,32 @@ Joined payload: `u8 kind`, then (strings are `u8 length` + UTF-8):
 
 
 
+
+- `13 AlarmsFull`: kind-10's six fields followed by `u8 recurrence`, `u8 days`,
+  `u8 sound`, `u8 vibrate`, `u8 tone`. 255 preserves an omitted field. Recurrence is
+  0 everyday, 1 weekends, 2 weekdays, 3 once, 4 custom. Custom requires a nonempty
+  seven-bit weekday mask, Sunday bit 0; days are otherwise 255. Sound/vibrate are 0/1;
+  tone is 0–3. Create may be disabled. Operation 4 gets one alarm. List/get/create/update
+  return verified rows `iHHMMsekDDsvt\n` (13 characters plus newline): kind-10's row
+  plus sound, vibration, and tone. Ten rows fit. Invalid or duplicate rows invalidate
+  the entire snapshot. The new kind prevents older firmware from ignoring options.
+- `14 Inspect`: `u8 section`, 0 status, 1 Quiet Time, 2 music. Status returns
+  `revision,utc_seconds,utc_offset_seconds,capture_state\ntimezone_abbreviation`.
+  Revision 1 supports kinds 12–16. Quiet Time returns `source_bits,temporary_until_utc`:
+  bits 0 effective, 1 manual, 2 scheduled, 3 calendar, 4 phone Focus, 5 manual override;
+  a zero expiry means none. A later manual action invalidates Muse's temporary expiry.
+  Expiry is connection-independent but volatile across reboot. Music returns
+  `has_metadata,play_state,volume_percent\ntitle\nartist`; -1 means unavailable;
+  play state is native MusicPlayState. Metadata has no measurement timestamp.
+- `15 Apps`: `u8 operation`, `u16 offset`, 16 UUID bytes. Operation 0 lists a page,
+  with zero UUID, returning `{uuid},name\n` rows up to the result limit. Advance offset
+  by returned count; an empty page ends enumeration. Refresh after installs/removals.
+  Operation 1 requests launch by UUID (offset 0) and returns the name. Hidden apps and
+  watchfaces are excluded. Name launches refuse tied best matches. Success confirms
+  a launch request, not that app startup completed.
+- `16 FindControl`: `u8 seconds` 1–30 to start, 0 to stop. Stop clears only the
+  MuseFind-owned vibration pattern; it never cancels an alarm or notification.
+
 `WATCH_ACTION_RESULT` (`0x4A`, watch → phone): `u8 msg_id`, `u8 action_id`, `u8 status`,
 `u8 value`, then optionally `u8 text_length` (1–160) and that much UTF-8. `status` 1 done (timer
 started, alarm set, option chosen: `value` is its index from 0), 2 declined (the wearer backed

@@ -40,6 +40,8 @@ typedef enum VibePatternOwner {
   VibePatternOwner_Alarm,
   /** Vibes started by the worker task; cleared on worker cleanup. */
   VibePatternOwner_Worker,
+  /** Muse find-watch pulses, independently cancellable. */
+  VibePatternOwner_MuseFind,
 } VibePatternOwner;
 
 /** @brief Initialize the service. */

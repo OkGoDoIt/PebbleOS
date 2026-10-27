@@ -102,6 +102,9 @@ bool watch_actions_music(uint8_t command, char *text, size_t text_size) {
   return s_music_connected;
 }
 
+uint32_t watch_actions_quiet_revision(void) { return s_quiet_time_calls; }
+bool watch_actions_inspect(uint8_t section, char *text, size_t size) { return true; }
+bool watch_actions_apps(const WatchActionRequest *request, char *text, size_t size) { return true; }
 void watch_actions_set_quiet_time(bool on) {
   s_quiet_time_on = on;
   s_quiet_time_calls++;
@@ -4118,6 +4121,36 @@ void test_audio_companion__watch_action_quiet_time_turns_itself_off(void) {
   cl_assert(!s_quiet_time_on);
 }
 
+void test_audio_companion__extended_action_payload_validation(void) {
+  WatchActionRequest request;
+  uint8_t status;
+  uint8_t alarm[] = {13, 1, 0, 6, 45, 1, 0, 4, 0x22, 1, 0, 2};
+  cl_assert(watch_actions_parse(alarm, sizeof(alarm), &request, &status));
+  cl_assert_equal_i(request.alarms.days, 0x22);
+  alarm[8] = 0;
+  cl_assert(!watch_actions_parse(alarm, sizeof(alarm), &request, &status));
+  alarm[8] = 0x22;
+  alarm[9] = 2;
+  cl_assert(!watch_actions_parse(alarm, sizeof(alarm), &request, &status));
+  const uint8_t find[] = {16, 0};
+  cl_assert(watch_actions_parse(find, sizeof(find), &request, &status));
+  const uint8_t status_query[] = {14, 0, 99};
+  cl_assert(!watch_actions_parse(status_query, sizeof(status_query), &request, &status));
+}
+
+void test_audio_companion__quiet_expiry_preserves_a_later_manual_choice(void) {
+  prv_watch_actions_ready();
+  const uint8_t hour[] = {AudioCompanionWatchActionQuietTime, 1, 60, 0};
+  prv_send_simple_watch_action(0x64, hour, sizeof(hour));
+  cl_assert(watch_actions_quiet_until() > 0);
+  // Even choosing On again means the wearer replaced the temporary choice.
+  watch_actions_set_quiet_time(true);
+  cl_assert_equal_i(watch_actions_quiet_until(), 0);
+  stub_new_timer_invoke(1);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_quiet_time_on);
+}
+
 void test_audio_companion__watch_action_opens_an_app_by_name(void) {
   prv_watch_actions_ready();
   uint8_t payload[16];
@@ -4188,6 +4221,8 @@ void test_audio_companion__watch_action_find_and_health(void) {
   void test_audio_companion__##name(void) {}
 PTT_ONLY(watch_action_music_says_what_is_playing)
 PTT_ONLY(watch_action_quiet_time_turns_itself_off)
+PTT_ONLY(quiet_expiry_preserves_a_later_manual_choice)
+PTT_ONLY(extended_action_payload_validation)
 PTT_ONLY(watch_action_opens_an_app_by_name)
 PTT_ONLY(watch_action_find_and_health)
 PTT_ONLY(watch_action_notice_is_shown)

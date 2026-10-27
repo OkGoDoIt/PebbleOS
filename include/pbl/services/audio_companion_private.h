@@ -298,6 +298,10 @@ typedef enum {
   AudioCompanionWatchActionTimers = 11,
   //! Native Core Devices Timer app; same payload as kind 11, durable and watch-app visible.
   AudioCompanionWatchActionNativeTimers = 12,
+  AudioCompanionWatchActionAlarmsFull = 13,
+  AudioCompanionWatchActionInspect = 14,
+  AudioCompanionWatchActionApps = 15,
+  AudioCompanionWatchActionFindControl = 16,
 } AudioCompanionWatchActionKind;
 
 typedef enum {

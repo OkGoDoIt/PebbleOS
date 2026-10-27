@@ -34,6 +34,7 @@ typedef struct DoNotDisturbData {
   bool manually_override_dnd;
   bool was_active;
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  uint32_t manual_revision;
   bool phone_focus;
   bool phone_focus_overridden;
 #endif
@@ -266,6 +267,16 @@ bool do_not_disturb_is_manually_enabled(void) {
 }
 
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
+uint32_t do_not_disturb_manual_revision(void) { return s_data.manual_revision; }
+
+uint8_t do_not_disturb_source_bits(void) {
+  return (do_not_disturb_is_active() ? 1 : 0) |
+         (do_not_disturb_is_manually_enabled() ? 2 : 0) |
+         (prv_is_schedule_active() ? 4 : 0) | (prv_is_smart_dnd_active() ? 8 : 0) |
+         (s_data.phone_focus && !s_data.phone_focus_overridden ? 16 : 0) |
+         (s_data.manually_override_dnd || s_data.phone_focus_overridden ? 32 : 0);
+}
+
 void do_not_disturb_set_phone_focus(bool enabled) {
   if (s_data.phone_focus == enabled) {
     return;
@@ -277,6 +288,9 @@ void do_not_disturb_set_phone_focus(bool enabled) {
 #endif
 
 void do_not_disturb_set_manually_enabled(bool enable) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  s_data.manual_revision++;
+#endif
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
   if (!enable && s_data.phone_focus) {
     s_data.phone_focus_overridden = true;
@@ -356,6 +370,9 @@ void do_not_disturb_handle_clock_change(void) {
 }
 
 void do_not_disturb_handle_pref_synced(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  s_data.manual_revision++;
+#endif
   prv_try_update_schedule_mode_callback(false);
 }
 

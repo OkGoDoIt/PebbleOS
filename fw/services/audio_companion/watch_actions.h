@@ -7,6 +7,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
+#include <pbl/util/uuid.h>
 
 //! Watch actions (PROTOCOL.md 4.5): the receiver's assistant asks the watch to set a timer, a
 //! one-off alarm, or to put a choice to the wearer. Fragments are assembled here; complete actions
@@ -41,6 +43,11 @@ typedef struct {
       uint8_t minute;
       uint8_t smart;
       uint8_t enabled;
+      uint8_t recurrence; // 0 everyday, 1 weekends, 2 weekdays, 3 once, 4 custom, 255 preserve
+      uint8_t days; // Sunday bit 0; 255 preserves custom days
+      uint8_t sound;
+      uint8_t vibrate;
+      uint8_t tone;
     } alarms;
     struct {
       uint16_t timeout_s;
@@ -62,6 +69,14 @@ typedef struct {
     struct {
       uint8_t seconds;
     } find_watch;
+    struct {
+      uint8_t section; // 0 status, 1 Quiet Time, 2 music
+    } inspect;
+    struct {
+      uint8_t operation; // 0 list, 1 launch UUID
+      uint16_t offset;
+      Uuid uuid;
+    } apps;
     struct {
       uint8_t metric;  // AudioCompanionWatchHealthMetric
       uint8_t days;
@@ -149,3 +164,8 @@ void watch_actions_test_reset(void);
 //! Manage native regular/smart alarms; returns the created id and compact list text.
 bool watch_actions_alarms(const WatchActionRequest *request, uint8_t *id,
                           char *text, size_t text_size);
+
+uint32_t watch_actions_quiet_revision(void);
+time_t watch_actions_quiet_until(void);
+bool watch_actions_inspect(uint8_t section, char *text, size_t size);
+bool watch_actions_apps(const WatchActionRequest *request, char *text, size_t size);

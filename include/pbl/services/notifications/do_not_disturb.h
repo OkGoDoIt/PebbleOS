@@ -86,6 +86,10 @@ void do_not_disturb_set_manually_enabled(bool enable);
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
 /** Set the connection-scoped phone Focus contribution without changing stored preferences. */
 void do_not_disturb_set_phone_focus(bool enabled);
+/** Active source bits: effective, manual, scheduled, calendar, phone Focus, override. */
+uint8_t do_not_disturb_source_bits(void);
+/** Changes on every manual action, including setting the current value again. */
+uint32_t do_not_disturb_manual_revision(void);
 #endif
 
 /**

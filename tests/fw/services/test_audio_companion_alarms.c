@@ -42,6 +42,14 @@ void alarm_set_smart(AlarmId id, bool smart) {
 void alarm_set_enabled(AlarmId id, bool enabled) {
   s_alarms[id].enabled = enabled;
 }
+void alarm_set_kind(AlarmId id, AlarmKind kind) { s_alarms[id].kind = kind; }
+void alarm_set_custom(AlarmId id, const bool days[PBL_DAY_PER_WEEK]) {
+  s_alarms[id].kind = ALARM_KIND_CUSTOM;
+  memcpy(s_days[id], days, sizeof(s_days[id]));
+}
+void alarm_set_sound_enabled(AlarmId id, bool enabled) { s_alarms[id].sound_enabled = enabled; }
+void alarm_set_vibrate_enabled(AlarmId id, bool enabled) { s_alarms[id].vibrate_enabled = enabled; }
+void alarm_set_tone(AlarmId id, AlarmTone tone) { s_alarms[id].tone = tone; }
 void alarm_delete(AlarmId id) {
   s_exists[id] = false;
 }
@@ -120,4 +128,32 @@ void test_audio_companion_alarms__ten_alarms_fit_and_full_create_fails(void) {
   cl_assert(!run(1, 0, 12, 0, 1, 1, &id, text));
   cl_assert(run(0, 0, 255, 255, 255, 255, &id, text));
   cl_assert_equal_i(strlen(text), 110);
+}
+
+void test_audio_companion_alarms__custom_recurrence_options_and_verified_partial_edit(void) {
+  uint8_t id;
+  char text[161];
+  WatchActionRequest request = {
+    .kind = AudioCompanionWatchActionAlarmsFull,
+    .alarms = {.operation = 1, .hour = 6, .minute = 45, .smart = 1, .enabled = 0,
+               .recurrence = 4, .days = 0x22, .sound = 1, .vibrate = 0, .tone = 2}
+  };
+  cl_assert(watch_actions_alarms(&request, &id, text, sizeof(text)));
+  cl_assert_equal_s(text, "0064510422102\n");
+  request.alarms = (typeof(request.alarms)){.operation = 2, .id = id, .hour = 255,
+      .minute = 50, .smart = 255, .enabled = 255, .recurrence = 255, .days = 255,
+      .sound = 255, .vibrate = 255, .tone = 255};
+  cl_assert(watch_actions_alarms(&request, &id, text, sizeof(text)));
+  cl_assert_equal_s(text, "0065010422102\n");
+  request.alarms.operation = 4;
+  cl_assert(watch_actions_alarms(&request, &id, text, sizeof(text)));
+  cl_assert_equal_s(text, "0065010422102\n");
+  for (int i = 1; i < 10; ++i) {
+    s_exists[i] = true;
+    s_alarms[i] = s_alarms[0];
+    memcpy(s_days[i], s_days[0], sizeof(s_days[i]));
+  }
+  request.alarms.operation = 0;
+  cl_assert(watch_actions_alarms(&request, &id, text, sizeof(text)));
+  cl_assert_equal_i(strlen(text), 140);
 }

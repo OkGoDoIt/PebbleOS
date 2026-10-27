@@ -5,6 +5,7 @@
 #include "kernel/event_loop.h"
 #include "kernel/pbl_malloc.h"
 #include "pbl/kernel/mutex.h"
+#include "pbl/drivers/rtc.h"
 #include "pbl/logging/logging.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/system_task.h"
@@ -26,6 +27,8 @@ static uint8_t s_assembly[AUDIO_COMPANION_WATCH_ACTION_PAYLOAD_MAX_BYTES];
 static uint8_t s_choice_action_id;
 //! Turns Quiet Time back off when the assistant set it for a while.
 static TimerID s_quiet_time_timer = TIMER_INVALID_ID;
+static uint32_t s_quiet_revision;
+static time_t s_quiet_until;
 static WatchActionsChooseHandler s_choose_handler;
 static WatchActionsChooseDismissHandler s_dismiss_handler;
 static WatchActionsNoticeHandler s_notice_handler;
@@ -107,6 +110,7 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       out->alarm.minute = prv_u8(&r);
       prv_string(&r, out->alarm.label, AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES);
       return r.ok && out->alarm.hour <= 23 && out->alarm.minute <= 59;
+    case AudioCompanionWatchActionAlarmsFull:
     case AudioCompanionWatchActionAlarms:
       out->alarms.operation = prv_u8(&r);
       out->alarms.id = prv_u8(&r);
@@ -114,13 +118,33 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       out->alarms.minute = prv_u8(&r);
       out->alarms.smart = prv_u8(&r);
       out->alarms.enabled = prv_u8(&r);
-      return r.ok && r.offset == r.length && out->alarms.operation <= 3 &&
+      if (out->kind == AudioCompanionWatchActionAlarmsFull) {
+        out->alarms.recurrence = prv_u8(&r);
+        out->alarms.days = prv_u8(&r);
+        out->alarms.sound = prv_u8(&r);
+        out->alarms.vibrate = prv_u8(&r);
+        out->alarms.tone = prv_u8(&r);
+        if ((out->alarms.recurrence > 4 && out->alarms.recurrence != 255) ||
+            (out->alarms.days > 127 && out->alarms.days != 255) ||
+            out->alarms.days == 0 ||
+            (out->alarms.sound > 1 && out->alarms.sound != 255) ||
+            (out->alarms.vibrate > 1 && out->alarms.vibrate != 255) ||
+            (out->alarms.tone > 3 && out->alarms.tone != 255) ||
+            (out->alarms.recurrence == 4 && out->alarms.days == 255) ||
+            (out->alarms.days != 255 && out->alarms.recurrence != 4)) {
+          return false;
+        }
+      }
+      return r.ok && r.offset == r.length && out->alarms.operation <=
+             (out->kind == AudioCompanionWatchActionAlarmsFull ? 4 : 3) &&
              out->alarms.id <= 9 && (out->alarms.hour <= 23 || out->alarms.hour == 255) &&
              (out->alarms.minute <= 59 || out->alarms.minute == 255) &&
              (out->alarms.smart <= 1 || out->alarms.smart == 255) &&
              (out->alarms.enabled <= 1 || out->alarms.enabled == 255) &&
              (out->alarms.operation != 1 || (out->alarms.hour <= 23 &&
-              out->alarms.minute <= 59 && out->alarms.smart <= 1 && out->alarms.enabled == 1));
+              out->alarms.minute <= 59 && out->alarms.smart <= 1 &&
+              (out->alarms.enabled == 1 || (out->kind == AudioCompanionWatchActionAlarmsFull &&
+                                           out->alarms.enabled == 0))));
     case AudioCompanionWatchActionChoose: {
       const uint16_t timeout = prv_u16(&r);
       out->choose.timeout_s = timeout < 10 ? 10 : (timeout > 300 ? 300 : timeout);
@@ -135,6 +159,19 @@ bool watch_actions_parse(const uint8_t *payload, size_t length, WatchActionReque
       }
       return r.ok;
     }
+    case AudioCompanionWatchActionInspect:
+      out->inspect.section = prv_u8(&r);
+      return r.ok && r.offset == r.length && out->inspect.section <= 2;
+    case AudioCompanionWatchActionApps:
+      out->apps.operation = prv_u8(&r);
+      out->apps.offset = prv_u16(&r);
+      for (unsigned i = 0; i < sizeof(Uuid); ++i) {
+        ((uint8_t *)&out->apps.uuid)[i] = prv_u8(&r);
+      }
+      return r.ok && r.offset == r.length && out->apps.operation <= 1;
+    case AudioCompanionWatchActionFindControl:
+      out->find_watch.seconds = prv_u8(&r);
+      return r.ok && r.offset == r.length && out->find_watch.seconds <= 30;
     case AudioCompanionWatchActionMusic:
       out->music.command = prv_u8(&r);
       return r.ok && out->music.command >= AudioCompanionWatchMusicPlay &&
@@ -202,25 +239,42 @@ static void prv_notice_kernel_main_cb(void *data) {
 // ---- Quiet Time for a while ----
 
 static void prv_quiet_time_off_system_task_cb(void *data) {
-  PBL_LOG_INFO("Watch action: Quiet Time over");
-  watch_actions_set_quiet_time(false);
+  const uint32_t revision = (uint32_t)(uintptr_t)data;
+  if (revision == watch_actions_quiet_revision()) {
+    watch_actions_set_quiet_time(false);
+    s_quiet_until = 0;
+  }
 }
 
 static void prv_quiet_time_timer_cb(void *data) {
-  system_task_add_callback(prv_quiet_time_off_system_task_cb, NULL);
+  system_task_add_callback(prv_quiet_time_off_system_task_cb, data);
 }
 
-static void prv_set_quiet_time(bool on, uint16_t minutes) {
-  watch_actions_set_quiet_time(on);
-  if (s_quiet_time_timer == TIMER_INVALID_ID) {
+static bool prv_set_quiet_time(bool on, uint16_t minutes) {
+  if (on && minutes && s_quiet_time_timer == TIMER_INVALID_ID) {
     s_quiet_time_timer = new_timer_create();
+    if (s_quiet_time_timer == TIMER_INVALID_ID) {
+      return false;
+    }
   }
-  if (on && minutes > 0) {
-    new_timer_start(s_quiet_time_timer, (uint32_t)minutes * 60 * 1000, prv_quiet_time_timer_cb,
-                    NULL, 0);
-  } else {
+  if (on && minutes) {
+    // Arm before changing the setting. The setter advances the manual revision once.
+    const uint32_t revision = watch_actions_quiet_revision() + 1;
+    if (!new_timer_start(s_quiet_time_timer, (uint32_t)minutes * 60 * 1000,
+                         prv_quiet_time_timer_cb, (void *)(uintptr_t)revision, 0)) {
+      return false;
+    }
+  } else if (s_quiet_time_timer != TIMER_INVALID_ID) {
     new_timer_stop(s_quiet_time_timer);
   }
+  watch_actions_set_quiet_time(on);
+  s_quiet_revision = watch_actions_quiet_revision();
+  s_quiet_until = on && minutes ? rtc_get_time() + minutes * 60 : 0;
+  return true;
+}
+
+time_t watch_actions_quiet_until(void) {
+  return s_quiet_revision == watch_actions_quiet_revision() ? s_quiet_until : 0;
 }
 
 // ---- running a complete action (system task, no service lock) ----
@@ -271,6 +325,7 @@ static void prv_run_system_task_cb(void *data) {
       kernel_free(pending);
       return;
     }
+    case AudioCompanionWatchActionAlarmsFull:
     case AudioCompanionWatchActionAlarms: {
       uint8_t id = 0;
       char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
@@ -286,6 +341,17 @@ static void prv_run_system_task_cb(void *data) {
       // watch_actions_choice_result().
       launcher_task_add_callback(prv_choose_kernel_main_cb, pending);
       return;
+    case AudioCompanionWatchActionInspect:
+    case AudioCompanionWatchActionApps: {
+      char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
+      const bool ok = request->kind == AudioCompanionWatchActionInspect ?
+          watch_actions_inspect(request->inspect.section, text, sizeof(text)) :
+          watch_actions_apps(request, text, sizeof(text));
+      audio_companion_send_watch_action_result(pending->action_id,
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0, text);
+      kernel_free(pending);
+      return;
+    }
     case AudioCompanionWatchActionMusic: {
       char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
       const bool ok = watch_actions_music(request->music.command, text, sizeof(text));
@@ -298,14 +364,14 @@ static void prv_run_system_task_cb(void *data) {
       kernel_free(pending);
       return;
     }
-    case AudioCompanionWatchActionQuietTime:
-      prv_set_quiet_time(request->quiet_time.on, request->quiet_time.minutes);
-      PBL_LOG_INFO("Watch action %u: Quiet Time %s (%u min)", pending->action_id,
-                   request->quiet_time.on ? "on" : "off", request->quiet_time.minutes);
+    case AudioCompanionWatchActionQuietTime: {
+      const bool ok = prv_set_quiet_time(request->quiet_time.on, request->quiet_time.minutes);
       audio_companion_send_watch_action_result(pending->action_id,
-                                               AudioCompanionWatchActionStatusDone, 0, NULL);
+          ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
+          ok ? NULL : "unavailable: Could not schedule expiry; Quiet Time was not changed.");
       kernel_free(pending);
       return;
+    }
     case AudioCompanionWatchActionLaunchApp: {
       char found[AUDIO_COMPANION_WATCH_ACTION_APP_NAME_MAX_BYTES + 1] = {0};
       const bool ok = watch_actions_launch_app(request->launch_app.name, found, sizeof(found));
@@ -313,7 +379,7 @@ static void prv_run_system_task_cb(void *data) {
       audio_companion_send_watch_action_result(
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
-          ok ? found : NULL);
+          found);
       kernel_free(pending);
       return;
     }
@@ -473,6 +539,8 @@ void watch_actions_set_notice_handler(WatchActionsNoticeHandler notice) {
 
 void watch_actions_init(void) {
   s_quiet_time_timer = TIMER_INVALID_ID;
+  s_quiet_revision = 0;
+  s_quiet_until = 0;
 }
 
 void watch_actions_test_reset(void) {

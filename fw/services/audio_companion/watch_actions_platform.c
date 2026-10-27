@@ -10,6 +10,10 @@
 #include "pbl/services/alarms/alarm.h"
 #include "pbl/services/light.h"
 #include "pbl/services/music.h"
+#include "pbl/services/time.h"
+#include "pbl/services/vibe_pattern.h"
+#include "pbl/services/audio_companion.h"
+#include <pbl/util/time.h>
 #include "pbl/services/notifications/do_not_disturb.h"
 #ifdef CONFIG_SERVICE_ACTIVITY
 #include "pbl/services/activity/activity.h"
@@ -66,6 +70,13 @@ bool watch_actions_music(uint8_t command, char *text, size_t text_size) {
       // thing.
       const MusicPlayState state = music_get_playback_state();
       const bool playing = state == MusicPlayStatePlaying;
+      if (state != MusicPlayStatePlaying && state != MusicPlayStatePaused) {
+        snprintf(text, text_size, "state_unknown: Player only supports toggle; no command sent.");
+        return false;
+      }
+      if ((music_command == MusicCommandPlay) == playing) {
+        return true;
+      }
       if ((music_command == MusicCommandPlay) != playing) {
         music_command = MusicCommandTogglePlayPause;
       }
@@ -99,7 +110,8 @@ void watch_actions_set_quiet_time(bool on) {
 
 typedef struct {
   const char *name;
-  //! 3 exact, 2 starts with, 1 contains; the best match wins, the first among equals.
+  //! 3 exact, 2 starts with, 1 contains; ties require the caller to choose.
+  bool tied;
   int best_rank;
   AppInstallId best_id;
   char best_name[APP_NAME_SIZE_BYTES];
@@ -141,10 +153,14 @@ static bool prv_app_search_cb(AppInstallEntry *entry, void *data) {
   }
   const int rank = prv_match_rank(entry->name, search->name);
   if (rank > search->best_rank) {
+    search->tied = false;
     search->best_rank = rank;
     search->best_id = entry->install_id;
     strncpy(search->best_name, entry->name, sizeof(search->best_name) - 1);
     search->best_name[sizeof(search->best_name) - 1] = '\0';
+  }
+  else if (rank > 0 && rank == search->best_rank) {
+    search->tied = true;
   }
   return true;  // keep looking: an exact match may come later
 }
@@ -152,7 +168,8 @@ static bool prv_app_search_cb(AppInstallEntry *entry, void *data) {
 bool watch_actions_launch_app(const char *name, char *found, size_t found_size) {
   AppSearch search = {.name = name, .best_id = INSTALL_ID_INVALID};
   app_install_enumerate_entries(prv_app_search_cb, &search);
-  if (search.best_rank == 0 || search.best_id == INSTALL_ID_INVALID) {
+  if (search.tied || search.best_rank == 0 || search.best_id == INSTALL_ID_INVALID) {
+    snprintf(found, found_size, "%s: List apps and choose an id.", search.tied ? "ambiguous" : "not_found");
     return false;
   }
   app_manager_put_launch_app_event(&(AppLaunchEventConfig){
@@ -175,11 +192,19 @@ static uint32_t s_find_segments[2 * AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECOND
 
 static void prv_find_kernel_main_cb(void *data) {
   const uint32_t seconds = (uint32_t)(uintptr_t)data;
+  if (seconds == 0) {
+    vibe_pattern_clear_for_owner(VibePatternOwner_MuseFind);
+    return;
+  }
+  if (seconds > AUDIO_COMPANION_WATCH_ACTION_FIND_MAX_SECONDS) {
+    return;
+  }
   for (uint32_t i = 0; i < seconds; i++) {
     s_find_segments[2 * i] = FIND_PULSE_MS;
     s_find_segments[2 * i + 1] = FIND_GAP_MS;
   }
   vibes_cancel();
+  vibe_pattern_set_owner(VibePatternOwner_MuseFind);
   vibes_enqueue_custom_pattern((VibePattern){
     .durations = s_find_segments,
     .num_segments = 2 * seconds - 1,
@@ -189,6 +214,84 @@ static void prv_find_kernel_main_cb(void *data) {
 
 void watch_actions_find_watch(uint8_t seconds) {
   launcher_task_add_callback(prv_find_kernel_main_cb, (void *)(uintptr_t)seconds);
+}
+
+// ---- Status and installed apps ----
+
+uint32_t watch_actions_quiet_revision(void) {
+  return do_not_disturb_manual_revision();
+}
+
+bool watch_actions_inspect(uint8_t section, char *text, size_t size) {
+  if (section == 0) {
+    time_t now = rtc_get_time();
+    struct pbl_tm local;
+    pbl_localtime_r(&now, &local);
+    // Tool revision 1 includes NativeTimers, AlarmsFull, Inspect, Apps, and FindControl.
+    snprintf(text, size, "1,%" PRId32 ",%d,%d\n%s", (int32_t)now, local.tm_gmtoff,
+             audio_companion_get_state(), local.tm_zone);
+  } else if (section == 1) {
+    snprintf(text, size, "%u,%" PRId32, do_not_disturb_source_bits(),
+             (int32_t)watch_actions_quiet_until());
+  } else if (section == 2) {
+    char title[MUSIC_BUFFER_LENGTH] = {0}, artist[MUSIC_BUFFER_LENGTH] = {0};
+    if (music_has_now_playing()) {
+      music_get_now_playing(title, artist, NULL);
+    }
+    snprintf(text, size, "%d,%d,%d\n%s\n%s", music_has_now_playing(),
+             music_is_playback_state_reporting_supported() ? (int)music_get_playback_state() : -1,
+             music_is_volume_reporting_supported() ? music_get_volume_percent() : -1, title, artist);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+typedef struct {
+  unsigned offset;
+  unsigned seen;
+  unsigned count;
+  char *text;
+  size_t size;
+} AppPage;
+
+static bool prv_app_page_cb(AppInstallEntry *entry, void *data) {
+  AppPage *page = data;
+  if (app_install_entry_is_hidden(entry) || app_install_entry_is_watchface(entry)) {
+    return true;
+  }
+  if (page->seen++ < page->offset) {
+    return true;
+  }
+  char uuid[UUID_STRING_BUFFER_LENGTH];
+  uuid_to_string(&entry->uuid, uuid);
+  const size_t used = strlen(page->text);
+  const int needed = snprintf(NULL, 0, "%s,%s\n", uuid, entry->name);
+  if (needed < 0 || used + needed >= page->size) {
+    return false;
+  }
+  snprintf(page->text + used, page->size - used, "%s,%s\n", uuid, entry->name);
+  page->count++;
+  return true;
+}
+
+bool watch_actions_apps(const WatchActionRequest *request, char *text, size_t size) {
+  if (request->apps.operation == 0) {
+    AppPage page = {.offset = request->apps.offset, .text = text, .size = size};
+    text[0] = '\0';
+    app_install_enumerate_entries(prv_app_page_cb, &page);
+    return true; // An empty page is the explicit end of the list.
+  }
+  const AppInstallId id = app_install_get_id_for_uuid(&request->apps.uuid);
+  AppInstallEntry entry;
+  if (id == INSTALL_ID_INVALID || !app_install_get_entry_for_install_id(id, &entry) ||
+      app_install_entry_is_hidden(&entry) || app_install_entry_is_watchface(&entry)) {
+    snprintf(text, size, "not_found: App is no longer installed.");
+    return false;
+  }
+  app_manager_put_launch_app_event(&(AppLaunchEventConfig){.id = id, .common.reason = APP_LAUNCH_USER});
+  snprintf(text, size, "%s", entry.name);
+  return true;
 }
 
 // ---- Health, from the watch's own activity tracking ----
@@ -279,8 +382,12 @@ typedef struct {
 
 static void prv_hr_start_day(HeartRateDays *job) {
   const time_t today = time_start_of_today();
-  job->day_start = today - (time_t)job->day * SECONDS_PER_DAY;
-  job->day_end = job->day == 0 ? rtc_get_time() : job->day_start + SECONDS_PER_DAY;
+  job->day_start = today;
+  job->day_end = rtc_get_time();
+  for (unsigned day = 0; day < job->day; ++day) {
+    job->day_end = job->day_start;
+    job->day_start = time_util_get_midnight_of(job->day_start - 1);
+  }
   job->cursor = job->day_start;
   job->sum = 0;
   job->count = 0;

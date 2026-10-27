@@ -790,6 +790,36 @@ static const uint8_t s_fx_watch_action_alarms_delete[] = {
   0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x03, 0x03, 0xff, 0xff, 0xff, 0xff,
 };
 
+// Native alarms with recurrence and sound: create
+static const uint8_t s_fx_watch_action_alarms_full_create[] = {
+  0x0e, 0x54, 0x0a, 0x00, 0x0c, 0x0d, 0x01, 0x00, 0x06, 0x2d, 0x01, 0x00,
+  0x04, 0x22, 0x01, 0x00, 0x02,
+};
+
+// Native alarms with recurrence and sound: delete
+static const uint8_t s_fx_watch_action_alarms_full_delete[] = {
+  0x0e, 0x54, 0x0a, 0x00, 0x0c, 0x0d, 0x03, 0x03, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
+// Native alarms with recurrence and sound: get
+static const uint8_t s_fx_watch_action_alarms_full_get[] = {
+  0x0e, 0x54, 0x0a, 0x00, 0x0c, 0x0d, 0x04, 0x03, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
+// Native alarms with recurrence and sound: list
+static const uint8_t s_fx_watch_action_alarms_full_list[] = {
+  0x0e, 0x54, 0x0a, 0x00, 0x0c, 0x0d, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
+// Native alarms with recurrence and sound: update
+static const uint8_t s_fx_watch_action_alarms_full_update[] = {
+  0x0e, 0x54, 0x0a, 0x00, 0x0c, 0x0d, 0x02, 0x03, 0xff, 0x32, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff,
+};
+
 // Native regular/smart alarm management: list
 static const uint8_t s_fx_watch_action_alarms_list[] = {
   0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
@@ -803,6 +833,20 @@ static const uint8_t s_fx_watch_action_alarms_smart_create[] = {
 // Native regular/smart alarm management: update
 static const uint8_t s_fx_watch_action_alarms_update[] = {
   0x0e, 0x52, 0x08, 0x00, 0x07, 0x0a, 0x02, 0x03, 0xff, 0x1e, 0xff, 0xff,
+};
+
+// Watch status and lifecycle extension: apps_list
+static const uint8_t s_fx_watch_action_apps_list[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x14, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00,
+};
+
+// Watch status and lifecycle extension: apps_open
+static const uint8_t s_fx_watch_action_apps_open[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x14, 0x0f, 0x01, 0x00, 0x00, 0xc6, 0x4a, 0xae,
+  0x42, 0xb8, 0x22, 0x4d, 0x6d, 0x99, 0x5b, 0xbc, 0x7c, 0x38, 0xe8, 0x43,
+  0xf4,
 };
 
 // First write of a choice whose payload is longer than one write; MORE set
@@ -838,6 +882,16 @@ static const uint8_t s_fx_watch_action_empty[] = {
   0x0e, 0x4d, 0x06, 0x00, 0x00,
 };
 
+// Watch status and lifecycle extension: find_start
+static const uint8_t s_fx_watch_action_find_start[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x02, 0x10, 0x0a,
+};
+
+// Watch status and lifecycle extension: find_stop
+static const uint8_t s_fx_watch_action_find_stop[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x02, 0x10, 0x00,
+};
+
 // Buzz and light up for ten seconds
 static const uint8_t s_fx_watch_action_find_watch[] = {
   0x0e, 0x4e, 0x07, 0x00, 0x02, 0x07, 0x0a,
@@ -852,6 +906,21 @@ static const uint8_t s_fx_watch_action_health_steps[] = {
 static const uint8_t s_fx_watch_action_id_zero[] = {
   0x0e, 0x4c, 0x00, 0x00, 0x0b, 0x01, 0x58, 0x02, 0x00, 0x00, 0x05, 0x50,
   0x61, 0x73, 0x74, 0x61,
+};
+
+// Watch status and lifecycle extension: inspect_music
+static const uint8_t s_fx_watch_action_inspect_music[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x02, 0x0e, 0x02,
+};
+
+// Watch status and lifecycle extension: inspect_quiet
+static const uint8_t s_fx_watch_action_inspect_quiet[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x02, 0x0e, 0x01,
+};
+
+// Watch status and lifecycle extension: inspect_status
+static const uint8_t s_fx_watch_action_inspect_status[] = {
+  0x0e, 0x55, 0x0b, 0x00, 0x02, 0x0e, 0x00,
 };
 
 // Open the watch app named Workout
@@ -1115,15 +1184,27 @@ static const ProtocolFixture s_protocol_fixtures[] = {
   { "stream_stop_user_disabled", FixtureChannelData, FixtureExpectParse, s_fx_stream_stop_user_disabled, 22 },
   { "watch_action_alarm", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarm, 15 },
   { "watch_action_alarms_delete", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_delete, 12 },
+  { "watch_action_alarms_full_create", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_full_create, 17 },
+  { "watch_action_alarms_full_delete", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_full_delete, 17 },
+  { "watch_action_alarms_full_get", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_full_get, 17 },
+  { "watch_action_alarms_full_list", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_full_list, 17 },
+  { "watch_action_alarms_full_update", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_full_update, 17 },
   { "watch_action_alarms_list", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_list, 12 },
   { "watch_action_alarms_smart_create", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_smart_create, 12 },
   { "watch_action_alarms_update", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_alarms_update, 12 },
+  { "watch_action_apps_list", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_apps_list, 25 },
+  { "watch_action_apps_open", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_apps_open, 25 },
   { "watch_action_choose_first", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_choose_first, 185 },
   { "watch_action_choose_last", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_choose_last, 38 },
   { "watch_action_empty", FixtureChannelControlIn, FixtureExpectReject, s_fx_watch_action_empty, 5 },
+  { "watch_action_find_start", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_find_start, 7 },
+  { "watch_action_find_stop", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_find_stop, 7 },
   { "watch_action_find_watch", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_find_watch, 7 },
   { "watch_action_health_steps", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_health_steps, 8 },
   { "watch_action_id_zero", FixtureChannelControlIn, FixtureExpectReject, s_fx_watch_action_id_zero, 16 },
+  { "watch_action_inspect_music", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_inspect_music, 7 },
+  { "watch_action_inspect_quiet", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_inspect_quiet, 7 },
+  { "watch_action_inspect_status", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_inspect_status, 7 },
   { "watch_action_launch_app", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_launch_app, 14 },
   { "watch_action_music_next", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_music_next, 7 },
   { "watch_action_music_now_playing", FixtureChannelControlIn, FixtureExpectParse, s_fx_watch_action_music_now_playing, 7 },
