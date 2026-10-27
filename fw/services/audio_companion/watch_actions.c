@@ -20,6 +20,7 @@ typedef struct {
   TimerID timer;
   bool active;
   bool running;
+  bool alert_pending;
   uint32_t id;
   uint32_t seconds;
   uint32_t remaining_ms;
@@ -212,11 +213,12 @@ static uint32_t prv_remaining_ms(const WatchTimer *timer) {
 static void prv_timer_done_kernel_main_cb(void *data) {
   char label[AUDIO_COMPANION_WATCH_ACTION_LABEL_MAX_BYTES + 1];
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  const WatchTimer *timer = prv_timer_with_id((uint32_t)(uintptr_t)data);
-  const bool finished = timer && !timer->active;
+  WatchTimer *timer = prv_timer_with_id((uint32_t)(uintptr_t)data);
+  const bool finished = timer && !timer->active && timer->alert_pending;
   const WatchActionsTimerDoneHandler handler = s_timer_done_handler;
   if (finished) {
     memcpy(label, timer->label, sizeof(label));
+    timer->alert_pending = false;
   }
   pbl_mutex_unlock(&s_lock);
   if (finished && handler) {
@@ -234,6 +236,7 @@ static void prv_timer_fired_cb(void *data) {
   timer->active = false;
   timer->running = false;
   timer->remaining_ms = 0;
+  timer->alert_pending = true;
   pbl_mutex_unlock(&s_lock);
   PBL_LOG_DBG("Watch action: timer done");
   launcher_task_add_callback(prv_timer_done_kernel_main_cb, data);
@@ -252,6 +255,7 @@ static bool prv_schedule_timer(WatchTimer *timer, uint32_t id, uint32_t ms) {
   timer->remaining_ms = ms;
   timer->running = true;
   timer->active = true;
+  timer->alert_pending = false;
   return true;
 }
 
@@ -259,7 +263,7 @@ static WatchTimer *prv_start_timer(uint32_t seconds, const char *label) {
   // Caller holds s_lock. Finished records can be replaced; live and paused timers cannot.
   for (int i = 0; i < WATCH_ACTIONS_MAX_TIMERS; i++) {
     WatchTimer *timer = &s_timers[i];
-    if (timer->active) {
+    if (timer->active || timer->alert_pending) {
       continue;
     }
     uint32_t id;
@@ -343,6 +347,7 @@ static bool prv_timers(const WatchActionRequest *request, char *text, size_t siz
     timer->active = false;
     timer->running = false;
     timer->id = 0;
+    timer->alert_pending = false;
     ok = true;
   }
   if (ok && timer && operation != 7) {

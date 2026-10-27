@@ -4274,6 +4274,8 @@ void test_audio_companion__timer_capacity_disconnect_expiry_restart_and_stale_id
   cl_assert_equal_i(prv_manage_timer(3, second, 0, NULL, text), AudioCompanionWatchActionStatusDone);
   cl_assert_equal_i(prv_manage_timer(1, 0, 60, NULL, text), AudioCompanionWatchActionStatusFailed);
   stub_new_timer_fire(handle);
+  // A new timer cannot reuse the expired record before its alert reaches KernelMain.
+  cl_assert_equal_i(prv_manage_timer(1, 0, 60, NULL, text), AudioCompanionWatchActionStatusFailed);
   prv_run_launcher_callbacks();
   cl_assert_equal_i(s_timer_done_calls, 1);
   cl_assert_equal_s(s_timer_done_label, "First");
