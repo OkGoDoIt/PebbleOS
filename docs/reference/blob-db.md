@@ -67,3 +67,16 @@ in `endpoint2.c`.
 
 New databases register a `BlobDBId` and an entry in `s_blob_dbs` in
 `fw/services/blob_db/api.c`.
+
+## App permissions
+
+Firmware with capability bit 27 (`app_permissions_support`) accepts an optional
+little-endian `uint32_t` permissions field appended to existing AppDB metadata.
+The watch keeps it in a separate record keyed by the app UUID. Only the
+extended form sets or clears it; legacy-size metadata leaves it unchanged. The
+watch trusts the companion to set it only from its own consent UI, see the
+Trust section of [Local microphone capture](local-microphone.md).
+
+| Bit | Permission |
+|---|---|
+| 0 | Microphone, see [Local microphone capture](local-microphone.md) |

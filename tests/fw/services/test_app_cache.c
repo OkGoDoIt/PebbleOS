@@ -75,6 +75,17 @@ AppInstallId worker_preferences_get_default_worker(void) {
   return s_test_id_worker;
 }
 
+AppInstallId s_test_id_running_app;
+AppInstallId s_test_id_running_worker;
+
+AppInstallId app_manager_get_current_app_id(void) {
+  return s_test_id_running_app;
+}
+
+AppInstallId worker_manager_get_current_worker_id(void) {
+  return s_test_id_running_worker;
+}
+
 extern AppInstallId app_cache_get_next_eviction(void);
 
 /* Start of test */
@@ -116,6 +127,8 @@ void test_app_cache__cleanup(void) {
   s_test_id_ql_down = 0;
   s_test_id_watchface = 0;
   s_test_id_worker = 0;
+  s_test_id_running_app = 0;
+  s_test_id_running_worker = 0;
 }
 
 /*************************************
@@ -229,6 +242,31 @@ void test_app_cache__update_all_lots_evict_one(void) {
 
   // ensure the one that is evicted is INVALID_ID
   cl_assert_equal_i(DESIRED_EVICT_ID, app_cache_get_next_eviction());
+}
+
+/*************************************
+ * A regularly used app outlives a newer, never launched one *
+ *************************************/
+
+void test_app_cache__frequent_app_outlives_newer_idle_app(void) {
+  const time_t day = 24 * 60 * 60;
+  time_t now = rtc_get_time();
+
+  cl_assert_equal_i(S_SUCCESS, app_cache_add_entry(app1.id, app1.size));
+  for (int i = 0; i < 5; i++) {
+    cl_assert_equal_i(S_SUCCESS, app_cache_app_launched(app1.id));
+  }
+
+  // app2 is installed 3 days later but never opened
+  rtc_set_time(now + 3 * day);
+  cl_assert_equal_i(S_SUCCESS, app_cache_add_entry(app2.id, app2.size));
+  cl_assert_equal_i(app2.id, app_cache_get_next_eviction());
+
+  // ...but it does win against an app last used much longer ago than its launches cover
+  rtc_set_time(now + 40 * day);
+  cl_assert_equal_i(S_SUCCESS, app_cache_add_entry(app3.id, app3.size));
+  cl_assert_equal_i(S_SUCCESS, app_cache_remove_entry(app2.id));
+  cl_assert_equal_i(app1.id, app_cache_get_next_eviction());
 }
 
 void test_app_cache__clear(void) {
@@ -366,6 +404,23 @@ void prv_load_lotta_apps(void) {
 void prv_cleanup(void) {
   app_cache_flush();
   prv_load_lotta_apps();
+}
+
+/*************************************
+ * The running app and worker are never evicted *
+ *************************************/
+
+void test_app_cache__free_up_space_keeps_running_processes(void) {
+  s_test_id_running_app = 17;
+  s_test_id_running_worker = 50;
+
+  prv_cleanup();
+  // ask for everything: only the two running processes may survive
+  cl_assert_equal_i(S_SUCCESS, app_cache_free_up_space(SIZE_SUM));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_b(true, app_cache_entry_exists(17));
+  cl_assert_equal_b(true, app_cache_entry_exists(50));
+  cl_assert_equal_i(t_data[16].size + t_data[49].size, app_cache_get_size());
 }
 
 void test_app_cache__free_up_space_lots_apps(void) {

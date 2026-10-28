@@ -99,6 +99,9 @@ static const int KALG_MAX_STEP_FREQ = 20;
 // Used to indicate that we have not yet detected a potential starting point for a step activity
 #define KALG_START_TIME_NONE 0
 
+// A step activity must be at least this long to be registered
+#define KALG_MIN_STEP_ACTIVITY_SECS (10 * PBL_SEC_PER_MIN)
+
 // State information for the walk activity detection
 typedef struct {
   time_t start_time;         // potential start time of the activity
@@ -386,8 +389,7 @@ static const char *prv_log_time(KAlgState *alg_state, time_t utc) {
 #endif
 
 // ----------------------------------------------------------------------------------------
-// Drop the HRM subscription held by a step activity, if it has one. Safe to call on a state that
-// stays in progress: the next active minute re-subscribes.
+// Drop the HRM subscription held by a step activity, if it has one.
 static void prv_release_step_activity_hrm(KAlgStepActivityState *state) {
 #ifdef CONFIG_HRM
   if (state->hrm_session != HRM_INVALID_SESSION_REF) {
@@ -401,30 +403,6 @@ static void prv_release_step_activity_hrm(KAlgStepActivityState *state) {
 static void prv_reset_step_activity_state(KAlgStepActivityState *state) {
   prv_release_step_activity_hrm(state);
   *state = (KAlgStepActivityState){};
-}
-
-// ----------------------------------------------------------------------------------------
-static void prv_reset_state(KAlgState *state) {
-  // Release the HRM unconditionally. The state reset below skips in-progress activities, but the
-  // subscription must not outlive the reset: a state machine that stops running can never reach
-  // prv_reset_step_activity_state, leaving the sensor pinned on until reboot.
-  prv_release_step_activity_hrm(&state->walk_state);
-  prv_release_step_activity_hrm(&state->run_state);
-
-  // Only reset step activity states if they're not currently in progress to avoid
-  // race conditions with the minute handler
-  if (state->walk_state.start_time == KALG_START_TIME_NONE) {
-    prv_reset_step_activity_state(&state->walk_state);
-  }
-  if (state->run_state.start_time == KALG_START_TIME_NONE) {
-    prv_reset_step_activity_state(&state->run_state);
-  }
-  state->sleep_state = (KAlgSleepActivityState){};
-  state->deep_sleep_state = (KAlgDeepSleepActivityState){};
-  state->not_worn_state = (KAlgNotWornState){};
-#ifdef CONFIG_HRM
-  state->activity_hrm_paused = false;
-#endif
 }
 
 // -----------------------------------------------------------------------------------------
@@ -1996,6 +1974,53 @@ static void prv_update_activity_hrm_scene(KAlgState *alg_state) {
 #endif
 
 // ------------------------------------------------------------------------------------------
+// End a step activity in progress, registering it if it is long enough, and reset its state
+static void prv_end_step_activity(KAlgState *alg_state, KAlgStepActivityState *state,
+                                  time_t utc_now, KAlgActivitySessionCallback sessions_cb,
+                                  void *context, KAlgActivityType activity_type) {
+  if (state->start_time == KALG_START_TIME_NONE) {
+    return;
+  }
+
+  int32_t duration_secs =
+      utc_now - state->start_time - (state->inactive_minute_count * PBL_SEC_PER_MIN);
+  duration_secs = MAX(0, duration_secs);
+  if ((uint32_t)duration_secs >= KALG_MIN_STEP_ACTIVITY_SECS) {
+    PBL_LOG_DBG("Ending activity %d: steps: %" PRIu16 ", rest_cal: %" PRIu32
+                ", "
+                "active_cal: "
+                "%" PRIu32 ", distance: %" PRIu32 " ",
+                (int)activity_type, state->steps, state->resting_calories, state->active_calories,
+                state->distance_mm);
+    sessions_cb(context, activity_type, state->start_time, duration_secs, false /*ongoing*/,
+                false /*delete*/, state->steps, state->resting_calories, state->active_calories,
+                state->distance_mm);
+  }
+  prv_reset_step_activity_state(state);
+#ifdef CONFIG_HRM
+  // This activity's HR session is gone; recompute the scene so it follows whichever activity
+  // (if any) is still running, or drops back to the default model.
+  prv_update_activity_hrm_scene(alg_state);
+#endif
+}
+
+// ----------------------------------------------------------------------------------------
+// End the step activities in progress as of the last processed minute and reset all detectors
+static void prv_reset_state(KAlgState *state, KAlgActivitySessionCallback sessions_cb,
+                            void *context) {
+  prv_end_step_activity(state, &state->walk_state, state->last_activity_update_utc, sessions_cb,
+                        context, KAlgActivityType_Walk);
+  prv_end_step_activity(state, &state->run_state, state->last_activity_update_utc, sessions_cb,
+                        context, KAlgActivityType_Run);
+  state->sleep_state = (KAlgSleepActivityState){};
+  state->deep_sleep_state = (KAlgDeepSleepActivityState){};
+  state->not_worn_state = (KAlgNotWornState){};
+#ifdef CONFIG_HRM
+  state->activity_hrm_paused = false;
+#endif
+}
+
+// ------------------------------------------------------------------------------------------
 // Process the minute data for walk or run activity detection
 static void prv_step_activity_update(KAlgState *alg_state, KAlgStepActivityState *state,
                                      time_t utc_now, uint16_t steps, uint32_t resting_calories,
@@ -2007,9 +2032,6 @@ static void prv_step_activity_update(KAlgState *alg_state, KAlgStepActivityState
 
   // If we see more than this number of inactive minutes in a row, the activity has ended
   const uint16_t k_max_inactive_minutes = 6;
-
-  // An activity must be at least this number of minutes long
-  const uint32_t k_min_activity_secs = 10 * PBL_SEC_PER_MIN;
 
   // Is this an active minute?
   bool is_active_minute = (steps >= attr->min_steps_per_min) && (steps <= attr->max_steps_per_min);
@@ -2056,7 +2078,7 @@ static void prv_step_activity_update(KAlgState *alg_state, KAlgStepActivityState
 #endif
 
     // If we've reached the minimum activity length, register/update it
-    if (duration_secs >= k_min_activity_secs) {
+    if (duration_secs >= KALG_MIN_STEP_ACTIVITY_SECS) {
       PBL_LOG_DBG("Updating activity %d: steps: %" PRIu16 ", rest_cal: %" PRIu32
                   ", "
                   "active_cal: %" PRIu32 ", distance: %" PRIu32 " ",
@@ -2081,27 +2103,7 @@ static void prv_step_activity_update(KAlgState *alg_state, KAlgStepActivityState
         (shutting_down) ? true : (state->inactive_minute_count++ > k_max_inactive_minutes);
 
     if (activity_ended) {
-      // This activity has ended
-      int32_t duration_secs =
-          utc_now - state->start_time - (state->inactive_minute_count * PBL_SEC_PER_MIN);
-      duration_secs = MAX(0, duration_secs);
-      if ((uint32_t)duration_secs >= k_min_activity_secs) {
-        PBL_LOG_DBG("Ending activity %d: steps: %" PRIu16 ", rest_cal: %" PRIu32
-                    ", "
-                    "active_cal: "
-                    "%" PRIu32 ", distance: %" PRIu32 " ",
-                    (int)activity_type, state->steps, state->resting_calories,
-                    state->active_calories, state->distance_mm);
-        sessions_cb(context, activity_type, state->start_time, duration_secs, false /*ongoing*/,
-                    false /*delete*/, state->steps, state->resting_calories, state->active_calories,
-                    state->distance_mm);
-      }
-      prv_reset_step_activity_state(state);
-#ifdef CONFIG_HRM
-      // This activity's HR session is gone; recompute the scene so it follows whichever activity
-      // (if any) is still running, or drops back to the default model.
-      prv_update_activity_hrm_scene(alg_state);
-#endif
+      prv_end_step_activity(alg_state, state, utc_now, sessions_cb, context, activity_type);
     } else {
       // This was an inactive minute, but the activity is still considered ongoing, so accumulate
       // whatever steps, calories we have in this minute
@@ -2127,7 +2129,7 @@ void kalg_activities_update(KAlgState *state, time_t utc_now, uint16_t steps, ui
   if ((utc_now < state->last_activity_update_utc) ||
       (utc_now > (state->last_activity_update_utc + (5 * PBL_SEC_PER_MIN)))) {
     PBL_LOG_WRN("Resetting state due to time travel");
-    prv_reset_state(state);
+    prv_reset_state(state, sessions_cb, context);
   };
   state->last_activity_update_utc = utc_now;
 
@@ -2173,9 +2175,10 @@ void kalg_get_sleep_stats(KAlgState *alg_state, KAlgOngoingSleepStats *stats) {
 }
 
 // ---------------------------------------------------------------------------------------
-void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable) {
+void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable,
+                                   KAlgActivitySessionCallback sessions_cb, void *context) {
   kalg_state->disable_activity_session_tracking = !enable;
-  prv_reset_state(kalg_state);
+  prv_reset_state(kalg_state, sessions_cb, context);
 }
 
 bool kalg_activity_hrm_is_active(KAlgState *kalg_state) {

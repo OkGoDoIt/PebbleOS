@@ -54,8 +54,10 @@ bool sys_hrm_manager_set_update_interval(HRMSessionRef session, uint32_t update_
   return true;
 }
 
+HRMActivityScene s_hrm_activity_scene = HRMActivityScene_Default;
+
 void hrm_manager_set_activity_scene(HRMActivityScene scene) {
-  (void)scene;
+  s_hrm_activity_scene = scene;
 }
 
 bool activity_prefs_hrm_activity_tracking_is_enabled(void) {
@@ -2137,22 +2139,126 @@ void test_kraepelin_algorithm__sleep_stats(void) {
 
 // ---------------------------------------------------------------------------------------
 // Feed active walking minutes, leaving the walk activity in progress.
-static void prv_feed_walk_minutes(int num_minutes) {
+#define WALK_STEPS_PER_MIN 80
+
+// Fixed start time so the tests below don't depend on the order they run in
+#define WALK_TEST_START_UTC 1787618400
+
+static void prv_feed_minutes(int num_minutes, uint16_t steps) {
   time_t now = rtc_get_time();
   for (int i = 0; i < num_minutes; i++) {
-    kalg_activities_update(s_kalg_state, now, 80 /*steps*/, 7000 /*vmc*/, 0 /*orientation*/,
+    kalg_activities_update(s_kalg_state, now, steps, steps ? 7000 : 0 /*vmc*/, 0 /*orientation*/,
                            true /*definitely_not_worn*/, 100 /*resting_calories*/,
-                           200 /*active_calories*/, 1000 /*distance_mm*/, false /*shutting_down*/,
-                           prv_activity_session_callback, nullptr);
+                           steps ? 200 : 0 /*active_calories*/, steps ? 1000 : 0 /*distance_mm*/,
+                           false /*shutting_down*/, prv_activity_session_callback, nullptr);
     now += PBL_SEC_PER_MIN;
     rtc_set_time(now);
   }
 }
 
 // ---------------------------------------------------------------------------------------
+// A walk in progress when a workout starts must not resume once it stops, or it gets logged
+// spanning the whole workout.
+void test_kraepelin_algorithm__walk_does_not_span_workout(void) {
+  s_kalg_state = kernel_zalloc(kalg_state_size());
+  kalg_init(s_kalg_state, prv_stats_cb);
+  s_num_captured_activity_sessions = 0;
+  rtc_set_time(WALK_TEST_START_UTC);
+
+  // Too short to be registered before the workout starts
+  prv_feed_minutes(6, WALK_STEPS_PER_MIN);
+  kalg_enable_activity_tracking(s_kalg_state, false, prv_activity_session_callback, nullptr);
+  prv_feed_minutes(35, WALK_STEPS_PER_MIN);
+  kalg_enable_activity_tracking(s_kalg_state, true, prv_activity_session_callback, nullptr);
+
+  // Too short to be registered on its own, but long enough if it bridged the workout
+  prv_feed_minutes(5, WALK_STEPS_PER_MIN);
+  prv_feed_minutes(8, 0);
+
+  cl_assert_equal_i(s_num_captured_activity_sessions, 0);
+
+  kalg_deinit(s_kalg_state);
+  kernel_free(s_kalg_state);
+  s_kalg_state = nullptr;
+}
+
+// ---------------------------------------------------------------------------------------
+// A registered walk in progress when a workout starts ends there, and a walk after the workout
+// is a new one.
+void test_kraepelin_algorithm__registered_walk_ends_with_workout(void) {
+  s_kalg_state = kernel_zalloc(kalg_state_size());
+  kalg_init(s_kalg_state, prv_stats_cb);
+  s_num_captured_activity_sessions = 0;
+  rtc_set_time(WALK_TEST_START_UTC);
+
+  prv_feed_minutes(12, WALK_STEPS_PER_MIN);
+  cl_assert_equal_i(s_num_captured_activity_sessions, 1);
+  cl_assert(s_captured_activity_sessions[0].ongoing);
+
+  kalg_enable_activity_tracking(s_kalg_state, false, prv_activity_session_callback, nullptr);
+  cl_assert_equal_i(s_num_captured_activity_sessions, 1);
+  cl_assert(!s_captured_activity_sessions[0].ongoing);
+  cl_assert_equal_i(s_captured_activity_sessions[0].len_minutes, 12);
+  const KAlgTestActivitySession ended = s_captured_activity_sessions[0];
+
+  prv_feed_minutes(35, WALK_STEPS_PER_MIN);
+  kalg_enable_activity_tracking(s_kalg_state, true, prv_activity_session_callback, nullptr);
+  prv_feed_minutes(12, WALK_STEPS_PER_MIN);
+
+  cl_assert_equal_i(s_num_captured_activity_sessions, 2);
+  cl_assert_equal_i(s_captured_activity_sessions[0].start_utc, ended.start_utc);
+  cl_assert_equal_i(s_captured_activity_sessions[0].len_minutes, ended.len_minutes);
+  cl_assert(!s_captured_activity_sessions[0].ongoing);
+  cl_assert(s_captured_activity_sessions[1].start_utc > ended.start_utc);
+
+  kalg_deinit(s_kalg_state);
+  kernel_free(s_kalg_state);
+  s_kalg_state = nullptr;
+}
+
+// ---------------------------------------------------------------------------------------
+// A walk in progress ends at the last minute before a time jump instead of carrying its stale
+// start time across it.
+static void prv_walk_ended_on_time_jump(int jump_secs) {
+  s_kalg_state = kernel_zalloc(kalg_state_size());
+  kalg_init(s_kalg_state, prv_stats_cb);
+  s_num_captured_activity_sessions = 0;
+  rtc_set_time(WALK_TEST_START_UTC);
+
+  prv_feed_minutes(12, WALK_STEPS_PER_MIN);
+  cl_assert_equal_i(s_num_captured_activity_sessions, 1);
+  cl_assert_equal_i(s_hrm_activity_scene, HRMActivityScene_Walk);
+
+  const time_t jumped_utc = rtc_get_time() + jump_secs;
+  rtc_set_time(jumped_utc);
+  prv_feed_minutes(1, 0);
+
+  cl_assert(!s_captured_activity_sessions[0].ongoing);
+  cl_assert_equal_i(s_captured_activity_sessions[0].len_minutes, 12);
+  cl_assert_equal_i(s_hrm_activity_scene, HRMActivityScene_Default);
+
+  prv_feed_minutes(12, WALK_STEPS_PER_MIN);
+
+  cl_assert_equal_i(s_num_captured_activity_sessions, 2);
+  cl_assert(s_captured_activity_sessions[1].start_utc >= jumped_utc);
+
+  kalg_deinit(s_kalg_state);
+  kernel_free(s_kalg_state);
+  s_kalg_state = nullptr;
+}
+
+void test_kraepelin_algorithm__walk_ended_on_backward_time_jump(void) {
+  prv_walk_ended_on_time_jump(-PBL_SEC_PER_HOUR);
+}
+
+void test_kraepelin_algorithm__walk_ended_on_forward_time_jump(void) {
+  prv_walk_ended_on_time_jump(PBL_SEC_PER_HOUR);
+}
+
+// ---------------------------------------------------------------------------------------
 // The HRM subscription taken by an auto-detected activity must be released when activity
-// tracking is disabled, even though the activity itself stays in progress. Otherwise starting a
-// workout leaves a never-expiring 1-second subscription behind that pins the sensor on.
+// tracking is disabled. Otherwise starting a workout leaves a never-expiring 1-second
+// subscription behind that pins the sensor on.
 void test_kraepelin_algorithm__hrm_released_when_tracking_disabled(void) {
   s_kalg_state = kernel_zalloc(kalg_state_size());
   kalg_init(s_kalg_state, prv_stats_cb);
@@ -2160,11 +2266,11 @@ void test_kraepelin_algorithm__hrm_released_when_tracking_disabled(void) {
   s_num_captured_activity_sessions = 0;
 
   // Walk long enough to pass the 3 minute threshold that arms the HRM
-  prv_feed_walk_minutes(5);
+  prv_feed_minutes(5, WALK_STEPS_PER_MIN);
   cl_assert_equal_i(s_hrm_live_subscriptions, 1);
 
   // Starting a workout disables activity tracking while the walk is still in progress
-  kalg_enable_activity_tracking(s_kalg_state, false);
+  kalg_enable_activity_tracking(s_kalg_state, false, prv_activity_session_callback, nullptr);
   cl_assert_equal_i(s_hrm_live_subscriptions, 0);
 
   kalg_deinit(s_kalg_state);
@@ -2181,7 +2287,7 @@ void test_kraepelin_algorithm__hrm_released_on_deinit(void) {
   s_hrm_live_subscriptions = 0;
   s_num_captured_activity_sessions = 0;
 
-  prv_feed_walk_minutes(5);
+  prv_feed_minutes(5, WALK_STEPS_PER_MIN);
   cl_assert_equal_i(s_hrm_live_subscriptions, 1);
 
   kalg_deinit(s_kalg_state);
@@ -2201,7 +2307,7 @@ void test_kraepelin_algorithm__hrm_subscription_is_bounded(void) {
   s_hrm_last_expire_s = 0;
   s_num_captured_activity_sessions = 0;
 
-  prv_feed_walk_minutes(5);
+  prv_feed_minutes(5, WALK_STEPS_PER_MIN);
   cl_assert_equal_i(s_hrm_live_subscriptions, 1);
 
   // The window has to outlast the inactive-minute grace period, or an ongoing activity would
@@ -2210,7 +2316,7 @@ void test_kraepelin_algorithm__hrm_subscription_is_bounded(void) {
 
   // Each further active minute re-arms it rather than subscribing again
   s_hrm_last_expire_s = 0;
-  prv_feed_walk_minutes(1);
+  prv_feed_minutes(1, WALK_STEPS_PER_MIN);
   cl_assert_equal_i(s_hrm_live_subscriptions, 1);
   cl_assert(s_hrm_last_expire_s > 7 * PBL_SEC_PER_MIN);
 

@@ -17,6 +17,10 @@
 #include <process_management/app_install_manager_private.h>
 #include <system/status_codes.h>
 
+#ifdef CONFIG_SERVICE_MIC_CAPTURE
+#include <pbl/services/mic_capture.h>
+#endif
+
 PBL_LOG_MODULE_DECLARE(service_blob_db, CONFIG_SERVICE_BLOB_DB_LOG_LEVEL);
 
 #define SETTINGS_FILE_NAME "appdb"
@@ -56,6 +60,52 @@ static void prv_close_file_and_unlock_mutex(void) {
   pbl_mutex_unlock(&s_app_db.mutex);
 }
 
+static bool prv_entry_len_valid(size_t len) {
+  return len == APP_DB_LEGACY_ENTRY_SIZE || len == sizeof(AppDBEntry);
+}
+
+// Records stay at the legacy size, which older firmware copies into its AppDBEntry unchecked, so
+// the permissions live in their own record keyed by the app's UUID. Older firmware skips it, as
+// its key isn't an AppInstallId.
+static uint32_t prv_read_permissions(SettingsFile *file, const Uuid *uuid) {
+  uint32_t permissions;
+  if (settings_file_get(file, uuid, sizeof(*uuid), &permissions, sizeof(permissions)) !=
+      S_SUCCESS) {
+    return 0;
+  }
+  return permissions;
+}
+
+static status_t prv_write_permissions(SettingsFile *file, const Uuid *uuid, uint32_t permissions) {
+  if (permissions) {
+    return settings_file_set(file, uuid, sizeof(*uuid), &permissions, sizeof(permissions));
+  }
+  if (settings_file_exists(file, uuid, sizeof(*uuid))) {
+    return settings_file_delete(file, uuid, sizeof(*uuid));
+  }
+  return S_SUCCESS;
+}
+
+static status_t prv_read_entry(SettingsFile *file, AppInstallId id, AppDBEntry *entry) {
+  memset(entry, 0, sizeof(*entry));
+  const int len = settings_file_get_len(file, &id, sizeof(id));
+  if (!len)
+    return E_DOES_NOT_EXIST;
+  if (!prv_entry_len_valid(len))
+    return E_INVALID_ARGUMENT;
+  // Reads only the legacy part, as records written before the permissions moved can be longer.
+  // The permissions are a separate lookup, done only where they're needed.
+  return settings_file_get(file, &id, sizeof(id), entry, APP_DB_LEGACY_ENTRY_SIZE);
+}
+
+//! A null uuid means every app's permissions changed.
+static void prv_permissions_changed(const Uuid *uuid, uint32_t permissions) {
+#ifdef CONFIG_SERVICE_MIC_CAPTURE
+  mic_capture_service_handle_permission_changed(uuid,
+                                                (permissions & APP_DB_PERMISSION_MICROPHONE) != 0);
+#endif
+}
+
 static status_t prv_cancel_app_fetch(AppInstallId app_id) {
   if (pebble_task_get_current() == PebbleTask_KernelBackground) {
     // if we are on kernel_bg, we can go ahead and cancel the app fetch instantly
@@ -71,7 +121,7 @@ static status_t prv_cancel_app_fetch(AppInstallId app_id) {
 //! AppInstallId currently being using.
 static bool prv_each_inspect_ids(SettingsFile *file, SettingsRecordInfo *info, void *context) {
   // check entry is valid
-  if ((info->val_len == 0) || (info->key_len != sizeof(AppInstallId))) {
+  if (!prv_entry_len_valid(info->val_len) || info->key_len != sizeof(AppInstallId)) {
     return true; // continue iterating
   }
 
@@ -96,16 +146,16 @@ struct UuidFilterData {
 //! to a value other than INSTALL_ID_INVALID
 static bool prv_db_filter_app_id(SettingsFile *file, SettingsRecordInfo *info, void *context) {
   // check entry is valid
-  if ((info->val_len == 0) || (info->key_len != sizeof(AppInstallId))) {
+  if (!prv_entry_len_valid(info->val_len) || info->key_len != sizeof(AppInstallId)) {
     return true; // continue iterating
   }
 
   struct UuidFilterData *uuid_data = (struct UuidFilterData *)context;
 
   AppInstallId app_id;
-  AppDBEntry entry;
+  AppDBEntry entry = {0};
   info->get_key(file, (uint8_t *)&app_id, info->key_len);
-  info->get_val(file, (uint8_t *)&entry, info->val_len);
+  info->get_val(file, (uint8_t *)&entry, APP_DB_LEGACY_ENTRY_SIZE);
 
   if (uuid_equal(&uuid_data->uuid, &entry.uuid)) {
     uuid_data->found_id = app_id;
@@ -147,10 +197,28 @@ AppInstallId app_db_get_install_id_for_uuid(const Uuid *uuid) {
 // App DB API
 ///////////////////////////
 
-//! Fills an AppDBEntry for a given UUID. This is a wrapper around app_db_read to keep it uniform
-//! with `app_db_get_app_entry_for_install_id`
+static status_t prv_read_entry_for_uuid(const Uuid *uuid, AppDBEntry *entry,
+                                        bool with_permissions) {
+  status_t rv = prv_lock_mutex_and_open_file();
+  if (rv != S_SUCCESS) {
+    return rv;
+  }
+  AppInstallId app_id = prv_find_install_id_for_uuid(&s_app_db.settings_file, uuid);
+  if (app_id == INSTALL_ID_INVALID) {
+    rv = E_DOES_NOT_EXIST;
+  } else {
+    rv = prv_read_entry(&s_app_db.settings_file, app_id, entry);
+    if ((rv == S_SUCCESS) && with_permissions) {
+      entry->permissions = prv_read_permissions(&s_app_db.settings_file, uuid);
+    }
+  }
+  prv_close_file_and_unlock_mutex();
+  return rv;
+}
+
+//! Fills an AppDBEntry for a given UUID, uniform with `app_db_get_app_entry_for_install_id`
 status_t app_db_get_app_entry_for_uuid(const Uuid *uuid, AppDBEntry *entry) {
-  return app_db_read((uint8_t *)uuid, sizeof(Uuid), (uint8_t *)entry, sizeof(AppDBEntry));
+  return prv_read_entry_for_uuid(uuid, entry, false /* with_permissions */);
 }
 
 status_t app_db_get_app_entry_for_install_id(AppInstallId app_id, AppDBEntry *entry) {
@@ -159,8 +227,7 @@ status_t app_db_get_app_entry_for_install_id(AppInstallId app_id, AppDBEntry *en
     return rv;
   }
 
-  rv = settings_file_get(&s_app_db.settings_file, (uint8_t *)&app_id, sizeof(AppInstallId),
-                         (uint8_t *)entry, sizeof(AppDBEntry));
+  rv = prv_read_entry(&s_app_db.settings_file, app_id, entry);
 
   prv_close_file_and_unlock_mutex();
   return rv;
@@ -187,7 +254,7 @@ typedef struct {
 
 static bool prv_enumerate_entries(SettingsFile *file, SettingsRecordInfo *info, void *context) {
   // check entry is valid
-  if ((info->val_len == 0) || (info->key_len != sizeof(AppInstallId))) {
+  if (!prv_entry_len_valid(info->val_len) || info->key_len != sizeof(AppInstallId)) {
     return true; // continue iteration
   }
 
@@ -195,7 +262,9 @@ static bool prv_enumerate_entries(SettingsFile *file, SettingsRecordInfo *info, 
 
   AppInstallId id;
   info->get_key(file, (uint8_t *)&id, info->key_len);
-  info->get_val(file, (uint8_t *)cb_data->entry_buf, info->val_len);
+  // The permissions record can't be read while iterating; callers don't need it
+  memset(cb_data->entry_buf, 0, sizeof(*cb_data->entry_buf));
+  info->get_val(file, (uint8_t *)cb_data->entry_buf, APP_DB_LEGACY_ENTRY_SIZE);
 
   // check return value
   cb_data->cb(id, cb_data->entry_buf, cb_data->data);
@@ -258,41 +327,60 @@ void app_db_init(void) {
 }
 
 status_t app_db_insert(const uint8_t *key, int key_len, const uint8_t *val, int val_len) {
-  if (key_len != UUID_SIZE || val_len != sizeof(AppDBEntry)) {
+  if (!key || !val || key_len != UUID_SIZE || !prv_entry_len_valid(val_len)) {
     return E_INVALID_ARGUMENT;
   }
+  AppDBEntry incoming = {0};
+  memcpy(&incoming, val, val_len);
+  if (!uuid_equal((const Uuid *)key, &incoming.uuid))
+    return E_INVALID_ARGUMENT;
 
   status_t rv = prv_lock_mutex_and_open_file();
-  if (rv != S_SUCCESS) {
+  if (rv != S_SUCCESS)
     return rv;
-  }
 
-  PBL_ASSERTN(key_len == 16);
-  PBL_ASSERTN(val_len > 0);
-
+  // Only the extended record speaks for the permissions; a legacy resend, e.g. from an older
+  // companion, leaves an existing grant alone
+  const bool has_permissions = (val_len == sizeof(AppDBEntry));
   bool new_install = false;
+  bool permissions_only = false;
   AppInstallId app_id = prv_find_install_id_for_uuid(&s_app_db.settings_file, (const Uuid *)key);
   if (app_id == INSTALL_ID_INVALID) {
     new_install = true;
     app_id = s_next_unique_flash_app_id++;
-  } else if (app_fetch_in_progress()) {
-    PBL_LOG_WRN("Got an insert for an app that is currently being fetched, %" PRId32, app_id);
-    rv = prv_cancel_app_fetch(app_id);
+  } else {
+    // The record carries no binary hash, so a resend of identical metadata may be a rebuilt app
+    // and still upgrades. Only an extended record changing just the permissions doesn't.
+    AppDBEntry previous;
+    if (has_permissions &&
+        (prv_read_entry(&s_app_db.settings_file, app_id, &previous) == S_SUCCESS)) {
+      permissions_only =
+          (memcmp(&previous, &incoming, APP_DB_LEGACY_ENTRY_SIZE) == 0) &&
+          (prv_read_permissions(&s_app_db.settings_file, &incoming.uuid) != incoming.permissions);
+    }
+    if (!permissions_only && app_fetch_in_progress())
+      rv = prv_cancel_app_fetch(app_id);
   }
 
-  if (rv == S_SUCCESS) {
-    rv = settings_file_set(&s_app_db.settings_file, (uint8_t *)&app_id, sizeof(AppInstallId), val,
-                           val_len);
+  if ((rv == S_SUCCESS) && !permissions_only) {
+    rv = settings_file_set(&s_app_db.settings_file, &app_id, sizeof(app_id), &incoming,
+                           APP_DB_LEGACY_ENTRY_SIZE);
   }
-
+  if ((rv == S_SUCCESS) && has_permissions) {
+    rv = prv_write_permissions(&s_app_db.settings_file, &incoming.uuid, incoming.permissions);
+  }
   prv_close_file_and_unlock_mutex();
 
   if (rv == S_SUCCESS) {
-    // app install something
-    app_install_do_callbacks(new_install ? APP_AVAILABLE : APP_UPGRADED, app_id, nullptr, nullptr,
-                             nullptr);
+    if (has_permissions) {
+      prv_permissions_changed(&incoming.uuid, incoming.permissions);
+    }
+    // Permission-only updates must not terminate or invalidate the cached app.
+    if (!permissions_only) {
+      app_install_do_callbacks(new_install ? APP_AVAILABLE : APP_UPGRADED, app_id, nullptr, nullptr,
+                               nullptr);
+    }
   }
-
   return rv;
 }
 
@@ -318,22 +406,15 @@ int app_db_get_len(const uint8_t *key, int key_len) {
 }
 
 status_t app_db_read(const uint8_t *key, int key_len, uint8_t *val_out, int val_len) {
-  status_t rv = prv_lock_mutex_and_open_file();
-  if (rv != S_SUCCESS) {
-    return rv;
+  if (!key || key_len != UUID_SIZE || !val_out || val_len < 0 ||
+      (size_t)val_len > sizeof(AppDBEntry)) {
+    return E_INVALID_ARGUMENT;
   }
-
-  PBL_ASSERTN(key_len == 16);
-
-  AppInstallId app_id = prv_find_install_id_for_uuid(&s_app_db.settings_file, (Uuid *)key);
-  if (app_id == INSTALL_ID_INVALID) {
-    rv = E_DOES_NOT_EXIST;
-  } else {
-    rv = settings_file_get(&s_app_db.settings_file, (uint8_t *)&app_id, sizeof(AppInstallId),
-                           val_out, val_len);
-  }
-
-  prv_close_file_and_unlock_mutex();
+  AppDBEntry entry;
+  const status_t rv =
+      prv_read_entry_for_uuid((const Uuid *)key, &entry, true /* with_permissions */);
+  if (rv == S_SUCCESS)
+    memcpy(val_out, &entry, val_len);
   return rv;
 }
 
@@ -361,10 +442,14 @@ status_t app_db_delete(const uint8_t *key, int key_len) {
   if (rv == S_SUCCESS) {
     rv = settings_file_delete(&s_app_db.settings_file, (uint8_t *)&app_id, sizeof(AppInstallId));
   }
+  if (rv == S_SUCCESS) {
+    prv_write_permissions(&s_app_db.settings_file, (const Uuid *)key, 0);
+  }
 
   prv_close_file_and_unlock_mutex();
 
   if (rv == S_SUCCESS) {
+    prv_permissions_changed((const Uuid *)key, 0);
     // uuid will be free'd by app_install_manager
     Uuid *uuid_copy = kernel_malloc_check(sizeof(Uuid));
     memcpy(uuid_copy, key, sizeof(Uuid));
@@ -395,8 +480,19 @@ status_t app_db_flush(void) {
   pfs_remove(SETTINGS_FILE_NAME);
 
   pbl_mutex_unlock(&s_app_db.mutex);
+  prv_permissions_changed(nullptr, 0);
   PBL_LOG_WRN("AppDB Flush finished");
   return S_SUCCESS;
+}
+
+bool app_db_microphone_granted(const Uuid *uuid) {
+  if (!uuid || (prv_lock_mutex_and_open_file() != S_SUCCESS)) {
+    return false;
+  }
+  // The grant record goes with the app, so it alone answers
+  const uint32_t permissions = prv_read_permissions(&s_app_db.settings_file, uuid);
+  prv_close_file_and_unlock_mutex();
+  return (permissions & APP_DB_PERMISSION_MICROPHONE) != 0;
 }
 
 status_t app_db_compact(void) {

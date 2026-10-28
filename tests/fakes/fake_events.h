@@ -19,3 +19,6 @@ void *fake_event_get_buffer_slot(PebbleEvent *event);
 
 typedef void (*FakeEventCallback)(PebbleEvent *event);
 void fake_event_set_callback(FakeEventCallback cb);
+
+//! Makes event_try_put_from_process() fail, as with a full queue.
+void fake_event_set_try_put_fails(bool fails);

@@ -37,6 +37,20 @@ void event_put(PebbleEvent *event) {
 void event_put_isr(PebbleEvent *event) {
 }
 
+static bool s_try_put_fails;
+
+bool event_try_put_from_process(PebbleTask task, PebbleEvent *event) {
+  if (s_try_put_fails) {
+    return false;
+  }
+  event_put(event);
+  return true;
+}
+
+void fake_event_set_try_put_fails(bool fails) {
+  s_try_put_fails = fails;
+}
+
 struct pbl_msgq *event_kernel_to_kernel_event_queue(void) {
   return nullptr;
 }
@@ -45,6 +59,7 @@ void event_queue_cleanup_and_reset(struct pbl_msgq *queue) {
 }
 
 void fake_event_init(void) {
+  s_try_put_fails = false;
   fake_event_reset_count();
   fake_event_clear_last();
 }

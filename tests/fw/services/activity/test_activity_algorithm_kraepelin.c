@@ -83,7 +83,8 @@ BatteryChargeState battery_get_charge_state(void) {
   return state;
 }
 
-void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable) {
+void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable,
+                                   KAlgActivitySessionCallback sessions_cb, void *context) {
 }
 
 bool kalg_activity_hrm_is_active(KAlgState *kalg_state) {

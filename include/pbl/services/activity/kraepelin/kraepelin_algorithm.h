@@ -237,12 +237,15 @@ void kalg_get_sleep_stats(KAlgState *state, KAlgOngoingSleepStats *stats);
 /**
  * @brief Enable or disable automatic activity session detection.
  *
- * Resets the detectors.
+ * Ends the step activities in progress and resets the detectors.
  *
  * @param kalg_state State passed to kalg_init().
  * @param enable true to detect sessions, false to stop.
+ * @param sessions_cb Called for each step activity ended.
+ * @param context Passed to @p sessions_cb.
  */
-void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable);
+void kalg_enable_activity_tracking(KAlgState *kalg_state, bool enable,
+                                   KAlgActivitySessionCallback sessions_cb, void *context);
 
 /**
  * @brief Check whether a continuous heart rate session is active for a detected activity.

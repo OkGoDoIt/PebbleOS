@@ -6,6 +6,7 @@
 
 #include <pbl/drivers/mic.h>
 #include <pbl/kernel/assert.h>
+#include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/voice/voice_speex.h>
 
@@ -42,6 +43,8 @@ typedef struct {
 } VoiceSpeexEncoder;
 
 static VoiceSpeexEncoder s_encoder = {};
+//! Dictation and app streams both initialize the encoder, from different tasks
+static PBL_MUTEX_DEFINE(s_lock);
 
 // Speex configuration
 #define SPEEX_SAMPLE_RATE         16000 // 16 kHz wideband
@@ -51,7 +54,7 @@ static VoiceSpeexEncoder s_encoder = {};
 #define SPEEX_ENCODED_BUFFER_SIZE 320   // Max encoded frame size
 #define SPEEX_AUDIO_GAIN          3     // Audio gain multiplier (3x)
 
-bool voice_speex_init(void) {
+static bool prv_init_locked(void) {
   if (s_encoder.initialized) {
     return true;
   }
@@ -150,8 +153,17 @@ bool voice_speex_init(void) {
   return true;
 }
 
+bool voice_speex_init(void) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool rv = prv_init_locked();
+  pbl_mutex_unlock(&s_lock);
+  return rv;
+}
+
 void voice_speex_deinit(void) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
   if (!s_encoder.initialized) {
+    pbl_mutex_unlock(&s_lock);
     return;
   }
 
@@ -173,6 +185,7 @@ void voice_speex_deinit(void) {
   }
 
   memset(&s_encoder, 0, sizeof(s_encoder));
+  pbl_mutex_unlock(&s_lock);
 }
 
 void voice_speex_get_transfer_info(AudioTransferInfoSpeex *info) {

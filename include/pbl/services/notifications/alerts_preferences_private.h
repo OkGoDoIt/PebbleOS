@@ -121,6 +121,20 @@ bool alerts_preferences_get_notification_backlight(void);
  */
 void alerts_preferences_set_notification_backlight(bool enable);
 
+/**
+ * @brief Get whether notifications silenced on the phone are delivered quietly.
+ *
+ * @return true if enabled, false if they alert as usual (default).
+ */
+bool alerts_preferences_get_notification_respect_phone_silence(void);
+
+/**
+ * @brief Set whether notifications silenced on the phone are delivered quietly.
+ *
+ * @param enable true to enable.
+ */
+void alerts_preferences_set_notification_respect_phone_silence(bool enable);
+
 /** @brief Age range within which notifications from the same sender are grouped. */
 typedef enum {
   /** Grouping disabled (default). */
@@ -253,39 +267,28 @@ bool alerts_preferences_dnd_is_manually_enabled(void);
  */
 void alerts_preferences_dnd_set_manually_enabled(bool enable);
 
-/**
- * @brief Get a DND schedule.
- *
- * @param type Schedule to get.
- * @param[out] schedule_out Schedule.
- */
-void alerts_preferences_dnd_get_schedule(DoNotDisturbScheduleType type,
-                                         DoNotDisturbSchedule *schedule_out);
+/** @brief Settings keys of the DND schedule slots, in slot order. */
+#define DND_SCHEDULE_SLOT_KEYS \
+  "qtSchedule0", "qtSchedule1", "qtSchedule2", "qtSchedule3", "qtSchedule4"
 
 /**
- * @brief Store a DND schedule.
+ * @brief Get a stored DND schedule slot.
  *
- * @param type Schedule to set.
- * @param schedule New schedule.
+ * @param index Slot index, below @ref DND_NUM_SCHEDULE_SLOTS.
+ * @param[out] slot Slot.
  */
-void alerts_preferences_dnd_set_schedule(DoNotDisturbScheduleType type,
-                                         const DoNotDisturbSchedule *schedule);
+void alerts_preferences_dnd_get_schedule_slot(unsigned int index, DoNotDisturbScheduleSlot *slot);
 
 /**
- * @brief Get whether a DND schedule is enabled.
+ * @brief Store a DND schedule slot.
  *
- * @param type Schedule to check.
- * @return true if enabled.
- */
-bool alerts_preferences_dnd_is_schedule_enabled(DoNotDisturbScheduleType type);
-
-/**
- * @brief Store whether a DND schedule is enabled.
+ * Use do_not_disturb_set_schedule_slot() to also update the DND state.
  *
- * @param type Schedule to change.
- * @param enable true to enable.
+ * @param index Slot index, below @ref DND_NUM_SCHEDULE_SLOTS.
+ * @param slot Slot.
  */
-void alerts_preferences_dnd_set_schedule_enabled(DoNotDisturbScheduleType type, bool enable);
+void alerts_preferences_dnd_set_schedule_slot(unsigned int index,
+                                              const DoNotDisturbScheduleSlot *slot);
 
 /**
  * @brief Get whether calendar-aware (smart) DND is enabled.

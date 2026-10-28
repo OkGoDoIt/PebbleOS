@@ -3107,3 +3107,62 @@ void test_activity__activity_sessions_add_delete_sessions(void) {
   cl_assert_equal_m(&activity_private_state()->activity_sessions[0], &a1, sizeof(ActivitySession));
   cl_assert_equal_m(&activity_private_state()->activity_sessions[1], &a3, sizeof(ActivitySession));
 }
+
+// ---------------------------------------------------------------------------------------
+// Test that sessions are still logged after the clock was set into the future and corrected
+void test_activity__activity_sessions_logged_after_future_clock(void) {
+  activity_start_tracking(false /*test_mode*/);
+  fake_system_task_callbacks_invoke_pending();
+
+  struct pbl_tm start_tm = {
+    // Jan 1, 2015, 10am
+    .tm_hour = 10,
+    .tm_mday = 1,
+    .tm_mon = 0,
+    .tm_year = 115
+  };
+  time_t utc_sec = pbl_mktime(&start_tm);
+  rtc_set_time(utc_sec);
+
+  // Sessions were logged while the clock was two years ahead
+  const time_t future_utc = utc_sec + 2 * 365 * PBL_SEC_PER_DAY;
+  ActivityState *state = activity_private_state();
+  state->logged_sleep_activity_exit_at_utc = future_utc;
+  state->logged_restful_sleep_activity_exit_at_utc = future_utc;
+  state->logged_step_activity_exit_at_utc = future_utc;
+
+  ActivitySession stale_walk = {
+    .start_utc = future_utc - 60 * PBL_SEC_PER_MIN,
+    .length_min = 30,
+    .type = ActivitySessionType_Walk,
+  };
+  activity_sessions_prv_add_activity_session(&stale_walk);
+
+  ActivitySession sleep_session = {
+    .start_utc = utc_sec - 10 * PBL_SEC_PER_HOUR,
+    .length_min = 7 * PBL_MIN_PER_HOUR,
+    .type = ActivitySessionType_Sleep,
+  };
+  activity_sessions_prv_add_activity_session(&sleep_session);
+
+  ActivitySession walk_session = {
+    .start_utc = utc_sec - 60 * PBL_SEC_PER_MIN,
+    .length_min = 30,
+    .type = ActivitySessionType_Walk,
+  };
+  activity_sessions_prv_add_activity_session(&walk_session);
+
+  state->sleep_data.cur_state = ActivitySleepStateAwake;
+  prv_reset_captured_dls_data();
+  prv_minute_system_task_cb(nullptr);
+
+  // Only the sessions that ended before now are logged
+  cl_assert_equal_i(s_num_dls_activity_records, 2);
+  cl_assert_equal_i(s_dls_activity_records[0].activity, ActivitySessionType_Sleep);
+  cl_assert_equal_i(s_dls_activity_records[1].activity, ActivitySessionType_Walk);
+  cl_assert_equal_i(state->logged_sleep_activity_exit_at_utc,
+                    sleep_session.start_utc + sleep_session.length_min * PBL_SEC_PER_MIN);
+  cl_assert_equal_i(state->logged_step_activity_exit_at_utc,
+                    walk_session.start_utc + walk_session.length_min * PBL_SEC_PER_MIN);
+  cl_assert_equal_i(state->logged_restful_sleep_activity_exit_at_utc, 0);
+}

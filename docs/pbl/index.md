@@ -17,7 +17,7 @@ active. Run it from anywhere inside the checkout:
 ```shell
 pbl configure --board asterix
 pbl build
-pbl flash
+pbl run
 ```
 
 `pbl --help` lists every command, grouped; `pbl <command> --help` shows one
@@ -25,18 +25,15 @@ command's own options.
 
 ## Commands
 
-| Build | Device | Emulator |
-| --- | --- | --- |
-| {doc}`configure` | {doc}`flash` | {doc}`qemu` |
-| {doc}`build` | {doc}`console` | {doc}`screenshot` |
-| {doc}`bundle` | {doc}`debug` | {doc}`touch` |
-| {doc}`menuconfig` | {doc}`image_resources` | {doc}`swipe` |
-| {doc}`clean` | {doc}`image_recovery` | {doc}`feed` |
-| {doc}`test` | {doc}`reset` | |
-| {doc}`itest` | {doc}`run` | |
-| | {doc}`erase` | |
-| | {doc}`bork` | |
-| | {doc}`openocd` | |
+| Build | Device |
+| --- | --- |
+| {doc}`configure` | {doc}`run` |
+| {doc}`build` | {doc}`console` |
+| {doc}`bundle` | {doc}`debug` |
+| {doc}`menuconfig` | {doc}`emulator` |
+| {doc}`clean` | {doc}`image_resources` |
+| {doc}`test` | {doc}`image_recovery` |
+| {doc}`itest` | {doc}`erase` |
 
 ## Shared options
 
@@ -53,7 +50,7 @@ Separate build directories let several boards be built side by side:
 ```shell
 pbl -b build-qemu configure --board qemu_emery
 pbl -b build-asterix configure --board asterix
-pbl -b build-asterix flash
+pbl -b build-asterix run
 ```
 
 ## Where its knowledge comes from
@@ -75,22 +72,32 @@ pbl -b build-asterix flash
 
 ## Runners
 
-Device commands reach a watch through a binary runner. A board lists the ones it supports in its manifest, and the
-first one is the default; `-r/--runner` picks another.
+Device commands reach their target through a binary runner: a watch, or a
+program on the host running the firmware, such as the emulator. A board
+lists the runners it supports in its manifest, and the first one that can
+handle the build is the default; `-r/--runner` picks another.
 
 | Runner | Boards | Operations |
 | --- | --- | --- |
-| `openocd` | asterix | flash (with resources), run, reset, erase (with ranges), debug, debug server |
-| `nrfutil` | asterix | flash (with resources), run, reset, erase (with ranges) |
-| `sftool` | obelix, getafix | flash (with resources), erase (with ranges) |
+| `openocd` | asterix | flash (with resources), erase, debug |
+| `nrfutil` | asterix | flash (with resources), erase |
+| `sftool` | obelix, getafix | flash (with resources), erase |
+| `phone` | asterix, obelix, getafix | flash (always with resources) |
+| `qemu` | qemu_* | run |
+| `native` | native_* | run |
+| `wasm` | native_*/wasm | run |
 
 For the OpenOCD runner, the probe and target configuration lives in the
 board's `support/openocd.cfg`, and how to write the resources and erase
-ranges, if it can, in `support/flash.cfg`.
+ranges, in `support/flash.cfg`.
 
 The `nrfutil` runner needs a J-Link probe. To write the resources it takes
 the external flash configuration from the board's
 `support/nrfutil_ext_mem.json`.
+
+The `phone` runner needs no programmer: it goes through the Pebble app's
+Developer Connection, at the phone address given with `--address`. It needs
+libpebble2.
 
 ```{toctree}
 :hidden:
@@ -109,27 +116,13 @@ itest.md
 :hidden:
 :caption: Device
 
-flash.md
+run.md
 console.md
 debug.md
+emulator.md
 image_resources.md
 image_recovery.md
-reset.md
-run.md
 erase.md
-bork.md
-openocd.md
-```
-
-```{toctree}
-:hidden:
-:caption: Emulator
-
-qemu.md
-screenshot.md
-touch.md
-swipe.md
-feed.md
 ```
 
 ```{toctree}

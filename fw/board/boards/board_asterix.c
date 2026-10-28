@@ -30,7 +30,6 @@
 #include <hal/nrf_clock.h>
 #include <hal/nrf_gpio.h>
 #include <nrfx_pdm.h>
-#include <nrfx_twim.h>
 
 static QSPIPortState s_qspi_port_state;
 static QSPIPort QSPI_PORT = {
@@ -83,10 +82,11 @@ PBL_IRQ_CONNECT(SPIM3, NRFX_SPIM_DEFAULT_CONFIG_IRQ_PRIORITY, nrfx_spim_3_irq_ha
 /* PERIPHERAL ID 10 */
 
 /* nPM1300 */
-PBL_I2C_NRF5_DEFINE(s_i2c_npmc_iic1, "i2c_npmc_iic1", 1, NRF_TWIM_FREQ_400K,
-                    PBL_GPIO(NRF5_GPIO_P0, 14, 0), PBL_GPIO(NRF5_GPIO_P0, 15, 0), nullptr);
-PBL_IRQ_CONNECT(SPI1_SPIM1_SPIS1_TWI1_TWIM1_TWIS1, NRFX_TWIM_DEFAULT_CONFIG_IRQ_PRIORITY,
-                nrfx_twim_1_irq_handler, , 0);
+PBL_I2C_NRF5_DEFINE(s_i2c_npmc_iic1, "i2c_npmc_iic1", 1, 400000,
+                    PBL_GPIO(NRF5_GPIO_P0, 14, PBL_GPIO_PULL_UP),
+                    PBL_GPIO(NRF5_GPIO_P0, 15, PBL_GPIO_PULL_UP), nullptr);
+PBL_IRQ_CONNECT(SPI1_SPIM1_SPIS1_TWI1_TWIM1_TWIS1, 7, pbl_i2c_nrf5_irq_handler, &s_i2c_npmc_iic1,
+                0);
 /* PERIPHERAL ID 9 */
 
 PBL_NPM1300_DEFINE(s_npm1300, &s_i2c_npmc_iic1.bus, 0x6B);
@@ -103,10 +103,9 @@ PBL_NPM1300_REGULATOR_DEFINE(s_npm1300_ldsw2, "npm1300_ldsw2", &s_npm1300, PBL_N
                              true, true);
 
 /* peripheral I2C bus */
-PBL_I2C_NRF5_DEFINE(s_i2c_iic2, "i2c_iic2", 0, NRF_TWIM_FREQ_400K, PBL_GPIO(NRF5_GPIO_P0, 25, 0),
-                    PBL_GPIO(NRF5_GPIO_P0, 11, 0), nullptr);
-PBL_IRQ_CONNECT(SPI0_SPIM0_SPIS0_TWI0_TWIM0_TWIS0, NRFX_TWIM_DEFAULT_CONFIG_IRQ_PRIORITY,
-                nrfx_twim_0_irq_handler, , 0);
+PBL_I2C_NRF5_DEFINE(s_i2c_iic2, "i2c_iic2", 0, 400000, PBL_GPIO(NRF5_GPIO_P0, 25, PBL_GPIO_PULL_UP),
+                    PBL_GPIO(NRF5_GPIO_P0, 11, PBL_GPIO_PULL_UP), nullptr);
+PBL_IRQ_CONNECT(SPI0_SPIM0_SPIS0_TWI0_TWIM0_TWIS0, 7, pbl_i2c_nrf5_irq_handler, &s_i2c_iic2, 0);
 
 PBL_DRV2604_DEFINE(s_drv2604, &s_i2c_iic2.bus, 0x5A, PBL_GPIO(NRF5_GPIO_P0, 2, 0));
 
@@ -219,9 +218,7 @@ void board_early_init(void) {
 
 void board_init(void) {
   uint8_t da7212_powerdown[] = {0xFD /* SYSTEM_ACTIVE */, 0};
-  pbl_i2c_use(I2C_DA7212);
-  pbl_i2c_write_block(I2C_DA7212, 2, da7212_powerdown);
-  pbl_i2c_release(I2C_DA7212);
+  pbl_i2c_write(I2C_DA7212, da7212_powerdown, 2);
 }
 
 const struct pbl_temp *const DIE_TEMP = NRF5_TEMP;

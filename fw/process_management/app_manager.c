@@ -30,6 +30,8 @@
 #include <kernel/ui/modals/modal_manager.h>
 #include <kernel/util/segment.h>
 #include <kernel/util/task_init.h>
+#include <popups/mic_banner.h>
+#include <popups/system_obstruction.h>
 #include <popups/timeline/peek.h>
 #include <process_management/app_install_manager.h>
 #include <process_management/app_run_state.h>
@@ -40,6 +42,12 @@
 #include <resource/resource_ids.auto.h>
 #ifndef CONFIG_RECOVERY_FW
 #include <pbl/services/speaker/speaker_service.h>
+#ifdef CONFIG_SERVICE_MIC_STREAM
+#include <pbl/services/mic_stream.h>
+#endif
+#ifdef CONFIG_SERVICE_MIC_CAPTURE
+#include <pbl/services/mic_capture.h>
+#endif
 #endif
 #include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
@@ -339,7 +347,7 @@ static bool prv_app_start(const PebbleProcessMd *app_md, const void *args,
   const ProcessAppSDKType sdk_type = process_metadata_get_app_sdk_type(app_md);
 
   // The rest of app_ram is available for app_state to use as it sees fit.
-  if (!app_state_configure(&app_ram, sdk_type, timeline_peek_get_obstruction_origin_y())) {
+  if (!app_state_configure(&app_ram, sdk_type, system_obstruction_get_origin_y())) {
     PBL_LOG_ERR("App state configuration failed");
     return false;
   }
@@ -461,6 +469,12 @@ static void prv_app_cleanup(void) {
   vibe_pattern_clear_for_owner(VibePatternOwner_App);
 #ifndef CONFIG_RECOVERY_FW
   speaker_service_stop_for_task(PebbleTask_App);
+#ifdef CONFIG_SERVICE_MIC_STREAM
+  mic_stream_service_stop(PebbleTask_App);
+#endif
+#ifdef CONFIG_SERVICE_MIC_CAPTURE
+  mic_capture_service_stop_for_task(PebbleTask_App);
+#endif
 #endif
 
   app_comm_set_sniff_interval(SNIFF_INTERVAL_NORMAL);
@@ -470,6 +484,7 @@ static void prv_app_cleanup(void) {
   app_install_notify_app_closed();
 
   timeline_peek_handle_process_kill();
+  mic_banner_handle_process_kill();
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -75,6 +75,13 @@ typedef struct PBL_PACKED {
   VoiceEndpointResult result : 8;
 } SessionSetupResultMsg;
 
+/** @brief Session setup result for #VoiceEndpointSessionTypeAudioStream, from the phone. */
+typedef struct PBL_PACKED {
+  SessionSetupResultMsg base;
+  /** Audio endpoint session the result is for, so a late answer can't start a newer stream. */
+  AudioEndpointSessionId session_id;
+} AudioStreamSetupResultMsg;
+
 /** @brief Dictation or NLP result, from the phone. */
 typedef struct PBL_PACKED {
   /** #MsgIdDictationResult or #MsgIdNLPResult. */

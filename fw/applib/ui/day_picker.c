@@ -286,7 +286,7 @@ static void prv_custom_day_picker_handle_selection(MenuLayer *menu_layer, MenuIn
       if (data->callback) {
         data->callback(result, data->callback_context);
       }
-      app_window_stack_pop(true);
+      app_window_stack_remove(&data->window, true);
     }
   } else {
     uint16_t day_of_week = (cell_index->row) % PBL_DAY_PER_WEEK;

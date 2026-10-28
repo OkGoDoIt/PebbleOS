@@ -1623,6 +1623,16 @@ static void prv_vibe_for_item(const TimelineItem *item) {
   }
 }
 
+static bool prv_notification_is_phone_silent(Uuid *id) {
+  TimelineItem item = {};
+  if (!notification_storage_get(id, &item)) {
+    return false;
+  }
+  const bool is_phone_silent = item.header.silent;
+  timeline_item_free_allocated_buffer(&item);
+  return is_phone_silent;
+}
+
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
 //! Alerts for a notification shown by the Quick View notification widget instead of this
 //! window: the vibration and backlight the popup would have given, with no popup. The widget
@@ -1662,6 +1672,12 @@ static void prv_handle_notification_added_common(Uuid *id, NotificationType type
   if (do_not_disturb_is_active() &&
       alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide) {
     prv_log_notification_vibe("skipped: hidden by DND", id);
+    return;
+  }
+
+  if (type == NotificationMobile && alerts_preferences_get_notification_respect_phone_silence() &&
+      prv_notification_is_phone_silent(id)) {
+    prv_log_notification_vibe("skipped: silenced on the phone", id);
     return;
   }
 

@@ -64,7 +64,7 @@ typedef struct LSM6DSOState {
   uint32_t sampling_interval_us;
   /** Samples per FIFO batch requested by the subscribers, 0 when not streaming. */
   uint16_t num_samples;
-  /** Raw FIFO read buffer, filled with pbl_i2c_read_register_block_dma(). */
+  /** Raw FIFO read buffer, filled through DMA, see @ref PBL_I2C_MSG_DMA_SAFE. */
   uint8_t raw_sample_buf[DCACHE_ROUND_UP(
       LSM6DSO_FIFO_SIZE * LSM6DSO_FIFO_WORD_SIZE_BYTES)] PBL_ALIGNED(DCACHE_LINE_SIZE_MAX);
   /** Watchdog timer detecting a stalled INT1 stream. */

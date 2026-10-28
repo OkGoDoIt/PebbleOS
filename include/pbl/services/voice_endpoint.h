@@ -29,6 +29,8 @@ typedef enum {
   VoiceEndpointSessionTypeCommand = 0x02,
   /** Natural language processing, e.g. reminders. */
   VoiceEndpointSessionTypeNLP = 0x03,
+  //! Live audio for an app; the phone decodes and hands it to the app's companion, no result
+  VoiceEndpointSessionTypeAudioStream = 0x04,
 
   /** Number of session types. */
   VoiceEndpointSessionTypeCount,
@@ -74,7 +76,7 @@ typedef struct PBL_PACKED {
  * @param session_type Kind of session.
  * @param session_id Audio endpoint session carrying the audio.
  * @param info Speex stream parameters.
- * @param app_uuid UUID of the requesting app, or NULL for a system session.
+ * @param app_uuid UUID of the requesting app, or nullptr for a system session.
  */
 void voice_endpoint_setup_session(VoiceEndpointSessionType session_type,
                                   AudioEndpointSessionId session_id, AudioTransferInfoSpeex *info,

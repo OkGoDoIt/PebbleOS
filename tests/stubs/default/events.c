@@ -14,5 +14,9 @@ void PBL_WEAK event_put_from_app(PebbleEvent *event) {
 void PBL_WEAK event_put_from_process(PebbleTask task, PebbleEvent *event) {
 }
 
+bool PBL_WEAK event_try_put_from_process(PebbleTask task, PebbleEvent *event) {
+  return true;
+}
+
 void PBL_WEAK event_reset_from_process_queue(PebbleTask task) {
 }

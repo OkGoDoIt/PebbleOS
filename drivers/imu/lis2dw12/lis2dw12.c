@@ -17,6 +17,7 @@
 #include <pbl/util/bits.h>
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
+#include <pbl/util/size.h>
 
 #include <board/board.h>
 
@@ -163,35 +164,23 @@ static const struct pbl_lis2dw12 *s_dev;
 ////////////////////////////////////////////////////////////////////////////////
 
 static bool prv_lis2dw12_write(uint8_t reg, const uint8_t *data, uint16_t len) {
-  bool ret;
-
-  pbl_i2c_use(&s_dev->i2c);
-  ret = pbl_i2c_write_register_block(&s_dev->i2c, reg, len, data) == 0;
-  pbl_i2c_release(&s_dev->i2c);
-
-  return ret;
+  return pbl_i2c_burst_write(&s_dev->i2c, reg, data, len) == 0;
 }
 
 static bool prv_lis2dw12_read(uint8_t reg, uint8_t *data, uint16_t len) {
-  bool ret;
-
-  pbl_i2c_use(&s_dev->i2c);
-  ret = pbl_i2c_read_register_block(&s_dev->i2c, reg, len, data) == 0;
-  pbl_i2c_release(&s_dev->i2c);
-
-  return ret;
+  return pbl_i2c_burst_read(&s_dev->i2c, reg, data, len) == 0;
 }
 
 static bool prv_lis2dw12_read_fifo(uint8_t samples) {
-  bool ret;
+  uint8_t reg = LIS2DW12_OUT_X_L;
+  struct pbl_i2c_msg msgs[] = {
+    {.buf = &reg, .len = 1U, .flags = PBL_I2C_MSG_WRITE},
+    {.buf = s_dev->state->raw_sample_buf,
+     .len = samples * LIS2DW12_SAMPLE_SIZE_BYTES,
+     .flags = PBL_I2C_MSG_READ | PBL_I2C_MSG_DMA_SAFE},
+  };
 
-  pbl_i2c_use(&s_dev->i2c);
-  ret = pbl_i2c_read_register_block_dma(&s_dev->i2c, LIS2DW12_OUT_X_L,
-                                        samples * LIS2DW12_SAMPLE_SIZE_BYTES,
-                                        s_dev->state->raw_sample_buf) == 0;
-  pbl_i2c_release(&s_dev->i2c);
-
-  return ret;
+  return pbl_i2c_transfer(&s_dev->i2c, msgs, ARRAY_LENGTH(msgs)) == 0;
 }
 
 static int16_t prv_raw_to_s12(const uint8_t *raw) {
@@ -470,7 +459,18 @@ static void prv_lis2dw12_int1_work_handler(void) {
 
   if (fifo_progress) {
     prv_queue_work(prv_lis2dw12_int1_work_handler);
-  } else if (!action_taken) {
+    return;
+  }
+
+  if (action_taken) {
+    return;
+  }
+
+  // Retry once, a source may have asserted after the status reads
+  action_taken = prv_lis2dw12_service_int1(&fifo_progress);
+  if (fifo_progress) {
+    prv_queue_work(prv_lis2dw12_int1_work_handler);
+  } else if (!action_taken && pbl_gpio_get(&s_dev->int1_in)) {
     prv_lis2dw12_recover();
   }
 }

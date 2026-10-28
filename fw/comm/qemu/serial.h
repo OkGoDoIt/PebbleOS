@@ -55,6 +55,8 @@ typedef enum {
   QemuProtocol_HealthMetric = 12,
   /** Heart rate reading, @ref QemuProtocolHeartRateHeader. */
   QemuProtocol_HeartRate = 13,
+  /** Microphone audio from the host: 16 kHz mono signed 16-bit little-endian PCM. */
+  QemuProtocol_MicAudio = 14,
 } QemuProtocol;
 
 /** @brief @ref QemuProtocol_Tap payload. */

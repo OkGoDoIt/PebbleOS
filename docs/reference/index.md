@@ -28,6 +28,7 @@ the phone apps.
 
 blob-db.md
 language-packs.md
+local-microphone.md
 ```
 
 ## Binary formats

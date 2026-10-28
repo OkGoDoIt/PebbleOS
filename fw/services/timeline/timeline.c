@@ -650,10 +650,11 @@ bool timeline_add_missed_call_pin(TimelineItem *pin, uint32_t uid) {
 
   // patch the dismiss action to be a remove action
   TimelineItemAction *remove_action = timeline_item_find_dismiss_action(pin);
-
-  // This i18n'd string is leaked, but only ever allocated once
-  remove_action->attr_list.attributes[1].cstring = (char *)i18n_get("Remove", &i18n_key);
-  remove_action->type = TimelineItemActionTypeRemove;
+  if (remove_action) {
+    // This i18n'd string is leaked, but only ever allocated once
+    remove_action->attr_list.attributes[1].cstring = (char *)i18n_get("Remove", &i18n_key);
+    remove_action->type = TimelineItemActionTypeRemove;
+  }
 
   return timeline_add(pin);
 }

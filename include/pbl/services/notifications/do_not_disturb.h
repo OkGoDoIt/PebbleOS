@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include <pbl/cron/cron.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/services/notifications/alerts_preferences.h>
+#include <pbl/util/units.h>
 
 #include <kernel/events.h>
 
@@ -19,22 +21,12 @@
  * - Manual: an on/off switch. Turning it off while an automatic mode is active overrides that mode
  *   until the next schedule boundary or settings change. It turns itself off when a scheduled
  *   period ends.
- * - Scheduled: a daily period, with separate schedules for weekdays and weekends.
+ * - Scheduled: up to @ref DND_NUM_SCHEDULE_SLOTS daily periods, each on its own set of days.
  * - Smart (calendar aware): active while a calendar event is ongoing.
  *
  * Every change of the active state posts a @c PEBBLE_DO_NOT_DISTURB_EVENT.
  * @{
  */
-
-/** @brief Schedule selector. */
-typedef enum DoNotDisturbScheduleType {
-  /** Schedule used Monday to Friday. */
-  WeekdaySchedule,
-  /** Schedule used on Saturday and Sunday. */
-  WeekendSchedule,
-  /** Number of schedules. */
-  NumDNDSchedules,
-} DoNotDisturbScheduleType;
 
 /**
  * @brief Daily DND period, in local time.
@@ -51,6 +43,46 @@ typedef struct PBL_PACKED DoNotDisturbSchedule {
   /** End minute (exclusive), 0 to 59. */
   uint8_t to_minute;
 } DoNotDisturbSchedule;
+
+/** @brief Number of DND schedule slots. */
+#define DND_NUM_SCHEDULE_SLOTS (5)
+
+/** @brief Days a DND schedule applies to. */
+typedef enum DoNotDisturbScheduleKind {
+  /** Every day of the week. */
+  DoNotDisturbScheduleKindEveryday,
+  /** Monday to Friday. */
+  DoNotDisturbScheduleKindWeekdays,
+  /** Saturday and Sunday. */
+  DoNotDisturbScheduleKindWeekends,
+  /** The days set in the slot. */
+  DoNotDisturbScheduleKindCustom,
+  /** Number of kinds. */
+  DoNotDisturbScheduleKindCount,
+} DoNotDisturbScheduleKind;
+
+/**
+ * @brief DND schedule slot, as stored and synced with the phone.
+ *
+ * A period spanning midnight belongs to the day it starts on, unless the slot is a legacy one.
+ */
+typedef struct PBL_PACKED DoNotDisturbScheduleSlot {
+  /** Non-zero if the slot holds a schedule. */
+  uint8_t used;
+  /** Non-zero if the schedule is enabled. */
+  uint8_t enabled;
+  /** A @ref DoNotDisturbScheduleKind. */
+  uint8_t kind;
+  /** Days for @ref DoNotDisturbScheduleKindCustom, a PBL_CRON_WDAY_ mask (Sunday is bit 0). */
+  uint8_t days;
+  /** Daily period. */
+  DoNotDisturbSchedule schedule;
+  /**
+   * Non-zero if the slot holds a weekday or weekend schedule from older firmware: every scheduled
+   * day is quiet before the period's end and after its start. Cleared when the days change.
+   */
+  uint8_t legacy;
+} DoNotDisturbScheduleSlot;
 
 /** @brief Where manual DND was toggled from, matching the FirstUseSource values. */
 typedef enum ManualDNDFirstUseSource {
@@ -113,43 +145,76 @@ bool do_not_disturb_is_smart_dnd_enabled(void);
 void do_not_disturb_toggle_smart_dnd(void);
 
 /**
- * @brief Get a DND schedule.
+ * @brief Get the days a schedule slot applies to.
  *
- * @param type Schedule to get.
- * @param[out] schedule_out Schedule.
+ * @param slot Slot.
+ * @return PBL_CRON_WDAY_ mask, 0 if the kind is invalid.
  */
-void do_not_disturb_get_schedule(DoNotDisturbScheduleType type, DoNotDisturbSchedule *schedule_out);
+static inline uint8_t do_not_disturb_schedule_slot_get_days(const DoNotDisturbScheduleSlot *slot) {
+  switch (slot->kind) {
+    case DoNotDisturbScheduleKindEveryday:
+      return PBL_CRON_WDAY_ANY;
+    case DoNotDisturbScheduleKindWeekdays:
+      return PBL_CRON_WDAY_WEEKDAYS;
+    case DoNotDisturbScheduleKindWeekends:
+      return PBL_CRON_WDAY_WEEKENDS;
+    case DoNotDisturbScheduleKindCustom:
+      return slot->days & PBL_CRON_WDAY_ANY;
+    default:
+      return 0;
+  }
+}
 
 /**
- * @brief Set a DND schedule and re-evaluate the DND state.
+ * @brief Check whether a schedule slot holds a valid schedule.
  *
- * @param type Schedule to set.
- * @param schedule New schedule.
+ * @param slot Slot to check.
+ * @return true if the kind, period and days are valid.
  */
-void do_not_disturb_set_schedule(DoNotDisturbScheduleType type, DoNotDisturbSchedule *schedule);
+static inline bool do_not_disturb_schedule_slot_is_valid(const DoNotDisturbScheduleSlot *slot) {
+  const DoNotDisturbSchedule *schedule = &slot->schedule;
+  if (slot->kind >= DoNotDisturbScheduleKindCount || schedule->from_hour >= PBL_HOUR_PER_DAY ||
+      schedule->to_hour >= PBL_HOUR_PER_DAY || schedule->from_minute >= PBL_MIN_PER_HOUR ||
+      schedule->to_minute >= PBL_MIN_PER_HOUR) {
+    return false;
+  }
+  if (slot->kind == DoNotDisturbScheduleKindCustom) {
+    return slot->days != 0 && (slot->days & ~PBL_CRON_WDAY_ANY) == 0;
+  }
+  return true;
+}
 
 /**
- * @brief Check whether a DND schedule is enabled.
+ * @brief Get a DND schedule slot.
  *
- * @param type Schedule to check.
- * @return true if enabled.
+ * @param index Slot index, below @ref DND_NUM_SCHEDULE_SLOTS.
+ * @param[out] slot Slot, zeroed if unused.
  */
-bool do_not_disturb_is_schedule_enabled(DoNotDisturbScheduleType type);
+void do_not_disturb_get_schedule_slot(unsigned int index, DoNotDisturbScheduleSlot *slot);
 
 /**
- * @brief Enable or disable a DND schedule and re-evaluate the DND state.
+ * @brief Store a DND schedule slot and re-evaluate the DND state.
  *
- * @param type Schedule to change.
- * @param scheduled true to enable.
+ * @param index Slot index.
+ * @param slot Schedule, marked used when stored.
+ * @return 0 on success, -EINVAL if @p index or @p slot is invalid.
  */
-void do_not_disturb_set_schedule_enabled(DoNotDisturbScheduleType type, bool scheduled);
+int do_not_disturb_set_schedule_slot(unsigned int index, const DoNotDisturbScheduleSlot *slot);
 
 /**
- * @brief Toggle a DND schedule and re-evaluate the DND state.
+ * @brief Store a DND schedule in the first unused slot and re-evaluate the DND state.
  *
- * @param type Schedule to toggle.
+ * @param slot Schedule, marked used when stored.
+ * @return Slot index, -EINVAL if @p slot is invalid or -ENOSPC if every slot is used.
  */
-void do_not_disturb_toggle_scheduled(DoNotDisturbScheduleType type);
+int do_not_disturb_add_schedule_slot(const DoNotDisturbScheduleSlot *slot);
+
+/**
+ * @brief Clear a DND schedule slot and re-evaluate the DND state.
+ *
+ * @param index Slot index.
+ */
+void do_not_disturb_delete_schedule_slot(unsigned int index);
 
 /** @brief Initialize the DND service and arm the schedule timers. */
 void do_not_disturb_init(void);

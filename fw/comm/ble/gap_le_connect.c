@@ -331,7 +331,6 @@ void pbl_bt_handle_le_connection_complete_event(const struct pbl_bt_conn_complet
         // does take place, let's trigger a disconnect to try and put us back into a sane state
         PBL_LOG_ERR("Not adding connection for device. It is already connected .. disconnecting");
         pbl_bt_gap_le_disconnect(&event->peer_address);
-        param_watchdog_timer = TIMER_INVALID_ID; // Don't use timer, will clean up below
         break;
       }
 

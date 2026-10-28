@@ -680,22 +680,42 @@ static FontInfo *prv_get_language_font(FontCache *font_cache, uint32_t base_reso
   return font->loaded ? font : NULL;
 }
 
-static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint,
-                                      FontInfo *font_info, bool need_bitmap,
-                                      GlyphLocation *location_out) {
-  if (location_out) {
-    *location_out = (GlyphLocation){};
-  }
+// Letterlike Symbols (U+2100-U+214F) that are styled Latin letters, by NFKC
+static const uint8_t s_letterlike_latin[] = {
+  [0x02] = 'C', [0x0a] = 'g', [0x0b] = 'H', [0x0c] = 'H', [0x0d] = 'H', [0x0e] = 'h',  [0x10] = 'I',
+  [0x11] = 'I', [0x12] = 'L', [0x13] = 'l', [0x15] = 'N', [0x19] = 'P', [0x1a] = 'Q',  [0x1b] = 'R',
+  [0x1c] = 'R', [0x1d] = 'R', [0x24] = 'Z', [0x28] = 'Z', [0x2a] = 'K', [0x2b] = 0xc5, [0x2c] = 'B',
+  [0x2d] = 'C', [0x2f] = 'e', [0x30] = 'E', [0x31] = 'F', [0x33] = 'M', [0x34] = 'o',  [0x39] = 'i',
+  [0x45] = 'D', [0x46] = 'd', [0x47] = 'e', [0x48] = 'i', [0x49] = 'j',
+};
 
-  if (font_cache->language_generation !=
-      __atomic_load_n(&g_font_language_generation, __ATOMIC_ACQUIRE)) {
-    text_resources_reset_cache(font_cache);
+// Maps a styled Latin codepoint (mathematical, letterlike or fullwidth) to its plain form, or
+// returns it unchanged.
+static Codepoint prv_plain_latin_codepoint(Codepoint codepoint) {
+  // Mathematical Alphanumeric Symbols: 13 styles of A-Z followed by a-z
+  if (codepoint >= 0x1d400 && codepoint < 0x1d6a4) {
+    const uint32_t offset = (codepoint - 0x1d400) % 52;
+    return (offset < 26) ? 'A' + offset : 'a' + offset - 26;
   }
-
-  if (!font_info->loaded) {
-    sys_font_reload_font(font_info);
+  // Mathematical Alphanumeric Symbols: 5 styles of 0-9
+  if (codepoint >= 0x1d7ce && codepoint < 0x1d800) {
+    return '0' + (codepoint - 0x1d7ce) % 10;
   }
+  // Halfwidth and Fullwidth Forms: fullwidth ASCII
+  if (codepoint >= 0xff01 && codepoint <= 0xff5e) {
+    return codepoint - 0xff01 + '!';
+  }
+  if (codepoint >= 0x2100 && codepoint < 0x2100 + ARRAY_LENGTH(s_letterlike_latin) &&
+      s_letterlike_latin[codepoint - 0x2100] != 0) {
+    return s_letterlike_latin[codepoint - 0x2100];
+  }
+  return codepoint;
+}
 
+// Looks codepoint up in the primary font, the language packs and the system fallback font.
+static const GlyphData *prv_find_glyph(FontCache *font_cache, Codepoint codepoint,
+                                       FontInfo *font_info, bool need_bitmap,
+                                       GlyphLocation *location_out) {
   const FontInfo *owner = nullptr;
   const FontResource *font_res = nullptr;
 
@@ -743,11 +763,47 @@ static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint
     }
   }
 
-  // (c) Absent everywhere: fall back to the wildcard (square box) then ' ', looked up in the
+  return nullptr;
+}
+
+static const GlyphData *prv_get_glyph(FontCache *font_cache, Codepoint codepoint,
+                                      FontInfo *font_info, bool need_bitmap,
+                                      GlyphLocation *location_out) {
+  if (location_out) {
+    *location_out = (GlyphLocation){};
+  }
+
+  if (font_cache->language_generation !=
+      __atomic_load_n(&g_font_language_generation, __ATOMIC_ACQUIRE)) {
+    text_resources_reset_cache(font_cache);
+  }
+
+  if (!font_info->loaded) {
+    sys_font_reload_font(font_info);
+  }
+
+  const GlyphData *data =
+      prv_find_glyph(font_cache, codepoint, font_info, need_bitmap, location_out);
+  if (data) {
+    return data;
+  }
+
+  // (c) Missing styled Latin letter or digit: draw its plain form, which is still readable.
+  const Codepoint plain = prv_plain_latin_codepoint(codepoint);
+  if (plain != codepoint) {
+    data = prv_find_glyph(font_cache, plain, font_info, need_bitmap, location_out);
+    if (data) {
+      return data;
+    }
+  }
+
+  // (d) Absent everywhere: fall back to the wildcard (square box) then ' ', looked up in the
   //     PRIMARY font, so a glyph missing from every font still yields the primary font's box or
   //     space. We use the wildcard codepoint from the base font in case the extension pack has
   //     been deleted. The fallback font's own wildcard is deliberately never used: a single
   //     missing-glyph box is the correct indicator.
+  const FontInfo *owner = nullptr;
+  const FontResource *font_res = nullptr;
   const Codepoint substitutes[] = {font_info->base.md.wildcard_codepoint, ' '};
   for (unsigned int i = 0; i < ARRAY_LENGTH(substitutes); i++) {
     data = prv_get_glyph_in_font(font_cache, substitutes[i], font_info, need_bitmap, &owner,

@@ -1029,7 +1029,8 @@ void activity_algorithm_enable_activity_tracking(bool enable) {
     return;
   }
 
-  kalg_enable_activity_tracking(s_alg_state->k_state, enable);
+  kalg_enable_activity_tracking(s_alg_state->k_state, enable, prv_create_activity_session_cb,
+                                nullptr);
 
   prv_unlock();
 }

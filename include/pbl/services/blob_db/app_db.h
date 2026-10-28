@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <pbl/kernel/compiler.h>
@@ -39,7 +40,15 @@ typedef struct PBL_PACKED {
   uint8_t template_id;
   /** App name. */
   char name[APP_NAME_SIZE_BYTES];
+  /** Optional phone-authorized permissions; absent on legacy records. Only app_db_read() fills
+   *  it; use app_db_microphone_granted() to check a grant. */
+  uint32_t permissions;
 } AppDBEntry;
+
+#define APP_DB_LEGACY_ENTRY_SIZE     offsetof(AppDBEntry, permissions)
+#define APP_DB_PERMISSION_MICROPHONE (1u << 0)
+
+bool app_db_microphone_granted(const Uuid *uuid);
 
 /**
  * @brief Callback of app_db_enumerate_entries().

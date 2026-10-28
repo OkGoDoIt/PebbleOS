@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2024 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import inject_metadata
 from waflib.Configure import conf
 from waflib.Errors import BuildError
@@ -14,12 +16,20 @@ def configure(conf):
     :return: None
     """
     CROSS_COMPILE_PREFIX = "arm-none-eabi-"
+    path = conf.environ.get("PATH", "").split(os.pathsep)
 
-    conf.env.AS = CROSS_COMPILE_PREFIX + "gcc"
-    conf.env.AR = CROSS_COMPILE_PREFIX + "ar"
-    conf.env.CC = CROSS_COMPILE_PREFIX + "gcc"
-    conf.env.LD = CROSS_COMPILE_PREFIX + "ld"
-    conf.env.SIZE = CROSS_COMPILE_PREFIX + "size"
+    def tool(name):
+        # The absolute path PATH resolves, so the configure log shows the binary that runs (pebble
+        # puts the SDK's toolchain first). Unresolved, waf reports it missing as before.
+        # A list, so a path with spaces stays one argument.
+        name = CROSS_COMPILE_PREFIX + name
+        return [conf.find_binary([name], [""], path) or name]
+
+    conf.env.AS = tool("gcc")
+    conf.env.AR = tool("ar")
+    conf.env.CC = tool("gcc")
+    conf.env.LD = tool("ld")
+    conf.env.SIZE = tool("size")
 
     optimize_flag = "-Os"
 

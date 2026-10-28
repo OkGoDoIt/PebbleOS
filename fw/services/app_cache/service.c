@@ -18,6 +18,8 @@
 #include <kernel/events.h>
 #include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
+#include <process_management/app_manager.h>
+#include <process_management/worker_manager.h>
 #include <shell/normal/quick_launch.h>
 #include <shell/normal/watchface.h>
 #include <shell/prefs.h>
@@ -53,8 +55,15 @@ PBL_LOG_MODULE_DEFINE(service_app_cache, CONFIG_SERVICE_APP_CACHE_LOG_LEVEL);
 
 #define MAX_PRIORITY ((uint32_t)~0)
 
+//! Grace earned per launch, capped so a once-popular app cannot become unevictable.
+#define LAUNCH_BONUS_PER_LAUNCH_S (24 * 60 * 60)
+#define LAUNCH_BONUS_MAX_LAUNCHES (30)
+
 // 8 quick launch apps, 1 default watchface, 1 default worker
 #define DO_NOT_EVICT_LIST_SIZE (10)
+
+// the running app and worker
+#define NEVER_EVICT_LIST_SIZE (2)
 
 static PBL_MUTEX_DEFINE(s_app_cache_mutex);
 
@@ -77,15 +86,22 @@ typedef struct {
   EvictListNode *list;
   uint32_t bytes_needed;
   uint32_t bytes_in_list;
+  //! Evicted only if nothing else can make room.
   const AppInstallId do_not_evict[DO_NOT_EVICT_LIST_SIZE];
+  //! Never evicted: their binaries are open, and pfs_remove croaks on an open file.
+  const AppInstallId never_evict[NEVER_EVICT_LIST_SIZE];
 } EachEvictData;
 
 //! Takes the information given in entry and calculates a new priority for the app.
 //!
 //! Policy rules:
-//! 1. App that has least recently launched or been installed app is evicted.
+//! 1. The least recently launched (or installed) app is evicted first.
+//! 2. Each launch earns the app a day of grace, up to LAUNCH_BONUS_MAX_LAUNCHES, so an app used
+//!    regularly outlives one installed more recently but never opened.
 static uint32_t prv_calculate_priority(AppCacheEntry *entry) {
-  return (uint32_t)MAX(entry->last_launch, entry->install_date);
+  const uint32_t last_used = (uint32_t)MAX(entry->last_launch, entry->install_date);
+  const uint32_t launches = MIN(entry->launch_count, LAUNCH_BONUS_MAX_LAUNCHES);
+  return last_used + (launches * LAUNCH_BONUS_PER_LAUNCH_S);
 }
 
 //! Comparator for EvictListNode
@@ -177,6 +193,10 @@ static bool prv_each_free_up_space(SettingsFile *file, SettingsRecordInfo *info,
   info->get_key(file, (uint8_t *)&id, info->key_len);
   info->get_val(file, (uint8_t *)&entry, info->val_len);
 
+  if (prv_is_in_list(id, data->never_evict, NEVER_EVICT_LIST_SIZE)) {
+    return true; // continue iterating
+  }
+
   // create node
   EvictListNode *node = kernel_malloc_check(sizeof(EvictListNode));
   list_init((ListNode *)node);
@@ -262,19 +282,24 @@ status_t app_cache_free_up_space(uint32_t bytes_needed) {
     // we don't want to remove any default apps or quick launch apps, so keep them in a list.
     EachEvictData evict_data = (EachEvictData){
       .bytes_needed = bytes_needed,
-      .do_not_evict = {
+      .do_not_evict =
+          {
 #ifndef CONFIG_SHELL_SDK
-        quick_launch_get_app(BUTTON_ID_UP),
-        quick_launch_get_app(BUTTON_ID_SELECT),
-        quick_launch_get_app(BUTTON_ID_DOWN),
-        quick_launch_get_app(BUTTON_ID_BACK),
-        quick_launch_single_click_get_app(BUTTON_ID_UP),
-        quick_launch_single_click_get_app(BUTTON_ID_DOWN),
-        quick_launch_combo_back_up_get_app(),
-        quick_launch_combo_up_down_get_app(),
+            quick_launch_get_app(BUTTON_ID_UP),
+            quick_launch_get_app(BUTTON_ID_SELECT),
+            quick_launch_get_app(BUTTON_ID_DOWN),
+            quick_launch_get_app(BUTTON_ID_BACK),
+            quick_launch_single_click_get_app(BUTTON_ID_UP),
+            quick_launch_single_click_get_app(BUTTON_ID_DOWN),
+            quick_launch_combo_back_up_get_app(),
+            quick_launch_combo_up_down_get_app(),
 #endif
-        watchface_get_default_install_id(),
-        worker_preferences_get_default_worker(),
+            watchface_get_default_install_id(),
+            worker_preferences_get_default_worker(),
+          },
+      .never_evict = {
+        app_manager_get_current_app_id(),
+        worker_manager_get_current_worker_id(),
       },
     };
 

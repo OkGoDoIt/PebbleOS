@@ -24,10 +24,10 @@ pthread_mutex_t posix_cpu = PTHREAD_MUTEX_INITIALIZER;
 bool posix_switch_pending;
 bool posix_in_isr;
 
+// The cleanup handler pushed in prv_thread_main() gives posix_cpu back.
 static void prv_exit(struct posix_thread *pt) {
   pthread_cond_destroy(&pt->wake);
   free(pt);
-  pthread_mutex_unlock(&posix_cpu);
   pthread_exit(nullptr);
 }
 
@@ -40,7 +40,8 @@ void posix_park(struct posix_thread *pt) {
   }
 }
 
-// A cancelled thread leaves its condition wait owning posix_cpu; give it back.
+// Gives posix_cpu back whenever a kernel pthread ends, cancelled or exited.
+// Nothing else may unlock it on the way out, or the next owner loses it.
 static void prv_release_cpu(void *arg) {
   (void)arg;
   pthread_mutex_unlock(&posix_cpu);
@@ -109,7 +110,6 @@ void arch_switch_request(void) {
 
 void arch_thread_exit(void) {
   // pbl_thread_abort() already switched away and ended this pthread.
-  pthread_mutex_unlock(&posix_cpu);
   pthread_exit(nullptr);
 }
 

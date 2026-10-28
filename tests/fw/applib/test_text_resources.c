@@ -258,6 +258,47 @@ void test_text_resources__glyph_frame_of_missing_glyph(void) {
   cl_assert_equal_m(&missing, &wildcard, sizeof(GRect));
 }
 
+static void prv_assert_same_glyph(Codepoint styled, Codepoint plain) {
+  uint8_t expected[64];
+  const GlyphData *glyph = text_resources_get_glyph(&s_font_cache, plain, &s_font_info, nullptr);
+  const size_t size = glyph_get_size_bytes(glyph);
+  cl_assert(size <= sizeof(expected));
+  memcpy(expected, glyph->data, size);
+
+  glyph = text_resources_get_glyph(&s_font_cache, styled, &s_font_info, nullptr);
+  cl_assert_equal_i(glyph_get_size_bytes(glyph), size);
+  cl_assert_equal_m(expected, glyph->data, size);
+}
+
+void test_text_resources__styled_latin_draws_plain_glyph(void) {
+  cl_assert(text_resources_init_font(0, RESOURCE_ID_GOTHIC_18, 0, &s_font_info));
+
+  // Mathematical bold, monospace and double-struck digits
+  prv_assert_same_glyph(0x1d400, 'A');
+  prv_assert_same_glyph(0x1d41a, 'a');
+  prv_assert_same_glyph(0x1d670, 'A');
+  prv_assert_same_glyph(0x1d689, 'Z');
+  prv_assert_same_glyph(0x1d68a, 'a');
+  prv_assert_same_glyph(0x1d6a3, 'z');
+  prv_assert_same_glyph(0x1d7ce, '0');
+  prv_assert_same_glyph(0x1d7ff, '9');
+  // Letterlike symbols
+  prv_assert_same_glyph(0x212c, 'B');
+  prv_assert_same_glyph(0x212b, 0xc5);
+  prv_assert_same_glyph(0x210e, 'h');
+  // Fullwidth forms
+  prv_assert_same_glyph(0xff01, '!');
+  prv_assert_same_glyph(0xff21, 'A');
+  prv_assert_same_glyph(0xff5e, '~');
+}
+
+void test_text_resources__styled_greek_draws_wildcard(void) {
+  cl_assert(text_resources_init_font(0, RESOURCE_ID_GOTHIC_18, 0, &s_font_info));
+
+  // Mathematical bold capital alpha
+  prv_assert_same_glyph(0x1d6a8, s_font_info.base.md.wildcard_codepoint);
+}
+
 void test_text_resources__init_backup_font(void) {
   // load the built in fallback font
   uint32_t font_fallback = RESOURCE_ID_FONT_FALLBACK_INTERNAL;

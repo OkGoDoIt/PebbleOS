@@ -111,13 +111,11 @@ static bool prv_read_data(uint16_t register_address, uint8_t *result, uint16_t s
     port = CST816->i2c_boot;
     addr_size = 2;
   }
-  pbl_i2c_use(port);
   uint8_t regad[2] = {register_address >> 8, register_address & 0xFF};
-  bool rv = pbl_i2c_write_block(port, addr_size, is_work_mode ? regad + 1 : regad) == 0;
+  bool rv = pbl_i2c_write(port, is_work_mode ? regad + 1 : regad, addr_size) == 0;
   if (rv) {
-    rv = pbl_i2c_read_block(port, size, result) == 0;
+    rv = pbl_i2c_read(port, result, size) == 0;
   }
-  pbl_i2c_release(port);
   pbl_mutex_unlock(&s_i2c_lock);
   return rv;
 }
@@ -131,13 +129,11 @@ static bool prv_write_data(uint16_t register_address, const uint8_t *datum, uint
     port = CST816->i2c_boot;
     addr_size = 2;
   }
-  pbl_i2c_use(port);
   uint8_t data[size + sizeof(register_address)];
   data[0] = register_address >> 8;
   data[1] = register_address & 0xFF;
   memcpy(data + sizeof(register_address), datum, size);
-  bool rv = pbl_i2c_write_block(port, size + addr_size, is_work_mode ? data + 1 : data) == 0;
-  pbl_i2c_release(port);
+  bool rv = pbl_i2c_write(port, is_work_mode ? data + 1 : data, size + addr_size) == 0;
   pbl_mutex_unlock(&s_i2c_lock);
   return rv;
 }

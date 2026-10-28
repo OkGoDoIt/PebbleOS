@@ -511,12 +511,30 @@ static void prv_log_activities(time_t now_utc) {
     {ActivitySettingsKeyLastStepActivityUTC, &state->logged_step_activity_exit_at_utc, false},
   };
 
-  bool logged_event = false;
+  bool exit_utc_changed = false;
+
+  // A clock set into the future and corrected later leaves future exit times behind, which
+  // would mark every new session as already logged. Reset them; the phone dedups re-sent ones.
+  for (int i = 0; i < ActivityClassCount; i++) {
+    ActivityClassParams *params = &class_settings[i];
+    if (*params->exit_utc > now_utc) {
+      PBL_LOG_WRN("Last logged activity exit time in the future, resetting");
+      *params->exit_utc = 0;
+      params->modified = true;
+      exit_utc_changed = true;
+    }
+  }
+
   ActivitySession *session = state->activity_sessions;
   for (uint32_t i = 0; i < state->activity_sessions_count; i++, session++) {
     // Get info on this activity
     uint32_t session_len_sec = session->length_min * PBL_SEC_PER_MIN;
     time_t session_exit_utc = session->start_utc + session_len_sec;
+
+    // Sessions ending in the future were recorded with a wrong clock, don't log them
+    if (session_exit_utc > now_utc) {
+      continue;
+    }
 
     ActivityClassParams *params = nullptr;
     switch (session->type) {
@@ -560,11 +578,11 @@ static void prv_log_activities(time_t now_utc) {
     activity_sessions_prv_send_activity_session_to_data_logging(session);
     *params->exit_utc = session_exit_utc;
     params->modified = true;
-    logged_event = true;
+    exit_utc_changed = true;
   }
 
-  // Update settings file if any events were logged
-  if (logged_event) {
+  // Update settings file if any exit times changed
+  if (exit_utc_changed) {
     pbl_mutex_lock(&state->mutex, PBL_FOREVER);
     SettingsFile *file = activity_private_settings_open();
     if (file) {

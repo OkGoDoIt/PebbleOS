@@ -133,6 +133,9 @@ static void prv_send_watch_versions(CommSession *session) {
   versions_msg.capabilities.unknown_attributes_support = 1;
   versions_msg.capabilities.notification_image_support = NOTIFICATION_IMAGE_SUPPORTED;
   versions_msg.capabilities.notification_window_state_support = 1;
+#ifdef CONFIG_SERVICE_MIC_CAPTURE
+  versions_msg.capabilities.app_permissions_support = 1;
+#endif
 #ifndef CONFIG_RECOVERY_FW
   versions_msg.capabilities.multiple_language_packs_support = 1;
 #endif
