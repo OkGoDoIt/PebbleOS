@@ -1062,7 +1062,7 @@ static void prv_update_ble_responsiveness_locked(void) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
   if (s_ptt.fast_link) {
     // A question is out: its audio should leave at once and its answer arrive without waiting
-    // out slave latency (up to ~1.35 s per write on an idle link).
+    // out slave latency (up to ~0.3 s per write on an idle link: 60 ms with latency 4).
     state = PBL_BT_RESPONSE_TIME_MIN;
     period = MAX_PERIOD_RUN_FOREVER;
   } else
