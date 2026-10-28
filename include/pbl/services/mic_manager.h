@@ -17,12 +17,18 @@
 //! app owns the mic preempts the app, which is told through its preempted callback before the mic
 //! is restarted. An app cannot acquire the mic while dictation owns it. The OS mic banner is shown
 //! while an app client owns the running mic.
+//!
+//! A background client records only while nobody else wants the mic: dictation and apps take it
+//! away like dictation takes it from an app, a dictation session stops it as soon as it begins,
+//! and it is told once the mic is free again. While it holds the mic for a user action, apps are
+//! refused as they are by any other owner. It never shows the banner.
 
 typedef enum MicClient {
   MicClientNone = 0,
   MicClientVoiceDictation,
   MicClientAppStream,
   MicClientAppCapture,
+  MicClientBackground,
 } MicClient;
 
 typedef enum MicManagerAppCheck {
@@ -37,6 +43,10 @@ MicManagerAppCheck mic_manager_check_app(PebbleTask task);
 //! Called (without the manager lock held) when the client's mic is taken away. The client must
 //! not call mic_manager_release() for the lost session; it is already released.
 typedef void (*MicManagerPreemptedCb)(void *context);
+
+//! Called (without the manager lock held, on the task that freed the mic) once the mic is free
+//! after the background client was refused or preempted. It must not block or call the manager.
+typedef void (*MicManagerFreeCb)(void *context);
 
 void mic_manager_init(void);
 
@@ -60,5 +70,14 @@ void mic_manager_set_dictation_active(bool active);
 
 MicClient mic_manager_get_owner(void);
 
-//! @return true while the mic is owned or reserved, or a dictation session runs
+//! @return true while the mic is owned or reserved, or a dictation session runs. A background
+//! owner counts only while it holds the mic.
 bool mic_manager_is_busy(void);
+
+//! Sets who to tell when the mic is free again for the background client.
+void mic_manager_set_background_free_cb(MicManagerFreeCb cb, void *context);
+
+//! While set, apps can neither take the mic from the background client nor reserve it, and it
+//! counts as busy; dictation still takes it. Has effect only while the background client owns
+//! the mic; the client clears it when the user action ends.
+void mic_manager_set_background_held(bool held);

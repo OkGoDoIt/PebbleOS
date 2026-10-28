@@ -96,6 +96,31 @@ static bool prv_acquire_dictation(void) {
                              s_dictation_buffer, 320, nullptr, nullptr);
 }
 
+static int16_t s_background_buffer[320];
+static int s_background_preempted_count;
+static int s_background_free_count;
+
+static void prv_background_handler(int16_t *samples, size_t sample_count, void *context) {
+}
+
+static void prv_background_preempted(void *context) {
+  s_background_preempted_count++;
+}
+
+static void prv_background_free(void *context) {
+  s_background_free_count++;
+}
+
+static bool prv_acquire_background(void) {
+  return mic_manager_acquire(MicClientBackground, prv_background_handler, nullptr,
+                             s_background_buffer, 320, prv_background_preempted, nullptr);
+}
+
+static bool prv_acquire_capture(void) {
+  return mic_manager_acquire(MicClientAppCapture, prv_app_handler, nullptr, s_app_buffer, 160,
+                             nullptr, nullptr);
+}
+
 // Setup
 ////////////////////////////////////////////////////////////////
 
@@ -111,7 +136,10 @@ void test_mic_manager__initialize(void) {
   s_reacquire_in_preempt = false;
   s_reacquire_result = true;
   s_banner_visible = false;
+  s_background_preempted_count = 0;
+  s_background_free_count = 0;
   mic_manager_init();
+  mic_manager_set_background_free_cb(prv_background_free, nullptr);
 }
 
 void test_mic_manager__cleanup(void) {
@@ -269,4 +297,101 @@ void test_mic_manager__dictation_session_holds_off_apps(void) {
   cl_assert(!mic_manager_is_busy());
   cl_assert(prv_acquire_app());
   mic_manager_release(MicClientAppStream);
+}
+
+void test_mic_manager__background_yields_to_an_app_and_hears_when_free(void) {
+  cl_assert(prv_acquire_background());
+  cl_assert_equal_i(MicClientBackground, mic_manager_get_owner());
+  cl_assert(!mic_manager_is_busy());
+  cl_assert(!s_banner_visible);
+
+  cl_assert(prv_acquire_capture());
+  cl_assert_equal_i(1, s_background_preempted_count);
+  cl_assert_equal_i(MicClientAppCapture, mic_manager_get_owner());
+  cl_assert(s_buffer == s_app_buffer);
+  cl_assert(s_banner_visible);
+
+  // It cannot take the mic back while the app records
+  cl_assert(!prv_acquire_background());
+  cl_assert_equal_i(0, s_background_free_count);
+
+  mic_manager_release(MicClientAppCapture);
+  cl_assert_equal_i(1, s_background_free_count);
+  cl_assert(prv_acquire_background());
+  cl_assert(s_buffer == s_background_buffer);
+  cl_assert(!s_banner_visible);
+  mic_manager_release(MicClientBackground);
+  cl_assert(!s_mic_running);
+}
+
+void test_mic_manager__dictation_stops_the_background_at_its_start(void) {
+  cl_assert(prv_acquire_background());
+
+  mic_manager_set_dictation_active(true);
+  cl_assert_equal_i(1, s_background_preempted_count);
+  cl_assert_equal_i(MicClientNone, mic_manager_get_owner());
+  cl_assert(!s_mic_running);
+  cl_assert(!prv_acquire_background());
+
+  cl_assert(prv_acquire_dictation());
+  mic_manager_release(MicClientVoiceDictation);
+  // The session still holds the mic until it ends
+  cl_assert_equal_i(0, s_background_free_count);
+  mic_manager_set_dictation_active(false);
+  cl_assert_equal_i(1, s_background_free_count);
+  cl_assert(prv_acquire_background());
+  mic_manager_release(MicClientBackground);
+}
+
+void test_mic_manager__a_held_background_refuses_apps_but_not_dictation(void) {
+  cl_assert(prv_acquire_background());
+  mic_manager_set_background_held(true);
+  cl_assert(mic_manager_is_busy());
+  cl_assert(!prv_acquire_capture());
+  cl_assert(!mic_manager_reserve(MicClientAppStream));
+  cl_assert_equal_i(0, s_background_preempted_count);
+  cl_assert_equal_i(MicClientBackground, mic_manager_get_owner());
+
+  cl_assert(prv_acquire_dictation());
+  cl_assert_equal_i(1, s_background_preempted_count);
+  mic_manager_set_background_held(false);
+  mic_manager_release(MicClientVoiceDictation);
+  cl_assert_equal_i(1, s_background_free_count);
+}
+
+void test_mic_manager__an_app_reserves_over_the_background(void) {
+  cl_assert(prv_acquire_background());
+  cl_assert(mic_manager_reserve(MicClientAppStream));
+  // The background keeps recording until the app's start goes through
+  cl_assert_equal_i(MicClientBackground, mic_manager_get_owner());
+  cl_assert(s_mic_running);
+  // Another app cannot jump the reservation
+  cl_assert(!prv_acquire_capture());
+
+  cl_assert(prv_acquire_app());
+  cl_assert_equal_i(1, s_background_preempted_count);
+  mic_manager_release(MicClientAppStream);
+  cl_assert_equal_i(1, s_background_free_count);
+
+  // A start that never happens frees the mic too
+  cl_assert(mic_manager_reserve(MicClientAppStream));
+  cl_assert(!prv_acquire_background());
+  mic_manager_release(MicClientAppStream);
+  cl_assert_equal_i(2, s_background_free_count);
+}
+
+void test_mic_manager__a_background_that_stops_wanting_the_mic_is_not_told(void) {
+  cl_assert(prv_acquire_capture());
+  cl_assert(!prv_acquire_background());
+  mic_manager_release(MicClientBackground);
+  mic_manager_release(MicClientAppCapture);
+  cl_assert_equal_i(0, s_background_free_count);
+}
+
+void test_mic_manager__a_background_driver_failure_does_not_loop(void) {
+  // The driver is busy outside the manager: nothing will free it, so nobody is told
+  s_mic_running = true;
+  cl_assert(!prv_acquire_background());
+  cl_assert_equal_i(MicClientNone, mic_manager_get_owner());
+  cl_assert_equal_i(0, s_background_free_count);
 }

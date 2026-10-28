@@ -27,6 +27,12 @@ typedef struct {
   bool dictation_active;
   bool banner_dirty;  //!< Owner changed to or from an app since the last post
   bool banner_queued; //!< A banner sync is waiting on KernelMain
+  //! The background client holds the mic for a user action, so apps cannot take it
+  bool background_held;
+  //! The background client was refused or preempted, and is told once the mic is free
+  bool background_waiting;
+  MicManagerFreeCb background_free_cb;
+  void *background_free_context;
 } MicManagerState;
 
 static MicManagerState s_state;
@@ -36,7 +42,13 @@ void mic_manager_init(void) {
 }
 
 static bool prv_is_app(MicClient client) {
-  return (client != MicClientNone) && (client != MicClientVoiceDictation);
+  return (client != MicClientNone) && (client != MicClientVoiceDictation) &&
+         (client != MicClientBackground);
+}
+
+//! Whether an app may take the mic from its owner
+static bool prv_owner_yields_to_apps_locked(void) {
+  return (s_state.owner == MicClientBackground) && !s_state.background_held;
 }
 
 // The banner is UI, so it follows the owner from KernelMain whichever task changed it.
@@ -60,14 +72,46 @@ static void prv_set_owner_locked(MicClient client) {
 }
 
 //! Posts the banner sync only once unlocked: event_put() can block while KernelMain waits on us.
+//! The background client hears that the mic is free the same way.
 static void prv_unlock(void) {
   const bool post = s_state.banner_dirty && !s_state.banner_queued;
   s_state.banner_dirty = false;
   s_state.banner_queued |= post;
+  MicManagerFreeCb free_cb = nullptr;
+  void *free_context = nullptr;
+  if (s_state.background_waiting && (s_state.owner == MicClientNone) &&
+      (s_state.reserved == MicClientNone) && !s_state.preempting && !s_state.dictation_active) {
+    s_state.background_waiting = false;
+    free_cb = s_state.background_free_cb;
+    free_context = s_state.background_free_context;
+  }
   pbl_mutex_unlock(&s_lock);
   if (post) {
     launcher_task_add_callback(prv_sync_banner, nullptr);
   }
+  if (free_cb) {
+    free_cb(free_context);
+  }
+}
+
+static void prv_note_refused_locked(MicClient client) {
+  if (client == MicClientBackground) {
+    s_state.background_waiting = true;
+  }
+}
+
+//! Stops the owner's mic and returns its preempted callback, to be called once unlocked.
+static MicManagerPreemptedCb prv_take_mic_locked(void **preempt_context) {
+  const MicManagerPreemptedCb preempted_cb = s_state.on_preempted;
+  *preempt_context = s_state.preempt_context;
+  if (s_state.owner == MicClientBackground) {
+    s_state.background_waiting = true;
+  }
+  mic_stop(MIC);
+  prv_set_owner_locked(MicClientNone);
+  s_state.on_preempted = nullptr;
+  s_state.preempt_context = nullptr;
+  return preempted_cb;
 }
 
 static bool prv_start_locked(MicClient client, MicDataHandlerCB handler, void *context,
@@ -97,6 +141,9 @@ bool mic_manager_acquire(MicClient client, MicDataHandlerCB handler, void *conte
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
 
   if (s_state.preempting || (s_state.owner == client)) {
+    if (s_state.owner != client) {
+      prv_note_refused_locked(client);
+    }
     prv_unlock();
     return false;
   }
@@ -112,22 +159,22 @@ bool mic_manager_acquire(MicClient client, MicDataHandlerCB handler, void *conte
     return rv;
   }
 
-  if (client != MicClientVoiceDictation) {
-    // Apps never preempt anyone
+  // Dictation preempts anyone; apps preempt only a background owner that isn't held
+  const bool may_preempt =
+      (s_state.owner != MicClientNone) &&
+      ((client == MicClientVoiceDictation) ||
+       ((client != MicClientBackground) && !held_for_other && prv_owner_yields_to_apps_locked()));
+  if (!may_preempt) {
     PBL_LOG_DBG("Mic busy (owner %u, reserved %u), refusing client %u", s_state.owner,
                 s_state.reserved, client);
+    prv_note_refused_locked(client);
     prv_unlock();
     return false;
   }
 
-  // Dictation takes the mic away from the app
-  PBL_LOG_DBG("Dictation preempting mic owner %u", s_state.owner);
-  const MicManagerPreemptedCb preempted_cb = s_state.on_preempted;
-  void *preempted_ctx = s_state.preempt_context;
-  mic_stop(MIC);
-  prv_set_owner_locked(MicClientNone);
-  s_state.on_preempted = nullptr;
-  s_state.preempt_context = nullptr;
+  PBL_LOG_DBG("Client %u preempting mic owner %u", client, s_state.owner);
+  void *preempted_ctx;
+  const MicManagerPreemptedCb preempted_cb = prv_take_mic_locked(&preempted_ctx);
   s_state.preempting = true;
   prv_unlock();
 
@@ -148,8 +195,9 @@ bool mic_manager_reserve(MicClient client) {
     return false;
   }
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  const bool rv = !s_state.preempting && !s_state.dictation_active &&
-                  (s_state.owner == MicClientNone) && (s_state.reserved == MicClientNone);
+  const bool owner_free = (s_state.owner == MicClientNone) || prv_owner_yields_to_apps_locked();
+  const bool rv = !s_state.preempting && !s_state.dictation_active && owner_free &&
+                  (s_state.reserved == MicClientNone);
   if (rv) {
     s_state.reserved = client;
   }
@@ -159,6 +207,10 @@ bool mic_manager_reserve(MicClient client) {
 
 void mic_manager_release(MicClient client) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (client == MicClientBackground) {
+    // It no longer wants the mic, so it need not hear when the mic is free
+    s_state.background_waiting = false;
+  }
   if ((client != MicClientNone) && (s_state.reserved == client)) {
     s_state.reserved = MicClientNone;
   }
@@ -175,7 +227,17 @@ void mic_manager_release(MicClient client) {
 void mic_manager_set_dictation_active(bool active) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   s_state.dictation_active = active;
+  MicManagerPreemptedCb preempted_cb = nullptr;
+  void *preempted_ctx = nullptr;
+  if (active && (s_state.owner == MicClientBackground)) {
+    // The session needs the mic and the shared encoder from its start
+    PBL_LOG_DBG("Dictation stopping the background mic");
+    preempted_cb = prv_take_mic_locked(&preempted_ctx);
+  }
   prv_unlock();
+  if (preempted_cb) {
+    preempted_cb(preempted_ctx);
+  }
 }
 
 MicClient mic_manager_get_owner(void) {
@@ -187,10 +249,23 @@ MicClient mic_manager_get_owner(void) {
 
 bool mic_manager_is_busy(void) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
-  const bool busy = (s_state.owner != MicClientNone) || (s_state.reserved != MicClientNone) ||
-                    s_state.dictation_active;
+  const bool owner_busy = (s_state.owner != MicClientNone) && !prv_owner_yields_to_apps_locked();
+  const bool busy = owner_busy || (s_state.reserved != MicClientNone) || s_state.dictation_active;
   prv_unlock();
   return busy;
+}
+
+void mic_manager_set_background_free_cb(MicManagerFreeCb cb, void *context) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_state.background_free_cb = cb;
+  s_state.background_free_context = context;
+  prv_unlock();
+}
+
+void mic_manager_set_background_held(bool held) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_state.background_held = held;
+  prv_unlock();
 }
 
 MicManagerAppCheck mic_manager_check_app(PebbleTask task) {
