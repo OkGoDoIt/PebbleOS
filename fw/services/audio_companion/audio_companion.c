@@ -28,6 +28,7 @@
 #include "kernel/pbl_malloc.h"
 #include "pbl/kernel/mutex.h"
 #include "pbl/services/battery/battery_state.h"
+#include "pbl/services/mic_manager.h"
 #include "pbl/services/music.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/runlevel.h"
@@ -395,6 +396,8 @@ static bool s_capture_wanted;          //!< intent handed to prv_apply_capture()
 //! handler only adds frames to the recording when this is set (guarded by s_lock).
 static bool s_record_capture;
 static bool s_mic_started;             //!< driver really started; owned by prv_apply_capture()
+//! mic_manager has been told the mic is held for a question; owned by prv_apply_capture().
+static bool s_mic_held;
 //! Microphone duty accounting, for the diagnostics screen: total milliseconds the driver has been
 //! running, plus the uptime at which the current run began (0 while stopped). Owned by
 //! prv_apply_capture() like s_mic_started; read under s_lock by the diagnostics getter.
@@ -1243,6 +1246,7 @@ static bool prv_maybe_alert_loss_locked(void) {
 // ---- Capture ----
 
 static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context);
+static void prv_mic_preempted(void *context);
 
 //! Record that capture should be running. The mic driver is only touched later, by
 //! prv_apply_capture(), which the caller must invoke once it has dropped s_lock.
@@ -1271,11 +1275,38 @@ static void prv_stop_capture_locked(void) {
 //! mutex, and taking it under s_lock is the lock-order inversion described above. s_capture_lock
 //! serializes concurrent appliers and is itself never acquired while s_lock is held, so the
 //! global order stays acyclic: s_capture_lock -> mic mutex -> s_lock.
+//! Bookkeeping for a mic that stopped, released or taken. s_capture_lock held, s_lock not.
+static void prv_note_mic_stopped(void) {
+  s_mic_started = false;
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  if (s_mic_on_since_ms != 0) {
+    s_mic_on_ms_total += prv_uptime_ms() - s_mic_on_since_ms;
+    s_mic_on_since_ms = 0;
+  }
+  pbl_mutex_unlock(&s_lock);
+}
+
+//! A question holds the mic: apps cannot take it from us then, as from any foreground owner.
+//! s_capture_lock held, s_lock not.
+static void prv_sync_mic_hold(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool hold = s_capture_wanted && prv_ptt_capturing_locked();
+  pbl_mutex_unlock(&s_lock);
+  if (hold != s_mic_held) {
+    mic_manager_set_background_held(hold);
+    s_mic_held = hold;
+  }
+#endif
+}
+
 static void prv_apply_capture(void) {
   if (!s_initialized) {
     return;
   }
   pbl_mutex_lock(&s_capture_lock, PBL_FOREVER);
+  // Before any start, so a question is never open to an app between acquiring and holding
+  prv_sync_mic_hold();
   for (;;) {
     pbl_mutex_lock(&s_lock, PBL_FOREVER);
     const bool want = s_capture_wanted;
@@ -1286,19 +1317,10 @@ static void prv_apply_capture(void) {
     }
 
     if (!want) {
-      if (mic_is_running(MIC)) {
-        mic_stop(MIC);
-      }
-      if (voice_speex_is_initialized()) {
-        voice_speex_deinit();
-      }
-      s_mic_started = false;
-      pbl_mutex_lock(&s_lock, PBL_FOREVER);
-      if (s_mic_on_since_ms != 0) {
-        s_mic_on_ms_total += prv_uptime_ms() - s_mic_on_since_ms;
-        s_mic_on_since_ms = 0;
-      }
-      pbl_mutex_unlock(&s_lock);
+      mic_manager_release(MicClientBackground);
+      // The encoder stays: dictation and app streams share it and set it up only when it is
+      // missing, so freeing it here could pull it out from under one of them.
+      prv_note_mic_stopped();
       PBL_LOG_INFO("Audio companion: capture stopped");
       continue;  // intent may have flipped again while the driver call ran
     }
@@ -1308,10 +1330,8 @@ static void prv_apply_capture(void) {
       int16_t *frame_buffer = voice_speex_get_frame_buffer();
       const size_t frame_samples = voice_speex_get_frame_size();
       if (frame_buffer && frame_samples > 0) {
-        started = mic_start(MIC, prv_mic_data_handler, NULL, frame_buffer, frame_samples);
-      }
-      if (!started) {
-        voice_speex_deinit();
+        started = mic_manager_acquire(MicClientBackground, prv_mic_data_handler, NULL, frame_buffer,
+                                      frame_samples, prv_mic_preempted, NULL);
       }
     } else {
       PBL_LOG_ERR("Audio companion: speex init failed");
@@ -1328,7 +1348,7 @@ static void prv_apply_capture(void) {
       continue;
     }
 
-    // Mic already owned by someone else (e.g. dictation) or out of memory. Park on the conflict
+    // Mic owned by someone else (dictation, an app) or out of memory. Park on the conflict
     // state directly rather than re-running the state machine: prv_reevaluate_locked() would set
     // the intent straight back to "capture" and spin this loop on a start that cannot succeed.
     //
@@ -1359,6 +1379,7 @@ static void prv_apply_capture(void) {
     prv_arm_capture_retry_locked();
     pbl_mutex_unlock(&s_lock);
   }
+  prv_sync_mic_hold();
   pbl_mutex_unlock(&s_capture_lock);
 }
 
@@ -3599,7 +3620,10 @@ void audio_companion_fill_info(uint8_t *buf, size_t *length_in_out) {
               info.flags);
 }
 
-// ---- Mic arbitration (called from the voice service) ----
+// ---- Mic arbitration ----
+//
+// Recording is mic_manager's background client: dictation and foreground apps take the mic from
+// it, a question holds it like any foreground owner, and the manager says when it is free again.
 
 void audio_companion_mic_conflict_begin(void) {
   if (!s_initialized) {
@@ -3615,8 +3639,7 @@ void audio_companion_mic_conflict_begin(void) {
   s_mic_conflict_active = true;
   prv_reevaluate_locked();
   pbl_mutex_unlock(&s_lock);
-  // Synchronous: the voice service calls this immediately before claiming the mic itself, so the
-  // driver must actually be released before we return.
+  // Synchronous, so the conflict is settled before whoever took the mic carries on
   prv_apply_pending();
 }
 
@@ -3629,6 +3652,24 @@ void audio_companion_mic_conflict_end(void) {
   prv_reevaluate_locked();
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
+}
+
+//! The manager took the mic, on the taking task with the manager unlocked and the driver already
+//! stopped. The pause is a mic-conflict gap until prv_mic_free_cb() says the mic is free.
+static void prv_mic_preempted(void *context) {
+  pbl_mutex_lock(&s_capture_lock, PBL_FOREVER);
+  prv_note_mic_stopped();
+  pbl_mutex_unlock(&s_capture_lock);
+  audio_companion_mic_conflict_begin();
+}
+
+static void prv_mic_free_system_task_cb(void *data) {
+  audio_companion_mic_conflict_end();
+}
+
+//! Runs on the task that freed the mic, possibly under that client's locks, so it only posts.
+static void prv_mic_free_cb(void *context) {
+  system_task_add_callback(prv_mic_free_system_task_cb, NULL);
 }
 
 // ---- Battery policy ----
@@ -3780,6 +3821,7 @@ static void prv_record_boot_reboot_trace(void) {
 void audio_companion_init(void) {
   audio_companion_spool_init();
   audio_companion_auth_init();
+  mic_manager_set_background_free_cb(prv_mic_free_cb, NULL);
 
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   StoredMomentQueue moments;
@@ -4222,6 +4264,7 @@ void audio_companion_test_reset(void) {
   s_capture_wanted = false;
   s_record_capture = false;
   s_mic_started = false;
+  s_mic_held = false;
   s_mic_on_ms_total = 0;
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
   memset(&s_ptt, 0, sizeof(s_ptt));

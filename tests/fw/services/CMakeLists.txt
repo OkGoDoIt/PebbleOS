@@ -531,6 +531,7 @@ pbl_clar_test(test_audio_companion_auth
 pbl_clar_test(test_audio_companion
   SOURCES
     fw/services/audio_companion/audio_companion.c
+    fw/services/mic_manager/mic_manager.c
     fw/services/audio_companion/protocol.c
     fw/services/audio_companion/reboot_trace.c
     fw/services/audio_companion/spool.c
@@ -545,6 +546,7 @@ pbl_clar_test(test_audio_companion_ptt
   SOURCE test_audio_companion.c
   SOURCES
     fw/services/audio_companion/audio_companion.c
+    fw/services/mic_manager/mic_manager.c
     fw/services/audio_companion/assistant_view.c
     fw/services/audio_companion/protocol.c
     fw/services/audio_companion/reboot_trace.c

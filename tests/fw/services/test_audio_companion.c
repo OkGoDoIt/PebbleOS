@@ -14,6 +14,7 @@
 #include "system/reboot_reason.h"
 
 #include <pbl/drivers/mic.h>
+#include <pbl/services/mic_manager.h>
 #include <pbl/drivers/rtc.h>
 #include <pbl/drivers/watchdog.h>
 #include <pbl/task_wdt/task_wdt.h>
@@ -867,6 +868,7 @@ void test_audio_companion__initialize(void) {
   s_find_seconds = 0;
 #endif
   audio_companion_test_reset();
+  mic_manager_init();
   audio_companion_init();
 }
 
@@ -2290,6 +2292,90 @@ void test_audio_companion__a_mic_conflict_retries_itself(void) {
   cl_assert(s_mic_running);
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
   cl_assert_equal_b(stub_new_timer_is_scheduled(retry), false);
+}
+
+// ---- mic_manager arbitration ----
+//
+// Recording is the manager's background client. A foreground app or dictation wanting the mic
+// gets it, the pause is a mic-conflict gap rather than silence, and recording comes back by
+// itself once the mic is free.
+
+static int16_t s_other_mic_buffer[AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES];
+
+static void prv_other_mic_handler(int16_t *samples, size_t sample_count, void *context) {
+}
+
+static bool prv_other_takes_mic(MicClient client) {
+  return mic_manager_acquire(client, prv_other_mic_handler, NULL, s_other_mic_buffer,
+                             AUDIO_COMPANION_DEFAULT_FRAME_SAMPLES, NULL, NULL);
+}
+
+void test_audio_companion__an_app_takes_the_mic_and_recording_resumes_after(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientBackground);
+  // Recording alone never makes an app see the mic as busy
+  cl_assert(!mic_manager_is_busy());
+
+  cl_assert(prv_other_takes_mic(MicClientAppCapture));
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientAppCapture);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+  cl_assert_equal_i(prv_diag().mic_conflicts, 1);
+
+  s_uptime_seconds += 5;
+  mic_manager_release(MicClientAppCapture);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientBackground);
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+
+  s_data_count = 0;
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+  AudioCompanionStreamGapMsg gap;
+  cl_assert(prv_last_gap_with_reason(AudioCompanionGapReasonMicConflict, &gap));
+  // The whole time the app had the mic, up to the first frame after it
+  cl_assert_equal_i(gap.missing_frame_count, (5000 - 20) / 20);
+}
+
+void test_audio_companion__dictation_stops_recording_at_its_start_and_gives_the_mic_back(void) {
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  prv_feed_frames(TEST_DRAIN_PUSH_FRAMES);
+
+  mic_manager_set_dictation_active(true);
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+  cl_assert_equal_i(prv_diag().mic_conflicts, 1);
+
+  cl_assert(prv_other_takes_mic(MicClientVoiceDictation));
+  mic_manager_release(MicClientVoiceDictation);
+  fake_system_task_callbacks_invoke_pending();
+  // Still the dictation session's until it ends
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+
+  mic_manager_set_dictation_active(false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(s_mic_running);
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientBackground);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+}
+
+void test_audio_companion__recording_waits_for_an_app_already_on_the_mic(void) {
+  cl_assert(prv_other_takes_mic(MicClientAppStream));
+  audio_companion_set_enabled(true);
+  prv_subscribe(true, true);
+  prv_authenticate();
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientAppStream);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+
+  mic_manager_release(MicClientAppStream);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientBackground);
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
 }
 
 // The boot-time flight recorder is the only thing that survives a watchdog reset, so it has to
@@ -4294,5 +4380,53 @@ void test_audio_companion__timer_management_payload_validation(void) {
   cl_assert(watch_actions_parse(payload, sizeof(payload), &request, &status));
   payload[10] = 2;
   cl_assert(!watch_actions_parse(payload, sizeof(payload), &request, &status));
+#endif
+}
+
+// A question is a foreground use of the mic: apps are refused while it is asked, as they would be
+// by any other owner, and dictation still wins.
+void test_audio_companion__ptt_a_question_holds_the_mic_against_apps(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  prv_ptt_receiver_ready(true);
+  cl_assert(!mic_manager_is_busy());
+
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(mic_manager_is_busy());
+  cl_assert(!prv_other_takes_mic(MicClientAppCapture));
+  cl_assert(!mic_manager_reserve(MicClientAppStream));
+  cl_assert_equal_i(mic_manager_get_owner(), MicClientBackground);
+
+  audio_companion_ptt_handle_button(BUTTON_ID_SELECT, false);
+  fake_system_task_callbacks_invoke_pending();
+  // Recording carries on, and is the app's to take again
+  cl_assert(s_mic_running);
+  cl_assert(!mic_manager_is_busy());
+  cl_assert(prv_other_takes_mic(MicClientAppCapture));
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStatePausedConflict);
+  mic_manager_release(MicClientAppCapture);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateStreaming);
+#endif
+}
+
+void test_audio_companion__ptt_dictation_ends_a_question(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
+  prv_ptt_receiver_ready(false);
+  cl_assert(audio_companion_ptt_arm(BUTTON_ID_SELECT, AudioCompanionPttTriggerInApp));
+  fake_system_task_callbacks_invoke_pending();
+  prv_feed_frames(20);
+  audio_companion_ptt_commit();
+  fake_system_task_callbacks_invoke_pending();
+
+  mic_manager_set_dictation_active(true);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!s_mic_running);
+  cl_assert_equal_i(prv_view().phase, AudioCompanionAssistantPhaseError);
+  cl_assert_equal_i(prv_view().error, AUDIO_COMPANION_ASSISTANT_ERROR_MIC_UNAVAILABLE);
+  // The hold went with the question
+  mic_manager_set_dictation_active(false);
+  fake_system_task_callbacks_invoke_pending();
+  cl_assert(!mic_manager_is_busy());
 #endif
 }

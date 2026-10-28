@@ -22,9 +22,6 @@
 #include <pbl/services/voice/voice_speex.h>
 #include <pbl/services/voice_endpoint.h>
 #include <pbl/util/uuid.h>
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION
-#include <pbl/services/audio_companion.h>
-#endif
 
 #include <board/board.h>
 #include <kernel/events.h>
@@ -67,9 +64,6 @@ static TimerID s_timeout = TIMER_INVALID_ID;
 static uint32_t s_session_generation = 0;   // Monotonic session counter
 static uint32_t s_timeout_generation = 0;   // Generation tied to currently scheduled timeout
 static bool s_teardown_in_progress = false; // Debounce concurrent teardown paths
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION
-static bool s_audio_companion_conflict_active;
-#endif
 
 static void prv_send_event(VoiceEventType event_type, VoiceStatus status,
                            PebbleVoiceServiceEventData *data);
@@ -118,12 +112,6 @@ static void prv_teardown_session(void) {
     comm_session_set_responsiveness(comm_session, PBL_BT_CONSUMER_PP_VOICE_ENDPOINT,
                                     PBL_BT_RESPONSE_TIME_MAX, 0);
   }
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION
-  if (s_audio_companion_conflict_active) {
-    s_audio_companion_conflict_active = false;
-    audio_companion_mic_conflict_end();
-  }
-#endif
 }
 
 static void prv_stop_recording(void) {
@@ -385,19 +373,10 @@ VoiceSessionId voice_start_dictation(VoiceEndpointSessionType session_type) {
   }
   mic_manager_set_dictation_active(true);
 
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION
-  audio_companion_mic_conflict_begin();
-  s_audio_companion_conflict_active = true;
-#endif
-
   // Lazily initialize Speex encoder to avoid baseline memory usage when voice not used
   if (!voice_speex_is_initialized()) {
     if (!voice_speex_init()) {
       PBL_LOG_ERR("Failed to initialize Speex encoder");
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION
-      audio_companion_mic_conflict_end();
-      s_audio_companion_conflict_active = false;
-#endif
       prv_reset();
       pbl_mutex_unlock(&s_lock);
       return VOICE_SESSION_ID_INVALID;

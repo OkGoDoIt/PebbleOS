@@ -5,6 +5,7 @@ config SERVICE_AUDIO_COMPANION
     depends on MIC && SERVICE_VOICE
     select BT_SERVICE_AUDIO_COMPANION if BT
     select MBEDTLS
+    select SERVICE_MIC_MANAGER
     select MIC_SF32LB_CAPTURE_DEEP_WFI if MIC_SF32LB
     help
       Background microphone streaming to an authorized third-party audio

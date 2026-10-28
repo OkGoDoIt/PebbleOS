@@ -139,7 +139,8 @@ AudioCompanionMarkResult audio_companion_mark_moment(void);
 //! User revoke from watch Settings: wipes identity, notifies the app, stops.
 void audio_companion_forget_receiver(void);
 
-//! Mic arbitration, called by the voice service. Dictation always wins.
+//! Pause recording because someone else has the mic, and resume once it is free. mic_manager
+//! drives these; dictation and foreground apps always win.
 void audio_companion_mic_conflict_begin(void);
 void audio_companion_mic_conflict_end(void);
 
