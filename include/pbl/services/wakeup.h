@@ -5,10 +5,11 @@
 
 #include <stdint.h>
 #include <time.h>
-#include <pbl/util/uuid.h>
-#include <system/status_codes.h>
 
 #include <pbl/services/new_timer/new_timer.h>
+#include <pbl/util/uuid.h>
+
+#include <system/status_codes.h>
 
 /**
  * @defgroup services_wakeup Wakeup

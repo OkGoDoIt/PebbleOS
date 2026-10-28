@@ -5,7 +5,6 @@
 #include "pbl/services/audio_companion.h"
 #endif
 #include "event_loop.h"
-
 #include "events.h"
 
 #include <inttypes.h>

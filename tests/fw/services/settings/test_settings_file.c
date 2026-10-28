@@ -52,7 +52,8 @@ void test_settings_file__failed_transaction_preserves_original_after_reopen(void
   uint32_t key = 1, original = 42, read = 0;
   cl_must_pass(settings_file_open(&file, "test-transaction", 4096));
   cl_must_pass(settings_file_set(&file, &key, sizeof(key), &original, sizeof(original)));
-  cl_assert_equal_i(settings_file_transaction(&file, prv_refused_transaction, NULL), E_OUT_OF_STORAGE);
+  cl_assert_equal_i(settings_file_transaction(&file, prv_refused_transaction, NULL),
+                    E_OUT_OF_STORAGE);
   cl_must_pass(settings_file_get(&file, &key, sizeof(key), &read, sizeof(read)));
   cl_assert_equal_i(read, original);
   settings_file_close(&file);
@@ -67,7 +68,8 @@ typedef struct {
   jmp_buf recovery;
 } TransactionPowerLoss;
 
-static status_t prv_power_loss_transaction(SettingsFile *old, SettingsFile *replacement, void *data) {
+static status_t prv_power_loss_transaction(SettingsFile *old, SettingsFile *replacement,
+                                           void *data) {
   TransactionPowerLoss *test = data;
   uint32_t key = 1, changed = 99;
   cl_must_pass(settings_file_set(replacement, &key, sizeof(key), &changed, sizeof(changed)));

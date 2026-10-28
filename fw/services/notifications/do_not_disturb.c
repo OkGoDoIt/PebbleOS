@@ -279,11 +279,12 @@ bool do_not_disturb_is_manually_enabled(void) {
 }
 
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
-uint32_t do_not_disturb_manual_revision(void) { return s_data.manual_revision; }
+uint32_t do_not_disturb_manual_revision(void) {
+  return s_data.manual_revision;
+}
 
 uint8_t do_not_disturb_source_bits(void) {
-  return (do_not_disturb_is_active() ? 1 : 0) |
-         (do_not_disturb_is_manually_enabled() ? 2 : 0) |
+  return (do_not_disturb_is_active() ? 1 : 0) | (do_not_disturb_is_manually_enabled() ? 2 : 0) |
          (prv_is_schedule_active() ? 4 : 0) | (prv_is_smart_dnd_active() ? 8 : 0) |
          (s_data.phone_focus && !s_data.phone_focus_overridden ? 16 : 0) |
          (s_data.manually_override_dnd || s_data.phone_focus_overridden ? 32 : 0);

@@ -323,8 +323,7 @@ void settings_menu_reload_rows(SettingsMenuItem category, int16_t select_row) {
       index.row = select_row;
     }
     // Clamps the selection to the new row count
-    menu_layer_set_selected_index(&data->menu_layer, index, MenuRowAlignNone,
-                                  false /* animated */);
+    menu_layer_set_selected_index(&data->menu_layer, index, MenuRowAlignNone, false /* animated */);
   }
 }
 

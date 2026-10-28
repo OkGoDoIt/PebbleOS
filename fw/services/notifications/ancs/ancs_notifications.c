@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <string.h>
+
 #include <pbl/drivers/rtc.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
@@ -23,8 +25,6 @@
 
 #include <comm/ble/kernel_le_client/ancs/ancs_types.h>
 #include <kernel/pbl_malloc.h>
-
-#include <string.h>
 
 PBL_LOG_MODULE_DECLARE(service_notifications, CONFIG_SERVICE_NOTIFICATIONS_LOG_LEVEL);
 
@@ -246,7 +246,7 @@ static bool prv_should_ignore_because_muted(const iOSNotifPrefs *app_notif_prefs
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
 //! The audio companion app hands a Muse answer to the phone with a notification there ("Muse sent
 //! a link"). The watch has already shown that answer, so iOS's copy of it is dropped.
-#define AUDIO_COMPANION_APP_ID_PREFIX "dev.audiocompanion.app"
+#define AUDIO_COMPANION_APP_ID_PREFIX        "dev.audiocompanion.app"
 #define AUDIO_COMPANION_HANDOFF_TITLE_PREFIX "Muse"
 
 static bool prv_attribute_has_prefix(const ANCSAttribute *attr, const char *prefix) {

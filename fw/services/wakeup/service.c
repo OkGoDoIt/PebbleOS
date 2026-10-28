@@ -523,8 +523,8 @@ static bool prv_copy_other_wakeups(SettingsFile *file, SettingsRecordInfo *info,
   info->get_key(file, &id, sizeof(id));
   info->get_val(file, &entry, sizeof(entry));
   if (!uuid_equal(&entry.uuid, context->uuid)) {
-    context->status = settings_file_set(context->destination, &id, sizeof(id), &entry,
-                                        sizeof(entry));
+    context->status =
+        settings_file_set(context->destination, &id, sizeof(id), &entry, sizeof(entry));
   }
   return context->status >= 0;
 }

@@ -684,7 +684,7 @@ static bool prv_rewrite_cb(SettingsFile *file, SettingsRecordInfo *info, void *c
   return true; // continue iterating
 }
 static status_t prv_rewrite_transaction(SettingsFile *old_file, SettingsFile *new_file,
-                                         void *context) {
+                                        void *context) {
   RewriteCbContext *cb_ctx = context;
   cb_ctx->new_file = new_file;
   return settings_file_each(old_file, prv_rewrite_cb, cb_ctx);

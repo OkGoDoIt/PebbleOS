@@ -796,9 +796,9 @@ void test_hrm_manager__system_task_callback_runs_unlocked(void) {
   stub_pebble_tasks_set_current(PebbleTask_KernelBackground);
   s_cb_ran_with_locks_held = false;
 
-  HRMSessionRef session_ref = hrm_manager_subscribe_with_callback(
-      INSTALL_ID_INVALID, 1, PBL_SEC_PER_MIN, HRMFeature_BPM, false /*low_latency*/,
-      prv_lock_checking_hrm_cb, NULL);
+  HRMSessionRef session_ref =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 1, PBL_SEC_PER_MIN, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_lock_checking_hrm_cb, NULL);
   fake_system_task_callbacks_invoke_pending();
   prv_fake_send_new_data();
   fake_system_task_callbacks_invoke_pending();

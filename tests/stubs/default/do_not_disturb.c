@@ -20,4 +20,5 @@ void PBL_WEAK do_not_disturb_toggle_manually_enabled(ManualDNDFirstUseSource sou
 void PBL_WEAK do_not_disturb_handle_pref_synced(void) {
 }
 
-void do_not_disturb_set_phone_focus(bool enabled) {}
+void do_not_disturb_set_phone_focus(bool enabled) {
+}
