@@ -89,6 +89,8 @@ typedef struct PeekWidgetsTestState {
   AppInstallId installed_app_id;
   // Notification storage
   bool notif_exists;
+  bool notif_phone_silent;        //!< Silenced on the phone (TimelineItemFlagSilent)
+  bool respect_phone_silence;     //!< The wearer's "respect the phone's silence" pref
   uint32_t notif_icon;            //!< The notification's own icon; 0 = it carries none
   Uuid stored_notif_id;
   // Watchface hook
@@ -288,6 +290,10 @@ DndNotificationMode alerts_preferences_dnd_get_show_notifications(void) {
   return s_test.dnd_mode;
 }
 
+bool alerts_preferences_get_notification_respect_phone_silence(void) {
+  return s_test.respect_phone_silence;
+}
+
 AppInstallId app_install_get_id_for_uuid(const Uuid *uuid) {
   if (uuid_equal(uuid, &s_test.installed_app_uuid)) {
     return s_test.installed_app_id;
@@ -385,6 +391,7 @@ bool notification_storage_get(const Uuid *id, TimelineItem *item_out) {
       .timestamp = rtc_get_time(),
       .type = TimelineItemTypeNotification,
       .layout = LayoutIdNotification,
+      .silent = s_test.notif_phone_silent,
     },
     .attr_list = {
       // The icon attribute is only present when the notification actually carries one
@@ -1408,4 +1415,34 @@ void test_peek_widgets__button_state_hook_fires(void) {
   const unsigned int before = s_test.num_button_state_calls;
   prv_start_playing();
   cl_assert(s_test.num_button_state_calls > before);
+}
+
+void test_peek_widgets__a_notification_silenced_on_the_phone_is_muted(void) {
+  // Peek style: the popup is gone either way, and a muted notification only peeks when asked
+  s_test.defer_callbacks = true;
+  s_test.notif_exists = true;
+  s_test.notif_phone_silent = true;
+  s_test.respect_phone_silence = true;
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_None);
+
+  // The wearer didn't ask to respect the phone: it alerts like any other
+  s_test.respect_phone_silence = false;
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
+}
+
+void test_peek_widgets__show_when_muted_peeks_a_notification_silenced_on_the_phone(void) {
+  // With a popup style the popup is skipped, so nothing would ever show it
+  s_test.defer_callbacks = true;
+  s_test.notif_style = QuickViewNotifStyle_FullScreenPeekIfMissed;
+  s_test.notif_muted = true;
+  s_test.notif_exists = true;
+  s_test.notif_phone_silent = true;
+  s_test.respect_phone_silence = true;
+  prv_send_notification_added(&s_notif_uuid);
+  prv_run_queued_callbacks();
+  cl_assert_equal_i(s_test.last_source, PeekWidgetSource_Notification);
 }

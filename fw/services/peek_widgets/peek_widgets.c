@@ -20,6 +20,7 @@
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/notifications/alerts.h"
 #include "pbl/services/notifications/alerts_preferences.h"
+#include "pbl/services/notifications/alerts_preferences_private.h"
 #include "pbl/services/notifications/do_not_disturb.h"
 #include "pbl/services/notifications/notification_storage.h"
 #include "pbl/services/timeline/attribute.h"
@@ -461,20 +462,36 @@ static void prv_maybe_activate_main_cb(void *data) {
   prv_maybe_activate_armed_notification();
 }
 
+//! Silenced on the phone, when the wearer asked the watch to respect that: no popup and no
+//! vibration, so it is as muted as one Quiet Time hides.
+static bool prv_notification_is_phone_silenced(const Uuid *id) {
+  if (!alerts_preferences_get_notification_respect_phone_silence()) {
+    return false;
+  }
+  TimelineItem item = {};
+  if (!notification_storage_get(id, &item)) {
+    return false;
+  }
+  const bool silent = item.header.silent;
+  timeline_item_free_allocated_buffer(&item);
+  return silent;
+}
+
 void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
   switch (event->type) {
     case NotificationAdded: {
       if (quick_view_prefs_get_notif_seconds() == 0) {
         return;
       }
-      // A notification the Alerts filter, Quiet Time or low power muted gets no popup or
-      // vibration; it shows here only as the silent peek the muted pref asks for. One that
-      // alerts shows here at once only in place of the popup; with a popup it comes here only
-      // if the popup is missed (peek_widgets_handle_notification_missed).
+      // A notification the Alerts filter, Quiet Time, low power or the phone muted gets no
+      // popup or vibration; it shows here only as the silent peek the muted pref asks for. One
+      // that alerts shows here at once only in place of the popup; with a popup it comes here
+      // only if the popup is missed (peek_widgets_handle_notification_missed).
       const bool muted =
           (do_not_disturb_is_active() &&
            (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide)) ||
-          !alerts_should_notify_for_type(AlertMobile);
+          !alerts_should_notify_for_type(AlertMobile) ||
+          prv_notification_is_phone_silenced(event->notification_id);
       if (muted ? !quick_view_prefs_get_notif_muted_enabled()
                 : (quick_view_prefs_get_notif_style() != QuickViewNotifStyle_Peek)) {
         return;
