@@ -1326,3 +1326,27 @@ void test_do_not_disturb__phone_focus_manual_override_lasts_until_focus_ends(voi
   cl_assert(!do_not_disturb_is_active());
 #endif
 }
+
+void test_do_not_disturb__phone_focus_outlasts_a_schedule_ending(void) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  // Manual on before the phone's Focus began; the schedule ending turns manual off, which is
+  // not the wearer turning Quiet Time off, so the Focus still holds it
+  DoNotDisturbSchedule schedule = {.from_hour = 1, .to_hour = 12, .to_minute = 30};
+  prv_set_schedule(WeekdaySlot, &schedule);
+  prv_set_schedule_enabled(WeekdaySlot, true);
+  do_not_disturb_set_manually_enabled(true);
+  rtc_set_time(s_thursday_12_00);
+  do_not_disturb_handle_clock_change();
+  do_not_disturb_set_phone_focus(true);
+  const uint32_t revision = do_not_disturb_manual_revision();
+
+  rtc_set_time(s_thursday_13_00);
+  do_not_disturb_handle_clock_change();
+  cl_assert(!do_not_disturb_is_manually_enabled());
+  cl_assert(do_not_disturb_is_active());
+  cl_assert_equal_i(do_not_disturb_manual_revision(), revision);
+
+  do_not_disturb_set_phone_focus(false);
+  cl_assert(!do_not_disturb_is_active());
+#endif
+}

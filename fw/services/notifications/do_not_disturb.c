@@ -53,6 +53,7 @@ static struct pbl_cron_job s_schedule_midnight_jobs[DND_NUM_SCHEDULE_SLOTS];
 static bool prv_is_smart_dnd_active(void);
 static bool prv_is_schedule_active(void);
 static void prv_update_schedule_mode(void);
+static void prv_set_manually_enabled(bool enable);
 
 static void prv_update_active_time(bool is_active) {
   if (is_active) {
@@ -237,7 +238,7 @@ static void prv_update_schedule_mode(void) {
 
   // Coming out of scheduled DND with manual DND on, turning it off
   if (s_data.is_in_schedule_period && !in_period && do_not_disturb_is_manually_enabled()) {
-    do_not_disturb_set_manually_enabled(false);
+    prv_set_manually_enabled(false);
   }
   s_data.is_in_schedule_period = in_period;
   PBL_LOG_DBG("%s scheduled period", s_data.is_in_schedule_period ? "In" : "Out of");
@@ -298,13 +299,7 @@ void do_not_disturb_set_phone_focus(bool enabled) {
 }
 #endif
 
-void do_not_disturb_set_manually_enabled(bool enable) {
-#ifdef CONFIG_SERVICE_AUDIO_COMPANION
-  s_data.manual_revision++;
-  if (!enable && s_data.phone_focus) {
-    s_data.phone_focus_overridden = true;
-  }
-#endif
+static void prv_set_manually_enabled(bool enable) {
   const bool is_auto_dnd = s_data.is_in_schedule_period || do_not_disturb_is_smart_dnd_enabled();
   const bool was_active = do_not_disturb_is_active();
 
@@ -314,6 +309,16 @@ void do_not_disturb_set_manually_enabled(bool enable) {
     s_data.manually_override_dnd = true;
   }
   prv_do_update();
+}
+
+void do_not_disturb_set_manually_enabled(bool enable) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  s_data.manual_revision++;
+  if (!enable && s_data.phone_focus) {
+    s_data.phone_focus_overridden = true;
+  }
+#endif
+  prv_set_manually_enabled(enable);
 }
 
 void do_not_disturb_toggle_manually_enabled(ManualDNDFirstUseSource source) {
