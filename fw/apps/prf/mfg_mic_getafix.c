@@ -3,27 +3,28 @@
 
 #include "mfg_mic_getafix.h"
 
+#include "mfg_audio.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <pbl/drivers/flash.h>
-#include <pbl/drivers/mic.h>
-#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/malloc.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/math.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/text_layer.h>
 #include <applib/ui/window.h>
 #include <apps/prf/mfg_test_result.h>
-#include <board/board.h>
-#include <flash_region/flash_region.h>
-#include <kernel/pbl_malloc.h>
 #include <mfg/mfg_info.h>
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
+#include <system/firmware_storage.h>
 
 // Kiss FFT from Speex library - must include config and os_support before kiss_fft headers
 // Save and undefine ABS to avoid redefinition warning with Speex's arch.h
@@ -39,16 +40,14 @@
 #define SAMPLE_BITS           16
 #define FFT_SIZE              1024
 #define MAX_CHANNELS          2
-#define PCM_BUFFER_SIZE       1024
 
 // Calculate total samples and flash requirements
 #define N_SAMPLES         (MAX_CHANNELS * ((SAMPLE_RATE_HZ * RECORDING_DURATION_MS) / 1000))
 #define SAMPLE_SIZE_BYTES (SAMPLE_BITS / 8)
 #define BLOCK_SIZE        (N_SAMPLES * SAMPLE_SIZE_BYTES)
 
-#define FLASH_START FLASH_REGION_FIRMWARE_DEST_BEGIN
-#define FLASH_END \
-  (FLASH_REGION_FIRMWARE_DEST_BEGIN + ROUND_TO_MOD_CEIL(BLOCK_SIZE, SUBSECTOR_SIZE_BYTES))
+#define FLASH_START PART_FIRMWARE_DEST_OFFSET
+#define FLASH_END (PART_FIRMWARE_DEST_OFFSET + ROUND_TO_MOD_CEIL(BLOCK_SIZE, SUBSECTOR_SIZE_BYTES))
 
 // Target frequency: 1 kHz ± 100 Hz
 #define TARGET_FREQ_HZ    1000
@@ -79,7 +78,6 @@ typedef struct {
   char mic1_text[STATUS_STR_LEN];
   char mic2_text[STATUS_STR_LEN];
 
-  int16_t pcm[PCM_BUFFER_SIZE];
   uint32_t flash_addr;
 
   TestState state;
@@ -105,7 +103,7 @@ static int prv_find_peak_frequency(int16_t *samples, size_t sample_count) {
   }
 
   // Allocate frequency domain buffer (FFT_SIZE/2 + 1 complex points)
-  kiss_fft_cpx *freq_data = kernel_malloc_check((FFT_SIZE / 2 + 1) * sizeof(kiss_fft_cpx));
+  kiss_fft_cpx *freq_data = pbl_malloc_check((FFT_SIZE / 2 + 1) * sizeof(kiss_fft_cpx));
 
   // Perform real FFT
   kiss_fftr(fft_cfg, samples, freq_data);
@@ -135,7 +133,7 @@ static int prv_find_peak_frequency(int16_t *samples, size_t sample_count) {
                (long)max_magnitude);
 
   // Clean up
-  kernel_free(freq_data);
+  pbl_free(freq_data);
   kiss_fftr_free(fft_cfg);
 
   // Check if magnitude is above threshold
@@ -164,14 +162,14 @@ static void prv_interleaved_to_non_interleaved(int16_t *audio_data, size_t frame
 
 // Separate channels for dual microphone analysis from flash
 static void prv_analyze_dual_mic(AppData *data) {
-  uint32_t num_channels = mic_get_channels(MIC);
+  const uint32_t num_channels = MAX_CHANNELS;
 
   // Allocate temporary buffer for FFT analysis
-  int16_t *fft_buffer = kernel_malloc_check(FFT_SIZE * 2 * sizeof(int16_t));
+  int16_t *fft_buffer = pbl_malloc_check(FFT_SIZE * 2 * sizeof(int16_t));
 
   while (data->flash_addr - FLASH_START < BLOCK_SIZE) {
     // Read first portion of data from flash for FFT analysis
-    flash_read_bytes((uint8_t *)fft_buffer, data->flash_addr, FFT_SIZE * 2 * sizeof(int16_t));
+    pbl_flash_read(FLASH, data->flash_addr, (uint8_t *)fft_buffer, FFT_SIZE * 2 * sizeof(int16_t));
     data->flash_addr += FFT_SIZE * 2 * sizeof(int16_t);
     if (num_channels == 2) {
       // Convert interleaved stereo to non-interleaved format
@@ -219,11 +217,11 @@ static void prv_analyze_dual_mic(AppData *data) {
       snprintf(data->mic2_text, STATUS_STR_LEN, "Mic 2: N/A");
     }
   }
-  kernel_free(fft_buffer);
+  pbl_free(fft_buffer);
 }
 
 // Microphone data callback - writes to flash
-static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *context) {
+static void prv_mic_data_handler(int16_t *samples, size_t sample_count) {
   AppData *data = app_state_get_user_data();
 
   if (data->state != TestState_Recording) {
@@ -233,7 +231,7 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   // Write samples to flash
   if (data->flash_addr - FLASH_START + (sample_count * sizeof(int16_t)) > BLOCK_SIZE) {
     // Recording complete
-    mic_stop(MIC);
+    mfg_audio_capture_stop();
     data->flash_addr = FLASH_START;
     data->state = TestState_Analyzing;
     snprintf(data->status_text, STATUS_STR_LEN, "Analyzing...");
@@ -246,13 +244,13 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
 
     data->state = TestState_Complete;
     snprintf(data->status_text, STATUS_STR_LEN, passed ? "PASS" : "FAIL");
-    data->result_display_start = rtc_get_ticks();
+    data->result_display_start = pbl_uptime_ticks();
 
     return;
   }
 
   // Write to flash
-  flash_write_bytes((uint8_t *)samples, data->flash_addr, sample_count * sizeof(int16_t));
+  pbl_flash_write(FLASH, data->flash_addr, (uint8_t *)samples, sample_count * sizeof(int16_t));
   data->flash_addr += sample_count * sizeof(int16_t);
 
   // Update progress
@@ -269,24 +267,21 @@ static void prv_start_test(void) {
   data->flash_addr = FLASH_START;
 
   // Erase flash region for recording
-  flash_region_erase_optimal_range(FLASH_START, FLASH_START, FLASH_END, FLASH_END);
+  pbl_flash_erase(FLASH, FLASH_START, FLASH_END - FLASH_START);
 
-  uint32_t num_channels = mic_get_channels(MIC);
+  const uint32_t num_channels = MAX_CHANNELS;
 
   snprintf(data->status_text, STATUS_STR_LEN, "Recording...");
 
   PBL_LOG_INFO("Starting microphone test (channels=%lu, block_size=%lu)",
                (unsigned long)num_channels, (unsigned long)BLOCK_SIZE);
 
-  mic_init(MIC);
-  mic_set_volume(MIC, 100); // maximum volume
-
-  if (!mic_start(MIC, prv_mic_data_handler, nullptr, data->pcm, PCM_BUFFER_SIZE)) {
+  if (mfg_audio_capture_start(MAX_CHANNELS, INT32_MAX, prv_mic_data_handler) != 0) {
     PBL_LOG_ERR("Failed to start microphone");
     mfg_test_result_report(MfgTestId_Mic, false, 0);
     data->state = TestState_Failed;
     snprintf(data->status_text, STATUS_STR_LEN, "Mic start failed");
-    data->result_display_start = rtc_get_ticks();
+    data->result_display_start = pbl_uptime_ticks();
   }
 }
 
@@ -312,7 +307,7 @@ static void prv_timer_callback(void *cb_data) {
 
   // Auto-close after result display timeout
   if (data->state == TestState_Complete || data->state == TestState_Failed) {
-    uint32_t elapsed = (uint32_t)(rtc_get_ticks() - data->result_display_start);
+    uint32_t elapsed = (uint32_t)(pbl_uptime_ticks() - data->result_display_start);
     if (elapsed >= RESULT_DISPLAY_MS) {
       app_window_stack_pop(false);
       return;
@@ -396,7 +391,7 @@ static void s_main(void) {
   app_event_loop();
 
   // Cleanup
-  mic_stop(MIC);
+  mfg_audio_capture_stop();
 }
 
 const PebbleProcessMd *mfg_mic_getafix_app_get_info(void) {

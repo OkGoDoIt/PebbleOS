@@ -11,6 +11,9 @@ PBL_WEAK int pbl_thread_create(struct pbl_thread *t, const struct pbl_thread_att
   return 0;
 }
 
+PBL_WEAK void pbl_thread_regions_default_set(const struct pbl_mpu_region *const *regions) {
+}
+
 PBL_WEAK void pbl_thread_abort(struct pbl_thread *t) {
 }
 
@@ -40,9 +43,6 @@ PBL_WEAK pbl_prio_t pbl_thread_prio_get(const struct pbl_thread *t) {
 
 PBL_WEAK enum pbl_thread_state pbl_thread_state(const struct pbl_thread *t) {
   return PBL_THREAD_READY;
-}
-
-PBL_WEAK void pbl_thread_regions_set(struct pbl_thread *t, const MpuRegion *const *regions) {
 }
 
 PBL_WEAK void pbl_thread_saved_regs(const struct pbl_thread *t,

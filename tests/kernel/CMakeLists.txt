@@ -5,6 +5,7 @@ pbl_clar_test(test_kernel
   SOURCES
     kernel/tick.c
     kernel/time.c
+    kernel/timer.c
     kernel/sched.c
     kernel/thread.c
     kernel/mutex.c
@@ -16,12 +17,31 @@ pbl_clar_test(test_kernel
     kernel/arch/posix/arch.c
     kernel/arch/posix/cycle.c
     kernel/arch/posix/test.c
+    kernel/timekeeping.c
+    drivers/base/device.c
+    drivers/timer/timer.c
   INCLUDES
     kernel
     kernel/arch
     kernel/arch/posix/include
   DEFINES
+    PBL_NO_LINKER_SCRIPT
+    CONFIG_DEVICE_LOG_LEVEL=0
     CONFIG_KERNEL_IDLE_STACK_SIZE=1024
+)
+
+pbl_clar_test(test_timekeeping
+  SOURCES
+    kernel/timekeeping.c
+    drivers/base/device.c
+    drivers/timer/timer.c
+  INCLUDES
+    kernel
+    kernel/arch
+    kernel/arch/posix/include
+  DEFINES
+    PBL_NO_LINKER_SCRIPT
+    CONFIG_DEVICE_LOG_LEVEL=0
 )
 
 pbl_clar_test(test_mmio)

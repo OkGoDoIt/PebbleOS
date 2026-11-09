@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <pbl/drivers/display.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/testing.h>
@@ -100,6 +101,16 @@ PBL_ALWAYS_INLINE
 #endif
 GBitmapDataRowInfo prv_gbitmap_get_data_row_info(const GBitmap *bitmap, uint16_t y) {
   if (bitmap->info.format == GBitmapFormat8BitCircular) {
+#if PBL_ROUND
+    if (!bitmap->data_row_infos) {
+      const uint16_t inset = pbl_display_round_inset(DISPLAY, y);
+      return (GBitmapDataRowInfo){
+        .data = (uint8_t *)bitmap->addr + y * PBL_DISPLAY_WIDTH,
+        .min_x = inset,
+        .max_x = PBL_DISPLAY_WIDTH - 1 - inset,
+      };
+    }
+#endif
     const GBitmapDataRowInfoInternal *info = &bitmap->data_row_infos[y];
     return (GBitmapDataRowInfo){
       .data = (uint8_t *)bitmap->addr + info->offset,
@@ -204,8 +215,9 @@ static GColor *prv_allocate_palette(GBitmapFormat format) {
   return palette;
 }
 
-#define BITMAP_FORMAT_IS_CIRCULAR_FULL_SCREEN(size, format) \
-  ((format) == GBitmapFormat8BitCircular && (size).w == DISP_COLS && (size).h == DISP_ROWS)
+#define BITMAP_FORMAT_IS_CIRCULAR_FULL_SCREEN(size, format)                  \
+  ((format) == GBitmapFormat8BitCircular && (size).w == PBL_DISPLAY_WIDTH && \
+   (size).h == PBL_DISPLAY_HEIGHT)
 
 PBL_T_STATIC size_t prv_gbitmap_size_for_data(GSize size, GBitmapFormat format) {
 #if PBL_ROUND
@@ -244,12 +256,6 @@ static GBitmap *prv_gbitmap_create_blank(GSize size, GBitmapFormat format) {
       applib_free(bitmap);
       return nullptr;
     }
-
-#if PBL_ROUND
-    if (BITMAP_FORMAT_IS_CIRCULAR_FULL_SCREEN(size, format)) {
-      bitmap->data_row_infos = g_gbitmap_data_row_infos;
-    }
-#endif
   }
 
   return bitmap;

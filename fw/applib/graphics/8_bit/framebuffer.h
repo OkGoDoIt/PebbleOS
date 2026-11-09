@@ -10,7 +10,7 @@
 
 #include <applib/graphics/gtypes.h>
 
-#define FRAMEBUFFER_BYTES_PER_ROW DISP_COLS
+#define FRAMEBUFFER_BYTES_PER_ROW PBL_DISPLAY_WIDTH
 #define FRAMEBUFFER_SIZE_BYTES    DISPLAY_FRAMEBUFFER_BYTES
 
 #ifndef UNITTEST
@@ -32,6 +32,11 @@ typedef struct FrameBuffer {
 } FrameBuffer;
 static_assert(sizeof(FrameBuffer) == offsetof(FrameBuffer, buffer) + FRAMEBUFFER_SIZE_BYTES,
               "FrameBuffer must not have tail padding");
+#endif
+
+#if PBL_ROUND
+//! Rows of the packed framebuffer of legacy round apps.
+extern const GBitmapDataRowInfoInternal g_gbitmap_legacy_3x_data_row_infos[];
 #endif
 
 uint8_t *framebuffer_get_line(FrameBuffer *f, uint16_t y);

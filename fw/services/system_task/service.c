@@ -6,6 +6,7 @@
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/irq.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/msgq.h>
 #include <pbl/kernel/poll.h>
 #include <pbl/kernel/thread.h>
@@ -16,15 +17,11 @@
 #include <pbl/services/system_task.h>
 #include <pbl/task_wdt/task_wdt.h>
 
-#include <kernel/memory_layout.h>
-#include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
 #include <kernel/util/task_init.h>
 #include <process_management/app_manager.h>
 
 PBL_LOG_MODULE_DEFINE(service_system_task, CONFIG_SERVICE_SYSTEM_TASK_LOG_LEVEL);
-
-#define SYSTEM_TASK_PRIORITY (PBL_PRIO_IDLE + 1)
 
 #define APP_THROTTLE_TIME_MS 300
 
@@ -68,7 +65,7 @@ static bool prv_is_accepting_callbacks() {
 static void prv_app_throttle_end(void *data) {
   struct pbl_thread *app = pebble_task_get_thread(PebbleTask_App);
   if (app) {
-    pbl_thread_prio_set(app, APP_TASK_PRIORITY);
+    pbl_thread_prio_set(app, CONFIG_APP_THREAD_PRIO);
   }
   PBL_LOG_DBG("Ending App Throttling");
 }
@@ -113,7 +110,7 @@ static void prv_requeue_deferred(void) {
     if (!s_deferred_head) {
       s_deferred_tail = nullptr;
     }
-    kernel_free(d);
+    pbl_free(d);
   }
 }
 
@@ -151,26 +148,26 @@ static void system_task_main(void *paramater) {
   }
 }
 
+static struct pbl_thread s_thread;
+PBL_THREAD_STACK_DEFINE(s_stack, CONFIG_SERVICE_SYSTEM_TASK_THREAD_STACK_SIZE);
+
 void system_task_init(void) {
   s_raised_priority_refcount = 0;
   pbl_poll_group_add(&s_system_task_queue_set, &s_system_task_queue);
   pbl_poll_group_add(&s_system_task_queue_set, &s_from_app_system_task_queue);
   s_initialized = true;
 
-  extern uint32_t __kernel_bg_stack_start__[];
-  extern uint32_t __kernel_bg_stack_size__[];
-  extern uint32_t __stack_guard_size__[];
-
-  struct pbl_thread_attr attr = {
+  const struct pbl_thread_attr attr = {
     .name = "KernelBG",
     .entry = system_task_main,
-    .prio = SYSTEM_TASK_PRIORITY,
+    .prio = CONFIG_SERVICE_SYSTEM_TASK_THREAD_PRIO,
     .privileged = true,
-    .stack = (void *)((uintptr_t)__kernel_bg_stack_start__ + MEMORY_LAYOUT_STACK_GUARD_SIZE),
-    .stack_size = MEMORY_LAYOUT_KERNEL_BG_STACK_SIZE - MEMORY_LAYOUT_STACK_GUARD_SIZE,
+    .stack = s_stack,
+    .stack_size = sizeof(s_stack),
   };
 
-  pebble_task_create(PebbleTask_KernelBackground, &attr);
+  PBL_ASSERTN(pbl_thread_create(&s_thread, &attr) == 0);
+  pebble_task_register(PebbleTask_KernelBackground, &s_thread);
 }
 
 void system_task_timer_init(void) {
@@ -205,7 +202,7 @@ static void prv_add_from_system_task(const SystemTaskEvent *event, uintptr_t cal
     return;
   }
 
-  DeferredEvent *d = kernel_malloc(sizeof(*d));
+  DeferredEvent *d = pbl_malloc(sizeof(*d));
   if (!d) {
     handle_system_task_send_failure(event->cb, caller_lr);
   }
@@ -324,8 +321,6 @@ void *system_task_get_current_callback(void) {
 }
 
 void system_task_enable_raised_priority(bool is_raised) {
-  const pbl_prio_t raised_priority_level = PBL_PRIO_IDLE + 3; // Same as KernelMain / BT tasks
-
   pbl_irq_lock();
   if (is_raised) {
     PBL_ASSERTN(s_raised_priority_refcount < UINT32_MAX);
@@ -335,7 +330,7 @@ void system_task_enable_raised_priority(bool is_raised) {
     }
     if (s_raised_priority_refcount++ == 0) {
       pbl_thread_prio_set(pebble_task_get_thread(PebbleTask_KernelBackground),
-                          raised_priority_level);
+                          CONFIG_SERVICE_SYSTEM_TASK_THREAD_RAISED_PRIO);
     }
   } else {
     PBL_ASSERTN(s_raised_priority_refcount > 0);
@@ -345,7 +340,7 @@ void system_task_enable_raised_priority(bool is_raised) {
     }
     if (--s_raised_priority_refcount == 0) {
       pbl_thread_prio_set(pebble_task_get_thread(PebbleTask_KernelBackground),
-                          SYSTEM_TASK_PRIORITY);
+                          CONFIG_SERVICE_SYSTEM_TASK_THREAD_PRIO);
     }
   }
   pbl_irq_unlock();
@@ -358,6 +353,7 @@ bool system_task_is_ready_to_run(void) {
 
 #if UNITTEST
 void system_task_reset_for_test(void) {
+  memset(&s_thread, 0, sizeof(s_thread));
   pbl_msgq_init(&s_system_task_queue, s_system_task_queue.buf, sizeof(SystemTaskEvent),
                 SYSTEM_TASK_QUEUE_LENGTH);
   pbl_msgq_init(&s_from_app_system_task_queue, s_from_app_system_task_queue.buf,

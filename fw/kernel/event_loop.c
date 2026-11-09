@@ -13,8 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <pbl/console/console.h>
 #include <pbl/cron/cron.h>
-#include <pbl/drivers/button.h>
+#include <pbl/kernel/time.h>
 #include <pbl/mcu/fpu.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/battery/battery_monitor.h>
@@ -37,8 +38,8 @@
 #include <applib/graphics/graphics.h>
 #include <applib/ui/ui.h>
 #include <comm/ble/kernel_le_client/kernel_le_client.h>
-#include <console/serial_console.h>
 #include <kernel/core_dump.h>
+#include <kernel/input_buttons.h>
 #include <kernel/kernel_applib_state.h>
 #include <kernel/low_power.h>
 #include <kernel/panic.h>
@@ -69,12 +70,14 @@
 #include <pbl/services/wakeup.h>
 #include <pbl/util/struct.h>
 
+#ifdef CONFIG_QEMU_SERIAL
+#include <comm/qemu/transport.h>
+#endif
 #include <shell/normal/app_idle_timeout.h>
 #include <shell/normal/watchface.h>
 #include <shell/prefs.h>
 #include <shell/shell_event_loop.h>
 #include <system/bootbits.h>
-#include <system/testinfra.h>
 
 static const uint32_t FORCE_QUIT_HOLD_MS = 1500;
 static int s_back_hold_timer = TIMER_INVALID_ID;
@@ -82,7 +85,7 @@ static int s_back_hold_timer = TIMER_INVALID_ID;
 #ifndef CONFIG_SHELL_SDK
 static const uint32_t BACK_QUICKPRESS_INTERVAL_TICKS = 300;
 static const int BACK_QUICKPRESS_COREDUMP_PRESSES = 10;
-static RtcTicks s_back_quickpress_last = 0;
+static uint64_t s_back_quickpress_last = 0;
 static int s_back_quickpress_count = 0;
 #endif
 
@@ -200,7 +203,7 @@ static void launcher_handle_button_event(PebbleEvent *e) {
     // 10 quick-presses of the back button triggers a manual coredump, if
     // that feature is enabled in system settings.
     if (button_id == BUTTON_ID_BACK) {
-      RtcTicks now = rtc_get_ticks();
+      uint64_t now = pbl_uptime_ticks();
       if ((now - s_back_quickpress_last) > BACK_QUICKPRESS_INTERVAL_TICKS) {
         s_back_quickpress_count = 0;
       }
@@ -642,7 +645,7 @@ static PBL_NOINLINE void prv_launcher_main_loop_init(void) {
   // skip this. This insures that we don't enter PRF for a bad worker.
   if (launcher_panic_get_current_error()) {
     PBL_LOG_WRN("Not launching worker because launcher panic");
-  } else if (button_get_state_bits() != 0) {
+  } else if (input_buttons_get_state() != 0) {
     PBL_LOG_WRN("Not launching worker because button held");
   } else if (boot_bit_test(BOOT_BIT_FW_START_FAIL_STRIKE_TWO)) {
     PBL_LOG_WRN("Not launching worker because of 2 strikes");
@@ -654,8 +657,12 @@ static PBL_NOINLINE void prv_launcher_main_loop_init(void) {
   }
 #endif
 
-  notify_system_ready_for_communication();
-  serial_console_enable_prompt();
+#ifdef CONFIG_QEMU_SERIAL
+  qemu_transport_notify_ready();
+#endif
+#ifdef CONFIG_CONSOLE
+  pbl_console_enable_prompt();
+#endif
 }
 
 void launcher_main_loop(void) {

@@ -6,9 +6,9 @@
 #include <pbl/logging/logging.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/fonts/fonts.h>
 #include <applib/ui/ui.h>
-#include <kernel/pbl_malloc.h>
 #include <process_management/app_manager.h>
 #include <process_management/sdk_shims.h>
 #include <process_state/app_state/app_state.h>
@@ -41,7 +41,7 @@ static void prv_window_load(Window *window) {
   int16_t page_height = 85; // height of scroll layer, also used for paging height
 
   // Initialize the scroll layer
-  const GRect scroll_bounds = GRect(0, y_offset, DISP_ROWS, page_height);
+  const GRect scroll_bounds = GRect(0, y_offset, PBL_DISPLAY_HEIGHT, page_height);
   scroll_layer_init(&data->scroll_layer, &scroll_bounds);
 
   // Use a text layer to show the Scroll Layer background area

@@ -19,6 +19,7 @@
 // Fakes
 /////////////////////
 
+#include <fake_pfs.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
 
@@ -263,14 +264,14 @@ void test_music__initialize(void) {
   s_prefs_music_show_progress_bar = true;
   s_prefs_music_show_album_art = false;
 
-  framebuffer_init(&s_fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(&s_fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
   framebuffer_clear(&s_fb);
   graphics_context_init(&s_ctx, &s_fb, GContextInitializationMode_App);
   s_app_state_get_graphics_context = &s_ctx;
 
   fake_spi_flash_init(0 /* offset */, 0x1000000 /* length */);
-  pfs_init(false /* run filesystem check */);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
   resource_init();
@@ -400,7 +401,7 @@ void test_music__album_art_requested_on_launch(void) {
   cl_assert_equal_i(s_imaging_request_count, 1);
   cl_assert_equal_i(s_imaging_request_token, 1);
   cl_assert_equal_i(s_imaging_request_format, ImagingFormat4BitPalette);
-  const int16_t side = PBL_IF_RECT_ELSE(DISP_COLS - ACTION_BAR_WIDTH, DISP_COLS);
+  const int16_t side = PBL_IF_RECT_ELSE(PBL_DISPLAY_WIDTH - ACTION_BAR_WIDTH, PBL_DISPLAY_WIDTH);
   cl_assert_equal_i(s_imaging_request_width, side);
   cl_assert_equal_i(s_imaging_request_height, side);
   cl_assert_equal_s(s_imaging_request_title, "Crumbling Castle");

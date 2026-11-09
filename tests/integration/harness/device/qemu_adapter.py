@@ -123,8 +123,8 @@ class QemuAdapter(DeviceAdapter):
             "-monitor", f"unix:{self.monitor_socket},server=on,wait=off",
             "-qmp", f"unix:{self.qmp_socket},server=on,wait=off",
             "-serial", f"file:{os.path.join(self.workdir, 'uart1.log')}",
-            "-serial", "tcp:127.0.0.1:0,server=on,wait=off",
-            "-serial", "tcp:127.0.0.1:0,server=on,wait=off",
+            "-serial", "tcp:127.0.0.1:0,server=on,wait=off,nodelay=on",
+            "-serial", "tcp:127.0.0.1:0,server=on,wait=off,nodelay=on",
             *(["-serial", self._bt_hci] if self._bt_hci else []),
             *machine_args,
             "-kernel", self.build.elf,
@@ -235,9 +235,7 @@ class QemuAdapter(DeviceAdapter):
 
     def default_connections(self):
         console = f"socket://127.0.0.1:{self.console_port}"
-        if self.build.config.get("CONFIG_PULSE_EVERYWHERE"):
-            return [f"pulse:{console}"]
-        return [f"serial:{console}", f"qemu:127.0.0.1:{self.pebble_port}"]
+        return [f"serial:{console}"]
 
     def set_battery(self, percent, charging=False):
         from libpebble2.communication.transports.qemu import (

@@ -5,9 +5,12 @@
 
 #include <stdint.h>
 
+#include <pbl/board/partitions.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/time.h>
 
 #include <pebbleos/core_dump_structs.h>
+#include <system/firmware_storage.h>
 
 // LCPU (BLE coprocessor) RAM, in the LPSYS domain outside main RAM.
 #if defined(CONFIG_SOC_SF32LB52)
@@ -16,9 +19,15 @@
 #endif
 
 // Max number of core dump images we can fit in our allocated space
-#define CORE_DUMP_FLASH_START FLASH_REGION_CD_BEGIN
-#define CORE_DUMP_FLASH_END   FLASH_REGION_CD_END
-#define CORE_DUMP_FLASH_SIZE  (CORE_DUMP_FLASH_END - CORE_DUMP_FLASH_START)
+#ifdef CONFIG_PBLBOOT
+#define CORE_DUMP_FLASH_START PART_CD_OFFSET
+#define CORE_DUMP_FLASH_SIZE  PART_CD_SIZE
+#else
+// Shares the only firmware slot
+#define CORE_DUMP_FLASH_START PART_FIRMWARE_DEST_OFFSET
+#define CORE_DUMP_FLASH_SIZE  PART_FIRMWARE_DEST_SIZE
+#endif
+#define CORE_DUMP_FLASH_END (CORE_DUMP_FLASH_START + CORE_DUMP_FLASH_SIZE)
 #if defined(CONFIG_SOC_NRF52)
 #define CORE_DUMP_MAX_IMAGES 2
 #elifdef CONFIG_SOC_SF32LB52
@@ -79,7 +88,7 @@ typedef struct PBL_PACKED {
   uint32_t core_number : 8; // See include/pebbleos/core_id.h
   uint32_t version : 24;    // Set to CORE_DUMP_VERSION
 
-  uint32_t time_stamp;       // rtc_get_time() when core dump was created
+  uint32_t time_stamp;       // pbl_realtime() when core dump was created
   uint8_t serial_number[16]; // null terminated watch serial number string
   uint8_t build_id[64];      // null terminated build ID of firmware string
 } CoreDumpImageHeader;

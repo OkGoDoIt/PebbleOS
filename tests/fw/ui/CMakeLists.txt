@@ -244,7 +244,7 @@ pbl_clar_test(test_menu_layer_system_cells
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
     fw/applib/ui/menu_text_scroll.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -266,7 +266,7 @@ pbl_clar_test(test_action_menu_window
     fw/applib/graphics/text_resources.c
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -297,7 +297,7 @@ pbl_clar_test(test_notification_window
     fw/applib/ui/menu_layer_system_cells.c
     fw/applib/ui/menu_text_scroll.c
     fw/applib/ui/preferred_durations.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -341,7 +341,7 @@ pbl_clar_test(test_simple_dialog
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
     fw/shell/system_theme_style.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -374,8 +374,8 @@ pbl_clar_test(test_emoji_fonts
     fw/applib/ui/menu_layer_system_cells.c
     fw/applib/ui/menu_text_scroll.c
     fw/shell/system_theme_style.c
-    fw/board/displays/display_gabbro.c
-    fw/system/hexdump.c
+    tests/fakes/fake_round_display.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -392,8 +392,8 @@ pbl_clar_test(test_emoji_glyphs
     fw/applib/graphics/perimeter.c
     fw/applib/graphics/text_render.c
     fw/applib/graphics/text_resources.c
-    fw/board/displays/display_gabbro.c
-    fw/system/hexdump.c
+    tests/fakes/fake_round_display.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
   DEFINES "FIRMWARE_EMOJI_DIR=\"${PBL_BASE}/resources/normal/base/pbf\""
@@ -409,7 +409,7 @@ pbl_clar_test(test_expandable_dialog
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
     fw/shell/system_theme_style.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -434,92 +434,32 @@ pbl_clar_test(test_expandable_dialog
 )
 
 pbl_clar_test(test_muse_app
+  MODULES resources graphics_bitdepth gdraw text_render png menu_layer text_layer time
   SOURCES
-    fw/applib/fonts/codepoint.c
-    fw/applib/graphics/@BITDEPTH@_bit/framebuffer.c
-    fw/applib/graphics/@BITDEPTH@_bit/bitblt_private.c
-    fw/applib/graphics/bitblt.c
-    fw/applib/graphics/framebuffer.c
-    fw/applib/graphics/gbitmap.c
-    fw/applib/graphics/gbitmap_png.c
-    fw/applib/graphics/gbitmap_sequence.c
-    fw/applib/graphics/gcolor_definitions.c
-    fw/applib/graphics/gdraw_command.c
-    fw/applib/graphics/gdraw_command_frame.c
-    fw/applib/graphics/gdraw_command_image.c
-    fw/applib/graphics/gdraw_command_list.c
-    fw/applib/graphics/gdraw_command_sequence.c
-    fw/applib/graphics/gpath.c
-    fw/applib/graphics/graphics.c
-    fw/applib/graphics/graphics_bitmap.c
-    fw/applib/graphics/graphics_circle.c
-    fw/applib/graphics/graphics_line.c
-    fw/applib/graphics/graphics_private.c
-    fw/applib/graphics/graphics_private_raw.c
     fw/applib/graphics/gtransform.c
-    fw/applib/graphics/gtypes.c
-    fw/applib/graphics/perimeter.c
-    fw/applib/graphics/text_layout.c
-    fw/applib/graphics/bidi.c
-    fw/applib/graphics/arabic_shaping.c
-    fw/applib/graphics/text_render.c
     fw/applib/graphics/text_resources.c
-    fw/applib/graphics/utf8.c
-    fw/applib/ui/kino/kino_reel.c
-    fw/applib/ui/kino/kino_reel_gbitmap.c
-    fw/applib/ui/kino/kino_reel_gbitmap_sequence.c
-    fw/applib/ui/kino/kino_reel_pdci.c
-    fw/applib/ui/kino/kino_reel_pdcs.c
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
-    fw/board/displays/display_gabbro.c
-    drivers/flash/flash_crc.c
-    fw/flash_region/filesystem_regions.c
-    fw/flash_region/flash_region.c
-    fw/resource/resource.c
-    fw/resource/resource_storage.c
-    fw/resource/resource_storage_builtin.c
-    fw/resource/resource_storage_file.c
-    fw/resource/resource_storage_flash.c
-    fw/services/filesystem/app_file.c
-    fw/services/filesystem/flash_translation.c
-    fw/services/filesystem/pfs.c
-    fw/system/hexdump.c
-    third_party/uzlib/uzlib/src/tinflate.c
-    third_party/uzlib/uzlib/src/adler32.c
-    third_party/uzlib/uzlib/src/crc32.c
-    third_party/upng/upng/upng.c
-    tests/fakes/fake_applib_resource.c
-    tests/fakes/fake_display.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
-    tests/fakes/fake_spi_flash.c
-    tests/fixtures/resources/builtin_resources.auto.c
-    tests/fixtures/resources/pfs_resource_table.c
     tests/stubs/stubs_animation.c
     tests/stubs/stubs_system_theme.c
     fw/shell/system_theme_style.c
     fw/applib/pbl_std/strftime.c
     fw/applib/pbl_std/timelocal.c
-    fw/services/clock/time.c
     fw/applib/ui/action_bar_layer.c
     fw/applib/ui/animation_interpolate.c
     fw/applib/ui/content_indicator.c
-    fw/applib/ui/inverter_layer.c
     fw/applib/ui/kino/kino_layer.c
     fw/applib/ui/kino/kino_player.c
     fw/applib/ui/kino/kino_reel/transform.c
     fw/applib/ui/kino/kino_reel_custom.c
-    fw/applib/ui/menu_layer.c
     fw/applib/ui/menu_text_scroll.c
-    fw/applib/ui/scroll_layer.c
     fw/applib/ui/shadows.c
-    fw/applib/ui/text_layer.c
-    fw/applib/ui/text_layer_flow.c
     fw/applib/ui/status_bar_layer.c
     fw/applib/ui/window.c
     fw/services/audio_companion/assistant_view.c
-    tests/fakes/fake_fonts.c
   PLATFORMS emery
   DEFINES USE_DISPLAY_PERIMETER_ON_FONT_LAYOUT=1 CONFIG_SERVICE_AUDIO_COMPANION_PTT=1
   OVERRIDES dummy_board
@@ -541,7 +481,7 @@ pbl_clar_test(test_selection_windows
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
     fw/applib/ui/menu_text_scroll.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/stubs/stubs_animation.c
@@ -584,7 +524,7 @@ pbl_clar_test(test_timeline_peek
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
     fw/applib/ui/menu_text_scroll.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/fixtures/screen_grid.c
@@ -623,7 +563,7 @@ pbl_clar_test(test_option_menu_window
     fw/applib/graphics/text_resources.c
     fw/applib/ui/layer.c
     fw/applib/ui/menu_layer_system_cells.c
-    fw/system/hexdump.c
+    subsys/logging/hexdump.c
     tests/fakes/fake_gbitmap_get_data_row.c
     tests/fakes/fake_rtc.c
     tests/fixtures/screen_grid.c

@@ -2,34 +2,32 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/mpu.h>
 #include <pbl/kernel/syscall.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/time.h>
 
 #include <applib/app_logging.h>
+#include <applib/app_time32.h>
 #include <applib/applib_malloc.auto.h>
 #include <applib/pbl_std/pbl_std.h>
-#include <kernel/memory_layout.h>
+#include <process_management/process_manager.h>
+#include <process_management/process_regions.h>
 #include <process_state/app_state/app_state.h>
 #include <process_state/worker_state/worker_state.h>
 #include <syscall/syscall.h>
 
 // Time
-time_t pbl_override_time(time_t *tloc) {
-  time_t t = sys_get_time();
+pbl_time32_t pbl_override_time(pbl_time32_t *tloc) {
+  const pbl_time32_t t = pbl_time_to_time32(sys_get_time());
   if (tloc) {
     *tloc = t;
   }
-  return (t);
+  return t;
 }
 
 // Manually construct double to avoid requiring soft-fp
-static double prv_time_to_double(time_t time) {
-  // time_t is 32bit signed int, convert it manually
-#if !UNITTEST && !defined(CONFIG_LIBC_HOST)
-  static_assert(sizeof(time_t) == 4, "Conversion depends on 32bit time_t");
-#endif
-
+static double prv_time_to_double(int32_t time) {
   if (time == 0) {
     return 0;
   }
@@ -73,18 +71,18 @@ static double prv_time_to_double(time_t time) {
   return conv.result;
 }
 
-double pbl_override_difftime(time_t end, time_t beginning) {
-  return prv_time_to_double(end - beginning);
+double pbl_override_difftime(pbl_time32_t end, pbl_time32_t beginning) {
+  // Wraps like the 32-bit subtraction apps were built with.
+  return prv_time_to_double((int32_t)((uint32_t)end - (uint32_t)beginning));
 }
 
-time_t pbl_override_time_legacy(time_t *tloc) {
-  time_t t = sys_get_time();
-  time_t legacy_time = sys_time_utc_to_local(t);
+pbl_time32_t pbl_override_time_legacy(pbl_time32_t *tloc) {
+  const pbl_time32_t legacy_time = pbl_time_to_time32(sys_time_utc_to_local(sys_get_time()));
 
   if (tloc) {
     *tloc = legacy_time;
   }
-  return (legacy_time);
+  return legacy_time;
 }
 
 static bool prv_tm_matches_local_time(const struct pbl_tm *requested, const struct pbl_tm *actual) {
@@ -107,7 +105,11 @@ static time_t prv_mktime_with_normalized_gmtoff(const struct pbl_tm *tb, int isd
 PBL_SYSCALL(time_t, pbl_override_mktime, (INOUT, struct pbl_tm *, tb)) {
   time_t t;
   if (tb->tm_isdst >= 0) {
-    // Caller knows the DST state — trust their tm_gmtoff and pass through.
+    // Caller knows the DST state — trust their tm_gmtoff and pass through. Older apps hold the
+    // standard time offset there and expect mktime() to add DST itself.
+    if (tb->tm_isdst > 0 && process_manager_expects_legacy_tm_gmtoff()) {
+      tb->tm_gmtoff += time_get_dstoffset();
+    }
     t = pbl_mktime(tb);
   } else {
     // tm_isdst < 0: caller doesn't know if DST is active. Try both
@@ -129,6 +131,14 @@ PBL_SYSCALL(time_t, pbl_override_mktime, (INOUT, struct pbl_tm *, tb)) {
   return t;
 }
 
+pbl_time32_t pbl_override_mktime_time32(struct pbl_tm *tb) {
+  const time_t t = pbl_override_mktime(tb);
+  if (t == -1) {
+    return -1;
+  }
+  return app_time_to_time32_or_error(t);
+}
+
 uint16_t time_ms(time_t *tloc, uint16_t *out_ms) {
   uint16_t t_ms;
   time_t t_s;
@@ -142,11 +152,20 @@ uint16_t time_ms(time_t *tloc, uint16_t *out_ms) {
   return (t_ms);
 }
 
-uint16_t pbl_override_time_ms_legacy(time_t *tloc, uint16_t *out_ms) {
+uint16_t time_ms_time32(pbl_time32_t *tloc, uint16_t *out_ms) {
+  time_t t_s;
+  const uint16_t t_ms = time_ms(&t_s, out_ms);
+  if (tloc) {
+    *tloc = pbl_time_to_time32(t_s);
+  }
+  return t_ms;
+}
+
+uint16_t pbl_override_time_ms_legacy(pbl_time32_t *tloc, uint16_t *out_ms) {
   uint16_t t_ms;
   time_t t_s;
   sys_get_time_ms(&t_s, &t_ms);
-  time_t legacy_time = sys_time_utc_to_local(t_s);
+  const pbl_time32_t legacy_time = pbl_time_to_time32(sys_time_utc_to_local(t_s));
 
   if (out_ms) {
     *out_ms = t_ms;
@@ -193,6 +212,16 @@ struct pbl_tm *pbl_override_localtime(const time_t *timep) {
   return localtime_tm;
 }
 
+struct pbl_tm *pbl_override_gmtime_time32(const pbl_time32_t *timep) {
+  const time_t t = app_time_from_time32(*timep);
+  return pbl_override_gmtime(&t);
+}
+
+struct pbl_tm *pbl_override_localtime_time32(const pbl_time32_t *timep) {
+  const time_t t = app_time_from_time32(*timep);
+  return pbl_override_localtime(&t);
+}
+
 size_t pbl_strftime(char *s, size_t maxsize, const char *format, const struct pbl_tm *tim_p) {
   char *locale = app_state_get_locale_info()->app_locale_time;
   return sys_strftime(s, maxsize, format, tim_p, locale);
@@ -207,10 +236,10 @@ PBL_SYSCALL(size_t, sys_strftime, (OUT_BUF, char *, s, maxsize), (VAL, size_t, m
             (IN, const struct pbl_tm *, tim_p), (VAL, char *, locale)) {
   if (from_user) {
     // Workers pass the app's locale buffer, which is not theirs to read
-    const MpuRegion *region = (pebble_task_get_current() == PebbleTask_Worker)
-                                  ? memory_layout_get_worker_region()
-                                  : memory_layout_get_app_region();
-    if (locale && !memory_layout_is_buffer_in_region(region, locale, ISO_LOCALE_LENGTH)) {
+    const struct pbl_mpu_region *region = (pebble_task_get_current() == PebbleTask_Worker)
+                                              ? process_region_worker()
+                                              : process_region_app();
+    if (locale && !pbl_mpu_region_contains_buffer(region, locale, ISO_LOCALE_LENGTH)) {
       locale = nullptr;
     }
   }

@@ -1,14 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "clar.h"
-
-#include "pbl/services/filesystem/pfs.h"
-
-#include "services/audio_companion/auth.h"
-
-#include "fake_spi_flash.h"
+#include "fake_pfs.h"
 #include "fake_rtc.h"
-
+#include "fake_spi_flash.h"
+#include "services/audio_companion/auth.h"
 #include "stubs_logging.h"
 #include "stubs_pbl_malloc.h"
 
@@ -28,7 +24,7 @@ static const uint8_t s_receiver_b[AUDIO_COMPANION_RECEIVER_ID_BYTES] = {
 
 void test_audio_companion_auth__initialize(void) {
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
+  fake_pfs_mount();
   audio_companion_auth_init();
 }
 

@@ -8,9 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <pbl/kernel/idle.h>
-#include <pbl/kernel/init.h>
-
 #include <emscripten/emscripten.h>
 #include <emscripten/fiber.h>
 #include <kernel.h>
@@ -35,6 +32,10 @@ struct posix_thread {
 };
 
 struct pbl_thread *pbl_cur;
+
+void arch_cur_set(struct pbl_thread *t) {
+  pbl_cur = t;
+}
 
 static bool s_switch_pending;
 static bool s_in_isr;
@@ -119,7 +120,7 @@ void arch_thread_init(struct pbl_thread *t, void (*entry)(void *), void *arg) {
   t->backend.arch.pt = pt;
 }
 
-void arch_thread_regions_set(struct pbl_thread *t, const MpuRegion *const *regions) {
+void arch_thread_regions_set(struct pbl_thread *t, const struct pbl_mpu_region *const *regions) {
 }
 
 void arch_start(void) {
@@ -154,6 +155,13 @@ uint32_t arch_cycles_per_sec(void) {
   return 1000000000U;
 }
 
+// Fibers only switch when they block, which no heap operation does.
+void arch_heap_lock(void) {
+}
+
+void arch_heap_unlock(void) {
+}
+
 void arch_irq_disable(void) {
 }
 
@@ -178,14 +186,14 @@ void arch_thread_info_regs(const struct pbl_thread *t, uint32_t regs[PBL_THREAD_
 }
 
 void arch_idle(pbl_tick_t max_ticks) {
-  pbl_soc_idle(max_ticks);
+  if (sched_idle_confirm()) {
+    timekeeping_idle(max_ticks);
+  }
 }
 
 static void prv_boot_main(void *arg) {
   prv_reap();
-  pbl_soc_early_init();
-  s_entry();
-  PBL_ASSERTN(false);
+  kernel_init(s_entry);
 }
 
 void pbl_posix_start(int (*entry)(void)) {

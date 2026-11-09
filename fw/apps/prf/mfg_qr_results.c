@@ -7,6 +7,7 @@
 #include <pbl/bluetooth/types.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/app_watch_info.h>
 #include <applib/battery_state_service.h>
 #include <applib/ui/app_window_stack.h>
@@ -14,7 +15,6 @@
 #include <applib/ui/window.h>
 #include <apps/prf/mfg_test_menu.h>
 #include <apps/prf/mfg_test_result.h>
-#include <kernel/pbl_malloc.h>
 #include <mfg/mfg_serials.h>
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
@@ -107,12 +107,12 @@ static void prv_append_result(char *buf, size_t bufsz, MfgTestId test) {
       snprintf(entry, sizeof(entry), "MAG:%c", rc);
       break;
 #endif
-#if defined(CONFIG_BOARD_ASTERIX) || defined(CONFIG_BOARD_OBELIX)
+#ifdef CONFIG_SPEAKER
     case MfgTestId_Speaker:
       snprintf(entry, sizeof(entry), "SPK:%c", rc);
       break;
 #endif
-#if defined(CONFIG_BOARD_ASTERIX) || defined(CONFIG_BOARD_OBELIX) || defined(CONFIG_BOARD_GETAFIX)
+#ifdef CONFIG_MIC
     case MfgTestId_Mic:
       snprintf(entry, sizeof(entry), "MIC:%c", rc);
       break;

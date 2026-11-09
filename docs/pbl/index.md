@@ -30,20 +30,27 @@ command's own options.
 | {doc}`configure` | {doc}`run` |
 | {doc}`build` | {doc}`console` |
 | {doc}`bundle` | {doc}`debug` |
-| {doc}`menuconfig` | {doc}`emulator` |
-| {doc}`clean` | {doc}`image_resources` |
-| {doc}`test` | {doc}`image_recovery` |
-| {doc}`itest` | {doc}`erase` |
+| {doc}`menuconfig` | {doc}`debugserver` |
+| {doc}`clean` | {doc}`emulator` |
+| {doc}`test` | {doc}`image_resources` |
+| {doc}`itest` | {doc}`image_recovery` |
+| | {doc}`erase` |
+| | {doc}`lab` |
+| | {doc}`power` |
 
 ## Shared options
 
-Two options are accepted by every command, before or after the command
+These options are accepted by every command, before or after the command
 name:
 
 - `-b, --build-dir DIR` — use a different build directory. It defaults to
   the one `pbl.yml` names (`build/`, or `build-test/` for `pbl test`), and
   `PBL_BUILD_DIR` overrides that in turn.
 - `--dry-run` — print the commands that would run instead of running them.
+- `--lab FILE` — the {ref}`lab file <pbl-lab-file>` describing the
+  hardware wired to this host, which device commands take their ports
+  from. It defaults to `$PBL_LAB`, else `~/.config/pbl/lab.yaml`.
+- `--watch NAME` — the lab's watch to use, when several run the build.
 
 Separate build directories let several boards be built side by side:
 
@@ -74,17 +81,20 @@ pbl -b build-asterix run
 
 Device commands reach their target through a binary runner: a watch, or a
 program on the host running the firmware, such as the emulator. A board
-lists the runners it supports in its manifest, and the first one that can
-handle the build is the default; `-r/--runner` picks another.
+lists the runners it supports in its manifest, and for each command the
+first one that can handle the build and the command is the default, so a
+board can be flashed with one runner and debugged with another;
+`-r/--runner` picks another.
 
 | Runner | Boards | Operations |
 | --- | --- | --- |
-| `openocd` | asterix | flash (with resources), erase, debug |
+| `openocd` | asterix | flash (with resources), erase, debug, debugserver |
 | `nrfutil` | asterix | flash (with resources), erase |
 | `sftool` | obelix, getafix | flash (with resources), erase |
+| `probe-rs` | asterix, obelix, getafix | debug, debugserver |
 | `phone` | asterix, obelix, getafix | flash (always with resources) |
-| `qemu` | qemu_* | run |
-| `native` | native_* | run |
+| `qemu` | qemu_* | run, debug, debugserver |
+| `native` | native_* | run, debug |
 | `wasm` | native_*/wasm | run |
 
 For the OpenOCD runner, the probe and target configuration lives in the
@@ -94,6 +104,14 @@ ranges, in `support/flash.cfg`.
 The `nrfutil` runner needs a J-Link probe. To write the resources it takes
 the external flash configuration from the board's
 `support/nrfutil_ext_mem.json`.
+
+The `probe-rs` runner needs [probe-rs](https://probe.rs). It takes the
+chip from the board's `support/probe-rs.yml`. Some platforms have a
+serial-based debugger, e.g. over the programmer's debug UART: give its
+port with `--tty`. `--probe` picks one of several debug probes. Both
+default to the lab's watch, see {doc}`lab`. Where
+probe-rs misreports the flash region to GDB, the file's `gdb-flash` gives
+it, so that GDB sets hardware breakpoints there.
 
 The `phone` runner needs no programmer: it goes through the Pebble app's
 Developer Connection, at the phone address given with `--address`. It needs
@@ -119,10 +137,13 @@ itest.md
 run.md
 console.md
 debug.md
+debugserver.md
 emulator.md
 image_resources.md
 image_recovery.md
 erase.md
+lab.md
+power.md
 ```
 
 ```{toctree}

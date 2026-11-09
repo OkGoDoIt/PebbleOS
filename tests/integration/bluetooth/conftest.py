@@ -3,8 +3,21 @@
 
 import pytest
 from harness.connections import Capability
+from harness.errors import Unsupported
 from harness.helpers.pairing import WatchPairing
 from harness.helpers.phone import IOS
+
+
+@pytest.fixture(autouse=True)
+def bluetooth_on(dut):
+    """Bluetooth out of airplane mode, which persists: a run that left it on
+    would fail every test after it."""
+    try:
+        command = dut.command("bt_airplane", mode="off")
+    except Unsupported:
+        return
+    if dut.has(Capability.PROMPT):
+        dut.prompt(command)
 
 
 @pytest.fixture
@@ -30,7 +43,7 @@ def phone(watch, phones):
 def only_phone(dut, phone):
     """Skips unless ``phone`` is the only Pebble protocol session: the
     watch sends some messages to whichever session it takes for the phone,
-    and the harness's own (e.g. PULSE on the emulator) can be that one."""
+    and the harness's own (e.g. the console's) can be that one."""
     if dut.has(Capability.PROTOCOL):
         pytest.skip("the harness's own protocol session competes with the phone")
     return phone

@@ -11,25 +11,23 @@
 #endif
 #include <pbl/util/size.h>
 
+#include <applib/app_malloc.h>
 #include <apps/prf/mfg_als.h>
 #include <apps/prf/mfg_backlight.h>
 #include <apps/prf/mfg_button.h>
 #include <apps/prf/mfg_charge.h>
 #include <apps/prf/mfg_display.h>
 #include <apps/prf/mfg_hrm_ctr_leakage_obelix.h>
-#include <apps/prf/mfg_mic_asterix.h>
+#include <apps/prf/mfg_mic.h>
 #include <apps/prf/mfg_mic_getafix.h>
-#include <apps/prf/mfg_mic_obelix.h>
 #include <apps/prf/mfg_program_color.h>
 #include <apps/prf/mfg_qr_results.h>
-#include <apps/prf/mfg_speaker_asterix.h>
-#include <apps/prf/mfg_speaker_obelix.h>
+#include <apps/prf/mfg_speaker.h>
 #include <apps/prf/mfg_test_menu.h>
 #include <apps/prf/mfg_test_result.h>
 #include <apps/prf/mfg_touch.h>
 #include <apps/prf/mfg_vibration.h>
 #include <kernel/event_loop.h>
-#include <kernel/pbl_malloc.h>
 #include <process_management/app_manager.h>
 #include <process_state/app_state/app_state.h>
 
@@ -56,15 +54,11 @@ static const MfgTestMenuEntry s_all_entries[] = {
 #ifdef CONFIG_MAG
   {"Magnetometer", MfgTestId_Mag, mfg_mag_app_get_info, SF | FI},
 #endif
-#ifdef CONFIG_BOARD_ASTERIX
-  {"Speaker", MfgTestId_Speaker, mfg_speaker_asterix_app_get_info, SF | FI},
-#elifdef CONFIG_BOARD_OBELIX
-  {"Speaker", MfgTestId_Speaker, mfg_speaker_obelix_app_get_info, SF | FI},
+#ifdef CONFIG_SPEAKER
+  {"Speaker", MfgTestId_Speaker, mfg_speaker_app_get_info, SF | FI},
 #endif
-#ifdef CONFIG_BOARD_ASTERIX
-  {"Microphone", MfgTestId_Mic, mfg_mic_asterix_app_get_info, SF | FI},
-#elifdef CONFIG_BOARD_OBELIX
-  {"Microphone", MfgTestId_Mic, mfg_mic_obelix_app_get_info, SF | FI},
+#if defined(CONFIG_MIC) && defined(CONFIG_SPEAKER)
+  {"Microphone", MfgTestId_Mic, mfg_mic_app_get_info, SF | FI},
 #elifdef CONFIG_BOARD_GETAFIX
   {"Microphone", MfgTestId_Mic, mfg_mic_getafix_app_get_info, SF | FI},
 #endif

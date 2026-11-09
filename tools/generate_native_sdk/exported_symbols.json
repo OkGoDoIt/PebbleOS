@@ -2,10 +2,9 @@
   "_notes": [ "You need to increase the revision for each change of this file AND",
               "increase PROCESS_INFO_CURRENT_SDK_VERSION_MINOR in pebble_process_info.h"
             ],
-  "revision" : "114",
+  "revision" : "116",
   "version" : "2.0",
   "files": [
-    "include/pbl/drivers/button_id.h",
     "fw/system/status_codes.h",
     "fw/applib/dict.h",
     "include/pbl/util/list.h",
@@ -28,6 +27,7 @@
     "fw/applib/app_worker.h",
     "fw/applib/backlight_service.h",
     "fw/applib/battery_state_service.h",
+    "fw/applib/dark_mode_service.h",
     "fw/applib/music_service.h",
     "fw/applib/peek_widget.h",
     "fw/applib/alarm_service.h",
@@ -262,6 +262,7 @@
             }, {
               "type": "function",
               "name": "clock_to_timestamp",
+              "implName": "clock_to_timestamp_time32",
               "addedRevision": "24"
             }, {
               "type": "function",
@@ -435,109 +436,136 @@
               "type": "group",
               "name": "MusicService",
               "appOnly": true,
-              "addedRevision": "113",
+              "addedRevision": "115",
               "exports": [
                 {
                   "type": "define",
                   "name": "MUSIC_SERVICE_BUFFER_LENGTH",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "type",
                   "name": "MusicServicePlaybackState",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "type",
                   "name": "MusicServiceEventType",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "type",
                   "name": "MusicServiceEventHandler",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "type",
                   "name": "MusicServiceCapability",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "type",
                   "name": "MusicServicePlaybackInfo",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "type",
                   "name": "MusicServiceCommand",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "function",
                   "name": "music_service_has_now_playing",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "function",
                   "name": "music_service_get_now_playing",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "function",
                   "name": "music_service_get_playback_state",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "function",
                   "name": "music_service_get_player_name",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "function",
                   "name": "music_service_get_playback_info",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "function",
                   "name": "music_service_is_command_supported",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "function",
                   "name": "music_service_send_command",
-                  "addedRevision": "114"
+                  "addedRevision": "116"
                 }, {
                   "type": "function",
                   "name": "music_service_subscribe",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }, {
                   "type": "function",
                   "name": "music_service_unsubscribe",
-                  "addedRevision": "113"
+                  "addedRevision": "115"
                 }
               ]
             }, {
               "type": "group",
               "name": "PeekWidget",
-              "addedRevision": "112",
+              "addedRevision": "114",
               "exports": [
                 {
                   "type": "define",
                   "name": "PEEK_WIDGET_TITLE_MAX_LEN",
-                  "addedRevision": "112"
+                  "addedRevision": "114"
                 }, {
                   "type": "define",
                   "name": "PEEK_WIDGET_APP_ICON",
-                  "addedRevision": "112"
+                  "addedRevision": "114"
                 }, {
                   "type": "define",
                   "name": "PEEK_WIDGET_SUBTITLE_MAX_LEN",
-                  "addedRevision": "112"
+                  "addedRevision": "114"
                 }, {
                   "type": "type",
                   "name": "PeekWidgetResult",
-                  "addedRevision": "112"
+                  "addedRevision": "114"
                 }, {
                   "type": "type",
                   "name": "PeekWidgetInfo",
-                  "addedRevision": "112"
+                  "addedRevision": "114"
                 }, {
                   "type": "function",
                   "name": "peek_widget_publish",
-                  "addedRevision": "112",
+                  "addedRevision": "114",
                   "stubReturn": "PEEK_WIDGET_RESULT_DISABLED"
                 }, {
                   "type": "function",
                   "name": "peek_widget_withdraw",
-                  "addedRevision": "112",
+                  "addedRevision": "114",
                   "stubReturn": "void"
+                }
+              ]
+            }, {
+              "type": "group",
+              "name": "DarkModeService",
+              "appOnly": true,
+              "addedRevision": "113",
+              "exports": [
+                {
+                  "type": "type",
+                  "name": "DarkModeHandler",
+                  "addedRevision": "113"
+                }, {
+                  "type": "function",
+                  "name": "dark_mode_service_subscribe",
+                  "addedRevision": "113",
+                  "stubReturn": "void"
+                }, {
+                  "type": "function",
+                  "name": "dark_mode_service_unsubscribe",
+                  "addedRevision": "113",
+                  "stubReturn": "void"
+                }, {
+                  "type": "function",
+                  "name": "dark_mode_service_peek",
+                  "addedRevision": "113",
+                  "stubReturn": "false"
                 }
               ]
             }, {
@@ -4588,6 +4616,11 @@
               "type": "function",
               "name": "mic_capture_is_active",
               "addedRevision": "111"
+            }, {
+              "type": "function",
+              "name": "layer_get_mic_accessory_bounds",
+              "addedRevision": "112",
+              "stubReturn": "false"
             }
           ]
         }, {
@@ -4799,23 +4832,23 @@
             }, {
               "type": "function",
               "name": "localtime",
-              "implName": "pbl_override_localtime",
+              "implName": "pbl_override_localtime_time32",
               "sortName": "gmtime",
               "addedRevision": "31"
             }, {
               "type": "function",
               "name": "gmtime",
-              "implName": "pbl_override_gmtime",
+              "implName": "pbl_override_gmtime_time32",
               "addedRevision": "0"
             }, {
               "type": "function",
               "name": "mktime",
-              "implName": "pbl_override_mktime",
+              "implName": "pbl_override_mktime_time32",
               "addedRevision": "29"
             }, {
               "type": "function",
               "name": "localtime__deprecated",
-              "implName": "pbl_override_gmtime",
+              "implName": "pbl_override_gmtime_time32",
               "deprecated": true,
               "addedRevision": "0"
             }, {
@@ -4843,11 +4876,12 @@
             }, {
               "type": "function",
               "name": "time_ms",
+              "implName": "time_ms_time32",
               "addedRevision": "59"
             }, {
               "type": "function",
               "name": "time_start_of_today",
-              "implName": "sys_time_start_of_today",
+              "implName": "time_start_of_today_time32",
               "addedRevision": "78"
             }
           ]
@@ -4857,25 +4891,25 @@
       "type": "function",
       "name": "malloc",
       "skipDefinition": true,
-      "implName": "task_malloc",
+      "implName": "applib_malloc",
       "addedRevision": "0"
     }, {
       "type": "function",
       "name": "calloc",
       "skipDefinition": true,
-      "implName": "task_calloc",
+      "implName": "applib_calloc",
       "addedRevision": "9"
     }, {
       "type": "function",
       "name": "free",
       "skipDefinition": true,
-      "implName": "task_free",
+      "implName": "applib_free",
       "addedRevision": "0"
     }, {
       "type": "function",
       "name": "realloc",
       "skipDefinition": true,
-      "implName": "task_realloc",
+      "implName": "applib_realloc",
       "addedRevision": "12"
     }, {
       "type": "function",

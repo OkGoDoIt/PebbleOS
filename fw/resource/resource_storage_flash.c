@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 
+#include <pbl/board/partitions.h>
 #include <pbl/drivers/flash.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/process_management/app_storage.h>
@@ -17,12 +18,12 @@
 
 static const SystemResourceBank s_resource_banks[] = {
   {
-    .begin = FLASH_REGION_SYSTEM_RESOURCES_BANK_0_BEGIN,
-    .end = FLASH_REGION_SYSTEM_RESOURCES_BANK_0_END,
+    .begin = PART_SYSTEM_RESOURCES_BANK_0_OFFSET,
+    .end = PART_SYSTEM_RESOURCES_BANK_0_OFFSET + PART_SYSTEM_RESOURCES_BANK_0_SIZE,
   },
   {
-    .begin = FLASH_REGION_SYSTEM_RESOURCES_BANK_1_BEGIN,
-    .end = FLASH_REGION_SYSTEM_RESOURCES_BANK_1_END,
+    .begin = PART_SYSTEM_RESOURCES_BANK_1_OFFSET,
+    .end = PART_SYSTEM_RESOURCES_BANK_1_OFFSET + PART_SYSTEM_RESOURCES_BANK_1_SIZE,
   },
 };
 
@@ -89,12 +90,12 @@ static uint32_t resource_storage_system_bank_metadata_size(ResourceStoreEntry *e
 static uint32_t resource_storage_system_bank_get_crc(ResourceStoreEntry *entry, uint32_t num_bytes,
                                                      uint32_t entry_offset) {
   uint32_t start_offset = resource_store_get_metadata_size(entry) + entry_offset;
-  return flash_crc32_legacy(BANK.begin + start_offset, num_bytes);
+  return pbl_flash_crc32_legacy(FLASH, BANK.begin + start_offset, num_bytes);
 }
 
 static uint32_t resource_storage_system_bank_read(ResourceStoreEntry *entry, uint32_t offset,
                                                   void *data, size_t num_bytes) {
-  flash_read_bytes(data, BANK.begin + offset, num_bytes);
+  pbl_flash_read(FLASH, BANK.begin + offset, data, num_bytes);
   return num_bytes;
 }
 
@@ -102,8 +103,8 @@ bool resource_storage_flash_bytes_are_readonly(const void *bytes) {
 #ifdef CONFIG_MMAP_RESOURCES
   // Pointers inside the banks are in the always-mapped XIP window.
   for (unsigned int i = 0; i < ARRAY_LENGTH(s_resource_banks); i++) {
-    if ((bytes >= (const void *)(uintptr_t)s_resource_banks[i].begin) &&
-        (bytes < (const void *)(uintptr_t)s_resource_banks[i].end)) {
+    if ((bytes >= (const void *)(uintptr_t)(CONFIG_FLASH_BASE + s_resource_banks[i].begin)) &&
+        (bytes < (const void *)(uintptr_t)(CONFIG_FLASH_BASE + s_resource_banks[i].end))) {
       return true;
     }
   }
@@ -111,15 +112,10 @@ bool resource_storage_flash_bytes_are_readonly(const void *bytes) {
   return false;
 }
 
-static const uint8_t *resource_storage_system_bank_readonly_bytes(ResourceStoreEntry *entry,
-                                                                  bool has_privileged_access) {
+static const uint8_t *resource_storage_system_bank_readonly_bytes(ResourceStoreEntry *entry) {
 #ifdef CONFIG_MMAP_RESOURCES
-  // Bank is XIP-mapped, so data is addressable at BANK.begin + offset. Only
-  // privileged callers get the raw pointer; unprivileged apps use the copy path.
-  if (!has_privileged_access) {
-    return nullptr;
-  }
-  return (const uint8_t *)(uintptr_t)(BANK.begin + entry->offset);
+  // Bank is XIP-mapped and readable by unprivileged code too.
+  return (const uint8_t *)(uintptr_t)(CONFIG_FLASH_BASE + BANK.begin + entry->offset);
 #else
   return nullptr;
 #endif
@@ -127,7 +123,7 @@ static const uint8_t *resource_storage_system_bank_readonly_bytes(ResourceStoreE
 
 static void resource_storage_system_bank_clear(ResourceStoreEntry *entry) {
   uint8_t buffer[MANIFEST_SIZE] = {};
-  flash_write_bytes(buffer, BANK.begin, MANIFEST_SIZE);
+  pbl_flash_write(FLASH, BANK.begin, buffer, MANIFEST_SIZE);
 }
 
 bool resource_storage_system_bank_check(ResAppNum app_num, uint32_t resource_id,

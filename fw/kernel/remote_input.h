@@ -6,8 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <pbl/drivers/button_id.h>
 #include <pbl/services/comm_session/session.h>
+
+#include <applib/ui/click.h>
 
 //! Result of an injected input request. Doubles as the status byte of the
 //! remote input endpoint's ack.

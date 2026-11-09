@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/kernel/malloc.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/blob_db/notif_db.h>
+#include <pbl/services/notifications/alerts_preferences_private.h>
 #include <pbl/services/notifications/notification_storage.h>
-
-#include <kernel/pbl_malloc.h>
 
 PBL_LOG_MODULE_DECLARE(service_blob_db, CONFIG_SERVICE_BLOB_DB_LOG_LEVEL);
 
@@ -30,23 +30,32 @@ status_t notif_db_insert(const uint8_t *key, int key_len, const uint8_t *val, in
     return E_INTERNAL;
   }
 
-  Uuid *id = kernel_malloc_check(sizeof(Uuid));
+  Uuid *id = pbl_malloc_check(sizeof(Uuid));
   *id = notification.header.id;
 
   char uuid_string[UUID_STRING_BUFFER_LENGTH];
   uuid_to_string(id, uuid_string);
 
-  // If the notification already exists, only update the status flags
-  if (notification_storage_notification_exists(&notification.header.id)) {
+  // notification_storage_notification_exists() also matches dismissed notifications, while
+  // notification_storage_get_status() only matches live ones.
+  uint8_t status;
+  const bool exists = notification_storage_notification_exists(&notification.header.id);
+  const bool live = exists && notification_storage_get_status(&notification.header.id, &status);
+
+  if (live) {
+    // If the notification already exists, only update the status flags
     notification_storage_set_status(&notification.header.id, notification.header.status);
     PBL_LOG_INFO("Notification modified: %s", uuid_string);
     notifications_handle_notification_acted_upon(id);
+  } else if (exists && alerts_preferences_get_notification_dismissal_sync()) {
+    PBL_LOG_DBG("Notification already dismissed: %s", uuid_string);
+    pbl_free(id);
   } else if (!has_status_bits) {
     notification_storage_store(&notification);
     PBL_LOG_INFO("Notification added: %s", uuid_string);
     notifications_handle_notification_added(id);
   } else {
-    kernel_free(id);
+    pbl_free(id);
   }
 
   timeline_item_free_allocated_buffer(&notification);

@@ -1,156 +1,80 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-import re
-import threading
-import time
+from pblconsole import ConsoleLink, ConsoleTimeout
+from pblconsole.link import DEFAULT_BAUDRATE
+from pblconsole.protocol import FrameTransport
 
-from harness.connections import Capability, Connection
+from harness.connections import Capability, Connection, start_protocol
 from harness.errors import HarnessError, PromptError, WatchTimeout
 
-DEFAULT_BAUDRATE = 115200
-# "<level> <task> <time> <file>:<line>> <message>"; hashed lines have no file.
-LOG_LINE = re.compile(r"^(\S) (\S+) (\S+) (\S*:\d+)> (.*)$")
-CTRL_C = b"\x03"
-# The next prompt, at the start of a line: ">" or a shell's "pebble> ".
-PROMPT_END = re.compile(r"\n\S*> ?$")
-# A prompt on a line of its own, which log lines (with "file:line> ") are not.
-PROMPT_LINE = re.compile(r"(^|\n)\S*> ?(\r?\n|$)")
-CTRL_D = b"\x04"
+PROMPT_READY_S = 5
 
 
 class SerialConnection(Connection):
-    """The legacy text console (firmware without PULSE): log lines, and the
-    prompt entered with Ctrl-C. The address is ``TTY[@BAUDRATE]`` or a
+    """The text console: log lines mixed with the shell, and the Pebble
+    protocol in frames between them. The address is ``TTY[@BAUDRATE]`` or a
     ``socket://`` URL."""
 
     scheme = "serial"
-    capabilities = Capability.PROMPT | Capability.LOGS
-    help = "the legacy text console on TTY[@BAUDRATE] or socket://HOST:PORT"
+    capabilities = Capability.PROMPT | Capability.LOGS | Capability.PROTOCOL
+    help = "the text console on TTY[@BAUDRATE] or socket://HOST:PORT"
 
     def __init__(self, address, dehasher=None):
         super().__init__(address, dehasher)
-        self._serial = None
-        self._reader = None
-        self._closing = False
-        self._in_prompt = False
-        self._prompt_buf = ""
-        self._cond = threading.Condition()
-        self._prompt_lock = threading.Lock()
-
-    def open(self, timeout):
-        import serial
-
-        url, _, baudrate = self.address.partition("@")
-        port = serial.serial_for_url(
-            url,
-            baudrate=int(baudrate or DEFAULT_BAUDRATE),
-            timeout=0.1,
-            do_not_open=True,
+        url, _, baudrate = address.partition("@")
+        self._link = ConsoleLink(
+            url, int(baudrate or DEFAULT_BAUDRATE), on_log=self._on_log
         )
-        # RTS resets the SoC on some boards.
-        port.rts = False
-        port.open()
-        self._serial = port
-        self._closing = False
-        self._reader = threading.Thread(target=self._read, daemon=True)
-        self._reader.start()
+        self._pebble = None
+        self._transport = None
 
-    def close(self):
-        self._closing = True
-        if self._reader is not None:
-            self._reader.join(timeout=2)
-            self._reader = None
-        if self._serial is not None:
-            self._serial.close()
-            self._serial = None
-
-    def _read(self):
-        line = ""
-        while not self._closing:
-            try:
-                data = self._serial.read(256)
-            except (OSError, TypeError, AttributeError):
-                # Closing the port under a pending read.
-                return
-            if not data:
-                continue
-            text = data.decode(errors="replace")
-            with self._cond:
-                if self._in_prompt:
-                    self._prompt_buf += text
-                    self._cond.notify_all()
-                    continue
-            for char in text:
-                if char == "\n":
-                    line = line.strip()
-                    if line and line != "^D":
-                        self._emit_line(line)
-                    line = ""
-                elif char != "\r":
-                    line += char
-
-    def _emit_line(self, line):
-        match = LOG_LINE.match(line)
+    def _on_log(self, line, match):
         if match is None:
             self.emit_log(line)
             return
-        level, task, _time, source, message = match.groups()
+        level, task, _time, source, message = match
         source = "" if source.startswith(":") else source
         self.emit_log(message, level=level, task=task, source=source)
 
-    def _wait_prompt_until(self, done, timeout, what):
-        deadline = time.monotonic() + timeout
-        with self._cond:
-            while not done(self._prompt_buf):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise WatchTimeout(f"{what} timed out")
-                self._cond.wait(remaining)
-            return self._prompt_buf
+    def open(self, timeout):
+        self._link.open()
+
+    def end_protocol_session(self):
+        if self._transport is not None:
+            self._transport.disconnect()
+            self._transport = None
+            self._pebble = None
+
+    def close(self):
+        self.end_protocol_session()
+        self._link.close()
+
+    @property
+    def protocol(self):
+        if self._pebble is None or not self._pebble.connected:
+            if not self._link.is_open:
+                raise HarnessError(f"{self!r} is not open")
+            self._transport = FrameTransport(self._link)
+            self._pebble = start_protocol(
+                self._transport, self.platform, self.settings_sync
+            )
+        return self._pebble
 
     def prompt_no_reply(self, command):
-        with self._prompt_lock:
-            with self._cond:
-                self._in_prompt = True
-                self._prompt_buf = ""
-            self._serial.write(CTRL_C)
-            self._wait_prompt_until(
-                lambda b: PROMPT_LINE.search(b) is not None,
-                5,
-                "entering the prompt",
-            )
-            self._serial.write(command.encode() + b"\r")
+        try:
+            self._link.command_no_reply(command, PROMPT_READY_S)
+        except ConsoleTimeout as e:
+            raise WatchTimeout(str(e)) from e
 
     def prompt(self, command, timeout):
-        if self._serial is None:
+        if not self._link.is_open:
             raise HarnessError(f"{self!r} is not open")
-        with self._prompt_lock:
-            with self._cond:
-                self._in_prompt = True
-                self._prompt_buf = ""
-            try:
-                self._serial.write(CTRL_C)
-                self._wait_prompt_until(
-                    lambda b: PROMPT_LINE.search(b) is not None,
-                    5,
-                    "entering the prompt",
-                )
-                with self._cond:
-                    self._prompt_buf = ""
-                self._serial.write(command.encode() + b"\r")
-                output = self._wait_prompt_until(
-                    lambda b: PROMPT_END.search(b) is not None,
-                    timeout,
-                    f"prompt command {command!r}",
-                )
-            finally:
-                self._serial.write(CTRL_D)
-                with self._cond:
-                    self._in_prompt = False
-
-        lines = [line.strip() for line in output.split("\n")[1:-1]]
-        lines = [line for line in lines if line]
-        if lines and lines[0].startswith("Invalid command"):
+        try:
+            lines = self._link.command(command, timeout, PROMPT_READY_S)
+        except ConsoleTimeout as e:
+            raise WatchTimeout(str(e)) from e
+        # Other errors are the command's output, for the caller to read.
+        if lines and "command not found" in lines[0]:
             raise PromptError(lines[0])
         return lines

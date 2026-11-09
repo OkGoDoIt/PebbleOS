@@ -73,7 +73,6 @@ The firmware runs a fixed set of tasks, each a kernel thread:
 | Worker | The app's background worker, if it has one |
 | Bluetooth host, controller, HCI | The Bluetooth stack |
 | NewTimers | Timer callbacks |
-| PULSE | The serial link to development tools |
 
 Services and drivers post events to KernelMain, which handles them and
 forwards what concerns the app to the app's own event queue. Only one app
@@ -86,10 +85,10 @@ apps run privileged. {doc}`../sdk/how_it_works` describes the boundary.
 ## Boot
 
 A bootloader, outside this tree, starts the firmware image in flash. The
-kernel's reset handler sets up memory and the SoC, then calls `main()`
-(`fw/main.c`), which brings up the drivers and starts KernelMain.
-KernelMain initializes the services and launches the first app, normally
-the watchface. {doc}`../kernel/boot` details the early steps.
+kernel's reset handler sets up memory and the SoC, then starts the scheduler
+with `main()` (`fw/main.c`) on the main thread, KernelMain. `main()` brings up
+the drivers and services and launches the first app, normally the watchface.
+{doc}`../kernel/boot` details the early steps.
 
 ## Firmware variants
 

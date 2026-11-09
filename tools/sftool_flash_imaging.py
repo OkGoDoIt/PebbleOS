@@ -3,20 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Flash imaging for SF32LB52 (Obelix/Getafix): writes firmware or resources
-# directly via sftool to the correct flash addresses. No PULSE descriptor is
-# prepended, so recovery (PRF) stays in PBLBOOT format for the bootloader.
+# directly via sftool to the correct flash addresses, so recovery (PRF) stays
+# in PBLBOOT format for the bootloader.
 #
-# Same CLI as pulse_flash_imaging / pulse_legacy_flash_imaging so callers can
-# select this tool via _get_pulse_flash_tool() for MICRO_FAMILY == 'SF32LB52'.
+# Same CLI as console_flash_imaging.
 
 
 import argparse
 import subprocess
 import sys
-
-# SAFE_FIRMWARE (recovery/PRF) and SYSTEM_RESOURCES for SF32LB52 (gd25q256e layout)
-SAFE_FIRMWARE_ADDR = 0x12A20000
-SYSTEM_RESOURCES_ADDR = 0x12620000
 
 
 def run_sftool(tty, path, address, chip="SF32LB52"):
@@ -39,6 +34,12 @@ def main():
     parser.add_argument(
         "-p", "--progress", action="store_true", help="(ignored, for CLI compatibility)"
     )
+    parser.add_argument(
+        "--address",
+        required=True,
+        type=lambda text: int(text, 0),
+        help="Address to write to, where the chip maps its flash",
+    )
     subparsers = parser.add_subparsers(dest="which", required=True)
 
     fw = subparsers.add_parser(
@@ -52,11 +53,10 @@ def main():
 
     args = parser.parse_args()
 
+    addr = args.address
     if args.which == "firmware":
-        addr = SAFE_FIRMWARE_ADDR
         name = "recovery (SAFE_FIRMWARE)"
     else:
-        addr = SYSTEM_RESOURCES_ADDR
         name = "resources (SYSTEM_RESOURCES)"
 
     print(f"Writing {name} to 0x{addr:x} via sftool...")

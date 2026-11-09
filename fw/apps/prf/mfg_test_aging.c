@@ -3,12 +3,13 @@
 
 #include "mfg_test_aging.h"
 
+#include "mfg_audio.h"
+
 #include <stdio.h>
 #include <time.h>
 
 #include <pbl/drivers/accel.h>
 #include <pbl/drivers/als.h>
-#include <pbl/drivers/audio.h>
 #include <pbl/drivers/backlight.h>
 #include <pbl/drivers/battery.h>
 #include <pbl/drivers/mag.h>
@@ -16,9 +17,11 @@
 #include <pbl/services/bluetooth/bluetooth_ctl.h>
 #include <pbl/services/idle_watchdog.h>
 #include <pbl/services/light.h>
+#include <pbl/util/size.h>
 #include <pbl/util/units.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/graphics/graphics.h>
 #include <applib/tick_timer_service.h>
 #include <applib/ui/app_window_stack.h>
@@ -26,9 +29,9 @@
 #include <applib/ui/vibes.h>
 #include <applib/ui/window.h>
 #include <apps/prf/mfg_test_result.h>
-#include <board/board.h>
-#include <console/console_internal.h>
-#include <kernel/pbl_malloc.h>
+#ifdef CONFIG_CONSOLE
+#include <pbl/console/console.h>
+#endif
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
 
@@ -121,11 +124,11 @@ typedef struct {
 } AppData;
 
 #ifdef CONFIG_SPEAKER
-static void prv_audio_trans_handler(uint32_t *free_size) {
-  uint32_t available_size = *free_size;
-  while (available_size > sizeof(sine_wave_4k)) {
-    available_size = audio_write(AUDIO, (void *)&sine_wave_4k[0], sizeof(sine_wave_4k));
+static size_t prv_audio_fill(int16_t *samples, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    samples[i] = sine_wave_4k[i % ARRAY_LENGTH(sine_wave_4k)];
   }
+  return count;
 }
 #endif
 
@@ -154,7 +157,7 @@ static void prv_cleanup_component(AppData *data) {
 #endif
 #ifdef CONFIG_SPEAKER
   if (data->audio_playing) {
-    audio_stop(AUDIO);
+    mfg_audio_playback_stop();
     data->audio_playing = false;
   }
 #endif
@@ -293,9 +296,7 @@ static void prv_run_component_display(AppData *data) {
     case ComponentAudio:
       comp_name = "Audio";
       if (!data->audio_playing) {
-        audio_start(AUDIO, prv_audio_trans_handler);
-        audio_set_volume(AUDIO, 100);
-        data->audio_playing = true;
+        data->audio_playing = mfg_audio_playback_start(0, prv_audio_fill) == 0;
       }
       break;
 #endif
@@ -642,7 +643,9 @@ static void prv_back_click_handler(ClickRecognizerRef recognizer, void *context)
 
   tick_timer_service_unsubscribe();
 
-  serial_console_set_rx_enabled(true);
+#ifdef CONFIG_CONSOLE
+  pbl_console_set_rx_enabled(true);
+#endif
   bt_ctl_set_enabled(true);
   prf_idle_watchdog_start();
 
@@ -668,7 +671,9 @@ static void prv_handle_init(void) {
   app_state_set_user_data(data);
 
   // Disable power consumers and idle watchdog for the entire test
-  serial_console_set_rx_enabled(false);
+#ifdef CONFIG_CONSOLE
+  pbl_console_set_rx_enabled(false);
+#endif
   bt_ctl_set_enabled(false);
   prf_idle_watchdog_stop();
 

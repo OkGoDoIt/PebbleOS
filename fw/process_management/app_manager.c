@@ -9,7 +9,9 @@
 // Pebble stuff
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/fatal.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/time.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/app_inbox_service.h>
 #include <pbl/services/app_outbox_service.h>
@@ -24,8 +26,6 @@
 #include <applib/ui/dialogs/dialog.h>
 #include <applib/ui/dialogs/simple_dialog.h>
 #include <kernel/event_loop.h>
-#include <kernel/memory_layout.h>
-#include <kernel/pbl_malloc.h>
 #include <kernel/ui/kernel_ui.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <kernel/util/segment.h>
@@ -74,7 +74,7 @@
 #include <pbl/shell/shell.h>
 #endif
 
-#define RETURN_CRASH_TIMEOUT_TICKS (60 * RTC_TICKS_HZ)
+#define RETURN_CRASH_TIMEOUT_TICKS (60 * PBL_TICK_HZ)
 
 //! Behold! The file that manages applications!
 //!
@@ -85,7 +85,6 @@
 
 extern char __APP_RAM__[];
 extern char __APP_RAM_end__[];
-extern char __stack_guard_size__[];
 
 //! Used by the "pebble gdb" command to locate the loaded app in memory.
 void *volatile g_app_load_address;
@@ -105,7 +104,7 @@ typedef struct NextApp {
 
 typedef struct {
   AppInstallId install_id;
-  RtcTicks crash_ticks;
+  uint64_t crash_ticks;
 } AppCrashInfo;
 
 static NextApp s_next_app;
@@ -258,8 +257,18 @@ PBL_T_STATIC MemorySegment prv_get_app_ram_segment(void) {
   return (MemorySegment){__APP_RAM__, __APP_RAM_end__};
 }
 
-PBL_T_STATIC size_t prv_get_stack_guard_size(void) {
-  return MEMORY_LAYOUT_STACK_GUARD_SIZE;
+// System apps run privileged, and a Moddable app runs its VM in a syscall on this stack.
+static bool prv_has_user_stack(const PebbleProcessMd *app_md) {
+#ifdef CONFIG_USERSPACE
+  return app_md->is_unprivileged && !app_md->is_moddable_app;
+#else
+  return false;
+#endif
+}
+
+PBL_T_STATIC size_t prv_get_stack_guard_size(const PebbleProcessMd *app_md) {
+  return prv_has_user_stack(app_md) ? CONFIG_KERNEL_USER_STACK_GUARD_SIZE
+                                    : CONFIG_KERNEL_STACK_GUARD_SIZE;
 }
 
 #if !defined(CONFIG_RECOVERY_FW) && !defined(CONFIG_SHELL_SDK)
@@ -300,9 +309,9 @@ static bool prv_app_start(const PebbleProcessMd *app_md, const void *args,
   // Set up the app's memory and load the app into it.
   size_t app_segment_size = prv_get_app_segment_size(app_md);
   // The stack guard is counted as part of the app segment size...
-  const size_t stack_guard_size = prv_get_stack_guard_size();
-  // ...and is carved out of the stack.
-  const size_t stack_size = prv_get_app_stack_size(app_md) - stack_guard_size;
+  const size_t stack_guard_size = prv_get_stack_guard_size(app_md);
+  // ...and the smaller one is carved out of the stack, so all apps keep the same usable size.
+  const size_t stack_size = prv_get_app_stack_size(app_md) - CONFIG_KERNEL_USER_STACK_GUARD_SIZE;
 
   MemorySegment app_ram = prv_get_app_ram_segment();
 
@@ -353,16 +362,14 @@ static bool prv_app_start(const PebbleProcessMd *app_md, const void *args,
   }
   // The remaining space in app_segment is assigned to the app's heap.
   // app_state needs to be configured before initializing the app heap
-  // as the AppState struct holds the app heap's Heap object.
+  // as the AppState struct holds the app heap.
 
   // Don't fuzz 3rd party app heaps because likely many of them rely on accessing free'd memory
   bool enable_heap_fuzzing = (sdk_type == ProcessAppSDKType_System);
-  Heap *app_heap = app_state_get_heap();
+  struct pbl_heap *app_heap = app_state_get_heap();
   PBL_LOG_DBG("App heap init %p %p", app_segment.start, app_segment.end);
-  heap_init(app_heap, app_segment.start, app_segment.end, enable_heap_fuzzing);
-  heap_set_lock_impl(app_heap, (HeapLockImpl){
-                                 .lock_function = prv_heap_lock,
-                               });
+  pbl_heap_init(app_heap, app_segment.start, app_segment.end, enable_heap_fuzzing);
+  pbl_heap_set_lock(app_heap, (struct pbl_heap_lock){.lock = prv_heap_lock});
   process_heap_set_exception_handlers(app_heap, app_md);
 
   // We're now going to start the app. We can't abort the app now without calling prv_app_cleanup.
@@ -397,10 +404,11 @@ static bool prv_app_start(const PebbleProcessMd *app_md, const void *args,
     .name = task_name,
     .entry = prv_app_task_main,
     .arg = entry_point,
-    .prio = APP_TASK_PRIORITY,
+    .prio = CONFIG_APP_THREAD_PRIO,
     .privileged = true,
-    .stack = stack,
-    .stack_size = stack_size,
+    .user_stack = prv_has_user_stack(app_md),
+    .stack = (char *)stack - stack_guard_size,
+    .stack_size = stack_size + stack_guard_size,
   };
 
   PBL_LOG_DBG("Starting %s", task_name);
@@ -417,7 +425,7 @@ static bool prv_app_start(const PebbleProcessMd *app_md, const void *args,
   }
 #endif
 
-  s_app_task_context.task_handle = pebble_task_create(PebbleTask_App, &attr);
+  s_app_task_context.task_handle = process_manager_thread_create(PebbleTask_App, &attr);
 
   // Always notify the phone that the application is running
   app_run_state_send_update(&app_md->uuid, RUNNING);
@@ -508,10 +516,10 @@ static void prv_app_show_crash_ui(AppInstallId install_id) {
   // the dialog and show us the default system watch face.
   PBL_ASSERTN(install_id != INSTALL_ID_INVALID);
   if (crash_info.install_id != install_id ||
-      (crash_info.crash_ticks + RETURN_CRASH_TIMEOUT_TICKS) < rtc_get_ticks()) {
+      (crash_info.crash_ticks + RETURN_CRASH_TIMEOUT_TICKS) < pbl_uptime_ticks()) {
     PBL_LOG_ERR("Watchface crashed (id=%" PRId32 "); relaunching", install_id);
     PBL_ANALYTICS_ADD(watchface_crash_count, 1);
-    crash_info = (AppCrashInfo){.install_id = install_id, .crash_ticks = rtc_get_ticks()};
+    crash_info = (AppCrashInfo){.install_id = install_id, .crash_ticks = pbl_uptime_ticks()};
     // Re-launch immediately
     watchface_launch_default(nullptr);
     return;
@@ -555,7 +563,7 @@ static void prv_app_show_crash_ui(AppInstallId install_id) {
 
   i18n_free_all(crash_dialog);
 
-  const uint32_t elapsed_ms = (rtc_get_ticks() - crash_info.crash_ticks) * 1000 / RTC_TICKS_HZ;
+  const uint32_t elapsed_ms = (pbl_uptime_ticks() - crash_info.crash_ticks) * 1000 / PBL_TICK_HZ;
   PBL_LOG_WRN("Watchface crashed twice in %" PRIu32 "ms (id=%" PRId32
               "); "
               "reverting to default",
@@ -693,7 +701,7 @@ static const CompositorTransition *prv_get_transition(const LaunchConfigCommon *
 void app_manager_put_launch_app_event(const AppLaunchEventConfig *config) {
   PBL_ASSERTN(config->id != INSTALL_ID_INVALID);
 
-  PebbleLaunchAppEventExtended *data = kernel_malloc_check(sizeof(PebbleLaunchAppEventExtended));
+  PebbleLaunchAppEventExtended *data = pbl_malloc_check(sizeof(PebbleLaunchAppEventExtended));
   *data = (PebbleLaunchAppEventExtended){.common = config->common};
   data->common.transition = prv_get_transition(&config->common, config->id);
 
@@ -875,7 +883,7 @@ void app_manager_get_framebuffer_size(GSize *size) {
 
   if (!s_app_task_context.app_md) {
     // No app has been started yet, so just use the default system size
-    *size = GSize(DISP_COLS, DISP_ROWS);
+    *size = GSize(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT);
     return;
   }
 
@@ -884,7 +892,7 @@ void app_manager_get_framebuffer_size(GSize *size) {
       process_metadata_get_app_sdk_platform(s_app_task_context.app_md);
 
   if (sdk_platform == PBL_PLATFORM_TYPE_CURRENT) {
-    *size = GSize(DISP_COLS, DISP_ROWS);
+    *size = GSize(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT);
     return;
   }
 
@@ -905,7 +913,7 @@ void app_manager_get_framebuffer_size(GSize *size) {
     case PlatformTypeEmery:
     case PlatformTypeFlint:
     case PlatformTypeGabbro:
-      *size = GSize(DISP_COLS, DISP_ROWS);
+      *size = GSize(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT);
       return;
   }
   pbl_panic();

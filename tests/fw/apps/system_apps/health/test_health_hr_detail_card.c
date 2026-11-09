@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include "fake_pfs.h"
 #include "test_health_app_includes.h"
 
 #include <pbl/util/units.h>
@@ -30,15 +31,15 @@ static HealthHrChartData s_today;
 
 void test_health_hr_detail_card__initialize(void) {
   // Setup graphics context
-  framebuffer_init(&s_fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(&s_fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
   framebuffer_clear(&s_fb);
   graphics_context_init(&s_ctx, &s_fb, GContextInitializationMode_App);
   s_app_state_get_graphics_context = &s_ctx;
 
   // Setup resources
   fake_spi_flash_init(0 /* offset */, 0x1000000 /* length */);
-  pfs_init(false /* run filesystem check */);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
   resource_init();
@@ -71,7 +72,7 @@ static void prv_show_zones(HealthDetailCard *card) {
   menu_layer_set_selected_index(&card->menu_layer, MenuIndex(0, 3), MenuRowAlignCenter, false);
 #else
   // Page down once, as the down button would
-  scroll_layer_set_content_offset(&card->scroll_layer, GPoint(0, -DISP_ROWS), false);
+  scroll_layer_set_content_offset(&card->scroll_layer, GPoint(0, -PBL_DISPLAY_HEIGHT), false);
 #endif
   window_render(&card->window, &s_ctx);
 }

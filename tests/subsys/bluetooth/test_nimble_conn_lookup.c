@@ -31,6 +31,13 @@ typedef struct {
 } FakeLink;
 
 static FakeLink s_links[3];
+static uint16_t s_updated_handle;
+static int s_update_status;
+
+int ble_gap_update_params(uint16_t conn_handle, const struct ble_gap_upd_params *params) {
+  s_updated_handle = conn_handle;
+  return s_update_status;
+}
 
 int ble_gap_conn_find(uint16_t handle, struct ble_gap_conn_desc *out_desc) {
   if (handle >= 3 || !s_links[handle].up) {
@@ -70,6 +77,8 @@ static void prv_link(uint16_t handle, const ble_addr_t *peer) {
 
 void test_nimble_conn_lookup__initialize(void) {
   memset(s_links, 0, sizeof(s_links));
+  s_updated_handle = BLE_HS_CONN_HANDLE_NONE;
+  s_update_status = 0;
   nimble_conn_set_private_link(BLE_HS_CONN_HANDLE_NONE);
   nimble_conn_clear_phone_link(nimble_conn_phone_link());
 }
@@ -130,4 +139,33 @@ void test_nimble_conn_lookup__private_flag(void) {
   cl_assert(!nimble_conn_is_private_link(PHONE_HANDLE));
   nimble_conn_set_private_link(BLE_HS_CONN_HANDLE_NONE);
   cl_assert(!nimble_conn_is_private_link(PRIVATE_HANDLE));
+}
+
+void test_nimble_conn_lookup__parameter_update_preserves_phone_link_and_collision_status(void) {
+  prv_link(PHONE_HANDLE, &s_phone_id);
+  nimble_conn_set_phone_link(PHONE_HANDLE);
+  prv_link(PRIVATE_HANDLE, &s_phone_id);
+  nimble_conn_set_private_link(PRIVATE_HANDLE);
+
+  const struct pbl_bt_device_internal device = prv_device(&s_phone_id);
+  const struct pbl_bt_conn_params_update_req req = {0};
+  cl_assert_equal_i(pbl_bt_le_connection_parameter_update(&device, &req),
+                    PBL_BT_HCI_STATUS_SUCCESS);
+  cl_assert_equal_i(s_updated_handle, PHONE_HANDLE);
+
+  s_update_status = BLE_HS_ERR_HCI_BASE + PBL_BT_HCI_STATUS_LL_PROCEDURE_COLLISION;
+  cl_assert_equal_i(pbl_bt_le_connection_parameter_update(&device, &req),
+                    PBL_BT_HCI_STATUS_LL_PROCEDURE_COLLISION);
+  cl_assert_equal_i(s_updated_handle, PHONE_HANDLE);
+}
+
+void test_nimble_conn_lookup__parameter_update_without_phone_never_reports_success(void) {
+  prv_link(PRIVATE_HANDLE, &s_phone_id);
+  nimble_conn_set_private_link(PRIVATE_HANDLE);
+
+  const struct pbl_bt_device_internal device = prv_device(&s_phone_id);
+  const struct pbl_bt_conn_params_update_req req = {0};
+  cl_assert_equal_i(pbl_bt_le_connection_parameter_update(&device, &req),
+                    PBL_BT_HCI_STATUS_UNKNOWN_CONNECTION_IDENTIFIER);
+  cl_assert_equal_i(s_updated_handle, BLE_HS_CONN_HANDLE_NONE);
 }

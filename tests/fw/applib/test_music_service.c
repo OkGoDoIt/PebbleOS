@@ -33,7 +33,7 @@ PebbleTask pebble_task_get_current(void) {
   return PebbleTask_App;
 }
 
-void kernel_free(void *ptr) {
+void pbl_free(void *ptr) {
   (void)ptr;
 }
 

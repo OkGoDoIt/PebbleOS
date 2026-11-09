@@ -1,11 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include "mic_source.h"
+
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/mic_manager.h>
 
-#include <board/board.h>
 #include <kernel/event_loop.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <popups/mic_banner.h>
@@ -107,7 +108,7 @@ static MicManagerPreemptedCb prv_take_mic_locked(void **preempt_context) {
   if (s_state.owner == MicClientBackground) {
     s_state.background_waiting = true;
   }
-  mic_stop(MIC);
+  mic_source_stop();
   prv_set_owner_locked(MicClientNone);
   s_state.on_preempted = nullptr;
   s_state.preempt_context = nullptr;
@@ -117,7 +118,7 @@ static MicManagerPreemptedCb prv_take_mic_locked(void **preempt_context) {
 static bool prv_start_locked(MicClient client, MicDataHandlerCB handler, void *context,
                              int16_t *buffer, size_t buffer_len, MicManagerPreemptedCb on_preempted,
                              void *preempt_context) {
-  if (!mic_start(MIC, handler, context, buffer, buffer_len)) {
+  if (!mic_source_start(handler, context, buffer, buffer_len)) {
     PBL_LOG_WRN("Mic failed to start for client %u", client);
     return false;
   }
@@ -215,7 +216,7 @@ void mic_manager_release(MicClient client) {
     s_state.reserved = MicClientNone;
   }
   if ((client != MicClientNone) && (s_state.owner == client)) {
-    mic_stop(MIC);
+    mic_source_stop();
     prv_set_owner_locked(MicClientNone);
     s_state.on_preempted = nullptr;
     s_state.preempt_context = nullptr;

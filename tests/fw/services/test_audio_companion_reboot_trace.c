@@ -326,10 +326,10 @@ void test_audio_companion_reboot_trace__tasks_from_channels_follow_the_map(void)
   cl_assert_equal_i(bits, (1 << PebbleTask_NewTimers) | (1 << PebbleTask_KernelMain));
 }
 
-void test_audio_companion_reboot_trace__tasks_from_channels_leaves_out_pulse(void) {
+void test_audio_companion_reboot_trace__tasks_from_channels_leaves_out_historical_task_id(void) {
   uint8_t map[AUDIO_COMPANION_WDT_CHANNELS];
   memset(map, AUDIO_COMPANION_WDT_CHANNEL_NONE, sizeof(map));
-  map[0] = PebbleTask_PULSE;
+  map[0] = 8; // PULSE in persisted maps from older firmware.
   map[1] = PebbleTask_KernelBackground;
 
   uint8_t bits;

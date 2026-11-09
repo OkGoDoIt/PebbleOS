@@ -6,12 +6,13 @@
 
 #include <pbl/services/clock.h>
 #include <pbl/services/i18n/i18n.h>
+#include <pbl/services/time.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/tick_timer_service.h>
 #include <applib/ui/ui.h>
 #include <applib/unobstructed_area_service.h>
-#include <kernel/pbl_malloc.h>
 #include <process_state/app_state/app_state.h>
 
 typedef struct {
@@ -104,13 +105,15 @@ static void prv_init(void) {
   window_init(&data->window, WINDOW_NAME("TicToc"));
   window_set_background_color(&data->window, GColorBlack);
 
-  text_layer_init(&data->text_date_layer, &GRect(8, 68, DISP_COLS - 8, DISP_ROWS - 68));
+  text_layer_init(&data->text_date_layer,
+                  &GRect(8, 68, PBL_DISPLAY_WIDTH - 8, PBL_DISPLAY_HEIGHT - 68));
   text_layer_set_text_color(&data->text_date_layer, GColorWhite);
   text_layer_set_background_color(&data->text_date_layer, GColorClear);
   text_layer_set_font(&data->text_date_layer, fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21));
   layer_add_child(&data->window.layer, &data->text_date_layer.layer);
 
-  text_layer_init(&data->text_time_layer, &GRect(7, 92, DISP_COLS - 7, DISP_ROWS - 92));
+  text_layer_init(&data->text_time_layer,
+                  &GRect(7, 92, PBL_DISPLAY_WIDTH - 7, PBL_DISPLAY_HEIGHT - 92));
   text_layer_set_text_color(&data->text_time_layer, GColorWhite);
   text_layer_set_background_color(&data->text_time_layer, GColorClear);
   text_layer_set_font(&data->text_time_layer,
@@ -124,7 +127,7 @@ static void prv_init(void) {
   tick_timer_service_subscribe(MINUTE_UNIT, prv_minute_tick_handler);
 
   struct pbl_tm time_struct;
-  rtc_get_time_tm(&time_struct);
+  clock_get_time_tm(&time_struct);
   prv_minute_tick_handler(&time_struct, MINUTE_UNIT);
 
   app_window_stack_push(&data->window, true);

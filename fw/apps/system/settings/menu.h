@@ -26,9 +26,7 @@ typedef enum {
   SettingsMenuItemDateTime,
   SettingsMenuItemDisplay,
   SettingsMenuItemHealth,
-#ifdef CONFIG_THEMING
   SettingsMenuItemThemes,
-#endif
   SettingsMenuItemActivity,
   SettingsMenuItemSystem,
   SettingsMenuItem_Count,

@@ -24,6 +24,7 @@ static GContext s_ctx;
 /////////////////////
 
 #include <fake_content_indicator.h>
+#include <fake_pfs.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
 
@@ -38,7 +39,6 @@ GContext *graphics_context_get_current_context(void) {
 #include <stubs_app_state.h>
 #include <stubs_buffer.h>
 #include <stubs_logging.h>
-#include <stubs_memory_layout.h>
 #include <stubs_pbl_malloc.h>
 #include <stubs_syscall_internal.h>
 
@@ -239,14 +239,14 @@ static MuseAppData *s_data;
 
 void test_muse_app__initialize(void) {
   s_fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(s_fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(s_fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
   graphics_context_init(&s_ctx, s_fb, GContextInitializationMode_System);
   framebuffer_clear(s_fb);
   s_app_state_get_graphics_context = &s_ctx;
 
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
   resource_init();
@@ -256,7 +256,7 @@ void test_muse_app__initialize(void) {
   s_missed_count = 0;
   s_taken_back = 0;
   s_have_before = false;
-  rtc_set_time(1760000000);
+  pbl_realtime_set(1760000000);
 }
 
 //! Opens the app, as the wearer would, after the test has set what it finds.
@@ -294,7 +294,7 @@ static AudioCompanionAssistantView prv_view(uint8_t turn, AudioCompanionAssistan
   if (answer) {
     strncpy(view.answer, answer, sizeof(view.answer) - 1);
   }
-  view.began_at = rtc_get_time();
+  view.began_at = pbl_realtime();
   return view;
 }
 
@@ -389,7 +389,7 @@ void test_muse_app__a_message_muse_started_says_who_it_is_from(void) {
       prv_view(200, AudioCompanionAssistantPhaseDone, NULL,
                "Your 3 PM with Sam moved to 4. I updated your calendar.");
   view.from_receiver = true;
-  view.began_at = rtc_get_time() - 20 * 60;
+  view.began_at = pbl_realtime() - 20 * 60;
   prv_show(&view);
   cl_assert_equal_s(prv_shown(s_data->meta), "From Muse \xC2\xB7 2:41 PM");
   prv_save("from_muse");

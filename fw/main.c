@@ -1,27 +1,21 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <stdio.h>
+#include <stdint.h>
 
 #include <pbl/bluetooth/init.h>
+#include <pbl/board/partitions.h>
 #include <pbl/device.h>
-#include <pbl/drivers/accel.h>
 #include <pbl/drivers/battery.h>
-#include <pbl/drivers/debounced_button.h>
-#include <pbl/drivers/display/display.h>
 #include <pbl/drivers/flash.h>
 #include <pbl/drivers/hrm.h>
-#include <pbl/drivers/mic.h>
-#include <pbl/drivers/otp.h>
-#include <pbl/drivers/rtc.h>
-#include <pbl/drivers/sf32lb52/rc10k.h>
-#include <pbl/drivers/touch/touch_sensor.h>
 #include <pbl/drivers/vibe.h>
 #include <pbl/drivers/watchdog.h>
 #include <pbl/kernel/assert.h>
-#include <pbl/kernel/irq.h>
-#include <pbl/kernel/sched.h>
+#include <pbl/kernel/mpu.h>
 #include <pbl/kernel/thread.h>
+#include <pbl/logging/backend.h>
+#include <pbl/logging/backend_flash.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/boot_splash.h>
@@ -35,23 +29,16 @@
 #include <pbl/services/system_task.h>
 #include <pbl/task_wdt/task_wdt.h>
 
-#include <board/board.h>
-#include <console/dbgserial.h>
-#include <console/dbgserial_input.h>
-#include <console/pulse.h>
-#include <console/serial_console.h>
 #include <debug/debug.h>
 #include <kernel/event_loop.h>
 #include <kernel/events.h>
-#include <kernel/fault_handling.h>
+#include <kernel/input_buttons.h>
 #include <kernel/kernel_applib_state.h>
-#include <kernel/kernel_heap.h>
-#include <kernel/memory_layout.h>
+#include <kernel/pebble_tasks.h>
 #include <kernel/ui/kernel_ui.h>
 #include <kernel/util/task_init.h>
-#include <logging/pulse_logging.h>
 #include <mfg/mfg_info.h>
-#include <mfg/mfg_serials.h>
+#include <process_management/process_regions.h>
 #include <resource/resource.h>
 #include <resource/system_resource.h>
 #include <system/bootbits.h>
@@ -61,94 +48,34 @@
 #include <comm/qemu/serial.h>
 #endif
 
-static TimerID s_lowpower_timer = TIMER_INVALID_ID;
 #ifndef CONFIG_MFG
 static TimerID s_uptime_timer = TIMER_INVALID_ID;
 #endif
-static void main_task(void *parameter);
 
 static void print_splash_screen(void) {
 #if defined(CONFIG_MFG)
-  PBL_LOG_ALWAYS("PebbleOS - MANUFACTURING MODE");
+  PBL_LOG_ALWAYS("Manufacturing mode");
 #elifdef CONFIG_RECOVERY_FW
-  PBL_LOG_ALWAYS("PebbleOS - RECOVERY MODE");
-#else
-  PBL_LOG_ALWAYS("PebbleOS");
+  PBL_LOG_ALWAYS("Recovery mode");
 #endif
-  PBL_LOG_ALWAYS("%s%s", TINTIN_METADATA.version_tag,
-                 (TINTIN_METADATA.is_dual_slot && !TINTIN_METADATA.is_recovery_firmware)
-                     ? (TINTIN_METADATA.is_slot_0 ? " (slot0)" : " (slot1)")
-                     : "");
+  if (TINTIN_METADATA.is_dual_slot && !TINTIN_METADATA.is_recovery_firmware) {
+    PBL_LOG_ALWAYS("Slot %d", TINTIN_METADATA.is_slot_0 ? 0 : 1);
+  }
   PBL_LOG_ALWAYS("(c) 2013-2026 The PebbleOS contributors");
   PBL_LOG_ALWAYS(" ");
 }
 
-int main(void) {
-  pbl_irq_init();
-
-  enable_fault_handlers();
-
-  kernel_heap_init();
-
-  dbgserial_init();
-  pulse_early_init();
-  print_splash_screen();
-
-  rtc_init();
-
-#ifdef CONFIG_RECOVERY_FW
-  boot_bit_clear(BOOT_BIT_RECOVERY_START_IN_PROGRESS);
-#endif
-
-  extern uint32_t __kernel_main_stack_start__[];
-  extern uint32_t __kernel_main_stack_size__[];
-  extern uint32_t __stack_guard_size__[];
-  struct pbl_thread_attr attr = {
-    .name = "KernelMain",
-    .entry = main_task,
-    .prio = PBL_PRIO_IDLE + 3,
-    .privileged = true,
-    .stack = (void *)((uintptr_t)__kernel_main_stack_start__ + MEMORY_LAYOUT_STACK_GUARD_SIZE),
-    .stack_size = MEMORY_LAYOUT_KERNEL_MAIN_STACK_SIZE - MEMORY_LAYOUT_STACK_GUARD_SIZE,
-  };
-
-  pebble_task_create(PebbleTask_KernelMain, &attr);
-
-  pbl_kernel_start();
-}
-
 static void init_drivers(void) {
   pbl_device_init_all();
-  board_init();
-
-  // The dbgserial input support requires timer support, so it is initialized here, much later
-  // than the core dbgserial_init().
-  dbgserial_input_init();
-
-  serial_console_init();
 
   battery_init();
 
-  flash_init();
-  flash_sleep_when_idle(true);
-  flash_enable_write_protection();
-  flash_prf_set_protection(true);
+  (void)pbl_flash_partition_protect(PART_SAFE_FIRMWARE);
 
   uint8_t vibe_cali = mfg_info_get_vibe_cali();
   if (vibe_cali != MFG_INFO_VIBE_CALI_INVALID) {
     (void)pbl_vibe_set_calibration(VIBE, vibe_cali);
   }
-
-#ifdef CONFIG_MIC
-  mic_init(MIC);
-#endif
-
-#ifdef CONFIG_TOUCH
-  touch_sensor_init();
-#endif
-
-  rtc_init_timers();
-  rtc_alarm_init();
 }
 
 static void clear_reset_loop_detection_bits(void) {
@@ -165,31 +92,57 @@ static void uptime_callback(void *data) {
 }
 #endif
 
-static void prv_low_power_debug_config_callback(void *data) {
-  new_timer_delete(s_lowpower_timer);
+#ifdef CONFIG_SOC_SF32LB52
+// The linker script places the image from Kconfig, which can't see the partitions
+#if defined(CONFIG_RECOVERY_FW) && !defined(CONFIG_MFG) && !defined(CONFIG_RECOVERY_FW_AS_FW)
+static_assert(CONFIG_FLASH_OFFSET == PART_SAFE_FIRMWARE_OFFSET);
+static_assert(CONFIG_FW_FLASH_SIZE == PART_SAFE_FIRMWARE_SIZE);
+#elif CONFIG_FIRMWARE_SLOT == 1
+static_assert(CONFIG_FLASH_OFFSET == PART_FIRMWARE_SLOT_1_OFFSET);
+static_assert(CONFIG_FW_FLASH_SIZE == PART_FIRMWARE_SLOT_1_SIZE);
+#else
+static_assert(CONFIG_FLASH_OFFSET == PART_FIRMWARE_SLOT_0_OFFSET);
+static_assert(CONFIG_FW_FLASH_SIZE == PART_FIRMWARE_SLOT_0_SIZE);
+#endif
+#endif
+
+static void prv_resource_banks_region_add(void) {
+#ifdef CONFIG_MMAP_RESOURCES
+  static_assert(PART_SYSTEM_RESOURCES_BANK_0_OFFSET + PART_SYSTEM_RESOURCES_BANK_0_SIZE ==
+                    PART_SYSTEM_RESOURCES_BANK_1_OFFSET,
+                "resource banks must be contiguous");
+
+  // System resources are served as pointers into the memory mapped banks.
+  static const struct pbl_mpu_region s_region = {
+    .name = "resource banks",
+    .base = CONFIG_FLASH_BASE + PART_SYSTEM_RESOURCES_BANK_0_OFFSET,
+    .size = PART_SYSTEM_RESOURCES_BANK_0_SIZE + PART_SYSTEM_RESOURCES_BANK_1_SIZE,
+    .attr = PBL_MPU_P_RO_U_RO | PBL_MPU_NORMAL_WT | PBL_MPU_SHAREABLE,
+  };
+  PBL_ASSERTN(pbl_mpu_region_add(&s_region) == 0);
+#endif
 }
 
-static PBL_NOINLINE void prv_main_task_init(void) {
-  // The Snowy bootloader does not clear the watchdog flag itself. Clear the
-  // flag ourselves so that a future safe reset does not look like a watchdog
-  // reset to the bootloader.
+int main(void) {
+  pebble_task_register(PebbleTask_KernelMain, pbl_thread_current());
+  process_regions_thread_init();
+
+  print_splash_screen();
+
+  clock_restore_time();
+
+#ifdef CONFIG_RECOVERY_FW
+  boot_bit_clear(BOOT_BIT_RECOVERY_START_IN_PROGRESS);
+#endif
+
   static McuRebootReason s_mcu_reboot_reason;
   s_mcu_reboot_reason = watchdog_clear_reset_flag();
 
-#ifdef CONFIG_PULSE_EVERYWHERE
-  pulse_init();
-  pulse_logging_init();
-#endif
-
-  pebble_task_configure_idle_task();
+  pbl_log_init();
 
   task_init();
 
-  memory_layout_setup_mpu();
-
-  board_early_init();
-
-  boot_splash_start();
+  prv_resource_banks_region_add();
 
   kernel_applib_init();
 
@@ -199,6 +152,9 @@ static PBL_NOINLINE void prv_main_task_init(void) {
 
   new_timer_service_init();
   regular_timer_init();
+
+  // After the timer service, which the display may use
+  boot_splash_start();
 
   // Suspend the task watchdog while the rest of the system comes up.
   pbl_task_wdt_init();
@@ -211,13 +167,12 @@ static PBL_NOINLINE void prv_main_task_init(void) {
 
   clock_init();
 
-#if defined(CONFIG_IS_BIGBOARD)
-  // Program a random S/N into the Bigboard in case it's not been done yet:
-  mfg_write_bigboard_serial_number();
-#endif
-
 #if defined(CONFIG_MFG)
   mfg_info_update_constant_data();
+#endif
+
+#ifdef CONFIG_LOG_BACKEND_FLASH
+  pbl_log_flash_init();
 #endif
 
   debug_init(s_mcu_reboot_reason);
@@ -245,12 +200,6 @@ static PBL_NOINLINE void prv_main_task_init(void) {
   hrm_init(HRM);
 #endif
 
-  // The display has to be initialized before bluetooth because on Snowy the
-  // display FPGA shares the 32 kHz clock signal with bluetooth. If the FPGA is
-  // not programmed when we attempt to initialize bluetooth, it prevents the
-  // clock from reaching the bluetooth module and initialization fails.
-  display_init();
-
   // Stop boot splash before initializing compositor
   boot_splash_stop();
   // Can't use the compositor framebuffer until the compositor is initialized
@@ -264,23 +213,9 @@ static PBL_NOINLINE void prv_main_task_init(void) {
 
   services_init();
 
-  // The RTC needs be calibrated after the mfg registry service has been initialized so we can
-  // load the measured frequency.
-#if defined(CONFIG_SOC_SF32LB52) && !defined(SF32LB52_USE_LXT)
-  rc10k_init();
-#endif
-  rtc_calibrate_frequency(mfg_info_get_rtc_freq());
-
   clear_reset_loop_detection_bits();
 
   PBL_ASSERTN(pbl_task_wdt_add(nullptr, CONFIG_TASK_WDT_TIMEOUT_MS, nullptr, nullptr) >= 0);
-
-  // Leave the board with stop and sleep mode debugging enabled for at least 10
-  // seconds to give OpenOCD time to start and still able to connect when it is
-  // ready to flash in the new image via JTAG
-  s_lowpower_timer = new_timer_create();
-  new_timer_start(s_lowpower_timer, 10 * 1000, prv_low_power_debug_config_callback, nullptr,
-                  0 /*flags*/);
 
 #ifndef CONFIG_MFG
   s_uptime_timer = new_timer_create();
@@ -289,14 +224,10 @@ static PBL_NOINLINE void prv_main_task_init(void) {
   boot_bit_set(BOOT_BIT_FW_STABLE);
 #endif
 
-  // Initialize button driver at the last moment to prevent "system on" button press from
-  // entering the kernel event queue.
-  debounced_button_init();
+  input_buttons_enable();
 
   pbl_task_wdt_resume();
-}
 
-static void main_task(void *parameter) {
-  prv_main_task_init();
   launcher_main_loop();
+  return 0;
 }

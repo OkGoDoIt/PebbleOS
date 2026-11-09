@@ -2,22 +2,23 @@
 
 #include "auth.h"
 
-#include "pbl/services/settings/settings_file.h"
-#include <pbl/drivers/rtc.h>
-#include "pbl/logging/logging.h"
-#include <pbl/kernel/compiler.h>
 #include "pbl/kernel/assert.h"
-
-#include <mbedtls/sha256.h>
+#include "pbl/logging/logging.h"
+#include "pbl/settings/settings.h"
 
 #include <inttypes.h>
 #include <string.h>
+
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/time.h>
+
+#include <mbedtls/sha256.h>
 
 PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LOG_LEVEL);
 
 #define AUTH_RECEIVER_HASH_BYTES (32)
 
-#define AUTH_SETTINGS_FILE_NAME "audiocomp"
+#define AUTH_SETTINGS_FILE_NAME "/audiocomp"
 #define AUTH_SETTINGS_FILE_SIZE (1024)
 #define AUTH_RECEIVER_KEY "receiver"
 #define AUTH_MARKS_KEY          "marks"
@@ -48,15 +49,15 @@ static void prv_hash_receiver_id(const uint8_t *receiver_id, uint8_t *hash_out) 
 }
 
 static bool prv_load_from_flash(void) {
-  SettingsFile file;
-  if (settings_file_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != 0) {
     return false;
   }
   StoredReceiver stored;
-  const status_t status = settings_file_get(&file, AUTH_RECEIVER_KEY, strlen(AUTH_RECEIVER_KEY),
-                                            &stored, sizeof(stored));
-  settings_file_close(&file);
-  if (status != S_SUCCESS || stored.version != STORED_RECEIVER_VERSION) {
+  const int status = pbl_settings_get(&file, AUTH_RECEIVER_KEY, strlen(AUTH_RECEIVER_KEY), &stored,
+                                      sizeof(stored));
+  pbl_settings_close(&file);
+  if (status != 0 || stored.version != STORED_RECEIVER_VERSION) {
     return false;
   }
   stored.name[AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES] = '\0';
@@ -102,21 +103,21 @@ bool audio_companion_auth_store_receiver(
 
   StoredReceiver stored = {
     .version = STORED_RECEIVER_VERSION,
-    .authorized_at = (uint32_t)rtc_get_time(),
+    .authorized_at = (uint32_t)pbl_realtime(),
   };
   prv_hash_receiver_id(receiver_id, stored.receiver_hash);
   if (name) {
     strncpy(stored.name, name, AUDIO_COMPANION_MAX_RECEIVER_NAME_BYTES);
   }
 
-  SettingsFile file;
-  if (settings_file_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != 0) {
     return false;
   }
-  const status_t status = settings_file_set(&file, AUTH_RECEIVER_KEY, strlen(AUTH_RECEIVER_KEY),
-                                            &stored, sizeof(stored));
-  settings_file_close(&file);
-  if (status != S_SUCCESS) {
+  const int status = pbl_settings_set(&file, AUTH_RECEIVER_KEY, strlen(AUTH_RECEIVER_KEY), &stored,
+                                      sizeof(stored));
+  pbl_settings_close(&file);
+  if (status != 0) {
     PBL_LOG_ERR("Failed to persist audio receiver: %" PRId32, (int32_t)status);
     return false;
   }
@@ -128,11 +129,11 @@ bool audio_companion_auth_store_receiver(
 }
 
 void audio_companion_auth_forget_receiver(void) {
-  SettingsFile file;
-  if (settings_file_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) == S_SUCCESS) {
-    settings_file_delete(&file, AUTH_RECEIVER_KEY, strlen(AUTH_RECEIVER_KEY));
-    settings_file_delete(&file, AUTH_MARKS_KEY, strlen(AUTH_MARKS_KEY));
-    settings_file_close(&file);
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) == 0) {
+    pbl_settings_delete(&file, AUTH_RECEIVER_KEY, strlen(AUTH_RECEIVER_KEY));
+    pbl_settings_delete(&file, AUTH_MARKS_KEY, strlen(AUTH_MARKS_KEY));
+    pbl_settings_close(&file);
   }
   memset(&s_receiver, 0, sizeof(s_receiver));
   s_receiver_loaded = false;
@@ -143,15 +144,15 @@ bool audio_companion_auth_load_marks(void *data, size_t length) {
   if (!s_receiver_loaded || length > AUTH_MARKS_MAX_BYTES) {
     return false;
   }
-  SettingsFile file;
-  if (settings_file_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != 0) {
     return false;
   }
   StoredMarks marks;
-  const status_t status =
-      settings_file_get(&file, AUTH_MARKS_KEY, strlen(AUTH_MARKS_KEY), &marks, sizeof(marks));
-  settings_file_close(&file);
-  if (status != S_SUCCESS || marks.length != length ||
+  const int status =
+      pbl_settings_get(&file, AUTH_MARKS_KEY, strlen(AUTH_MARKS_KEY), &marks, sizeof(marks));
+  pbl_settings_close(&file);
+  if (status != 0 || marks.length != length ||
       memcmp(marks.receiver_hash, s_receiver.receiver_hash, AUTH_RECEIVER_HASH_BYTES) != 0) {
     return false;
   }
@@ -166,12 +167,12 @@ bool audio_companion_auth_save_marks(const void *data, size_t length) {
   StoredMarks marks = {.length = length};
   memcpy(marks.receiver_hash, s_receiver.receiver_hash, AUTH_RECEIVER_HASH_BYTES);
   memcpy(marks.data, data, length);
-  SettingsFile file;
-  if (settings_file_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, AUTH_SETTINGS_FILE_NAME, AUTH_SETTINGS_FILE_SIZE) != 0) {
     return false;
   }
-  const status_t status =
-      settings_file_set(&file, AUTH_MARKS_KEY, strlen(AUTH_MARKS_KEY), &marks, sizeof(marks));
-  settings_file_close(&file);
-  return status == S_SUCCESS;
+  const int status =
+      pbl_settings_set(&file, AUTH_MARKS_KEY, strlen(AUTH_MARKS_KEY), &marks, sizeof(marks));
+  pbl_settings_close(&file);
+  return status == 0;
 }

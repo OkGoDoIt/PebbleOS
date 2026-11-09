@@ -7,17 +7,16 @@
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/debug.h>
 #include <pbl/kernel/fatal.h>
+#include <pbl/kernel/mpu.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/util/size.h>
 
-#include <kernel/memory_layout.h>
 #include <process_management/app_manager.h>
 #include <process_management/worker_manager.h>
 #include <system/die.h>
 #include <system/reboot_reason.h>
 
-static struct pbl_thread s_threads[NumPebbleTask];
 struct pbl_thread *g_task_threads[NumPebbleTask] KERNEL_READONLY_DATA = {};
 
 // Cycles consumed by tasks that have already been destroyed in each slot.
@@ -31,22 +30,18 @@ static uint32_t s_dead_task_cycles[NumPebbleTask];
 // process dies) instead of rebooting the system. ARMv8-M bounds them with
 // PSPLIM; ARMv7-M plants a no-access MPU guard below each. Plain .bss statics
 // land in the privileged-only .kernel_bss output.
-#define SYSCALL_STACK_WORDS 512u // 2 KiB each; size against measured high-water.
-#ifdef CONFIG_ARMV8_M_MAINLINE
-#define SYSCALL_STACK_GUARD_WORDS 0u
-#else
-#define SYSCALL_STACK_GUARD_WORDS 8u // smallest ARMv7-M MPU region, naturally aligned
-#endif
+#define SYSCALL_STACK_WORDS       (CONFIG_PROCESS_SYSCALL_STACK_SIZE / sizeof(uint32_t))
+#define SYSCALL_STACK_GUARD_WORDS (CONFIG_KERNEL_STACK_GUARD_SIZE / sizeof(uint32_t))
 
 struct syscall_stack {
-#if SYSCALL_STACK_GUARD_WORDS
+#if CONFIG_KERNEL_STACK_GUARD_SIZE > 0
   uint32_t guard[SYSCALL_STACK_GUARD_WORDS];
 #endif
   uint32_t words[SYSCALL_STACK_WORDS];
 };
 
-static struct syscall_stack s_app_syscall_stack PBL_ALIGNED(32);
-static struct syscall_stack s_worker_syscall_stack PBL_ALIGNED(32);
+static struct syscall_stack s_app_syscall_stack PBL_ALIGNED(CONFIG_KERNEL_STACK_ALIGN);
+static struct syscall_stack s_worker_syscall_stack PBL_ALIGNED(CONFIG_KERNEL_STACK_ALIGN);
 
 static struct syscall_stack *prv_syscall_stack(PebbleTask task) {
   switch (task) {
@@ -61,30 +56,9 @@ static struct syscall_stack *prv_syscall_stack(PebbleTask task) {
 
 void pebble_task_attr_set_syscall_stack(PebbleTask task, struct pbl_thread_attr *attr) {
   struct syscall_stack *stack = prv_syscall_stack(task);
-  attr->syscall_stack = stack->words;
-  attr->syscall_stack_size = sizeof(stack->words);
+  attr->syscall_stack = stack;
+  attr->syscall_stack_size = sizeof(*stack);
 }
-
-#if SYSCALL_STACK_GUARD_WORDS
-static MpuRegion s_syscall_stack_guard_regions[NumPebbleTask];
-
-static const MpuRegion *prv_syscall_stack_guard_region(PebbleTask task,
-                                                       const struct pbl_thread_attr *attr) {
-  if (attr->syscall_stack == nullptr) {
-    return nullptr;
-  }
-  const struct syscall_stack *stack = prv_syscall_stack(task);
-  s_syscall_stack_guard_regions[task] = (MpuRegion){
-    .region_num = MemoryRegion_Task4,
-    .enabled = true,
-    .base_address = (uintptr_t)stack->guard,
-    .size = sizeof(stack->guard),
-    .cache_policy = MpuCachePolicy_NotCacheable,
-    .permissions = MpuPermissions_NoAccess,
-  };
-  return &s_syscall_stack_guard_regions[task];
-}
-#endif
 
 // Peak unused bytes on a syscall stack: scan the zeroed .bss from the base to
 // the first written word (the high-water). For sizing during validation.
@@ -102,8 +76,8 @@ static uint16_t prv_syscall_stack_free_bytes(PebbleTask task) {
 }
 #endif
 
-static void prv_task_register(PebbleTask task, struct pbl_thread *thread) {
-  g_task_threads[task] = thread;
+void pebble_task_register(PebbleTask task, struct pbl_thread *thread) {
+  KERNEL_READONLY_DATA_SET(g_task_threads[task], thread);
 }
 
 static uint32_t prv_read_task_run_time(const struct pbl_thread *thread) {
@@ -126,7 +100,7 @@ void pebble_task_unregister(PebbleTask task) {
   // Clear the handle before crediting the cycles: the collector reads
   // s_dead_task_cycles before walking the task list, so this ordering
   // ensures cycles are never seen in both buckets simultaneously.
-  g_task_threads[task] = nullptr;
+  KERNEL_READONLY_DATA_SET(g_task_threads[task], nullptr);
   s_dead_task_cycles[task] += cycles;
 }
 
@@ -166,8 +140,6 @@ char pebble_task_get_char(PebbleTask task) {
       return 'd';
     case PebbleTask_NewTimers:
       return 't';
-    case PebbleTask_PULSE:
-      return 'p';
     case NumPebbleTask:
     case PebbleTask_Unknown:;
   }
@@ -232,7 +204,6 @@ static const enum pbl_analytics_key s_task_cpu_pct_keys[NumPebbleTask] = {
   [PebbleTask_BTController] = PBL_ANALYTICS_KEY(task_cpu_bt_controller_pct),
   [PebbleTask_BTHCI] = PBL_ANALYTICS_KEY(task_cpu_bt_hci_pct),
   [PebbleTask_NewTimers] = PBL_ANALYTICS_KEY(task_cpu_new_timers_pct),
-  [PebbleTask_PULSE] = PBL_ANALYTICS_KEY(task_cpu_pulse_pct),
 };
 
 void pbl_analytics_external_collect_task_cpu_stats(void) {
@@ -305,113 +276,6 @@ struct pbl_msgq *pebble_task_get_to_queue(PebbleTask task) {
       pbl_panic();
   }
   return queue;
-}
-
-static void prv_set_user_memory(struct pbl_thread_attr *attr, const MpuRegion *region) {
-#ifdef CONFIG_USERSPACE
-  attr->user_start = region->base_address;
-  attr->user_end = region->base_address + region->size;
-#endif
-}
-
-struct pbl_thread *pebble_task_create(PebbleTask pebble_task, struct pbl_thread_attr *attr) {
-  MpuRegion app_region;
-  MpuRegion worker_region;
-
-  switch (pebble_task) {
-    case PebbleTask_App:
-      mpu_init_region_from_region(&app_region, memory_layout_get_app_region(),
-                                  true /* allow_user_access */);
-      mpu_init_region_from_region(&worker_region, memory_layout_get_worker_region(),
-                                  false /* allow_user_access */);
-      prv_set_user_memory(attr, memory_layout_get_app_region());
-      break;
-    case PebbleTask_Worker:
-      mpu_init_region_from_region(&app_region, memory_layout_get_app_region(),
-                                  false /* allow_user_access */);
-      mpu_init_region_from_region(&worker_region, memory_layout_get_worker_region(),
-                                  true /* allow_user_access */);
-      prv_set_user_memory(attr, memory_layout_get_worker_region());
-      break;
-    case PebbleTask_KernelMain:
-    case PebbleTask_KernelBackground:
-    case PebbleTask_BTHost:
-    case PebbleTask_BTController:
-    case PebbleTask_BTHCI:
-    case PebbleTask_NewTimers:
-    case PebbleTask_PULSE:
-      mpu_init_region_from_region(&app_region, memory_layout_get_app_region(),
-                                  false /* allow_user_access */);
-      mpu_init_region_from_region(&worker_region, memory_layout_get_worker_region(),
-                                  false /* allow_user_access */);
-      break;
-    default:
-      pbl_panic();
-  }
-
-  const MpuRegion *stack_guard_region = nullptr;
-#ifndef CONFIG_ARMV8_M_MAINLINE
-  // Per-task stack overflow detection: on ARMv7-M we plant a no-access
-  // MPU region at the bottom of each task's stack. On ARMv8-M the kernel
-  // sets PSPLIM to the same address, so the hardware stack-pointer-limit
-  // check catches overflows directly -- and the ARMv8-M MPU AP encoding
-  // can't actually express "no access" anyway (the closest is priv-RO,
-  // which is half a guard at best). Skip the redundant region and reclaim
-  // the slot.
-  switch (pebble_task) {
-    case PebbleTask_App:
-      stack_guard_region = memory_layout_get_app_stack_guard_region();
-      break;
-    case PebbleTask_Worker:
-      stack_guard_region = memory_layout_get_worker_stack_guard_region();
-      break;
-    case PebbleTask_KernelMain:
-      stack_guard_region = memory_layout_get_kernel_main_stack_guard_region();
-      break;
-    case PebbleTask_KernelBackground:
-      stack_guard_region = memory_layout_get_kernel_bg_stack_guard_region();
-      break;
-    case PebbleTask_BTHost:
-    case PebbleTask_BTController:
-    case PebbleTask_BTHCI:
-    case PebbleTask_NewTimers:
-    case PebbleTask_PULSE:
-      break;
-    default:
-      pbl_panic();
-  }
-#endif
-
-  attr->regions[0] = &app_region;
-  attr->regions[1] = &worker_region;
-  attr->regions[2] = stack_guard_region;
-#if defined(CONFIG_USERSPACE) && SYSCALL_STACK_GUARD_WORDS
-  attr->regions[3] = prv_syscall_stack_guard_region(pebble_task, attr);
-#endif
-
-  struct pbl_thread *thread = &s_threads[pebble_task];
-  PBL_ASSERT(pbl_thread_create(thread, attr) == 0, "Could not start task %s", attr->name);
-  prv_task_register(pebble_task, thread);
-  return thread;
-}
-
-void pebble_task_configure_idle_task(void) {
-  // The idle thread exists before we can hand it regions, so configure it
-  // after the fact. This only matters on platforms with a cache, where
-  // altering the base address, length or cacheability attributes of MPU
-  // regions during context switches causes cache incoherency for memory
-  // covered by the regions; ISRs inherit the MPU configuration of the
-  // thread that is running at the time.
-  MpuRegion app_region;
-  MpuRegion worker_region;
-  mpu_init_region_from_region(&app_region, memory_layout_get_app_region(),
-                              false /* allow_user_access */);
-  mpu_init_region_from_region(&worker_region, memory_layout_get_worker_region(),
-                              false /* allow_user_access */);
-  const MpuRegion *regions[PBL_THREAD_MAX_MEM_REGIONS] = {
-    &app_region, &worker_region, nullptr, nullptr
-  };
-  pbl_thread_regions_set(pbl_thread_idle(), regions);
 }
 
 void pbl_thread_stack_overflow(struct pbl_thread *thread, const char *name) {

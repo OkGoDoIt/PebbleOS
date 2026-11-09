@@ -5,7 +5,9 @@ import os
 import shlex
 import sys
 
+from pbl import lock
 from pbl.command import PblCommand
+from pbl.runners.sftool import FLASH_XIP_BASE
 
 
 class _ImageCommand(PblCommand):
@@ -13,40 +15,52 @@ class _ImageCommand(PblCommand):
 
     group = "device"
     partition = None
+    region = None
 
     def do_add_parser(self, parser_adder):
         parser = self.add_subparser(parser_adder)
-        parser.add_argument("--tty", help="tty for serial imaging")
+        parser.add_argument("--tty", help="tty for serial imaging (default: the lab's)")
         parser.add_argument(
-            "--force-pulse",
+            "--force-console",
             action="store_true",
-            help="Force PULSE-based imaging even where sftool would be used",
+            help="Force imaging over the console even where sftool would be used",
         )
         return parser
 
     def _tool(self, build, args):
         """The imaging tool this build's SoC and protocol call for."""
-        if build.config.CONFIG_SOC_SF32LB52 and not args.force_pulse:
+        if build.config.CONFIG_SOC_SF32LB52 and not args.force_console:
             return "sftool_flash_imaging"
-        if build.config.CONFIG_PULSE_EVERYWHERE or args.force_pulse:
-            return "pulse_flash_imaging"
-        return "pulse_flash_imaging"
+        return "console_flash_imaging"
 
     def _image(self, build, args, path):
-        if not args.tty:
-            self.die("no device to image: pass --tty")
+        tty = args.tty
+        if not tty:
+            watch = self.lab_watch(build)
+            if watch is None or not watch.serial:
+                self.die("no device to image: pass --tty, or add the watch to a lab")
+            tty = watch.serial
+            self.inf(f"lab: watch {watch.name} ({watch.board})")
 
-        tool = self.script("tools", self._tool(build, args) + ".py")
-        self.inf(f'writing "{path}" to {args.tty}')
-        self.check_shell(
-            f"{shlex.quote(sys.executable)} {tool} -t {shlex.quote(args.tty)} "
-            f"-p {self.partition} {shlex.quote(path)}",
-            "imaging failed",
-        )
+        tool_name = self._tool(build, args)
+        tool = self.script("tools", tool_name + ".py")
+        tool_args = ""
+        if tool_name == "sftool_flash_imaging":
+            offset, _ = build.flash_region(self.region)
+            tool_args = f"--address {FLASH_XIP_BASE + offset:#x} "
+        self.inf(f'writing "{path}" to {tty}')
+        with self.holding([(lock.serial_key(tty), f"serial port {tty}")]):
+            self.check_shell(
+                f"{shlex.quote(sys.executable)} {tool} -t {shlex.quote(tty)} "
+                f"{tool_args}-p {self.partition} {shlex.quote(path)}",
+                "imaging failed",
+            )
 
 
 class ImageResources(_ImageCommand):
     partition = "resources"
+    # The bank the firmware checks first
+    region = "SYSTEM_RESOURCES_BANK_0"
 
     def __init__(self):
         super().__init__("image_resources", "Image the system resources over serial")
@@ -58,6 +72,7 @@ class ImageResources(_ImageCommand):
 
 class ImageRecovery(_ImageCommand):
     partition = "firmware"
+    region = "SAFE_FIRMWARE"
 
     def __init__(self):
         super().__init__("image_recovery", "Image the recovery firmware over serial")

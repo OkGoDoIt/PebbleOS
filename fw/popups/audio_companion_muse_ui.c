@@ -10,7 +10,7 @@
 #include "applib/ui/dialogs/dialog_private.h"
 #include "applib/ui/dialogs/simple_dialog.h"
 #include "kernel/event_loop.h"
-#include "kernel/pbl_malloc.h"
+#include <pbl/kernel/malloc.h>
 #include "kernel/pebble_tasks.h"
 #include "kernel/ui/modals/modal_manager.h"
 #include "pbl/logging/logging.h"
@@ -73,7 +73,7 @@ static void prv_prompt_unload(void *context) {
   if (s_prompt == prompt) {
     s_prompt = NULL;
   }
-  task_free(prompt);
+  pbl_free(prompt);
 }
 
 static void prv_show_prompt_kernel_main_cb(void *data) {
@@ -84,7 +84,7 @@ static void prv_show_prompt_kernel_main_cb(void *data) {
     return;
   }
 
-  MuseConsentPrompt *prompt = task_zalloc_check(sizeof(*prompt));
+  MuseConsentPrompt *prompt = pbl_zalloc_check(sizeof(*prompt));
   ConfirmationDialog *confirmation = confirmation_dialog_create("Muse");
   prompt->dialog = confirmation;
 
@@ -116,7 +116,7 @@ static void prv_card_unload(void *context) {
   if (s_card == card) {
     s_card = NULL;
   }
-  task_free(card);
+  pbl_free(card);
 }
 
 static void prv_pop_card(void) {
@@ -129,7 +129,7 @@ static void prv_pop_card(void) {
 
 static void prv_push_card(const char *text, bool ending) {
   prv_pop_card();
-  MuseStatusCard *card = task_zalloc_check(sizeof(*card));
+  MuseStatusCard *card = pbl_zalloc_check(sizeof(*card));
   card->ending = ending;
   card->dialog = simple_dialog_create("Muse");
   Dialog *dialog = simple_dialog_get_dialog(card->dialog);
@@ -190,7 +190,7 @@ static void prv_status_kernel_main_cb(void *data) {
       break;
     }
   }
-  kernel_free(update);
+  pbl_free(update);
 }
 
 // ---- relay handlers (system task): defer to KernelMain ----
@@ -200,7 +200,7 @@ static void prv_consent_handler(void) {
 }
 
 static void prv_status_handler(AudioCompanionMuseStatus status, uint8_t detail) {
-  MuseStatusUpdate *update = kernel_malloc(sizeof(*update));
+  MuseStatusUpdate *update = pbl_malloc(sizeof(*update));
   if (!update) {
     return;
   }

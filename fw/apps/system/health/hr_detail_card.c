@@ -12,9 +12,10 @@
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/util/units.h>
 
+#include <applib/app_malloc.h>
 #include <applib/fonts/codepoint.h>
-#include <board/display.h>
-#include <kernel/pbl_malloc.h>
+#include <applib/platform.h>
+#include <shell/system_theme.h>
 
 typedef struct HealthHrDetailCard {
   int16_t num_headings;
@@ -27,7 +28,7 @@ typedef struct HealthHrDetailCard {
 } HealthHrDetailCardData;
 
 #define DEFAULT_MAX_PROGRESS (10 * PBL_SEC_PER_MIN)
-#define CHART_HEIGHT         PBL_IF_RECT_ELSE((DISP_ROWS * 4) / 9, (DISP_ROWS * 2) / 5)
+#define CHART_HEIGHT PBL_IF_RECT_ELSE((PBL_DISPLAY_HEIGHT * 4) / 9, (PBL_DISPLAY_HEIGHT * 2) / 5)
 
 static void prv_draw_chart(GContext *ctx, const GRect *bounds, void *context) {
   HealthHrDetailCardData *card_data = context;
@@ -131,7 +132,7 @@ Window *health_hr_detail_card_create(HealthData *health_data, const HealthHrChar
     .num_headings = card_data->num_headings,
     .headings = card_data->headings,
     .weekly_max = max_progress,
-    .bg_color = GColorWhite,
+    .bg_follows_theme = true,
     .num_zones = card_data->num_zones,
     .zones = card_data->zones,
     .chart = &chart,

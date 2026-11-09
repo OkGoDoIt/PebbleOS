@@ -8,8 +8,6 @@
 #include <pbl/kernel/msgq.h>
 #include <pbl/kernel/thread.h>
 
-#include <kernel/memory_layout.h>
-
 //! This is an enumeration of different tasks we've had in our system. Please don't rearrange
 //! these numbers! For example, the value of PebbleTask_Timers is hardcoded into our syscall
 //! assembly and terrible things will happen if you move this around.
@@ -25,8 +23,6 @@ typedef enum PebbleTask {
 
   PebbleTask_NewTimers,
 
-  PebbleTask_PULSE,
-
   NumPebbleTask,
 
   PebbleTask_Unknown
@@ -38,6 +34,7 @@ static_assert((1 << (8 * sizeof(PebbleTaskBitset))) >= (1 << NumPebbleTask),
               "The type of PebbleTaskBitset is not wide enough to "
               "track all tasks in the PebbleTask enum");
 
+//! Makes @p thread the one running @p task.
 void pebble_task_register(PebbleTask task, struct pbl_thread *thread);
 void pebble_task_unregister(PebbleTask task);
 
@@ -58,17 +55,11 @@ void pebble_task_suspend(PebbleTask task);
 //! @return The queue handle to send events to the given task.
 struct pbl_msgq *pebble_task_get_to_queue(PebbleTask task);
 
-//! Creates the thread for @p pebble_task with the memory regions it needs;
-//! @p attr->regions is filled in here.
-struct pbl_thread *pebble_task_create(PebbleTask pebble_task, struct pbl_thread_attr *attr);
-
 #ifdef CONFIG_USERSPACE
 //! Runs the syscalls of @p task (App or Worker) on its dedicated privileged
 //! stack instead of the caller's.
 void pebble_task_attr_set_syscall_stack(PebbleTask task, struct pbl_thread_attr *attr);
 #endif
-
-void pebble_task_configure_idle_task(void);
 
 #if UNITTEST
 #define PBL_ASSERT_TASK(task)

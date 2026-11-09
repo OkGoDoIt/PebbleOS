@@ -2,16 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(excl)
-if(NOT CONFIG_BOARD_ASTERIX)
+if(NOT CONFIG_SPEAKER)
   list(APPEND excl
-    mfg_speaker_asterix.c
-    mfg_mic_asterix.c
+    mfg_speaker.c
   )
 endif()
-if(NOT CONFIG_BOARD_OBELIX)
+if(NOT (CONFIG_MIC AND CONFIG_SPEAKER))
   list(APPEND excl
-    mfg_speaker_obelix.c
-    mfg_mic_obelix.c
+    mfg_mic.c
   )
 endif()
 if(NOT (CONFIG_BOARD_OBELIX AND CONFIG_MFG))
@@ -22,6 +20,11 @@ endif()
 if(NOT CONFIG_BOARD_GETAFIX)
   list(APPEND excl
     mfg_mic_getafix.c
+  )
+endif()
+if(NOT CONFIG_AUDIO)
+  list(APPEND excl
+    mfg_audio.c
   )
 endif()
 if(NOT CONFIG_MAG)

@@ -45,6 +45,7 @@ PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(cpu_running_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(cpu_sleep0_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(cpu_sleep1_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(cpu_sleep2_pct, 100)
+// Reserved version-3 wire slot; the IPC driver no longer records it.
 PBL_ANALYTICS_METRIC_DEFINE_UNSIGNED(sifli_ipc_not_idle_count)
 
 // Per-task CPU usage
@@ -56,6 +57,7 @@ PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(task_cpu_bt_host_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(task_cpu_bt_controller_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(task_cpu_bt_hci_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(task_cpu_new_timers_pct, 100)
+// Reserved version-3 wire slot; the PULSE task no longer exists.
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(task_cpu_pulse_pct, 100)
 PBL_ANALYTICS_METRIC_DEFINE_SCALED_UNSIGNED(task_cpu_idle_pct, 100)
 

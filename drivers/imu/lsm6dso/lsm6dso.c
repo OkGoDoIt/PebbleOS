@@ -7,8 +7,8 @@
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/imu/lsm6dso/lsm6dso.h>
-#include <pbl/drivers/rtc.h>
 #include <pbl/kernel/delay.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
 #include <pbl/services/imu/units.h>
@@ -18,8 +18,6 @@
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
-
-#include <board/board.h>
 
 PBL_LOG_MODULE_DEFINE(driver_accel_lsm6dso, CONFIG_DRIVER_IMU_LOG_LEVEL);
 
@@ -242,12 +240,7 @@ static void prv_raw_to_mg(const uint8_t *raw, AccelDriverSample *sample) {
 }
 
 static uint64_t prv_get_curr_system_time_us(void) {
-  time_t time_s;
-  uint16_t time_ms;
-
-  rtc_get_time_ms(&time_s, &time_ms);
-
-  return (((uint64_t)time_s) * 1000 + time_ms) * 1000ULL;
+  return pbl_realtime_ms() * 1000ULL;
 }
 
 // Convert and dispatch the samples already sitting in raw_sample_buf. Kept free of
@@ -367,7 +360,7 @@ static void prv_lsm6dso_drain_fifo(void) {
   }
 
   prv_lsm6dso_process_samples(samples, prv_get_curr_system_time_us());
-  s_dev->state->last_fifo_read_tick = rtc_get_ticks();
+  s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
 }
 
 static void prv_lsm6dso_recover(void);
@@ -452,7 +445,7 @@ static bool prv_lsm6dso_service_int1(Lsm6dsoInt1Pass pass, bool *fifo_progress) 
           return false;
         }
         timestamp_us = prv_get_curr_system_time_us();
-        s_dev->state->last_fifo_read_tick = rtc_get_ticks();
+        s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
       }
     }
   }
@@ -708,12 +701,12 @@ static void prv_lsm6dso_recover(void) {
   }
 
   s_dev->state->wu_active = false;
-  s_dev->state->last_fifo_read_tick = rtc_get_ticks();
+  s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
 }
 
 static uint32_t prv_ms_since_last_fifo_read(void) {
-  RtcTicks ticks = rtc_get_ticks() - s_dev->state->last_fifo_read_tick;
-  return (uint32_t)((ticks * 1000) / RTC_TICKS_HZ);
+  uint64_t ticks = pbl_uptime_ticks() - s_dev->state->last_fifo_read_tick;
+  return (uint32_t)((ticks * 1000) / PBL_TICK_HZ);
 }
 
 static uint32_t prv_stall_threshold_ms(void) {
@@ -727,7 +720,7 @@ static void prv_update_int1_watchdog(void) {
   s_dev->state->shake_stuck_passes = 0U;
 
   if (s_dev->state->num_samples > 0U) {
-    s_dev->state->last_fifo_read_tick = rtc_get_ticks();
+    s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
     s_dev->state->int1_period_ms =
         (s_dev->state->sampling_interval_us * s_dev->state->num_samples) / 1000;
     regular_timer_add_multisecond_callback(

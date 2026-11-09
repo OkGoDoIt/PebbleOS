@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/drivers/display.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/session_send_buffer.h>
 #include <pbl/services/compositor/compositor.h>
@@ -11,7 +13,6 @@
 
 #include <applib/graphics/framebuffer.h>
 #include <kernel/event_loop.h>
-#include <kernel/pbl_malloc.h>
 
 PBL_LOG_MODULE_DECLARE(service_compositor, CONFIG_SERVICE_COMPOSITOR_LOG_LEVEL);
 
@@ -82,8 +83,8 @@ static void prv_request_fast_connection(CommSession *session) {
 
 static uint32_t prv_framebuffer_next_chunk(FrameBufferState *restrict state,
                                            uint32_t max_chunk_bytes, uint8_t *output_buffer) {
-  const uint32_t bytes_per_row = CONFIG_SCREEN_COLOR_DEPTH_BITS * DISP_COLS / 8;
-  const uint32_t cols_per_byte = DISP_COLS / bytes_per_row;
+  const uint32_t bytes_per_row = CONFIG_SCREEN_COLOR_DEPTH_BITS * PBL_DISPLAY_WIDTH / 8;
+  const uint32_t cols_per_byte = PBL_DISPLAY_WIDTH / bytes_per_row;
 
   uint32_t remaining_chunk_bytes = max_chunk_bytes;
   uint8_t *output_buffer_with_offset = output_buffer;
@@ -100,9 +101,8 @@ static uint32_t prv_framebuffer_next_chunk(FrameBufferState *restrict state,
     }
 
 #if PBL_ROUND
-    const GBitmapDataRowInfoInternal *row_infos = g_gbitmap_data_row_infos;
-    const size_t framebuffer_row_min_pixel = row_infos[state->row].min_x;
-    const size_t framebuffer_row_max_pixel = row_infos[state->row].max_x;
+    const size_t framebuffer_row_min_pixel = pbl_display_round_inset(DISPLAY, state->row);
+    const size_t framebuffer_row_max_pixel = PBL_DISPLAY_WIDTH - 1 - framebuffer_row_min_pixel;
     for (uint32_t i = 0; i < remaining_framebuffer_row_bytes; i++) {
       const uint32_t i_with_offset = i + framebuffer_current_column;
       if (WITHIN(i_with_offset, framebuffer_row_min_pixel, framebuffer_row_max_pixel)) {
@@ -140,7 +140,7 @@ void screenshot_send_next_chunk(void *raw_state) {
     session_len += sizeof(ScreenshotHeader);
   }
 
-  void *buffer = kernel_zalloc(max_buf_len);
+  void *buffer = pbl_zalloc(max_buf_len);
   if (!buffer) {
     PBL_LOG_WRN("Screenshot aborted, OOM.");
     prv_send_error_response(session, SCREENSHOT_OOM_ERROR);
@@ -151,7 +151,7 @@ void screenshot_send_next_chunk(void *raw_state) {
   session_len += len;
 
   if (len == 0) {
-    kernel_free(buffer);
+    pbl_free(buffer);
     prv_finish(state);
     return;
   }
@@ -188,7 +188,7 @@ void screenshot_send_next_chunk(void *raw_state) {
   }
   comm_session_send_buffer_end_write(sb);
 
-  kernel_free(buffer);
+  pbl_free(buffer);
 
   prv_request_fast_connection(session);
 
@@ -227,8 +227,8 @@ void screenshot_protocol_msg_callback(CommSession *session, const uint8_t *msg_d
           .fb = compositor_get_framebuffer(),
           .row = 0,
           .col = 0,
-          .width = DISP_COLS,
-          .height = DISP_ROWS,
+          .width = PBL_DISPLAY_WIDTH,
+          .height = PBL_DISPLAY_HEIGHT,
         },
     .sent_header = false,
   };

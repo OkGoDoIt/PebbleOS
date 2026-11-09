@@ -297,7 +297,7 @@ class PFSFileNode(Recognizer):
 
 
 class SettingsFile(Recognizer):
-    type = "SettingsFile"
+    type = "struct pbl_settings_file"
     depends_on = "String"
 
     def is_type(self, settings, search_blocks):
@@ -395,9 +395,9 @@ class CommSession(Recognizer):
         spp = self.try_session_address("s_plain_spp_transport_implementation")
         ppogatt = self.try_session_address("s_ppogatt_transport_implementation")
         qemu = self.try_session_address("s_qemu_transport_implementation")
-        pulse_pp = self.try_session_address("s_pulse_transport_implementation")
+        console = self.try_session_address("s_console_transport_implementation")
 
-        return transport_imp in [iap, spp, ppogatt, qemu, pulse_pp]
+        return transport_imp in [iap, spp, ppogatt, qemu, console]
 
 
 # --- Windows --- #

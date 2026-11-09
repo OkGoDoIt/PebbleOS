@@ -11,7 +11,7 @@
 #include "applib/ui/dialogs/dialog.h"
 #include "applib/ui/dialogs/expandable_dialog.h"
 #include "applib/ui/menu_layer.h"
-#include "kernel/pbl_malloc.h"
+#include <applib/app_malloc.h>
 #include "pbl/services/analytics/native_heartbeat_stats.h"
 #include "pbl/services/audio_companion.h"
 #include "pbl/services/i18n/i18n.h"

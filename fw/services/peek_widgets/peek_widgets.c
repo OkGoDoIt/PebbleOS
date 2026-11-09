@@ -3,7 +3,7 @@
 
 #include "pbl/services/peek_widgets.h"
 
-#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/time.h>
 #include "apps/system_app_ids.h"
 #include "kernel/event_loop.h"
 #include "kernel/ui/modals/modal_manager.h"
@@ -158,7 +158,7 @@ static bool prv_play_state_is_playing(MusicPlayState play_state) {
 }
 
 static bool prv_music_in_replay_window(void) {
-  return (rtc_get_time() < (s_state.music_connected_at + PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S));
+  return (pbl_realtime() < (s_state.music_connected_at + PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S));
 }
 
 static bool prv_music_is_active(void) {
@@ -201,7 +201,7 @@ static bool prv_music_is_active(void) {
     return false;
   }
   if (mode == QuickViewMusicMode_TrackStart) {
-    return (rtc_get_time() < (s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S));
+    return (pbl_realtime() < (s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S));
   }
   return true;
 }
@@ -250,7 +250,7 @@ static void prv_show_music(bool animated) {
   }
 
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
+      pbl_realtime(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
       NULL /* action_group */);
   attribute_list_destroy_list(&attr_list);
   if (!item) {
@@ -286,7 +286,7 @@ static void prv_query_phone(void) {
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
   if (audio_companion_query_phone_media()) {
     // Ask again later even if no answer comes (an app that predates the question)
-    s_state.phone_next_query_at = rtc_get_time() + PEEK_WIDGET_PHONE_REQUERY_IDLE_S;
+    s_state.phone_next_query_at = pbl_realtime() + PEEK_WIDGET_PHONE_REQUERY_IDLE_S;
   }
 #endif
 }
@@ -296,7 +296,7 @@ static void prv_maybe_query_phone(void) {
     s_state.phone_next_query_at = 0;
     return;
   }
-  if (s_state.phone_next_query_at && (rtc_get_time() >= s_state.phone_next_query_at)) {
+  if (s_state.phone_next_query_at && (pbl_realtime() >= s_state.phone_next_query_at)) {
     prv_query_phone();
   }
 }
@@ -313,7 +313,7 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
       const uint32_t track_id = prv_music_track_id();
       if (track_id && (track_id != s_state.music_track_id)) {
         s_state.music_track_id = track_id;
-        s_state.track_changed_at = rtc_get_time();
+        s_state.track_changed_at = pbl_realtime();
         s_state.music_dismissed = false;
         s_state.music_past_end_logged = false;
         // Tracks only move on while something plays
@@ -342,7 +342,7 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
       break;
     }
     case PebbleMediaEventTypeServerConnected:
-      s_state.music_connected_at = rtc_get_time();
+      s_state.music_connected_at = pbl_realtime();
       s_state.music_playing_seen_live = false;
       break;
     case PebbleMediaEventTypeServerDisconnected:
@@ -354,7 +354,7 @@ void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
       s_state.phone_report_valid = true;
       if (prv_play_state_is_playing(music_get_playback_state())) {
         s_state.phone_next_query_at =
-            rtc_get_time() + (phone_playing ? PEEK_WIDGET_PHONE_REQUERY_PLAYING_S
+            pbl_realtime() + (phone_playing ? PEEK_WIDGET_PHONE_REQUERY_PLAYING_S
                                             : PEEK_WIDGET_PHONE_REQUERY_IDLE_S);
       }
       break;
@@ -389,7 +389,7 @@ static void prv_notif_activate(void) {
   s_state.notif_armed = false;
   s_state.notif_active = true;
   s_state.notif_expires_at =
-      (seconds == QUICK_VIEW_NOTIF_SECONDS_PERSISTENT) ? 0 : (rtc_get_time() + seconds);
+      (seconds == QUICK_VIEW_NOTIF_SECONDS_PERSISTENT) ? 0 : (pbl_realtime() + seconds);
 }
 
 //! Builds the notification widget's content from the stored notification.
@@ -436,7 +436,7 @@ static bool prv_show_notification(bool animated) {
   attribute_list_add_resource_id(&attr_list, AttributeIdIconTiny, icon);
 
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
+      pbl_realtime(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
       NULL /* action_group */);
   attribute_list_destroy_list(&attr_list);
   const bool shown = (item != NULL);
@@ -603,7 +603,7 @@ static bool prv_show_timeline(bool animated) {
 //! Picks the freshest live app widget. Expired and dismissed entries are dropped in place.
 //! Must be called with app_lock held.
 static AppPeekWidget *prv_pick_app_widget(void) {
-  const time_t now = rtc_get_time();
+  const time_t now = pbl_realtime();
   AppPeekWidget *best = NULL;
   for (unsigned int i = 0; i < PEEK_WIDGET_MAX_APP_WIDGETS; i++) {
     AppPeekWidget *widget = &s_state.app_widgets[i];
@@ -665,7 +665,7 @@ static bool prv_show_app_widget(bool animated) {
   }
 
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
+      pbl_realtime(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &attr_list,
       NULL /* action_group */);
   attribute_list_destroy_list(&attr_list);
   if (!item) {
@@ -712,7 +712,7 @@ bool peek_widgets_publish_app_widget(const PeekWidgetAppPublish *publish) {
   if (!slot) {
     slot = oldest; // Full: evict the oldest publish
   }
-  const time_t now = rtc_get_time();
+  const time_t now = pbl_realtime();
   const uint16_t timeout_s = MIN(publish->timeout_s, PEEK_WIDGET_APP_TIMEOUT_MAX_S);
   *slot = (AppPeekWidget) {
     .in_use = true,
@@ -757,7 +757,7 @@ void peek_widgets_withdraw_app_widget(const Uuid *owner) {
 
 static PeekWidgetSource prv_pick(void) {
   if (s_state.notif_active) {
-    const time_t now = rtc_get_time();
+    const time_t now = pbl_realtime();
     if (s_state.notif_expires_at && (now >= s_state.notif_expires_at)) {
       prv_notif_clear();
     } else {
@@ -778,7 +778,7 @@ static PeekWidgetSource prv_pick(void) {
 
 //! Re-arms the wake timer for the next music/notification policy transition.
 static void prv_update_timer(void) {
-  const time_t now = rtc_get_time();
+  const time_t now = pbl_realtime();
   time_t deadline = 0;
   if (s_state.notif_active && s_state.notif_expires_at) {
     deadline = s_state.notif_expires_at;

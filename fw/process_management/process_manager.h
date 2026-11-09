@@ -129,6 +129,10 @@ bool process_manager_make_process_safe_to_kill(PebbleTask task, bool gracefully)
 //! Setup some required state for processes
 void process_manager_process_setup(PebbleTask task);
 
+//! Creates the thread of the App or Worker @p task, confined to its own RAM; @p attr->regions and
+//! the user memory bounds are filled in here.
+struct pbl_thread *process_manager_thread_create(PebbleTask task, struct pbl_thread_attr *attr);
+
 //! Kills the task and cleans it up. Must only be called if
 //! process_manager_make_process_safe_to_kill() returns true.
 void process_manager_process_cleanup(PebbleTask task);
@@ -154,6 +158,10 @@ bool process_manager_compiled_with_legacy2_sdk(void);
 
 //! Return true if the current process was compiled with any 3.x SDK
 bool process_manager_compiled_with_legacy3_sdk(void);
+
+//! Return true if the current process was built before localtime() included DST in tm_gmtoff
+//! and expects tm_gmtoff to hold the standard time offset only
+bool process_manager_expects_legacy_tm_gmtoff(void);
 
 //! Returns platform the application was compiled against
 //! Use this to test, e.g. if app is Aplite while being executed on Basalt

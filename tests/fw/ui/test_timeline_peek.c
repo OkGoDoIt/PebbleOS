@@ -28,6 +28,7 @@
 #include <pbl/services/time.h>
 #include <pbl/util/units.h>
 
+#include <fake_pfs.h>
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
@@ -79,9 +80,9 @@ void test_timeline_peek__initialize(void) {
   TimezoneInfo tz_info = {
     .tm_zone = "UTC",
   };
-  time_util_update_timezone(&tz_info);
-  rtc_set_timezone(&tz_info);
-  rtc_set_time(PBL_SEC_PER_DAY);
+  time_util_update_timezone(&tz_info, 0, 0);
+  tz_storage_save(&tz_info);
+  pbl_realtime_set(PBL_SEC_PER_DAY);
 
   // We start time out at 5pm on Jan 1, 2015 for all of these tests
   struct pbl_tm time_tm = {
@@ -102,8 +103,8 @@ void test_timeline_peek__initialize(void) {
 
   // Setup resources
   fake_spi_flash_init(0 /* offset */, 0x1000000 /* length */);
-  pfs_init(false /* run filesystem check */);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
   resource_init();
@@ -153,7 +154,7 @@ typedef struct TimelinePeekItemConfig {
 
 static TimelineItem *prv_set_timeline_item(const TimelinePeekItemConfig *config, bool animated) {
   TimelineItem *item = nullptr;
-  const time_t now = rtc_get_time();
+  const time_t now = pbl_realtime();
   const time_t timestamp = config ? (config->timestamp ?: now) : now;
   if (config) {
     AttributeList list;
@@ -278,7 +279,7 @@ void test_timeline_peek__peek_title_only_concurrent_2(void) {
 
 void test_timeline_peek__peek_in_5_minutes(void) {
   prv_render_timeline_peek(&(TimelinePeekItemConfig){
-    .timestamp = rtc_get_time() + (5 * PBL_SEC_PER_MIN),
+    .timestamp = pbl_realtime() + (5 * PBL_SEC_PER_MIN),
     .title = "Stock for party 🍺",
     .subtitle = "Pebble Pad on Park",
     .icon = TIMELINE_RESOURCE_NOTIFICATION_REMINDER,
@@ -332,7 +333,7 @@ void test_timeline_peek__peek_visibility(void) {
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Normally it is animated, but for this unit test, we don't request `animated`
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Peek service shows the peek UI. Not animated for this unit test.
   prv_set_timeline_item(
@@ -344,12 +345,12 @@ void test_timeline_peek__peek_visibility(void) {
       },
       false /* animated */);
   // Peek should now be on-screen.
-  cl_assert(layer->frame.origin.y < DISP_ROWS);
+  cl_assert(layer->frame.origin.y < PBL_DISPLAY_HEIGHT);
 
   // Peek service hides the peek UI. Not animated for this unit test.
   prv_set_timeline_item(nullptr, false /* animated */);
   // Peek should now be off-screen.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 }
 
 void test_timeline_peek__peek_visible_to_hidden_outside_of_watchface(void) {
@@ -364,25 +365,25 @@ void test_timeline_peek__peek_visible_to_hidden_outside_of_watchface(void) {
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Normally it is animated, but for this unit test, we don't request `animated`
-  cl_assert(layer->frame.origin.y < DISP_ROWS);
+  cl_assert(layer->frame.origin.y < PBL_DISPLAY_HEIGHT);
 
   // Transition away from the watchface
   s_is_watchface_running = false;
   timeline_peek_set_visible(false, false /* animated */);
   // For simplicity, the implementation also moves the layer even though it is not necessary.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Peek service hides the peek UI using the animated code path.
   prv_set_timeline_item(nullptr, true /* animated */);
   // This time we set the item to NULL, not just request invisibility. Since we're not in the
   // watchface, even though `animated` was requested, it should immediately move the position.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Transition back to the watchface
   s_is_watchface_running = true;
   timeline_peek_set_visible(true, false /* animated */);
   // Peek should be visible again, but it should still be off-screen.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
   timeline_item_destroy(item);
 }
 
@@ -391,13 +392,13 @@ void test_timeline_peek__peek_hidden_to_visible_outside_of_watchface(void) {
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Normally it is animated, but for this unit test, we don't request `animated`
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Transition away from the watchface
   s_is_watchface_running = false;
   timeline_peek_set_visible(false, false /* animated */);
   // For simplicity, the implementation also moves the layer even though it is not necessary.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Peek service shows the peek UI using the animated code path.
   TimelineItem *item = prv_set_timeline_item(
@@ -409,13 +410,13 @@ void test_timeline_peek__peek_hidden_to_visible_outside_of_watchface(void) {
       },
       true /* animated */);
   // Since we're not in the watchface, the peek remains off-screen.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Transition back to the watchface
   s_is_watchface_running = true;
   timeline_peek_set_visible(true, false /* animated */);
   // Peek should be visible again and now on-screen.
-  cl_assert(layer->frame.origin.y < DISP_ROWS);
+  cl_assert(layer->frame.origin.y < PBL_DISPLAY_HEIGHT);
   timeline_item_destroy(item);
 }
 
@@ -431,19 +432,19 @@ void test_timeline_peek__peek_visible_leaving_and_entering_watchface(void) {
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Normally it is animated, but for this unit test, we don't request `animated`
-  cl_assert(layer->frame.origin.y < DISP_ROWS);
+  cl_assert(layer->frame.origin.y < PBL_DISPLAY_HEIGHT);
 
   // Transition away from the watchface
   s_is_watchface_running = false;
   timeline_peek_set_visible(false, false /* animated */);
   // For simplicity, the implementation also moves the layer even though it is not necessary.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Transition back to the watchface
   s_is_watchface_running = true;
   timeline_peek_set_visible(true, false /* animated */);
   // Peek should be visible again and on-screen.
-  cl_assert(layer->frame.origin.y < DISP_ROWS);
+  cl_assert(layer->frame.origin.y < PBL_DISPLAY_HEIGHT);
   timeline_item_destroy(item);
 }
 
@@ -452,19 +453,19 @@ void test_timeline_peek__peek_hidden_leaving_and_entering_watchface(void) {
   TimelinePeek *peek = timeline_peek_get_peek();
   const Layer *layer = &peek->layout_layer;
   // Peek should be off-screen.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Transition away from the watchface
   s_is_watchface_running = false;
   timeline_peek_set_visible(false, false /* animated */);
   // Peek should be hidden and off-screen.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 
   // Transition back to the watchface
   s_is_watchface_running = true;
   timeline_peek_set_visible(true, false /* animated */);
   // Peek should be visible again, but it should still be off-screen.
-  cl_assert(layer->frame.origin.y >= DISP_ROWS);
+  cl_assert(layer->frame.origin.y >= PBL_DISPLAY_HEIGHT);
 }
 
 #ifdef CONFIG_SERVICE_PEEK_WIDGETS
@@ -480,7 +481,7 @@ static TimelineItem *prv_create_widget_item(const char *title, const char *subti
   }
   attribute_list_add_uint32(&list, AttributeIdIconTiny, TIMELINE_RESOURCE_AUDIO_CASSETTE);
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &list, NULL);
+      pbl_realtime(), 0 /* duration */, TimelineItemTypePin, LayoutIdGeneric, &list, NULL);
   attribute_list_destroy_list(&list);
   return item;
 }
@@ -493,7 +494,7 @@ void test_timeline_peek__widget_item_source_and_guards(void) {
 
   TimelinePeek *peek = timeline_peek_get_peek();
   // Widget content shows just like timeline content.
-  cl_assert(peek->layout_layer.frame.origin.y < DISP_ROWS);
+  cl_assert(peek->layout_layer.frame.origin.y < PBL_DISPLAY_HEIGHT);
   cl_assert_equal_i(timeline_peek_get_source(), PeekWidgetSource_Music);
 
   // Widget items are synthetic, so no pin id is ever reported.
@@ -529,7 +530,7 @@ void test_timeline_peek__widget_visible_while_timeline_disabled(void) {
         .icon = TIMELINE_RESOURCE_TIMELINE_CALENDAR,
       },
       false /* animated */);
-  cl_assert(peek->layout_layer.frame.origin.y >= DISP_ROWS);
+  cl_assert(peek->layout_layer.frame.origin.y >= PBL_DISPLAY_HEIGHT);
   timeline_item_destroy(pin);
 
   // Widget content has its own prefs and shows regardless.
@@ -537,7 +538,7 @@ void test_timeline_peek__widget_visible_while_timeline_disabled(void) {
   timeline_peek_set_widget_item(PeekWidgetSource_Music, item, NULL /* icon_override */,
                                 false /* animated */);
   timeline_item_destroy(item);
-  cl_assert(peek->layout_layer.frame.origin.y < DISP_ROWS);
+  cl_assert(peek->layout_layer.frame.origin.y < PBL_DISPLAY_HEIGHT);
 }
 
 void test_timeline_peek__widget_icon_override_wins(void) {

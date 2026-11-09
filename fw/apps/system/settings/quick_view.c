@@ -9,7 +9,7 @@
 #include "window.h"
 
 #include "applib/ui/option_menu_window.h"
-#include "kernel/pbl_malloc.h"
+#include <applib/app_malloc.h>
 #include "process_state/app_state/app_state.h"
 #include "pbl/services/i18n/i18n.h"
 #include "pbl/services/notifications/alerts_preferences.h"

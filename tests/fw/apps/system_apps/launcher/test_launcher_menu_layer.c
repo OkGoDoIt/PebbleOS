@@ -22,7 +22,8 @@ static GContext s_ctx;
 #include <pbl/services/timeline/timeline_resources.h>
 
 #include <fake_content_indicator.h>
-#include <fake_settings_file.h>
+#include <fake_pfs.h>
+#include <fake_settings.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
 #include <fixtures/screen_grid.h>
@@ -187,6 +188,10 @@ GColor shell_prefs_get_theme_highlight_color(void) {
   return PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack);
 }
 
+GColor system_theme_get_highlight_color(void) {
+  return shell_prefs_get_theme_highlight_color();
+}
+
 bool alerts_preferences_get_notification_alternative_design(void) {
   return false;
 }
@@ -237,14 +242,14 @@ GContext *graphics_context_get_current_context(void) {
 void test_launcher_menu_layer__initialize(void) {
   // Setup framebuffer and graphics context
   fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
   test_graphics_context_init(&s_ctx, fb);
   graphics_context_set_antialiased(&s_ctx, true);
 
   // Setup resources
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
   resource_init();
@@ -254,7 +259,7 @@ void test_launcher_menu_layer__initialize(void) {
   content_indicator_init_buffer(buffer);
 
   // Setup AppGlanceDB
-  fake_settings_file_reset();
+  fake_settings_reset();
   app_glance_db_init();
 
   // Setup AppGlanceService
@@ -447,7 +452,7 @@ void test_launcher_menu_layer__content_size_change_keeps_selection(void) {
   GRangeVertical selection_range;
   launcher_menu_layer_get_selection_vertical_range(&launcher_menu_layer, &selection_range);
   cl_assert(selection_range.origin_y >= 0);
-  cl_assert(selection_range.origin_y + selection_range.size_h <= DISP_ROWS);
+  cl_assert(selection_range.origin_y + selection_range.size_h <= PBL_DISPLAY_HEIGHT);
 
   // Restoring a state captured with a different content size also keeps the row on screen
   launcher_menu_layer_set_selection_state(&launcher_menu_layer, &state);
@@ -455,7 +460,7 @@ void test_launcher_menu_layer__content_size_change_keeps_selection(void) {
                     selected_row);
   launcher_menu_layer_get_selection_vertical_range(&launcher_menu_layer, &selection_range);
   cl_assert(selection_range.origin_y >= 0);
-  cl_assert(selection_range.origin_y + selection_range.size_h <= DISP_ROWS);
+  cl_assert(selection_range.origin_y + selection_range.size_h <= PBL_DISPLAY_HEIGHT);
 
   launcher_menu_layer_deinit(&launcher_menu_layer);
   app_menu_data_source_deinit(&data_source);

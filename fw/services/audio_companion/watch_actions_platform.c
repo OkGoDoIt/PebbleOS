@@ -1,27 +1,28 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "watch_actions.h"
-
 #include "applib/ui/vibes.h"
 #include "kernel/event_loop.h"
-#include "process_management/app_install_manager.h"
-#include "process_management/app_manager.h"
-#include "pbl/drivers/rtc.h"
+#include "pbl/kernel/time.h"
 #include "pbl/services/alarms/alarm.h"
+#include "pbl/services/audio_companion.h"
 #include "pbl/services/light.h"
 #include "pbl/services/music.h"
+#include "pbl/services/notifications/do_not_disturb.h"
 #include "pbl/services/time.h"
 #include "pbl/services/vibe_pattern.h"
-#include "pbl/services/audio_companion.h"
+#include "process_management/app_install_manager.h"
+#include "process_management/app_manager.h"
+#include "watch_actions.h"
+
 #include <pbl/util/time.h>
-#include "pbl/services/notifications/do_not_disturb.h"
 #ifdef CONFIG_SERVICE_ACTIVITY
+#include "applib/pbl_std/pbl_std.h"
+#include "pbl/kernel/malloc.h"
 #include "pbl/services/activity/activity.h"
 #include "pbl/services/activity/activity_algorithm.h"
 #include "pbl/services/system_task.h"
 #include "pbl/services/time.h"
-#include "kernel/pbl_malloc.h"
-#include "applib/pbl_std/pbl_std.h"
+
 #include <pbl/util/math.h>
 #endif
 
@@ -224,7 +225,7 @@ uint32_t watch_actions_quiet_revision(void) {
 
 bool watch_actions_inspect(uint8_t section, char *text, size_t size) {
   if (section == 0) {
-    time_t now = rtc_get_time();
+    time_t now = pbl_realtime();
     struct pbl_tm local;
     pbl_localtime_r(&now, &local);
     // Tool revision 1 includes NativeTimers, AlarmsFull, Inspect, Apps, and FindControl.
@@ -318,7 +319,7 @@ bool watch_actions_health(uint8_t metric, uint8_t days, char *text, size_t text_
       return false;
     }
     activity_get_metric(ActivityMetricHeartRateFilteredUpdatedTimeUTC, 1, &updated_utc);
-    const time_t now = rtc_get_time();
+    const time_t now = pbl_realtime();
     const int32_t age = updated_utc > 0 && now >= updated_utc
                             ? (int32_t)(now - updated_utc) : -1;
     snprintf(text, text_size, "%" PRId32 ",%" PRId32, bpm, age);
@@ -394,7 +395,7 @@ typedef struct {
 static void prv_hr_start_day(HeartRateDays *job) {
   const time_t today = time_start_of_today();
   job->day_start = today;
-  job->day_end = rtc_get_time();
+  job->day_end = pbl_realtime();
   for (unsigned day = 0; day < job->day; ++day) {
     job->day_end = job->day_start;
     job->day_start = time_util_get_midnight_of(job->day_start - 1);
@@ -424,7 +425,7 @@ static void prv_hr_finish(HeartRateDays *job) {
                job->any ? "read" : "unavailable");
   audio_companion_send_watch_action_result(
       job->action_id, AudioCompanionWatchActionStatusDone, 0, text);
-  kernel_free(job);
+  pbl_free(job);
 }
 
 static void prv_hr_step_system_task_cb(void *data) {
@@ -482,7 +483,7 @@ void watch_actions_heart_rate_daily(uint8_t action_id, uint8_t days) {
                                              "health_off: Activity tracking is disabled.");
     return;
   }
-  HeartRateDays *job = kernel_zalloc(sizeof(*job));
+  HeartRateDays *job = pbl_zalloc(sizeof(*job));
   if (!job) {
     audio_companion_send_watch_action_result(action_id, AudioCompanionWatchActionStatusFailed, 0,
                                              "busy: Health history could not be allocated.");

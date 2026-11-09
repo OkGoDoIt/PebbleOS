@@ -7,6 +7,65 @@ config KERNEL_IDLE_STACK_SIZE
 	int "Idle thread stack size in bytes"
 	default 1024
 
+config KERNEL_MAIN_STACK_SIZE
+	int "Main thread stack size in bytes"
+	default 4096
+
+config KERNEL_MAIN_THREAD_PRIO
+	int "Main thread priority"
+	default 3
+
+config KERNEL_ISR_STACK_SIZE
+	int "ISR stack size in bytes"
+	default 1024
+
+config ARCH_HAS_STACK_GUARD
+	bool
+	help
+	  The architecture can trap a thread overflowing its stack.
+
+config KERNEL_STACK_GUARD
+	bool "Trap stack overflows"
+	default y
+	depends on ARCH_HAS_STACK_GUARD
+	help
+	  Fault as soon as a thread or the ISR stack overflows, instead of
+	  corrupting the memory below it. Uses the stack limit registers where
+	  the core has them, and otherwise a no-access MPU region below each
+	  stack.
+
+config KERNEL_STACK_GUARD_SIZE
+	int
+	default 128 if KERNEL_STACK_GUARD && !CPU_CORTEX_M_HAS_SPLIM
+	default 0
+	help
+	  Bytes reserved below a stack for its MPU guard, on top of the size the
+	  stack is defined with. An exception frame with FP state takes 104 bytes
+	  and lazy stacking only writes its lowest 32, so a smaller guard can be
+	  skipped without a fault.
+
+config KERNEL_USER_STACK_GUARD_SIZE
+	int
+	default 32 if KERNEL_STACK_GUARD && !CPU_CORTEX_M_HAS_SPLIM
+	default 0
+	help
+	  MPU guard of a stack only used unprivileged, see
+	  pbl_thread_attr::user_stack. Frames that skip it still fault, as they
+	  land in memory the thread can't write.
+
+config KERNEL_MPU_REGIONS
+	int
+	default 12 if SOC_SF32LB52
+	default 8
+	help
+	  MPU slots the core implements. The last four switch with the thread, and
+	  the rest take the static regions.
+
+config KERNEL_MPU_IN_FAULTS
+	bool
+	help
+	  Keep the MPU on in the HardFault and NMI handlers.
+
 config KERNEL_TICK_HZ
 	int "Tick rate in Hz"
 	default 1000 if QEMU || SOC_SF32LB52 || SOC_POSIX
@@ -49,15 +108,20 @@ config KERNEL_THREAD_TLS_SLOTS
 
 config KERNEL_STACK_ALIGN
 	int "Thread stack alignment"
-	default 32 if ARMV8_M_MAINLINE
-	default 256
+	default 128 if KERNEL_STACK_GUARD && !CPU_CORTEX_M_HAS_SPLIM
+	default 32
 	help
-	  Alignment that lets the bottom of a stack be covered by an MPU
-	  guard region on the target core.
+	  Must be a multiple of the stack guard size, which an MPU region can
+	  only cover when naturally aligned.
 
 config KERNEL_MUTEX_LOCK_LR
 	bool "Record the caller of the outermost mutex lock"
 	default y
+
+config ARCH_HAS_DEBUGGER_DETECT
+	bool
+	help
+	  The architecture can tell whether a debugger is attached.
 
 config ARCH_HAS_USERSPACE
 	bool

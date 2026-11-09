@@ -77,6 +77,10 @@ def configure(conf):
     ]
     if "FROZEN_AT_REVISION" not in conf.env.PLATFORM:
         pebble_linkflags.append("-nostartfiles")
+        # Without crt0 nothing pulls __errno out of libc before the linker script loads libm.a,
+        # which lands after gcc's -lgcc -lc group. Link libm ahead of that group (LDFLAGS end
+        # the link line) so libc resolves what sqrtf, fmod and friends reference.
+        conf.env.append_value("LDFLAGS", ["-lm"])
 
     conf.env.prepend_value("CFLAGS", pebble_cflags)
     conf.env.prepend_value("LINKFLAGS", pebble_linkflags)

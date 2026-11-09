@@ -3,10 +3,12 @@
 
 #include "app.h"
 
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/clock.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/graphics/perimeter.h>
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/text_layer.h>
@@ -14,7 +16,6 @@
 #include <apps/system/launcher/launcher.h>
 #include <apps/system/timeline/timeline.h>
 #include <apps/system_app_ids.h>
-#include <kernel/pbl_malloc.h>
 #include <process_management/app_install_manager.h>
 #include <process_management/app_manager.h>
 #include <process_state/app_state/app_state.h>
@@ -36,7 +37,8 @@ static void prv_sdk_home_update_proc(Layer *layer, GContext *ctx) {
   const int line_top_margin = 14;
   const int line_stroke_width = 2;
   graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, &GRect(0, time_max_y + line_top_margin, DISP_COLS, line_stroke_width));
+  graphics_fill_rect(ctx,
+                     &GRect(0, time_max_y + line_top_margin, PBL_DISPLAY_WIDTH, line_stroke_width));
 }
 
 static void prv_update_time(SdkAppData *data) {
@@ -50,7 +52,7 @@ static void prv_update_info(SdkAppData *data) {
   const unsigned int tip_delay_s = 5;
   if ((app_id == INSTALL_ID_INVALID) || shell_sdk_last_installed_app_is_watchface()) {
     text = "Install an app to continue";
-  } else if ((rtc_get_time() / tip_delay_s) & 1) {
+  } else if ((pbl_realtime() / tip_delay_s) & 1) {
     // Show the launcher help on every odd set of five seconds since the epoch
     text = "Press Select to access Launcher";
   } else {
@@ -98,7 +100,7 @@ static void prv_init(void) {
 
   const int time_padding = 22;
   frame.origin.y += time_height + time_padding;
-  frame.size.h = DISP_ROWS - frame.origin.y;
+  frame.size.h = PBL_DISPLAY_HEIGHT - frame.origin.y;
 
   TextLayer *info_text_layer = &data->info_text_layer;
   text_layer_init(info_text_layer, &frame);

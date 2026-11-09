@@ -2,16 +2,15 @@
 
 #include "spool.h"
 
+#include "pbl/kernel/assert.h"
+#include "pbl/kernel/malloc.h"
+#include "pbl/logging/logging.h"
 #include "pbl/services/audio_companion_private.h"
 
-#include "kernel/pbl_malloc.h"
-#include "pbl/logging/logging.h"
-#include "pbl/kernel/assert.h"
 #include <pbl/kernel/compiler.h>
 
 #ifndef UNITTEST
-#include "kernel/kernel_heap.h"
-#include "pbl/util/heap.h"
+#include "pbl/kernel/heap.h"
 #endif
 
 #include <string.h>
@@ -73,9 +72,9 @@ void audio_companion_spool_test_set_heap_free_bytes(uint32_t bytes) {
 static uint32_t prv_heap_free_bytes(void) { return s_test_heap_free_bytes; }
 #else
 static uint32_t prv_heap_free_bytes(void) {
-  Heap *heap = kernel_heap_get();
-  const size_t size = heap_size(heap);
-  return (size > heap->current_size) ? (uint32_t)(size - heap->current_size) : 0;
+  struct pbl_heap *heap = pbl_malloc_heap();
+  const size_t size = pbl_heap_size(heap);
+  return (size > pbl_heap_used(heap)) ? (uint32_t)(size - pbl_heap_used(heap)) : 0;
 }
 #endif
 
@@ -318,7 +317,7 @@ static bool prv_release_oldest_chunk(void) {
   if (!released) {
     return false;
   }
-  kernel_free(released);
+  pbl_free(released);
   PBL_ASSERTN(s_current_bytes >= SPOOL_CHUNK_BYTES);
   s_current_bytes -= SPOOL_CHUNK_BYTES;
   return true;
@@ -353,7 +352,7 @@ static SpoolChunk *prv_get_writable_tail(size_t needed_bytes) {
       (CONFIG_AUDIO_COMPANION_SPOOL_HEAP_RESERVE_BYTES + SPOOL_CHUNK_BYTES);
 
   if (below_ceiling && (below_floor || heap_headroom)) {
-    SpoolChunk *chunk = kernel_malloc(SPOOL_CHUNK_BYTES);
+    SpoolChunk *chunk = pbl_malloc(SPOOL_CHUNK_BYTES);
     if (chunk) {
       s_current_bytes += SPOOL_CHUNK_BYTES;
       if (s_current_bytes > s_high_water_bytes) {
@@ -381,7 +380,7 @@ void audio_companion_spool_reset(void) {
   SpoolChunk *chunk = s_head;
   while (chunk) {
     SpoolChunk *next = chunk->next;
-    kernel_free(chunk);
+    pbl_free(chunk);
     chunk = next;
   }
   s_head = NULL;
@@ -516,7 +515,7 @@ void audio_companion_spool_trim_through(uint32_t sequence) {
         s_drain_chunk = s_head;
         s_drain_offset = s_head->trim_offset;
       }
-      kernel_free(chunk);
+      pbl_free(chunk);
       s_current_bytes -= SPOOL_CHUNK_BYTES;
       continue;
     }

@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/crc/crc.h>
+#include <pbl/fs/fs.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/protocol.h>
@@ -12,8 +13,6 @@
 #include <pbl/services/data_logging/dls_list.h>
 #include <pbl/services/data_logging/dls_private.h>
 #include <pbl/services/data_logging/dls_storage.h>
-#include <pbl/services/filesystem/flash_translation.h>
-#include <pbl/services/filesystem/pfs.h>
 #include <pbl/services/regular_timer.h>
 #include <pbl/task_wdt/task_wdt.h>
 #include <pbl/util/list.h>
@@ -30,25 +29,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <pbl/kernel/mpu.h>
 #include <pbl/kernel/time.h>
 
 #include <fake_app_manager.h>
 #include <fake_new_timer.h>
 #include <fake_pbl_malloc.h>
 #include <fake_pebble_tasks.h>
+#include <fake_pfs.h>
 #include <fake_rtc.h>
 #include <fake_session.h>
 #include <fake_spi_flash.h>
 #include <fake_system_task.h>
-uint64_t pbl_uptime_ticks(void) {
-  return 1337;
-}
-
-#include <kernel/memory_layout.h>
-const MpuRegion *memory_layout_get_app_region(void) {
+#include <process_management/process_regions.h>
+const struct pbl_mpu_region *process_region_app(void) {
   return nullptr;
 }
-bool memory_layout_is_buffer_in_region(const MpuRegion *region, const void *buf, size_t length) {
+bool pbl_mpu_region_contains_buffer(const struct pbl_mpu_region *region, const void *buf,
+                                    size_t length) {
   return true;
 }
 
@@ -100,11 +98,13 @@ static void prv_transport_sent_data_cb(uint16_t endpoint_id, const uint8_t *data
 // Setup
 static void prv_init_fake_flash(void) {
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
-  pfs_format(false /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
 
-  PBL_LOG_INFO("\nFile system size: %d, avail: %d", (int)pfs_get_size(),
-               (int)get_available_pfs_space());
+  struct pbl_fs_statvfs stat;
+  cl_assert_equal_i(pbl_fs_statvfs("/", &stat), 0);
+  PBL_LOG_INFO("\nFile system size: %d, avail: %d", (int)(stat.f_blocks * stat.f_frsize),
+               (int)(stat.f_bfree * stat.f_frsize));
 }
 
 // ----------------------------------------------------------------------------------------

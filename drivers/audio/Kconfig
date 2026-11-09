@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config MIC
+    bool "Microphone"
+    select AUDIO
+    help
+      The board has a microphone, the MIC capture device.
+
+config SPEAKER
+    bool "Speaker"
+    select AUDIO
+    help
+      The board has a speaker, the SPEAKER playback device.
+
+menuconfig AUDIO
+    bool "Audio"
+    help
+      Audio stream class (pbl/drivers/audio.h) and its drivers.
+
+if AUDIO
+
+config AUDIO_AMP_GPIO
+    bool "GPIO amplifier"
+    depends on GPIO
+    help
+      Amplifier switched by an enable GPIO, with an optional supply and
+      enable mode pulses.
+
+config AUDIO_SF32LB52_AUDCODEC
+    bool "SiFli SF32LB52 audio codec"
+    default y if SPEAKER
+    depends on SOC_SF32LB52 && DMA_SF32LB52 && CLK_SF32LB
+    help
+      Playback through the DAC of the SF32LB52 audio codec.
+
+config AUDIO_SF32LB52_PDM
+    bool "SiFli SF32LB52 PDM"
+    default y if MIC
+    depends on SOC_SF32LB52 && DMA_SF32LB52 && CLK_SF32LB && RESET_SF32LB && PINCTRL && REGULATOR
+    help
+      Capture from digital microphones on the SF32LB52 PDM interface.
+
+config MIC_SF32LB_CAPTURE_DEEP_WFI
+    bool "Allow deep WFI while the SF32LB microphone is capturing"
+    depends on AUDIO_SF32LB52_PDM
+    help
+      By default the PDM driver forbids deep WFI for the whole of a capture,
+      so the core idles in plain WFI with the 240 MHz DLL and the full-speed
+      bus clocks running for as long as the microphone is on. With this set
+      the driver asks the SoC for its audio deep-WFI profile instead (HCLK
+      held at the 48 MHz deep-WFI source and the HP clock forced on -- the
+      recipe the vendor SDK uses for its own audio scenario) and only forbids
+      deep sleep, which would power HPSYS and the PDM down. Off by default
+      until it has been characterised on every SF32LB board; the audio
+      companion selects it.
+
+config AUDIO_QEMU
+    bool "QEMU audio device"
+    default y if SPEAKER
+    depends on SOC_QEMU
+    help
+      Playback through the QEMU audio device.
+
+config AUDIO_HOST_MIC
+    bool "Host microphone"
+    default y if MIC
+    depends on SOC_QEMU || SOC_POSIX
+    help
+      Records mono audio the host sends over the QEMU channel
+      (`pebble emu-mic`), and silence when it sends none.
+
+config AUDIO_NRF5_PDM
+    bool "Nordic nRF5 PDM"
+    default y if MIC
+    depends on SOC_NRF52
+    select HAL_NORDIC
+    help
+      Capture from digital microphones on the nRF5 PDM interface.
+
+config AUDIO_NRF5_I2S
+    bool "Nordic nRF5 I2S"
+    default y if SPEAKER
+    depends on SOC_NRF52
+    select HAL_NORDIC
+    help
+      Playback through the nRF5 I2S interface.
+
+config AUDIO_DA7212
+    bool "Dialog DA7212 codec"
+    depends on I2C
+    select REGULATOR
+    help
+      The Dialog DA7212 codec, playing to its line output.
+
+config AUDIO_SHELL
+    bool "Shell commands"
+    default DRIVER_SHELL
+    depends on SHELL
+    help
+      The audio shell command, to list the devices, record and play tones.
+
+module = DRIVER_AUDIO
+module-str = Audio
+source "subsys/logging/Kconfig.template.log_level"
+
+endif # AUDIO

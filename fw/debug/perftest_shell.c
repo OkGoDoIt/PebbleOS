@@ -10,6 +10,7 @@
 
 #include <pbl/drivers/watchdog.h>
 #include <pbl/kernel/thread.h>
+#include <pbl/profiler/profiler.h>
 #include <pbl/services/compositor/compositor.h>
 #include <pbl/services/compositor/compositor_private.h>
 #include <pbl/shell/shell.h>
@@ -22,7 +23,8 @@
 #include <applib/graphics/graphics.h>
 #include <applib/graphics/gtypes.h>
 #include <kernel/event_loop.h>
-#include <system/profiler.h>
+
+PBL_PROFILER_NODE_DECLARE(text_render_flash);
 
 // Average this many iterations of the text test for getting useful perf numbers.
 #define PERFTEST_TEXT_ITERATIONS 5
@@ -65,21 +67,25 @@ static int prv_perftest_line(const struct pbl_shell *sh, const char *do_aa, cons
   graphics_context_set_antialiased(ctx, aa_enable);
   graphics_context_set_stroke_width(ctx, stroke_width);
 
-  profiler_start();
+  pbl_profiler_start();
   // 45 degrees
-  graphics_draw_line(ctx, GPoint(0, 0), GPoint(DISP_COLS, DISP_ROWS));
+  graphics_draw_line(ctx, GPoint(0, 0), GPoint(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT));
   // ~63 degrees
-  graphics_draw_line(ctx, GPoint(DISP_COLS / 2, 0), GPoint(DISP_COLS, DISP_ROWS));
+  graphics_draw_line(ctx, GPoint(PBL_DISPLAY_WIDTH / 2, 0),
+                     GPoint(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT));
   // ~33 degrees
-  graphics_draw_line(ctx, GPoint(0, DISP_ROWS / 3), GPoint(DISP_COLS, DISP_ROWS));
+  graphics_draw_line(ctx, GPoint(0, PBL_DISPLAY_HEIGHT / 3),
+                     GPoint(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT));
   // ~53 degrees
-  graphics_draw_line(ctx, GPoint(DISP_COLS / 4, 0), GPoint(DISP_COLS, DISP_ROWS));
+  graphics_draw_line(ctx, GPoint(PBL_DISPLAY_WIDTH / 4, 0),
+                     GPoint(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT));
   // ~39 degrees
-  graphics_draw_line(ctx, GPoint(0, DISP_ROWS / 5), GPoint(DISP_COLS, DISP_ROWS));
-  profiler_stop();
+  graphics_draw_line(ctx, GPoint(0, PBL_DISPLAY_HEIGHT / 5),
+                     GPoint(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT));
+  pbl_profiler_stop();
 
-  uint32_t total_time = profiler_get_total_duration(false);
-  uint32_t us = profiler_get_total_duration(true);
+  uint32_t total_time = pbl_profiler_duration_cycles();
+  uint32_t us = pbl_profiler_cycles_to_us(pbl_profiler_duration_cycles());
   pbl_shell_print(sh, "%s, %s, %" PRIu32 ", %" PRIu32, do_aa, width, us, total_time);
   return 0;
 }
@@ -199,7 +205,7 @@ static char s_text_test_str[1024];
 static void prv_perftest_text_main(void *data) {
   const PerftestTextArguments *args = &s_perftest_text_arguments;
 
-  profiler_init();
+  pbl_profiler_reset();
   GFont font = fonts_get_system_font(args->font_key);
 
   int font_index;
@@ -216,10 +222,10 @@ static void prv_perftest_text_main(void *data) {
   strncpy(s_text_test_str, s_perftest_text_strings[args->text_index].string, length);
   s_text_test_str[length] = '\0';
 
-  GRect bounds = GRect(0, 0, DISP_COLS, DISP_ROWS);
+  GRect bounds = GRect(0, 0, PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT);
   bounds.origin.y -= args->y_offset;
   if (args->y_offset > 0) {
-    bounds.size.h = DISP_ROWS + args->y_offset;
+    bounds.size.h = PBL_DISPLAY_HEIGHT + args->y_offset;
   }
 
   uint32_t avg = 0;
@@ -232,14 +238,14 @@ static void prv_perftest_text_main(void *data) {
     GContext *ctx = prv_perftest_get_context();
     graphics_context_set_text_color(ctx, GColorBlack);
 
-    profiler_start();
+    pbl_profiler_start();
     graphics_draw_text(ctx, s_text_test_str, font, bounds, TEXT_OVERFLOW, TEXT_ALIGNMENT, nullptr);
-    profiler_stop();
-    avg += profiler_get_total_duration(true);
+    pbl_profiler_stop();
+    avg += pbl_profiler_cycles_to_us(pbl_profiler_duration_cycles());
   }
 
   avg /= PERFTEST_TEXT_ITERATIONS;
-  uint32_t flash_us_avg = PROFILER_NODE_GET_TOTAL_US(text_render_flash) / PERFTEST_TEXT_ITERATIONS;
+  uint32_t flash_us_avg = PBL_PROFILER_NODE_TOTAL_US(text_render_flash) / PERFTEST_TEXT_ITERATIONS;
   pbl_shell_print(args->sh, "%s, %s, %s, %" PRIu32 ", %" PRIu32, args->font_key, args->type_str,
                   args->y_offset_str, avg, flash_us_avg);
 

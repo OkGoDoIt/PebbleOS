@@ -10,17 +10,18 @@
 
 #include <pbl/services/activity/health_util.h>
 #include <pbl/services/i18n/i18n.h>
+#include <pbl/services/time.h>
 #include <pbl/util/size.h>
 #include <pbl/util/units.h>
 
 #include <applib/pbl_std/pbl_std.h>
+#include <applib/platform.h>
 #include <applib/ui/kino/kino_layer.h>
-#include <board/display.h>
 #include <resource/resource_ids.auto.h>
 
 // Compile-time display offset calculations
-#define HEALTH_X_OFFSET ((DISP_COLS - LEGACY_2X_DISP_COLS) / 2)
-#define HEALTH_Y_OFFSET ((DISP_ROWS - LEGACY_2X_DISP_ROWS) / 2)
+#define HEALTH_X_OFFSET ((PBL_DISPLAY_WIDTH - LEGACY_2X_DISP_COLS) / 2)
+#define HEALTH_Y_OFFSET ((PBL_DISPLAY_HEIGHT - LEGACY_2X_DISP_ROWS) / 2)
 
 typedef struct HealthSleepSummaryCardData {
   HealthData *health_data;
@@ -263,7 +264,7 @@ Layer *health_sleep_summary_card_create(HealthData *health_data) {
           .segments = s_sleep_summary_progress_segments,
         },
     .health_data = health_data,
-#if DISP_ROWS > LEGACY_2X_DISP_ROWS
+#if PBL_DISPLAY_HEIGHT > LEGACY_2X_DISP_ROWS
     .number_font = fonts_get_system_font(FONT_KEY_LECO_32_BOLD_NUMBERS),
     .unit_font = fonts_get_system_font(FONT_KEY_LECO_26_BOLD_NUMBERS_AM_PM),
 #else

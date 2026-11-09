@@ -28,6 +28,7 @@ static GContext s_ctx;
 /////////////////////
 
 #include <fake_content_indicator.h>
+#include <fake_pfs.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
 
@@ -79,7 +80,7 @@ static FrameBuffer *fb = nullptr;
 
 void test_expandable_dialog__initialize(void) {
   fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
   // Must use System init mode to enable orphan avoidance algorithm
   const GContextInitializationMode context_init_mode = GContextInitializationMode_System;
   graphics_context_init(&s_ctx, fb, context_init_mode);
@@ -87,8 +88,8 @@ void test_expandable_dialog__initialize(void) {
 
   // Setup resources
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
 

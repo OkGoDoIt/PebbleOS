@@ -260,7 +260,7 @@ bool music_get_phone_audio_report(bool *playing_out, uint32_t *age_ms_out) {
     *playing_out = s_test.phone_playing;
   }
   if (age_ms_out) {
-    *age_ms_out = (rtc_get_time() - s_test.phone_reported_at) * 1000;
+    *age_ms_out = (pbl_realtime() - s_test.phone_reported_at) * 1000;
   }
   return s_test.phone_reported;
 }
@@ -269,7 +269,7 @@ bool music_get_ms_until_track_end(int64_t *ms_out) {
   if (!s_test.track_end_known) {
     return false;
   }
-  const time_t elapsed_s = rtc_get_time() - s_test.track_end_set_at;
+  const time_t elapsed_s = pbl_realtime() - s_test.track_end_set_at;
   *ms_out = s_test.ms_until_track_end - ((int64_t)elapsed_s * 1000);
   return true;
 }
@@ -361,7 +361,7 @@ status_t pin_db_get(const TimelineItemId *id, TimelineItem *pin_out) {
   *pin_out = (TimelineItem) {
     .header = {
       .id = *id,
-      .timestamp = rtc_get_time(),
+      .timestamp = pbl_realtime(),
       .duration = 30,
       .type = TimelineItemTypePin,
       .layout = LayoutIdGeneric,
@@ -388,7 +388,7 @@ bool notification_storage_get(const Uuid *id, TimelineItem *item_out) {
   *item_out = (TimelineItem) {
     .header = {
       .id = *id,
-      .timestamp = rtc_get_time(),
+      .timestamp = pbl_realtime(),
       .type = TimelineItemTypeNotification,
       .layout = LayoutIdNotification,
       .silent = s_test.notif_phone_silent,
@@ -484,7 +484,7 @@ static void prv_publish_app_widget(const Uuid *owner, const char *title, uint32_
 static void prv_set_track_end_in(int64_t ms) {
   s_test.track_end_known = true;
   s_test.ms_until_track_end = ms;
-  s_test.track_end_set_at = rtc_get_time();
+  s_test.track_end_set_at = pbl_realtime();
 }
 
 //! What a reconnect looks like from here: the metadata is cleared, then the phone replays it.
@@ -523,7 +523,7 @@ static void prv_reconnect_and_replay_track(void) {
 static void prv_phone_answers(bool playing) {
   s_test.phone_reported = true;
   s_test.phone_playing = playing;
-  s_test.phone_reported_at = rtc_get_time();
+  s_test.phone_reported_at = pbl_realtime();
   prv_send_media_event(PebbleMediaEventTypePhoneAudioReported);
 }
 

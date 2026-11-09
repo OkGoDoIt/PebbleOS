@@ -3,7 +3,7 @@
 
 #include <pbl/kernel/compiler.h>
 
-#include <board/display.h>
+#include <applib/platform.h>
 #include <popups/mic_banner.h>
 
 void PBL_WEAK mic_banner_init(void) {
@@ -23,5 +23,10 @@ bool PBL_WEAK mic_banner_is_visible(void) {
 }
 
 int16_t PBL_WEAK mic_banner_get_obstruction_origin_y(void) {
-  return DISP_ROWS;
+  return PBL_DISPLAY_HEIGHT;
+}
+
+bool PBL_WEAK mic_banner_get_accessory_area(GRect *area_out) {
+  *area_out = GRectZero;
+  return false;
 }

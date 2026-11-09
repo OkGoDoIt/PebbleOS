@@ -2,16 +2,18 @@
 
 #include "watch_actions.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
-#include <kernel/pbl_malloc.h>
-#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/malloc.h>
+#include <pbl/kernel/time.h>
 #include <pbl/services/persist.h>
-#include <pbl/services/settings/settings_file.h>
 #include <pbl/services/wakeup.h>
+#include <pbl/settings/settings.h>
+
 #include <process_management/app_install_manager.h>
 #include <process_management/app_manager.h>
 #include <process_management/worker_manager.h>
@@ -40,13 +42,13 @@ typedef struct {
   NativeTimer timers[TIMER_MAX];
   int32_t count;
   int32_t last_muse_id;
-  SettingsFile *destination;
-  status_t status;
+  struct pbl_settings_file *destination;
+  int status;
 } TimerStore;
 
-static bool prv_read(SettingsFile *file, uint32_t key, void *value, size_t size) {
-  return settings_file_get_len(file, &key, sizeof(key)) == (int)size &&
-         settings_file_get(file, &key, sizeof(key), value, size) >= 0;
+static bool prv_read(struct pbl_settings_file *file, uint32_t key, void *value, size_t size) {
+  return pbl_settings_get_len(file, &key, sizeof(key)) == size &&
+         pbl_settings_get(file, &key, sizeof(key), value, size) >= 0;
 }
 
 static int64_t prv_remaining(const NativeTimer *timer, int64_t now) {
@@ -57,19 +59,19 @@ static int64_t prv_remaining(const NativeTimer *timer, int64_t now) {
   return remaining < 0 ? 0 : (remaining > timer->duration_ms ? timer->duration_ms : remaining);
 }
 
-static bool prv_load(SettingsFile *file, TimerStore *store) {
+static bool prv_load(struct pbl_settings_file *file, TimerStore *store) {
   uint32_t key = TIMER_MUSE_ID_KEY;
-  if (settings_file_exists(file, &key, sizeof(key)) &&
+  if (pbl_settings_exists(file, &key, sizeof(key)) &&
       (!prv_read(file, key, &store->last_muse_id, sizeof(store->last_muse_id)) ||
        store->last_muse_id < 0 || store->last_muse_id >= 0x40000000)) {
     return false;
   }
   key = TIMER_COUNT_KEY;
-  if (!settings_file_exists(file, &key, sizeof(key))) {
+  if (!pbl_settings_exists(file, &key, sizeof(key))) {
     // A fresh app has no timers yet. A foreign version must never be overwritten.
     key = TIMER_VERSION_KEY;
     int32_t version;
-    return !settings_file_exists(file, &key, sizeof(key)) ||
+    return !pbl_settings_exists(file, &key, sizeof(key)) ||
            (prv_read(file, key, &version, sizeof(version)) && version == 1);
   }
   int32_t version;
@@ -97,51 +99,54 @@ static bool prv_load(SettingsFile *file, TimerStore *store) {
   return true;
 }
 
-static bool prv_copy_other_records(SettingsFile *file, SettingsRecordInfo *info, void *data) {
+static bool prv_copy_other_records(struct pbl_settings_file *file, struct pbl_settings_record *info,
+                                   void *data) {
   TimerStore *store = data;
   uint32_t key = 0;
   if (info->key_len == sizeof(key)) {
-    info->get_key(file, &key, sizeof(key));
+    pbl_settings_read_key(file, &key, sizeof(key));
     if (key == TIMER_VERSION_KEY || key == TIMER_MUSE_ID_KEY ||
         (key >= TIMER_COUNT_KEY && key <= TIMER_COUNT_KEY + TIMER_MAX)) {
       return true;
     }
   }
-  uint8_t *bytes = kernel_malloc(info->key_len + info->val_len);
+  uint8_t *bytes = pbl_malloc(info->key_len + info->val_len);
   if (!bytes) {
-    store->status = E_OUT_OF_MEMORY;
+    store->status = -ENOMEM;
     return false;
   }
-  info->get_key(file, bytes, info->key_len);
-  info->get_val(file, bytes + info->key_len, info->val_len);
-  store->status = settings_file_set(store->destination, bytes, info->key_len,
-                                    bytes + info->key_len, info->val_len);
-  kernel_free(bytes);
+  pbl_settings_read_key(file, bytes, info->key_len);
+  pbl_settings_read_val(file, bytes + info->key_len, info->val_len);
+  store->status = pbl_settings_set(store->destination, bytes, info->key_len, bytes + info->key_len,
+                                   info->val_len);
+  pbl_free(bytes);
   return store->status >= 0;
 }
 
-static status_t prv_save(SettingsFile *old, SettingsFile *replacement, void *data) {
+static int prv_save(struct pbl_settings_file *old, struct pbl_settings_file *replacement,
+                    void *data) {
   TimerStore *store = data;
   store->destination = replacement;
-  settings_file_each(old, prv_copy_other_records, store);
+  pbl_settings_each(old, prv_copy_other_records, store);
   if (store->status < 0) {
     return store->status;
   }
   uint32_t key = TIMER_VERSION_KEY;
   int32_t version = 1;
-  status_t status = settings_file_set(replacement, &key, sizeof(key), &version, sizeof(version));
+  int status = pbl_settings_set(replacement, &key, sizeof(key), &version, sizeof(version));
   key = TIMER_MUSE_ID_KEY;
   if (status >= 0) {
-    status = settings_file_set(replacement, &key, sizeof(key), &store->last_muse_id,
-                               sizeof(store->last_muse_id));
+    status = pbl_settings_set(replacement, &key, sizeof(key), &store->last_muse_id,
+                              sizeof(store->last_muse_id));
   }
   key = TIMER_COUNT_KEY;
   if (status >= 0) {
-    status = settings_file_set(replacement, &key, sizeof(key), &store->count, sizeof(store->count));
+    status = pbl_settings_set(replacement, &key, sizeof(key), &store->count, sizeof(store->count));
   }
   for (int i = 0; status >= 0 && i < store->count; ++i) {
     key = TIMER_COUNT_KEY + 1 + i;
-    status = settings_file_set(replacement, &key, sizeof(key), &store->timers[i], sizeof(NativeTimer));
+    status =
+        pbl_settings_set(replacement, &key, sizeof(key), &store->timers[i], sizeof(NativeTimer));
   }
   return status;
 }
@@ -179,17 +184,14 @@ bool watch_actions_native_timers(const WatchActionRequest *request, char *text, 
     return false;
   }
   persist_service_client_open(&s_timer_uuid);
-  SettingsFile *file = persist_service_lock_and_get_store(&s_timer_uuid);
+  struct pbl_settings_file *file = persist_service_lock_and_get_store(&s_timer_uuid);
   TimerStore store = {0};
   bool ok = false;
   if (!file || !prv_load(file, &store)) {
     snprintf(text, size, "incompatible_data: Timer data could not be read safely; nothing changed.");
     goto done;
   }
-  time_t seconds;
-  uint16_t milliseconds;
-  rtc_get_time_ms(&seconds, &milliseconds);
-  const int64_t now = (int64_t)seconds * 1000 + milliseconds;
+  const int64_t now = (int64_t)pbl_realtime_ms();
   const time_t old_deadline = prv_deadline(&store, now);
   const uint8_t operation = request->timers.operation;
   NativeTimer *timer = NULL;
@@ -256,7 +258,7 @@ bool watch_actions_native_timers(const WatchActionRequest *request, char *text, 
   }
   if (operation != 2) {
     if (timer) {
-      timer->last_update = seconds;
+      timer->last_update = (int32_t)(now / 1000);
     }
     const time_t next = prv_deadline(&store, now);
     const time_t guard_deadline = old_deadline && next ?
@@ -264,7 +266,7 @@ bool watch_actions_native_timers(const WatchActionRequest *request, char *text, 
     // Arm before committing. A reset between files may open Timer early, but never leaves a
     // committed running timer without a wakeup. Timer reads the canonical records on launch.
     if (wakeup_replace_app_deadline(&s_timer_uuid, guard_deadline) < 0 ||
-        settings_file_transaction(file, prv_save, &store) < 0) {
+        pbl_settings_transaction(file, prv_save, &store) < 0) {
       snprintf(text, size, "storage_error: Change not confirmed; read timers before retrying.");
       goto done;
     }

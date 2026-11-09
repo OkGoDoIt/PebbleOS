@@ -16,6 +16,7 @@
 #include <kernel/ui/kernel_ui.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
+#include <shell/system_theme.h>
 
 #ifdef CONFIG_TOUCH
 #include <pbl/util/testing.h>
@@ -224,7 +225,7 @@ static void prv_update_arrow(SwapLayer *swap_layer) {
     const GRect *layer_frame = &swap_layer->layer.frame;
     const bool viewing_entire_notif = (cur_frame->size.h == layer_frame->size.h);
 #if PBL_ROUND
-    const bool at_bottom = (cur_frame->origin.y < (-cur_frame->size.h + DISP_ROWS));
+    const bool at_bottom = (cur_frame->origin.y < (-cur_frame->size.h + PBL_DISPLAY_HEIGHT));
     const bool text_visible =
         WITHIN(cur_frame->origin.y, TEXT_VISIBLE_LOWER_THRESHOLD(cur_frame->size.h),
                TEXT_VISIBLE_UPPER_THRESHOLD);
@@ -248,7 +249,7 @@ static void prv_arrow_layer_update_proc(Layer *layer, GContext *ctx) {
   const GRect *layer_bounds = &layer->bounds;
 
 #if PBL_RECT
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, system_theme_get_bg_color());
   graphics_fill_rect(ctx, layer_bounds);
 #endif
 
@@ -264,8 +265,13 @@ static void prv_arrow_layer_update_proc(Layer *layer, GContext *ctx) {
   // arrow is drawn correctly in both environments
 #if UNITTEST
   const GCompOp compositing_mode = GCompOpSet;
+#elif PBL_COLOR
+  // The arrow bitmap is black: tint it to stay visible in dark mode
+  const GCompOp compositing_mode = system_theme_is_dark_mode() ? GCompOpTint : GCompOpSet;
+  graphics_context_set_tint_color(ctx, system_theme_get_fg_color());
 #else
-  const GCompOp compositing_mode = PBL_IF_COLOR_ELSE(GCompOpSet, GCompOpAssign);
+  const GCompOp compositing_mode =
+      system_theme_is_dark_mode() ? GCompOpAssignInverted : GCompOpAssign;
 #endif
   graphics_context_set_compositing_mode(ctx, compositing_mode);
 
@@ -610,7 +616,7 @@ PBL_T_STATIC void prv_attempt_scroll(SwapLayer *swap_layer, ScrollDirection dire
         return;
       }
 #else
-      if (offset >= swap_layer->current->layer.bounds.size.h - DISP_ROWS) {
+      if (offset >= swap_layer->current->layer.bounds.size.h - PBL_DISPLAY_HEIGHT) {
         prv_handle_swap_attempt(swap_layer, direction, is_repeating);
         return;
       }

@@ -3,9 +3,9 @@
 #include "watch_actions.h"
 
 #include "kernel/event_loop.h"
-#include "kernel/pbl_malloc.h"
+#include "pbl/kernel/malloc.h"
 #include "pbl/kernel/mutex.h"
-#include "pbl/drivers/rtc.h"
+#include "pbl/kernel/time.h"
 #include "pbl/logging/logging.h"
 #include "pbl/services/new_timer/new_timer.h"
 #include "pbl/services/system_task.h"
@@ -220,7 +220,7 @@ static void prv_native_timers_kernel_main_cb(void *data) {
   const bool ok = watch_actions_native_timers(&pending->request, text, sizeof(text));
   audio_companion_send_watch_action_result(pending->action_id,
       ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0, text);
-  kernel_free(pending);
+  pbl_free(pending);
 }
 
 // ---- A notice ----
@@ -233,7 +233,7 @@ static void prv_notice_kernel_main_cb(void *data) {
   if (handler) {
     handler(text);
   }
-  kernel_free(text);
+  pbl_free(text);
 }
 
 // ---- Quiet Time for a while ----
@@ -269,7 +269,7 @@ static bool prv_set_quiet_time(bool on, uint16_t minutes) {
   }
   watch_actions_set_quiet_time(on);
   s_quiet_revision = watch_actions_quiet_revision();
-  s_quiet_until = on && minutes ? rtc_get_time() + minutes * 60 : 0;
+  s_quiet_until = on && minutes ? pbl_realtime() + minutes * 60 : 0;
   return true;
 }
 
@@ -290,7 +290,7 @@ static void prv_choose_kernel_main_cb(void *data) {
   } else if (still_wanted) {
     watch_actions_choice_result(pending->action_id, AudioCompanionWatchActionStatusUnsupported, 0);
   }
-  kernel_free(pending);
+  pbl_free(pending);
 }
 
 static void prv_run_system_task_cb(void *data) {
@@ -322,7 +322,7 @@ static void prv_run_system_task_cb(void *data) {
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           NULL);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionAlarmsFull:
@@ -333,7 +333,7 @@ static void prv_run_system_task_cb(void *data) {
       audio_companion_send_watch_action_result(pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed,
           id, text);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionChoose:
@@ -349,7 +349,7 @@ static void prv_run_system_task_cb(void *data) {
           watch_actions_apps(request, text, sizeof(text));
       audio_companion_send_watch_action_result(pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0, text);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionMusic: {
@@ -361,7 +361,7 @@ static void prv_run_system_task_cb(void *data) {
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           text);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionQuietTime: {
@@ -369,7 +369,7 @@ static void prv_run_system_task_cb(void *data) {
       audio_companion_send_watch_action_result(pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           ok ? NULL : "unavailable: Could not schedule expiry; Quiet Time was not changed.");
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionLaunchApp: {
@@ -380,18 +380,18 @@ static void prv_run_system_task_cb(void *data) {
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           found);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionFindWatch:
       watch_actions_find_watch(request->find_watch.seconds);
       audio_companion_send_watch_action_result(pending->action_id,
                                                AudioCompanionWatchActionStatusDone, 0, NULL);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     case AudioCompanionWatchActionNotice: {
       const size_t length = strlen(request->notice.text) + 1;
-      char *text = kernel_malloc(length);
+      char *text = pbl_malloc(length);
       if (text) {
         memcpy(text, request->notice.text, length);
         launcher_task_add_callback(prv_notice_kernel_main_cb, text);
@@ -400,14 +400,14 @@ static void prv_run_system_task_cb(void *data) {
           pending->action_id,
           text ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           NULL);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     case AudioCompanionWatchActionHealth: {
       if (request->health.metric == AudioCompanionWatchHealthHeartRateDaily) {
         // Read from the minute history a little at a time; the result is sent when it's done.
         watch_actions_heart_rate_daily(pending->action_id, request->health.days);
-        kernel_free(pending);
+        pbl_free(pending);
         return;
       }
       char text[AUDIO_COMPANION_WATCH_ACTION_RESULT_TEXT_MAX_BYTES + 1] = {0};
@@ -419,11 +419,11 @@ static void prv_run_system_task_cb(void *data) {
           pending->action_id,
           ok ? AudioCompanionWatchActionStatusDone : AudioCompanionWatchActionStatusFailed, 0,
           (ok || text[0]) ? text : NULL);
-      kernel_free(pending);
+      pbl_free(pending);
       return;
     }
     default:
-      kernel_free(pending);
+      pbl_free(pending);
       return;
   }
 }
@@ -456,7 +456,7 @@ uint8_t watch_actions_handle_fragment(uint8_t action_id, uint8_t flags, const ui
     return AudioCompanionAckStatusOk;
   }
 
-  PendingAction *pending = kernel_zalloc(sizeof(*pending));
+  PendingAction *pending = pbl_zalloc(sizeof(*pending));
   uint8_t status = AudioCompanionWatchActionStatusFailed;
   const bool parsed =
       pending && watch_actions_parse(s_assembly, s_assembly_length, &pending->request, &status);
@@ -468,7 +468,7 @@ uint8_t watch_actions_handle_fragment(uint8_t action_id, uint8_t flags, const ui
   }
   if (!parsed) {
     pbl_mutex_unlock(&s_lock);
-    kernel_free(pending);
+    pbl_free(pending);
     PBL_LOG_WRN("Watch action %u: payload rejected", action_id);
     // ACK the write (it arrived intact) and report the outcome like any other action.
     system_task_add_callback(prv_reject_system_task_cb,
@@ -478,7 +478,7 @@ uint8_t watch_actions_handle_fragment(uint8_t action_id, uint8_t flags, const ui
   if (pending->request.kind == AudioCompanionWatchActionChoose) {
     if (s_choice_action_id != 0) {
       pbl_mutex_unlock(&s_lock);
-      kernel_free(pending);
+      pbl_free(pending);
       return AudioCompanionAckStatusBusy;
     }
     s_choice_action_id = action_id;

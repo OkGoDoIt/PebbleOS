@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include <pbl/bluetooth/muse_setup.h>
-#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/math.h>
 
@@ -68,7 +68,7 @@ static struct {
   uint32_t rx_bytes;
   uint32_t tx_packets;
   uint32_t tx_refused;
-  RtcTicks deadline;
+  uint64_t deadline;
   int last_error;
   int last_gap_event;
   uint32_t gap_events;
@@ -224,11 +224,11 @@ bool pbl_bt_muse_setup_notify(const uint8_t *data, size_t length) {
 static int prv_gap_event(struct ble_gap_event *event, void *arg);
 
 static uint32_t prv_ms_left_locked(void) {
-  const RtcTicks now = rtc_get_ticks();
+  const uint64_t now = pbl_uptime_ticks();
   if (now >= s_state.deadline) {
     return 0;
   }
-  return (uint32_t)((s_state.deadline - now) * 1000 / RTC_TICKS_HZ);
+  return (uint32_t)((s_state.deadline - now) * 1000 / PBL_TICK_HZ);
 }
 
 //! bt_lock held. Advertises as the gadget until the deadline or a connection.
@@ -394,7 +394,7 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
   strcpy(s_state.name, MUSE_SETUP_NAME_PREFIX);
   memcpy(&s_state.name[sizeof(MUSE_SETUP_NAME_PREFIX) - 1], suffix, PBL_BT_MUSE_SETUP_SUFFIX_LEN);
   s_state.name[sizeof(MUSE_SETUP_NAME_PREFIX) - 1 + PBL_BT_MUSE_SETUP_SUFFIX_LEN] = '\0';
-  s_state.deadline = rtc_get_ticks() + (RtcTicks)duration_ms * RTC_TICKS_HZ / 1000;
+  s_state.deadline = pbl_uptime_ticks() + (uint64_t)duration_ms * PBL_TICK_HZ / 1000;
   s_state.open = true;
   s_state.last_error = 0;
   s_state.last_gap_event = -1;

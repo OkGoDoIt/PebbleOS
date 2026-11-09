@@ -5,18 +5,29 @@
 
 #include <stdio.h>
 
+#include <pbl/board/partitions.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/mpu.h>
+#include <pbl/logging/logging.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/app_timer.h>
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/click.h>
 #include <applib/ui/text_layer.h>
 #include <applib/ui/window.h>
 #include <font_resource_keys.auto.h>
-#include <kernel/memory_layout.h>
-#include <kernel/pbl_malloc.h>
 #include <process_state/app_state/app_state.h>
+#include <syscall/syscall.h>
+
+#ifdef CONFIG_QEMU
+#include <hardware/qemu_memorymap.h>
+
+#define FLASH_MAP_BASE QEMU_EXTFLASH_XIP_BASE
+#else
+#define FLASH_MAP_BASE CONFIG_FLASH_BASE
+#endif
 
 // Demo app that deliberately runs a series of memory accesses that the
 // MPU is supposed to deny for the unprivileged App task. Use up/down to
@@ -36,15 +47,12 @@
 extern const uint32_t __WORKER_RAM__[];
 extern const uint32_t __FLASH_start__[];
 extern const uint32_t __APP_RAM__[];
-extern const uint32_t __kernel_main_stack_start__[];
-extern const uint32_t __stack_guard_size__[];
+extern const uint32_t _heap_start[];
 #ifdef CONFIG_SOC_SF32LB52
 extern const uint32_t __ramfunc_start[];
 #endif
 
-#ifndef CONFIG_ARMV8_M_MAINLINE
 KERNEL_READONLY_DATA static uint32_t s_ro_bss_probe;
-#endif
 
 typedef enum {
   TestKind_WorkerRamWrite,
@@ -54,12 +62,15 @@ typedef enum {
 #ifdef CONFIG_SOC_SF32LB52
   TestKind_RamfuncWrite,
   TestKind_RamfuncRead,
+  TestKind_FilesystemRead,
+  TestKind_FilesystemSyscall,
+#ifdef CONFIG_MMAP_RESOURCES
+  TestKind_ResourceBankRead,
 #endif
-#ifndef CONFIG_ARMV8_M_MAINLINE
+#endif
   TestKind_RoBssWrite,
-#endif
   TestKind_FlashWrite,
-#ifndef CONFIG_ARMV8_M_MAINLINE
+#if CONFIG_KERNEL_STACK_GUARD_SIZE > 0
   TestKind_StackGuardWrite,
 #endif
   TestKind_StackOverflow,
@@ -75,12 +86,15 @@ static const char *const s_test_titles[TestKindCount] = {
 #ifdef CONFIG_SOC_SF32LB52
   [TestKind_RamfuncWrite] = "Ramfunc W",
   [TestKind_RamfuncRead] = "Ramfunc R",
+  [TestKind_FilesystemRead] = "Filesystem R",
+  [TestKind_FilesystemSyscall] = "Filesystem syscall",
+#ifdef CONFIG_MMAP_RESOURCES
+  [TestKind_ResourceBankRead] = "Resource bank R",
 #endif
-#ifndef CONFIG_ARMV8_M_MAINLINE
+#endif
   [TestKind_RoBssWrite] = "RO BSS W",
-#endif
   [TestKind_FlashWrite] = "Flash W",
-#ifndef CONFIG_ARMV8_M_MAINLINE
+#if CONFIG_KERNEL_STACK_GUARD_SIZE > 0
   [TestKind_StackGuardWrite] = "Stack guard W",
 #endif
   [TestKind_StackOverflow] = "Stack overflow",
@@ -89,6 +103,9 @@ static const char *const s_test_titles[TestKindCount] = {
 
 static const bool s_test_expect_survive[TestKindCount] = {
   [TestKind_SyscallNearLimit] = true,
+#if defined(CONFIG_SOC_SF32LB52) && defined(CONFIG_MMAP_RESOURCES)
+  [TestKind_ResourceBankRead] = true,
+#endif
 };
 
 typedef struct {
@@ -121,7 +138,7 @@ static uint32_t PBL_NOINLINE prv_overflow_recurse(uint32_t depth) {
 // stack guard while privileged, which reboots the system.
 static void PBL_NOINLINE prv_syscall_near_limit(size_t headroom) {
   volatile uint8_t marker;
-  const uintptr_t stack_base = (uintptr_t)__APP_RAM__ + (uintptr_t)__stack_guard_size__;
+  const uintptr_t stack_base = (uintptr_t)__APP_RAM__ + CONFIG_KERNEL_USER_STACK_GUARD_SIZE;
   const uintptr_t sp = (uintptr_t)&marker;
   const size_t burn = (sp > stack_base + headroom) ? (sp - stack_base - headroom) : 1;
   volatile uint8_t pad[burn];
@@ -148,14 +165,14 @@ static void prv_run_test(TestKind kind) {
       break;
     }
     case TestKind_KernelRamWrite: {
-      // Bottom of the kernel main stack -- well inside kernel RAM and
-      // not covered by any region the App task can see.
-      volatile uint32_t *p = (volatile uint32_t *)__kernel_main_stack_start__;
+      // Bottom of the kernel heap -- well inside kernel RAM and not covered
+      // by any region the App task can see.
+      volatile uint32_t *p = (volatile uint32_t *)_heap_start;
       *p = 0xDEADBEEF;
       break;
     }
     case TestKind_KernelRamRead: {
-      volatile uint32_t *p = (volatile uint32_t *)__kernel_main_stack_start__;
+      volatile uint32_t *p = (volatile uint32_t *)_heap_start;
       volatile uint32_t v = *p;
       (void)v;
       break;
@@ -172,21 +189,39 @@ static void prv_run_test(TestKind kind) {
       (void)v;
       break;
     }
+    case TestKind_FilesystemRead: {
+      volatile uint32_t *p = (volatile uint32_t *)(FLASH_MAP_BASE + PART_FILESYSTEM_OFFSET);
+      volatile uint32_t v = *p;
+      (void)v;
+      break;
+    }
+    case TestKind_FilesystemSyscall: {
+      // The kernel must refuse to read this on the app's behalf too. Not through
+      // fonts_get_system_font(), which also reads the key from the app.
+      sys_font_get_system_font((const char *)(FLASH_MAP_BASE + PART_FILESYSTEM_OFFSET));
+      break;
+    }
+#ifdef CONFIG_MMAP_RESOURCES
+    case TestKind_ResourceBankRead: {
+      volatile uint32_t *p =
+          (volatile uint32_t *)(FLASH_MAP_BASE + PART_SYSTEM_RESOURCES_BANK_0_OFFSET);
+      volatile uint32_t v = *p;
+      (void)v;
+      break;
+    }
 #endif
-#ifndef CONFIG_ARMV8_M_MAINLINE
+#endif
     case TestKind_RoBssWrite: {
-      // ARMv7-M maps this as priv RW + user RO, so unprivileged writes fault.
       volatile uint32_t *p = &s_ro_bss_probe;
       *p = 0xDEADBEEF;
       break;
     }
-#endif
     case TestKind_FlashWrite: {
       volatile uint32_t *p = (volatile uint32_t *)__FLASH_start__;
       *p = 0xDEADBEEF;
       break;
     }
-#ifndef CONFIG_ARMV8_M_MAINLINE
+#if CONFIG_KERNEL_STACK_GUARD_SIZE > 0
     case TestKind_StackGuardWrite: {
       // Direct store to the bottom 32 B of App RAM. On ARMv7-M the per-task
       // stack-guard MPU region blocks this; ARMv8-M uses PSPLIM instead, so
@@ -225,6 +260,7 @@ static void prv_attempt(void *cb_data) {
   // Reaching this point means no fault. Surface that prominently --
   // the previous "TESTING..." text gets replaced so the outcome is
   // obvious in a screenshot.
+  PBL_LOG_INFO("%s survived", s_test_titles[data->selected_index]);
   text_layer_set_text(&data->selection_text, s_test_expect_survive[data->selected_index]
                                                  ? "SURVIVED\n(expected)"
                                                  : "SURVIVED!\n(MPU MISS)");

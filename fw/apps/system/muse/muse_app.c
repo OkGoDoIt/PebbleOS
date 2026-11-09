@@ -22,8 +22,8 @@
 #include <applib/ui/vibes.h>
 #include <applib/ui/window.h>
 #include <apps/system_app_ids.h>
-#include <kernel/pbl_malloc.h>
-#include <pbl/drivers/rtc.h>
+#include <applib/app_malloc.h>
+#include <pbl/kernel/time.h>
 #include <pbl/services/audio_companion.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/light.h>
@@ -215,7 +215,7 @@ static const char *prv_error_line(uint8_t error, ButtonId button) {
 static const char *prv_meta(MuseAppData *data) {
   const AudioCompanionAssistantView *v = &data->view;
   const bool from_muse = v->from_receiver && !v->heard[0];
-  const time_t now = rtc_get_time();
+  const time_t now = pbl_realtime();
   const bool old = v->began_at && now - v->began_at >= MUSE_SHOW_TIME_AFTER_S;
   if (!from_muse && !old) {
     return NULL;

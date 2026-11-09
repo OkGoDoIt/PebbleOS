@@ -45,7 +45,7 @@ typedef enum {
 } AudioCompanionRebootTraceFlags;
 
 typedef struct PBL_PACKED {
-  uint32_t boot_wall_time;  //!< rtc_get_time() captured when this entry was recorded
+  uint32_t boot_wall_time;  //!< pbl_realtime() captured when this entry was recorded
   uint8_t reason_code;      //!< RebootReasonCode of the session that just ended
   uint8_t flags;            //!< AudioCompanionRebootTraceFlags bitfield
   //! For a watchdog reset, PebbleTask bitsets: which tasks had checked in (@ref watchdog_bits)
@@ -154,7 +154,7 @@ void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace);
 //! Rebuild PebbleTask bitsets from channel masks using @p channel_tasks (PebbleTask per channel,
 //! AUDIO_COMPANION_WDT_CHANNEL_NONE when unused). Returns false, with both outputs zero, when the
 //! map does not name the task of every active channel. Tasks that do not fit an 8-bit set
-//! (PULSE) are left out.
+//! (including the removed PULSE task, historically ID 8) are left out.
 bool audio_companion_reboot_trace_tasks_from_channels(
     uint8_t fed_channels, uint8_t active_channels,
     const uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS], uint8_t *bits_out,

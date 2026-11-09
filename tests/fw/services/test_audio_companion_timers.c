@@ -1,19 +1,21 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-#include <clar.h>
-#include <string.h>
 #include <stdlib.h>
-#include <pbl/services/filesystem/pfs.h>
+#include <string.h>
+
 #include <pbl/services/persist.h>
-#include <pbl/services/settings/settings_file.h>
 #include <pbl/services/wakeup.h>
+#include <pbl/settings/settings.h>
+
+#include <clar.h>
+#include <fake_pbl_malloc.h>
+#include <fake_pfs.h>
+#include <fake_rtc.h>
+#include <fake_spi_flash.h>
 #include <process_management/app_manager.h>
 #include <process_management/worker_manager.h>
 #include <services/audio_companion/watch_actions.h>
-#include <fake_pbl_malloc.h>
-#include <fake_rtc.h>
-#include <fake_spi_flash.h>
 
-static SettingsFile s_file;
+static struct pbl_settings_file s_file;
 static bool s_installed;
 static bool s_running;
 static bool s_worker_running;
@@ -35,11 +37,16 @@ const PebbleProcessMd *worker_manager_get_current_worker_md(void) {
   return s_worker_running ? &s_md : NULL;
 }
 void persist_service_client_open(const Uuid *uuid) {
-  cl_must_pass(settings_file_open(&s_file, "native-timers", 4096));
+  cl_must_pass(pbl_settings_open(&s_file, "/native-timers", 4096));
 }
-void persist_service_client_close(const Uuid *uuid) { settings_file_close(&s_file); }
-SettingsFile *persist_service_lock_and_get_store(const Uuid *uuid) { return &s_file; }
-void persist_service_unlock_store(SettingsFile *file) {}
+void persist_service_client_close(const Uuid *uuid) {
+  pbl_settings_close(&s_file);
+}
+struct pbl_settings_file *persist_service_lock_and_get_store(const Uuid *uuid) {
+  return &s_file;
+}
+void persist_service_unlock_store(struct pbl_settings_file *file) {
+}
 status_t wakeup_replace_app_deadline(const Uuid *uuid, time_t timestamp) {
   if (!s_wakeup_ok) { return E_OUT_OF_STORAGE; }
   s_deadline = timestamp;
@@ -48,7 +55,7 @@ status_t wakeup_replace_app_deadline(const Uuid *uuid, time_t timestamp) {
 
 void test_audio_companion_timers__initialize(void) {
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
+  fake_pfs_mount();
   fake_rtc_init(0, 1800000000);
   s_installed = true;
   s_running = false;
@@ -67,8 +74,8 @@ static bool run(int op, uint32_t id, int seconds, const char *label, char *text)
 
 static void read_record(uint32_t key, void *value, size_t size) {
   persist_service_client_open(&s_uuid);
-  cl_assert_equal_i(settings_file_get_len(&s_file, &key, sizeof(key)), size);
-  cl_must_pass(settings_file_get(&s_file, &key, sizeof(key), value, size));
+  cl_assert_equal_i(pbl_settings_get_len(&s_file, &key, sizeof(key)), size);
+  cl_must_pass(pbl_settings_get(&s_file, &key, sizeof(key), value, size));
   persist_service_client_close(&s_uuid);
 }
 
@@ -115,7 +122,7 @@ void test_audio_companion_timers__preserves_native_preferences_and_never_overwri
   persist_service_client_open(&s_uuid);
   uint32_t sound_key = 76863;
   uint8_t sound = 1;
-  cl_must_pass(settings_file_set(&s_file, &sound_key, 4, &sound, 1));
+  cl_must_pass(pbl_settings_set(&s_file, &sound_key, 4, &sound, 1));
   persist_service_client_close(&s_uuid);
   uint32_t first = 0;
   for (int i = 0; i < 8; ++i) {
@@ -158,7 +165,7 @@ void test_audio_companion_timers__refuses_unavailable_running_labels_corruption_
   persist_service_client_open(&s_uuid);
   uint32_t key = 72445847;
   uint8_t foreign[37] = {0};
-  cl_must_pass(settings_file_set(&s_file, &key, 4, foreign, sizeof(foreign)));
+  cl_must_pass(pbl_settings_set(&s_file, &key, 4, foreign, sizeof(foreign)));
   persist_service_client_close(&s_uuid);
   cl_assert(!run(1, 0, 60, NULL, text));
   cl_assert(strstr(text, "incompatible_data:"));

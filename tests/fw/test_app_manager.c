@@ -1,10 +1,9 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <pbl/mcu/mpu.h>
+#include <pbl/kernel/heap.h>
 #include <pbl/services/blob_db/app_db.h>
 #include <pbl/services/vibe_pattern.h>
-#include <pbl/util/heap.h>
 
 #include <applib/app_comm.h>
 #include <applib/graphics/framebuffer.h>
@@ -126,7 +125,7 @@ MemorySegment prv_get_app_ram_segment(void) {
   return (MemorySegment){__APP_RAM__, &__APP_RAM__[1024 * 128]};
 }
 
-size_t prv_get_stack_guard_size(void) {
+size_t prv_get_stack_guard_size(const PebbleProcessMd *app_md) {
   return 32;
 }
 
@@ -246,10 +245,6 @@ const char *pebble_task_get_name(PebbleTask task) {
   return "?";
 }
 
-struct pbl_thread *pebble_task_create(PebbleTask pebble_task, struct pbl_thread_attr *attr) {
-  return nullptr;
-}
-
 void *process_loader_load(const PebbleProcessMd *app_md, PebbleTask task, MemorySegment *segment) {
   if (app_md == (PebbleProcessMd *)&s_borked_app) {
     return nullptr;
@@ -289,7 +284,7 @@ void vibe_pattern_clear_for_owner(VibePatternOwner owner) {
 void speaker_service_stop_for_task(PebbleTask task) {
 }
 
-Heap *worker_state_get_heap(void) {
+struct pbl_heap *worker_state_get_heap(void) {
   return nullptr;
 }
 
@@ -345,7 +340,7 @@ const CompositorTransition *shell_get_close_compositor_animation(AppInstallId cu
 
 FAKE_VOID_FUNC(watchface_launch_default, const CompositorTransition *);
 
-void process_heap_set_exception_handlers(Heap *heap, const PebbleProcessMd *app_md) {
+void process_heap_set_exception_handlers(struct pbl_heap *heap, const PebbleProcessMd *app_md) {
 }
 
 // Tests

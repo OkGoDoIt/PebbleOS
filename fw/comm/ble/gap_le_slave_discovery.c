@@ -17,7 +17,6 @@
 #include <pbl/version.h>
 
 #include <applib/bluetooth/ble_ad_parse.h>
-#include <board/board.h>
 #include <comm/bt_lock.h>
 #include <mfg/mfg_info.h>
 #include <mfg/mfg_serials.h>
@@ -111,7 +110,7 @@ static void prv_schedule_ad_job(bool fast) {
   };
   memcpy(&mfg_data.serial_number, mfg_get_serial_number(), MFG_SERIAL_NUMBER_SIZE);
 
-  ble_ad_set_manufacturer_specific_data(ad, BT_VENDOR_ID, (const uint8_t *)&mfg_data,
+  ble_ad_set_manufacturer_specific_data(ad, CONFIG_BT_VENDOR_ID, (const uint8_t *)&mfg_data,
                                         sizeof(struct ManufacturerSpecificData));
 
   // Values chosen according to Apple Accessory Design Guidelines.

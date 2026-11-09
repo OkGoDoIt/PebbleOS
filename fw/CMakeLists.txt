@@ -3,15 +3,12 @@
 
 pbl_include_directories(.)
 
-add_subdirectory(board)
 add_subdirectory(shell)
 add_subdirectory(services)
 add_subdirectory(applib)
 add_subdirectory(mfg)
 add_subdirectory(comm)
-add_subdirectory(console)
 add_subdirectory(debug)
-add_subdirectory(flash_region)
 add_subdirectory(kernel)
 add_subdirectory(popups)
 add_subdirectory(process_management)

@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <pbl/kernel/time.h>
 #include <pbl/util/size.h>
 
 #include <applib/graphics/framebuffer.h>
@@ -21,6 +22,7 @@
 // Fakes
 /////////////////////
 
+#include <fake_pfs.h>
 #include <fake_resource_syscalls.h>
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
@@ -51,10 +53,6 @@ const char *pebble_task_get_name(PebbleTask task) {
 }
 
 void pebble_task_unregister(PebbleTask task) {
-}
-
-struct pbl_thread *pebble_task_create(PebbleTask pebble_task, struct pbl_thread_attr *attr) {
-  return nullptr;
 }
 
 //! System install ids are negative, app-db (third-party) install ids are positive
@@ -116,15 +114,15 @@ void test_menu_layer_system_cells__initialize(void) {
   process_manager_set_compiled_with_legacy2_sdk(false);
 
   fb = malloc(sizeof(FrameBuffer));
-  framebuffer_init(fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
 
   test_graphics_context_init(&s_ctx, fb);
   framebuffer_clear(fb);
 
   // Setup resources
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
 
@@ -517,7 +515,7 @@ void test_menu_layer_system_cells__scrolling_text(void) {
                   &s_menu_system_basic_cell_test_column_data[0], true /* is_selected */);
 
     // Past the 800 ms pause
-    fake_rtc_set_ticks(RTC_TICKS_HZ * 3 / 2);
+    fake_rtc_set_ticks(PBL_TICK_HZ * 3 / 2);
     cell_bounds.origin.x += cell_width + GRID_CELL_PADDING;
     prv_draw_cell(MenuCellType_Basic, &cell_bounds, &rows[i],
                   &s_menu_system_basic_cell_test_column_data[0], true /* is_selected */);
@@ -726,7 +724,7 @@ void test_menu_layer_system_cells__single_line_content_sizes(void) {
         .title = (char *)titles[i],
         .icon_align = DEFAULT_ICON_ALIGN,
       };
-      const GRect cell_bounds = GRect(0, y_offset, DISP_COLS, row_height);
+      const GRect cell_bounds = GRect(0, y_offset, PBL_DISPLAY_WIDTH, row_height);
       prv_draw_cell(MenuCellType_Basic, &cell_bounds, &row_data,
                     &s_menu_system_basic_cell_test_column_data[0], i == 0 /* is_selected */);
       y_offset += row_height;

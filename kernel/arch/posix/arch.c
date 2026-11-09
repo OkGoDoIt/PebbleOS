@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#define _GNU_SOURCE
+
 #include "posix.h"
 
 #include <string.h>
@@ -19,6 +21,10 @@
 // scheduling is as deterministic as on the target.
 
 struct pbl_thread *pbl_cur;
+
+void arch_cur_set(struct pbl_thread *t) {
+  pbl_cur = t;
+}
 
 pthread_mutex_t posix_cpu = PTHREAD_MUTEX_INITIALIZER;
 bool posix_switch_pending;
@@ -49,6 +55,11 @@ static void prv_release_cpu(void *arg) {
 
 static void *prv_thread_main(void *arg) {
   struct posix_thread *pt = arg;
+#ifdef __APPLE__
+  pthread_setname_np(pt->name);
+#else
+  pthread_setname_np(pthread_self(), pt->name);
+#endif
   pthread_mutex_lock(&posix_cpu);
   pthread_cleanup_push(prv_release_cpu, nullptr);
   posix_park(pt);
@@ -67,10 +78,11 @@ void arch_thread_init(struct pbl_thread *t, void (*entry)(void *), void *arg) {
   pthread_cond_init(&pt->wake, nullptr);
   pt->entry = entry;
   pt->arg = arg;
+  strncpy(pt->name, t->name, sizeof(pt->name) - 1);
   t->backend.arch.pt = pt;
 }
 
-void arch_thread_regions_set(struct pbl_thread *t, const MpuRegion *const *regions) {
+void arch_thread_regions_set(struct pbl_thread *t, const struct pbl_mpu_region *const *regions) {
   (void)t;
   (void)regions;
 }
@@ -133,6 +145,13 @@ bool arch_in_isr(void) {
 
 uint32_t arch_cycles_per_sec(void) {
   return 1000000000U;
+}
+
+// Threads only yield the CPU when they block, which no heap operation does.
+void arch_heap_lock(void) {
+}
+
+void arch_heap_unlock(void) {
 }
 
 void arch_irq_disable(void) {

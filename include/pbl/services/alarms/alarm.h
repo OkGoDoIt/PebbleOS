@@ -8,8 +8,6 @@
 
 #include <pbl/util/units.h>
 
-#include <board/board.h>
-
 /**
  * @defgroup services_alarms Alarms
  * @ingroup services

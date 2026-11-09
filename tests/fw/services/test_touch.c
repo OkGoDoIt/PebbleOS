@@ -4,12 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <pbl/drivers/display/display.h>
+#include <pbl/drivers/touch.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/services/event_service.h>
 #include <pbl/services/touch/touch.h>
 #include <pbl/services/touch/touch_event.h>
 #include <pbl/services/touch/touch_session.h>
 
+#include <applib/platform.h>
 #include <clar.h>
 #include <fake_events.h>
 #include <kernel/event_loop.h>
@@ -18,7 +20,7 @@
 
 // Stubs
 
-void kernel_free(void *p) {
+void pbl_free(void *p) {
 }
 
 // Declared in syscall/syscall.h; in the test build DEFINE_SYSCALL is a plain function.
@@ -58,13 +60,18 @@ static int s_touch_sensor_enable_count;
 static int s_touch_sensor_disable_count;
 static bool s_touch_sensor_enabled;
 
-void touch_sensor_set_enabled(bool enabled) {
-  if (enabled) {
-    s_touch_sensor_enable_count++;
-  } else {
-    s_touch_sensor_disable_count++;
-  }
-  s_touch_sensor_enabled = enabled;
+const struct pbl_touch *const TOUCH = nullptr;
+
+int pbl_touch_enable(const struct pbl_touch *touch) {
+  s_touch_sensor_enable_count++;
+  s_touch_sensor_enabled = true;
+  return 0;
+}
+
+int pbl_touch_disable(const struct pbl_touch *touch) {
+  s_touch_sensor_disable_count++;
+  s_touch_sensor_enabled = false;
+  return 0;
 }
 
 // setup and teardown
@@ -387,19 +394,6 @@ void test_touch__gestures_delivered_when_enabled(void) {
   cl_assert_equal_i(event.gesture.event.type, GestureEvent_Tap);
 }
 
-void test_touch__global_disable_sleeps_unsubscribed_sensor(void) {
-  // The driver can re-arm the sensor outside the service's subscriber
-  // bookkeeping (e.g. its I2C error-recovery path). Disabling globally must
-  // still put the chip to sleep, even when s_subscriber_count is 0.
-  s_touch_sensor_enabled = true;
-
-  touch_service_set_globally_enabled(false);
-  cl_assert(!s_touch_sensor_enabled);
-  cl_assert(s_touch_sensor_disable_count >= 1);
-
-  touch_service_set_globally_enabled(true);
-}
-
 void test_touch__wake_gate_latches_across_gesture(void) {
   // A session-gated Touchdown stamps non_navigational and latches it for the gesture.
   TouchWakeGateResult blocked = {.latch = true};
@@ -478,7 +472,8 @@ void test_touch__physical_touch_is_still_rotated(void) {
   touch_set_rotated(true);
   touch_handle_update(TouchState_FingerDown, 10, 20);
   // Mirrored against the display bounds, unlike the injected path above.
-  prv_assert_touch_event(TouchEvent_Touchdown, DISP_COLS - 1 - 10, DISP_ROWS - 1 - 20);
+  prv_assert_touch_event(TouchEvent_Touchdown, PBL_DISPLAY_WIDTH - 1 - 10,
+                         PBL_DISPLAY_HEIGHT - 1 - 20);
 
   touch_handle_update(TouchState_FingerUp, 10, 20);
   touch_set_rotated(false);

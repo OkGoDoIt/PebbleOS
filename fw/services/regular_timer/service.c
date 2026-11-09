@@ -3,12 +3,13 @@
 
 #include <time.h>
 
-#include <pbl/drivers/rtc.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/services/regular_timer.h>
+#include <pbl/services/time.h>
 #include <pbl/util/math.h>
 
 PBL_LOG_MODULE_DEFINE(service_regular_timer, CONFIG_SERVICE_REGULAR_TIMER_LOG_LEVEL);
@@ -28,7 +29,7 @@ static ListNode s_minutes_callbacks;
 static time_t s_last_minute_fire_ts; // uses
 static int s_last_minute_fired = -1; // Track which minute we last fired on
 
-// Fire slightly after the RTC second boundary so the new second is always visible
+// Fire slightly after the second boundary so the new second is always visible
 #define SECOND_BOUNDARY_MARGIN_MS 10
 static time_t s_last_second_fired;
 static bool s_last_second_fired_valid;
@@ -93,11 +94,10 @@ static void do_callbacks(ListNode *list) {
 // -------------------------------------------------------------------------------------------
 static void timer_callback(void *data);
 
-//! Arm the timer for second @p next; the RTC is at @p now and @p ms.
+//! Arm the timer for second @p next; the wall clock is at @p now and @p ms.
 static void prv_arm_locked(time_t now, uint16_t ms, time_t next) {
   uint32_t timeout_ms = (uint32_t)(next - now - 1) * 1000 + (1000 - MIN(ms, 999));
-  // The timer runs on the system tick, which drifts from the RTC in deep sleep.
-  timeout_ms += SECOND_BOUNDARY_MARGIN_MS + timeout_ms / 1024;
+  timeout_ms += SECOND_BOUNDARY_MARGIN_MS;
   bool success = new_timer_start(s_timer_id, timeout_ms, timer_callback, nullptr, 0 /*flags*/);
   PBL_ASSERTN(success);
   s_next_fire = next;
@@ -116,19 +116,16 @@ static time_t prv_next_due_locked(time_t now) {
 }
 
 static void prv_arm_next_locked(void) {
-  time_t now;
-  uint16_t ms;
-  rtc_get_time_ms(&now, &ms);
-  prv_arm_locked(now, ms, prv_next_due_locked(now));
+  uint64_t now_ms = pbl_realtime_ms();
+  time_t now = (time_t)(now_ms / 1000U);
+  prv_arm_locked(now, (uint16_t)(now_ms % 1000U), prv_next_due_locked(now));
 }
 
 // -------------------------------------------------------------------------------------------
 static void timer_callback(void *data) {
   (void)data;
 
-  time_t t;
-  uint16_t ms;
-  rtc_get_time_ms(&t, &ms);
+  time_t t = pbl_realtime();
 
   pbl_mutex_lock(&s_callback_list_semaphore, PBL_FOREVER);
   if (s_last_second_fired_valid && (t == s_last_second_fired)) {
@@ -164,7 +161,7 @@ static void timer_callback(void *data) {
 
   if (should_fire_minute) {
     // Keep the logging to detect large time jumps (multiple minutes skipped)
-    const time_t now_ts = rtc_get_ticks() / PBL_TICK_HZ;
+    const time_t now_ts = pbl_uptime_ticks() / PBL_TICK_HZ;
     if ((now_ts - s_last_minute_fire_ts) > MISSING_MINUTE_CB_LOG_THRESHOLD_S) {
       PBL_LOG_WRN("Large time jump detected. Previous ts: %lu, Now ts: %lu",
                   (long)s_last_minute_fire_ts, (long)now_ts);
@@ -184,12 +181,11 @@ static void timer_callback(void *data) {
 
 // --------------------------------------------------------------------------------------------
 void regular_timer_init(void) {
-  time_t seconds;
-  uint16_t milliseconds;
-  rtc_get_time_ms(&seconds, &milliseconds);
+  uint64_t now_ms = pbl_realtime_ms();
+  time_t seconds = (time_t)(now_ms / 1000U);
   s_timer_id = new_timer_create();
   pbl_mutex_lock(&s_callback_list_semaphore, PBL_FOREVER);
-  prv_arm_locked(seconds, milliseconds, seconds + 1);
+  prv_arm_locked(seconds, (uint16_t)(now_ms % 1000U), seconds + 1);
   pbl_mutex_unlock(&s_callback_list_semaphore);
 }
 
@@ -198,9 +194,9 @@ void regular_timer_add_multisecond_callback(RegularTimerInfo *cb, uint16_t secon
   pbl_mutex_lock(&s_callback_list_semaphore, PBL_FOREVER);
 
   // Counts run from the last second handled, which may be a while ago.
-  time_t now;
-  uint16_t ms;
-  rtc_get_time_ms(&now, &ms);
+  uint64_t now_ms = pbl_realtime_ms();
+  time_t now = (time_t)(now_ms / 1000U);
+  uint16_t ms = (uint16_t)(now_ms % 1000U);
   const time_t behind =
       (s_last_second_fired_valid && now > s_last_second_fired) ? now - s_last_second_fired : 0;
 

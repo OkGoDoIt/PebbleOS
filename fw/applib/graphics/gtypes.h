@@ -6,17 +6,14 @@
 
 #pragma once
 
-#include <pbl/drivers/display/display.h> // FIXME: Need display dimensions
+#include <stdint.h>
+
 #include <pbl/kernel/compiler.h>
 #include <pbl/util/math.h>
 #include <pbl/util/math_fixed.h>
 
+#include <applib/platform.h>
 #include <resource/resource.h>
-
-#if !(defined(SDK) || defined(UNITTEST))
-#endif
-
-#include <stdint.h>
 
 //! @addtogroup Graphics
 //! @{
@@ -250,7 +247,7 @@ typedef int (*GPointComparator)(const GPoint *const a, const GPoint *const b, vo
 
 //! @internal
 static inline GPoint gpoint_scalar_lshift(const GPoint point, int8_t s) {
-  return GPoint(point.x << s, point.y << s);
+  return GPoint(point.x * (1 << s), point.y * (1 << s));
 }
 
 //! @internal
@@ -505,15 +502,15 @@ typedef GRect GRectReturn;
 #define GRECT_PRINTF_FORMAT            "{ %" PRId16 ", %" PRId16 " } { %" PRId16 ", %" PRId16 " }"
 #define GRECT_PRINTF_FORMAT_EXPLODE(r) (r).origin.x, (r).origin.y, (r).size.w, (r).size.h
 
-#define DISP_FRAME (GRect(0, 0, DISP_COLS, DISP_ROWS))
+#define DISP_FRAME (GRect(0, 0, PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT))
 
 //! @internal
 static inline GRect grect_scalar_lshift(const GRect rect, int8_t s) {
   return (GRect){
-    .origin.x = rect.origin.x << s,
-    .origin.y = rect.origin.y << s,
-    .size.w = rect.size.w << s,
-    .size.h = rect.size.h << s,
+    .origin.x = rect.origin.x * (1 << s),
+    .origin.y = rect.origin.y * (1 << s),
+    .size.w = rect.size.w * (1 << s),
+    .size.h = rect.size.h * (1 << s),
   };
 }
 
@@ -772,6 +769,14 @@ typedef struct {
   int16_t max_x;
 } GBitmapDataRowInfo;
 
+//! @internal
+//! data type that's used to store row data infos in a space-efficient manner
+typedef struct {
+  uint32_t offset; // uint32_t needed for rectangular framebuffers > 65535 bytes
+  uint16_t min_x;
+  uint16_t max_x;
+} GBitmapDataRowInfoInternal;
+
 typedef struct BitmapInfo {
   //! Is .addr heap allocated? Do we need to free .addr in gbitmap_deinit?
   bool is_bitmap_heap_allocated : 1;
@@ -816,7 +821,8 @@ typedef struct GBitmap {
     GColor *palette;
 
     //! On GBitmapFormat8BitCircular, this points to a circular_map that's addressed according to
-    //! .bounds (so it must consist of at least .bounds.origin.y + .bounds.size.h entries)
+    //! .bounds (so it must consist of at least .bounds.origin.y + .bounds.size.h entries), or is
+    //! nullptr for rows laid out as the display's.
     const GBitmapDataRowInfoInternal *data_row_infos;
   };
 

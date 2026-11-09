@@ -8,7 +8,7 @@
 #include "applib/ui/dialogs/confirmation_dialog.h"
 #include "applib/ui/dialogs/dialog.h"
 #include "kernel/event_loop.h"
-#include "kernel/pbl_malloc.h"
+#include <pbl/kernel/malloc.h>
 #include "kernel/pebble_tasks.h"
 #include "kernel/ui/modals/modal_manager.h"
 #include "pbl/services/audio_companion.h"
@@ -68,7 +68,7 @@ static void prv_dialog_unload(void *context) {
   if (s_prompt == prompt) {
     s_prompt = NULL;
   }
-  task_free(prompt);
+  pbl_free(prompt);
 }
 
 //! Runs on KernelMain: modal windows and their push animations use
@@ -82,18 +82,18 @@ static void prv_show_consent_prompt_kernel_main_cb(void *data) {
     // request arrived before the dialog timed out): decline the new request.
     PBL_LOG_INFO("Audio companion consent prompt busy; declining new request");
     audio_companion_handle_consent_response(false);
-    kernel_free(receiver_name);
+    pbl_free(receiver_name);
     return;
   }
   PBL_LOG_INFO("Audio companion: showing consent prompt");
 
-  AudioCompanionConsentPrompt *prompt = task_zalloc_check(sizeof(*prompt));
+  AudioCompanionConsentPrompt *prompt = pbl_zalloc_check(sizeof(*prompt));
   ConfirmationDialog *confirmation_dialog = confirmation_dialog_create("Audio Companion");
   prompt->dialog = confirmation_dialog;
 
   Dialog *dialog = confirmation_dialog_get_dialog(confirmation_dialog);
   const char *fmt = i18n_get("Allow %s to stream background audio?", prompt);
-  char *msg = task_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
+  char *msg = pbl_zalloc_check(DIALOG_MAX_MESSAGE_LEN);
   sniprintf(msg, DIALOG_MAX_MESSAGE_LEN, fmt,
             (receiver_name && receiver_name[0]) ? receiver_name : "Audio app");
   dialog_set_text(dialog, msg);
@@ -112,8 +112,8 @@ static void prv_show_consent_prompt_kernel_main_cb(void *data) {
 
   s_prompt = prompt;
   i18n_free_all(prompt);
-  task_free(msg);
-  kernel_free(receiver_name);
+  pbl_free(msg);
+  pbl_free(receiver_name);
   confirmation_dialog_push(confirmation_dialog, modal_manager_get_window_stack(ModalPriorityGeneric));
 }
 
@@ -127,7 +127,7 @@ static void prv_show_enable_prompt_kernel_main_cb(void *data) {
   }
   PBL_LOG_INFO("Audio companion: showing enable prompt");
 
-  AudioCompanionConsentPrompt *prompt = task_zalloc_check(sizeof(*prompt));
+  AudioCompanionConsentPrompt *prompt = pbl_zalloc_check(sizeof(*prompt));
   prompt->enable_prompt = true;
   ConfirmationDialog *confirmation_dialog = confirmation_dialog_create("Audio Companion");
   prompt->dialog = confirmation_dialog;
@@ -157,7 +157,7 @@ static void prv_show_enable_prompt_kernel_main_cb(void *data) {
 static void prv_show_consent_prompt(const char *receiver_name) {
   char *name_copy = NULL;
   if (receiver_name && receiver_name[0]) {
-    name_copy = kernel_strdup(receiver_name);  // NULL on OOM -> generic copy
+    name_copy = pbl_strdup(receiver_name);  // NULL on OOM -> generic copy
   }
   launcher_task_add_callback(prv_show_consent_prompt_kernel_main_cb, name_copy);
 }

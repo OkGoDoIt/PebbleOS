@@ -55,7 +55,7 @@ add_executable(pebble_renderer
   "${PEBBLEOS_ROOT}/tests/stubs/default/compiled_with_legacy2_sdk.c"
   "${PEBBLEOS_ROOT}/tests/stubs/default/heap.c"
   "${PEBBLEOS_ROOT}/tests/stubs/default/logging.c"
-  "${PEBBLEOS_ROOT}/tests/stubs/default/memory_layout.c"
+  "${PEBBLEOS_ROOT}/tests/stubs/default/process_regions.c"
   "${PEBBLEOS_ROOT}/tests/stubs/default/pbl_malloc.c"
   "${PEBBLEOS_ROOT}/tests/stubs/default/pebble_tasks.c"
 )
@@ -83,11 +83,9 @@ target_include_directories(pebble_renderer PRIVATE
 target_compile_definitions(pebble_renderer PRIVATE
   UNITTEST
   CONFIG_SCREEN_COLOR_DEPTH_BITS=8
-  DISP_COLS=144
-  DISP_ROWS=168
-  DISPLAY_FRAMEBUFFER_BYTES=24192
-  PBL_COLOR
-  PBL_RECT
+  CONFIG_PLATFORM_COLOR=1
+  CONFIG_PLATFORM_DISPLAY_WIDTH=144
+  CONFIG_PLATFORM_DISPLAY_HEIGHT=168
   CONFIG_BOARD_OBELIX=1
   CONFIG_PLATFORM_EMERY=1
   CONFIG_FLASH_GD25Q256E=1

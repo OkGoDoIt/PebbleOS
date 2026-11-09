@@ -10,7 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/mutex.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/blob_db/ios_notif_pref_db.h>
 #include <pbl/services/blob_db/pin_db.h>
@@ -37,6 +39,7 @@
 #include "popups/audio_companion_actions_ui.h"
 
 #include <pbl/services/regular_timer.h>
+#include <pbl/services/time.h>
 #include <pbl/services/timeline/actions_endpoint.h>
 #include <pbl/services/timeline/attribute.h>
 #include <pbl/services/timeline/notification_layout.h>
@@ -50,6 +53,7 @@
 #include <pbl/util/testing.h>
 #include <pbl/util/units.h>
 
+#include <applib/applib_malloc.auto.h>
 #include <applib/ui/action_button.h>
 #include <applib/ui/action_menu_window.h>
 #include <applib/ui/app_window_stack.h>
@@ -64,11 +68,11 @@
 #include <applib/ui/window_stack.h>
 #include <apps/system/timeline/peek_layer.h>
 #include <kernel/event_loop.h>
-#include <kernel/pbl_malloc.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <process_management/process_manager.h>
 #include <process_state/app_state/app_state.h>
 #include <resource/resource_ids.auto.h>
+#include <shell/system_theme.h>
 
 PBL_LOG_MODULE_DECLARE(service_alerts, CONFIG_SERVICE_ALERTS_LOG_LEVEL);
 
@@ -263,7 +267,7 @@ static void prv_dismiss_all(void *data, ActionMenu *action_menu) {
 
   Uuid *first_id = notifications_presented_list_first();
 
-  NotificationInfo *notif_list = kernel_malloc_check(sizeof(NotificationInfo) * num_notifications);
+  NotificationInfo *notif_list = pbl_malloc_check(sizeof(NotificationInfo) * num_notifications);
 
   for (int i = 0; i < num_notifications; i++) {
     Uuid *id = notifications_presented_list_relative(first_id, i);
@@ -276,7 +280,7 @@ static void prv_dismiss_all(void *data, ActionMenu *action_menu) {
   timeline_actions_dismiss_all(notif_list, num_notifications, action_menu,
                                prv_handle_dismiss_all_complete, data);
 
-  kernel_free(notif_list);
+  pbl_free(notif_list);
 }
 
 static void prv_dismiss_all_action_cb(ActionMenu *action_menu, const ActionMenuItem *item,
@@ -367,7 +371,7 @@ static void prv_hide_peek_layer(void *context) {
 #if PBL_ROUND
   // Needed because the peek layer's background and the screen have different sizes,
   // so the peek layer needs to move a different number of pixels vs the swap layer
-  const int16_t peek_circle_vertical_offset = (BANNER_CIRCLE_RADIUS - (DISP_ROWS / 2)) / 2;
+  const int16_t peek_circle_vertical_offset = (BANNER_CIRCLE_RADIUS - (PBL_DISPLAY_HEIGHT / 2)) / 2;
   peek_frame_animation_dy -= peek_circle_vertical_offset;
 #endif
   Animation *peek_up =
@@ -526,7 +530,7 @@ PBL_T_STATIC LayoutLayer *prv_get_layout_handler(SwapLayer *swap_layer, int8_t r
 
   NotificationType type = notifications_presented_list_get_type(id);
 
-  TimelineItem *item = task_zalloc_check(sizeof(TimelineItem));
+  TimelineItem *item = applib_zalloc(sizeof(TimelineItem));
 
   if (type == NotificationMobile) {
     if (!notification_storage_get(id, item)) {
@@ -670,7 +674,7 @@ static void prv_clear_if_stale_reminder(Uuid *id, NotificationType type, void *c
   const time_t reminder_stale_time = prv_get_stale_time(&reminder);
   const time_t event_stale_time = prv_get_stale_time(&item);
   const time_t stale_time = MAX(reminder_stale_time, event_stale_time);
-  const time_t now = rtc_get_time();
+  const time_t now = pbl_realtime();
 
   if (stale_time <= now && window_data->is_modal) {
     prv_remove_notification(window_data, id, true /* close am */);
@@ -854,7 +858,7 @@ static void prv_mute_notification_timed(const ActionMenuItem *action_menu_item,
   Attribute *expiration_attr =
       notif_prefs ? attribute_find(&notif_prefs->attr_list, AttributeIdMuteExpiration) : nullptr;
   if (notif_prefs && expiration_attr) {
-    const uint32_t expiration_time = rtc_get_time() + duration_seconds;
+    const uint32_t expiration_time = pbl_realtime() + duration_seconds;
     expiration_attr->uint32 = expiration_time;
 
     ios_notif_pref_db_store_prefs((uint8_t *)app_id, app_id_len, &notif_prefs->attr_list,
@@ -879,7 +883,7 @@ static void prv_mute_notification_1_hour(ActionMenu *action_menu,
 
 static void prv_mute_notification_today(ActionMenu *action_menu,
                                         const ActionMenuItem *action_menu_item, void *context) {
-  time_t now = rtc_get_time();
+  time_t now = pbl_realtime();
   struct pbl_tm now_tm;
   pbl_localtime_r(&now, &now_tm);
   const int seconds_until_midnight =
@@ -1255,7 +1259,7 @@ static void prv_layout_did_appear_handler(SwapLayer *swap_layer, LayoutLayer *la
 static void prv_update_colors_handler(SwapLayer *swap_layer, GColor bg_color,
                                       bool status_bar_filled, void *context) {
   NotificationWindowData *data = context;
-  GColor status_color = (status_bar_filled) ? bg_color : GColorWhite;
+  GColor status_color = (status_bar_filled) ? bg_color : system_theme_get_bg_color();
   // Status bar is clear on round, because the banner is rendered under it
   status_bar_layer_set_colors(&data->status_layer, PBL_IF_ROUND_ELSE(GColorClear, status_color),
                               gcolor_legible_over(status_color));

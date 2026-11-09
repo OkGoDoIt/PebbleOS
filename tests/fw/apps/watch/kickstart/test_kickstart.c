@@ -19,6 +19,7 @@ extern void prv_set_data(KickstartData *data, int32_t current_steps, int32_t typ
 /////////////////////
 
 #include <fake_pbl_std.h>
+#include <fake_pfs.h>
 #include <fake_spi_flash.h>
 #include <fixtures/load_test_resources.h>
 
@@ -50,15 +51,15 @@ GContext *graphics_context_get_current_context(void) {
 
 void test_kickstart__initialize(void) {
   // Setup graphics context
-  framebuffer_init(&s_fb, &(GSize){DISP_COLS, DISP_ROWS});
+  framebuffer_init(&s_fb, &(GSize){PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT});
   framebuffer_clear(&s_fb);
   graphics_context_init(&s_ctx, &s_fb, GContextInitializationMode_App);
   s_app_state_get_graphics_context = &s_ctx;
 
   // Setup resources
   fake_spi_flash_init(0 /* offset */, 0x1000000 /* length */);
-  pfs_init(false /* run filesystem check */);
-  pfs_format(true /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   load_resource_fixture_in_flash(RESOURCES_FIXTURE_PATH, SYSTEM_RESOURCES_FIXTURE_NAME,
                                  false /* is_next */);
   resource_init();

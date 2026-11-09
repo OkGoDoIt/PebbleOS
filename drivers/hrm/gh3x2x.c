@@ -1,12 +1,12 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/board.h>
 #include <pbl/drivers/hrm.h>
 #include <pbl/drivers/hrm/gh3x2x.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/analytics/analytics.h>
-
-#include <board/board.h>
+#include <pbl/util/math.h>
 
 #ifdef CONFIG_GH3X2X_ALGO
 #include <math.h>
@@ -156,34 +156,22 @@ void gh3x2x_print_fmt(const char *fmt, ...) {
 #define GH3X2X_HR_MIN_PLAUSIBLE_BPM 25
 #define GH3X2X_HR_MAX_PLAUSIBLE_BPM 240
 
-void gh3x2x_hr_result_report(uint8_t bpm, uint8_t quality) {
+void gh3x2x_hr_result_report(uint8_t bpm, uint8_t valid_score) {
   HRMData hrm_data = {};
 
-  PBL_LOG_DBG("GH3X2X BPM %" PRIu8 " (quality=%" PRIu8 ", wear=%u)", bpm, quality,
+  PBL_LOG_DBG("GH3X2X BPM %" PRIu8 " (score=%" PRIu8 ", wear=%u)", bpm, valid_score,
               HRM->state->is_wear);
 
   hrm_data.features = HRMFeature_BPM;
 
   if (!HRM->state->is_wear) {
-    hrm_data.hrm_quality = HRMQuality_OffWrist;
+    hrm_data.off_wrist = true;
   } else if (bpm < GH3X2X_HR_MIN_PLAUSIBLE_BPM || bpm > GH3X2X_HR_MAX_PLAUSIBLE_BPM) {
-    // Implausible reading: report as worst quality with no BPM so consumers discard it.
+    // Implausible reading: report no BPM and no confidence so consumers discard it.
     PBL_LOG_WRN("GH3X2X dropping implausible BPM %" PRIu8, bpm);
-    hrm_data.hrm_quality = HRMQuality_Worst;
   } else {
     hrm_data.hrm_bpm = bpm;
-
-    if (quality >= 98U) {
-      hrm_data.hrm_quality = HRMQuality_Excellent;
-    } else if (quality >= 90U) {
-      hrm_data.hrm_quality = HRMQuality_Good;
-    } else if (quality >= 80U) {
-      hrm_data.hrm_quality = HRMQuality_Acceptable;
-    } else if (quality >= 70U) {
-      hrm_data.hrm_quality = HRMQuality_Poor;
-    } else {
-      hrm_data.hrm_quality = HRMQuality_Worst;
-    }
+    hrm_data.hrm_confidence = MIN(valid_score, 100U);
   }
 
   hrm_manager_new_data_cb(&hrm_data);
@@ -201,31 +189,12 @@ void gh3x2x_spo2_result_report(uint8_t pct, uint8_t confidence, uint8_t valid_le
 
   hrm_data.features = HRMFeature_SpO2;
 
-  // Always carry the raw algorithm values through for debugging.
+  // Always carry the algorithm values through; valid_level is for debugging only.
   hrm_data.spo2_percent = pct;
-  hrm_data.spo2_confidence = confidence;
+  hrm_data.spo2_confidence = MIN(confidence, 100U);
   hrm_data.spo2_valid_level = valid_level;
   hrm_data.spo2_invalid = (invalid_flg != 0);
-
-  // Map the algorithm confidence coefficient (0-100) onto our quality scale. Thresholds are tuned
-  // to what this sensor actually produces on the wrist; the old 90/98 cut-offs were unreachable, so
-  // nothing ever scored Good and no downstream gate fired. A reading the algorithm rejects
-  // (invalid_flg) is never treated as usable.
-  if (!HRM->state->is_wear) {
-    hrm_data.spo2_quality = HRMQuality_OffWrist;
-  } else if (invalid_flg) {
-    hrm_data.spo2_quality = HRMQuality_Worst;
-  } else if (confidence >= 85U) {
-    hrm_data.spo2_quality = HRMQuality_Excellent;
-  } else if (confidence >= 65U) {
-    hrm_data.spo2_quality = HRMQuality_Good;
-  } else if (confidence >= 45U) {
-    hrm_data.spo2_quality = HRMQuality_Acceptable;
-  } else if (confidence >= 25U) {
-    hrm_data.spo2_quality = HRMQuality_Poor;
-  } else {
-    hrm_data.spo2_quality = HRMQuality_Worst;
-  }
+  hrm_data.off_wrist = !HRM->state->is_wear;
 
   hrm_manager_new_data_cb(&hrm_data);
 }
@@ -236,7 +205,7 @@ void gh3x2x_hrv_result_report(const int32_t *rri, int32_t confidence, int32_t va
   if (!HRM->state->is_wear) {
     HRMData hrm_data = {};
     hrm_data.features = HRMFeature_HRV;
-    hrm_data.hrv_quality = HRMQuality_OffWrist;
+    hrm_data.off_wrist = true;
     hrm_manager_new_data_cb(&hrm_data);
     return;
   }
@@ -251,17 +220,7 @@ void gh3x2x_hrv_result_report(const int32_t *rri, int32_t confidence, int32_t va
     HRMData hrm_data = {};
     hrm_data.features = HRMFeature_HRV;
     hrm_data.hrv_ppi_ms = (uint16_t)rri[i];
-    if (confidence >= 98) {
-      hrm_data.hrv_quality = HRMQuality_Excellent;
-    } else if (confidence >= 90) {
-      hrm_data.hrv_quality = HRMQuality_Good;
-    } else if (confidence >= 80) {
-      hrm_data.hrv_quality = HRMQuality_Acceptable;
-    } else if (confidence >= 70) {
-      hrm_data.hrv_quality = HRMQuality_Poor;
-    } else {
-      hrm_data.hrv_quality = HRMQuality_Worst;
-    }
+    hrm_data.hrv_confidence = (uint8_t)CLIP(confidence, 0, 100);
     hrm_manager_new_data_cb(&hrm_data);
   }
 }
@@ -541,7 +500,9 @@ void hrm_init(HRMDevice *dev) {
   pbl_gpio_configure(&dev->int_input, PBL_GPIO_INPUT | PBL_GPIO_PULL_DOWN);
 #endif
 
-  dev->state->is_wear = false;
+  // Wear state is unknown until the soft ADT reaches a verdict, which can take minutes while the
+  // wearer moves. Assume worn until then: the ADT reports off-wrist as well as on-wrist.
+  dev->state->is_wear = true;
   dev->state->initialized = true;
 }
 

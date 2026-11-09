@@ -14,7 +14,7 @@
 #include "applib/ui/window.h"
 #include "applib/ui/window_stack.h"
 #include "apps/system/muse/muse_app.h"
-#include "kernel/pbl_malloc.h"
+#include <pbl/kernel/malloc.h>
 #include "kernel/pebble_tasks.h"
 #include "kernel/ui/kernel_ui.h"
 #include "kernel/ui/modals/modal_manager.h"
@@ -25,7 +25,7 @@
 #include "pbl/services/timeline/attribute.h"
 #include "pbl/services/timeline/item.h"
 #include "pbl/services/timeline/timeline.h"
-#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/time.h>
 #include "resource/resource_ids.auto.h"
 #include "resource/timeline_resource_ids.auto.h"
 #include "services/audio_companion/assistant_view.h"
@@ -66,12 +66,12 @@ static void prv_timer_card_unload(void *context) {
     evented_timer_cancel(card->buzz_timer);
   }
   vibes_cancel();
-  task_free(card);
+  pbl_free(card);
 }
 
 static void prv_timer_done_handler(const char *label) {
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
-  TimerCard *card = task_zalloc_check(sizeof(*card));
+  TimerCard *card = pbl_zalloc_check(sizeof(*card));
   if (label && label[0]) {
     snprintf(card->text, sizeof(card->text), "%s\nTimer done", label);
   } else {
@@ -103,12 +103,12 @@ typedef struct {
 } NoticeCard;
 
 static void prv_notice_unload(void *context) {
-  task_free(context);
+  pbl_free(context);
 }
 
 static void prv_notice_handler(const char *text) {
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
-  NoticeCard *card = task_zalloc_check(sizeof(*card));
+  NoticeCard *card = pbl_zalloc_check(sizeof(*card));
   strncpy(card->text, text, sizeof(card->text) - 1);
   card->dialog = simple_dialog_create("Muse Notice");
   Dialog *dialog = simple_dialog_get_dialog(card->dialog);
@@ -231,7 +231,7 @@ static void prv_choice_unload(Window *window) {
   if (s_choice == choice) {
     s_choice = NULL;
   }
-  kernel_free(choice);
+  pbl_free(choice);
 }
 
 static void prv_choose_handler(uint8_t action_id, const WatchActionRequest *request) {
@@ -240,7 +240,7 @@ static void prv_choose_handler(uint8_t action_id, const WatchActionRequest *requ
     watch_actions_choice_result(action_id, AudioCompanionWatchActionStatusFailed, 0);
     return;
   }
-  ChoiceWindow *choice = kernel_zalloc(sizeof(*choice));
+  ChoiceWindow *choice = pbl_zalloc(sizeof(*choice));
   if (!choice) {
     watch_actions_choice_result(action_id, AudioCompanionWatchActionStatusFailed, 0);
     return;
@@ -292,7 +292,7 @@ static void prv_dismiss_handler(void) {
    AUDIO_COMPANION_ASSISTANT_MAX_OPTIONS * (AUDIO_COMPANION_ASSISTANT_OPTION_BYTES + 4) + 4)
 
 static void *prv_notification_build(const AudioCompanionAssistantView *view) {
-  char *body = kernel_malloc(MUSE_NOTIFICATION_BODY_BYTES);
+  char *body = pbl_malloc(MUSE_NOTIFICATION_BODY_BYTES);
   if (!body) {
     return NULL;
   }
@@ -341,7 +341,7 @@ static void *prv_notification_build(const AudioCompanionAssistantView *view) {
 
   TimelineItemActionGroup group = {.num_actions = count, .actions = actions};
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attrs, &group);
+      pbl_realtime(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attrs, &group);
   if (item) {
     item->header.from_watch = true;
     item->header.parent_id = (Uuid)MUSE_APP_UUID;
@@ -352,7 +352,7 @@ static void *prv_notification_build(const AudioCompanionAssistantView *view) {
   attribute_list_destroy_list(&open_attrs);
   attribute_list_destroy_list(&dismiss_attrs);
   attribute_list_destroy_list(&attrs);
-  kernel_free(body);
+  pbl_free(body);
   return item;
 }
 

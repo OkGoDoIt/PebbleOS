@@ -4,8 +4,8 @@
 #pragma once
 
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/mpu.h>
 #include <pbl/kernel/types.h>
-#include <pbl/mcu/mpu.h>
 
 /**
  * @defgroup kernel_thread Threads
@@ -45,8 +45,8 @@
 
 /** @brief Size of a thread name, including the terminating NUL. */
 #define PBL_THREAD_NAME_LEN 16
-/** @brief Number of MPU regions switched in with each thread. */
-#define PBL_THREAD_MAX_MEM_REGIONS 4
+/** @brief Number of MPU regions a thread can bring, on top of its stack guards. */
+#define PBL_THREAD_MAX_MEM_REGIONS 2
 
 /**
  * @brief Thread entry function.
@@ -84,12 +84,23 @@ struct pbl_thread_attr {
    * @c CONFIG_USERSPACE every thread runs privileged.
    */
   bool privileged;
-  /** Lowest address of the stack; the caller owns the memory. */
+  /**
+   * The thread only uses @ref stack unprivileged once it has started, with nothing it can write
+   * below the stack, so it takes the smaller @c CONFIG_KERNEL_USER_STACK_GUARD_SIZE guard.
+   */
+  bool user_stack;
+  /**
+   * Lowest address of the stack buffer, aligned to its guard size; the caller owns the memory. The
+   * guard takes the bottom of it.
+   */
   void *stack;
-  /** Stack size in bytes, at least 128. */
+  /** Stack buffer size in bytes, guard included; the rest must be at least 128. */
   size_t stack_size;
-  /** MPU regions switched in with the thread. NULL entries are ignored. */
-  const MpuRegion *regions[PBL_THREAD_MAX_MEM_REGIONS];
+  /**
+   * MPU regions switched in with the thread, which only need to be valid during
+   * pbl_thread_create(). NULL entries take the default region.
+   */
+  const struct pbl_mpu_region *regions[PBL_THREAD_MAX_MEM_REGIONS];
 #ifdef CONFIG_USERSPACE
   /**
    * Memory the thread's syscalls may read and write, [user_start, user_end); empty for none. The
@@ -98,9 +109,13 @@ struct pbl_thread_attr {
   uintptr_t user_start;
   /** End of the thread's syscall-accessible memory. */
   uintptr_t user_end;
-  /** Privileged stack the thread's syscalls run on, or NULL to run them on its own stack. */
+  /**
+   * Privileged stack the thread's syscalls run on, or NULL to run them on its own stack. Lowest
+   * address of the buffer, aligned to @c CONFIG_KERNEL_STACK_GUARD_SIZE; the guard takes the bottom
+   * of it.
+   */
   void *syscall_stack;
-  /** Size of @ref syscall_stack in bytes. */
+  /** Size of the @ref syscall_stack buffer in bytes, guard included. */
   size_t syscall_stack_size;
 #endif
 };
@@ -121,10 +136,12 @@ struct pbl_thread {
   pbl_prio_t prio;
   /** Runs in privileged mode. */
   bool privileged;
-  /** Lowest address of the stack. */
+  /** Lowest address of the usable stack, above the guard. */
   void *stack;
-  /** Stack size in bytes. */
+  /** Usable stack size in bytes. */
   size_t stack_size;
+  /** Size in bytes of the guard below @ref stack. */
+  size_t stack_guard_size;
   /** Thread-local pointer slots, see pbl_thread_tls_get(). */
   void *tls[CONFIG_KERNEL_THREAD_TLS_SLOTS];
 #ifdef CONFIG_USERSPACE
@@ -140,15 +157,17 @@ struct pbl_thread {
 };
 
 /**
- * @brief Define a thread stack with the alignment the MPU port needs for a guard region.
+ * @brief Define a thread stack, with room for its guard.
  *
- * Expands to a @c static array; @c CONFIG_KERNEL_STACK_ALIGN gives the alignment.
+ * Expands to a @c static array. Pass it and its @c sizeof to pbl_thread_create() through
+ * @ref pbl_thread_attr.
  *
  * @param name Name of the stack array.
- * @param size Stack size in bytes.
+ * @param size Usable stack size in bytes.
  */
-#define PBL_THREAD_STACK_DEFINE(name, size) \
-  static uint8_t name[size] PBL_ALIGNED(CONFIG_KERNEL_STACK_ALIGN)
+#define PBL_THREAD_STACK_DEFINE(name, size)                                 \
+  static uint8_t name[(size) + CONFIG_KERNEL_STACK_GUARD_SIZE] PBL_ALIGNED( \
+      CONFIG_KERNEL_STACK_ALIGN)
 
 /**
  * @brief Create and start a thread.
@@ -258,14 +277,15 @@ static inline uint32_t pbl_thread_id(const struct pbl_thread *t) {
 }
 
 /**
- * @brief Replace the MPU regions of a thread.
+ * @brief Set the regions of threads that do not specify their own.
  *
- * Used for the idle thread, whose regions cannot be passed at creation.
+ * Must be called from the first thread, before it creates any other: the idle thread and the
+ * caller get these regions too, the caller when it is next switched in.
  *
- * @param t Thread.
- * @param regions Array of @ref PBL_THREAD_MAX_MEM_REGIONS regions; NULL entries are ignored.
+ * @param regions Array of @ref PBL_THREAD_MAX_MEM_REGIONS regions, which must stay valid; NULL
+ *                entries leave the slot empty.
  */
-void pbl_thread_regions_set(struct pbl_thread *t, const MpuRegion *const *regions);
+void pbl_thread_regions_default_set(const struct pbl_mpu_region *const *regions);
 
 /**
  * @brief Read a thread-local pointer slot.

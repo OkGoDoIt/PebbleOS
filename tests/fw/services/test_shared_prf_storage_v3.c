@@ -4,16 +4,16 @@
 #include <string.h>
 
 #include <pbl/bluetooth/sm_types.h>
+#include <pbl/board/partitions.h>
 #include <pbl/btutil/sm_util.h>
 #include <pbl/drivers/flash.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/services/shared_prf_storage/shared_prf_storage.h>
 #include <pbl/services/shared_prf_storage/v3_sprf/shared_prf_storage_private.h>
 #include <pbl/util/size.h>
 
 #include <clar.h>
-#include <flash_region/flash_region.h>
-#include <kernel/pbl_malloc.h>
 
 // Fakes
 //////////////////////////////////////////////////////////
@@ -26,12 +26,10 @@ extern void shared_prf_storage_set_valid_page_number(uint32_t page_num);
 
 // Defines
 //////////////////////////////////////////////////////////
-#define SPRF_REGION_SIZE \
-  (FLASH_REGION_SHARED_PRF_STORAGE_END - FLASH_REGION_SHARED_PRF_STORAGE_BEGIN)
-#define SPRF_NUM_PAGES (SPRF_REGION_SIZE / sizeof(SharedPRFData))
+#define SPRF_REGION_SIZE PART_SHARED_PRF_STORAGE_SIZE
+#define SPRF_NUM_PAGES   (SPRF_REGION_SIZE / sizeof(SharedPRFData))
 
-#define SPRF_PAGE_FLASH_OFFSET(idx) \
-  (FLASH_REGION_SHARED_PRF_STORAGE_BEGIN + (idx * sizeof(SharedPRFData)))
+#define SPRF_PAGE_FLASH_OFFSET(idx) (PART_SHARED_PRF_STORAGE_OFFSET + (idx * sizeof(SharedPRFData)))
 
 // Stubs
 //////////////////////////////////////////////////////////
@@ -171,11 +169,11 @@ static const struct pbl_bt_sm_pairing_info PAIRING_INFO = (const struct pbl_bt_s
 // Helpers
 ///////////////////////////////////////////////////////////
 static void prv_fill_flash_random_data(void) {
-  uint8_t *buf = kernel_malloc_check(SPRF_REGION_SIZE);
+  uint8_t *buf = pbl_malloc_check(SPRF_REGION_SIZE);
   fake_spi_flash_erase();
   memset(buf, 0x17, SPRF_REGION_SIZE);
-  flash_write_bytes(buf, FLASH_REGION_SHARED_PRF_STORAGE_BEGIN, SPRF_REGION_SIZE);
-  kernel_free(buf);
+  pbl_flash_write(FLASH, PART_SHARED_PRF_STORAGE_OFFSET, buf, SPRF_REGION_SIZE);
+  pbl_free(buf);
 }
 
 static void prv_assert_mutexes_unlocked(void) {
@@ -185,7 +183,7 @@ static void prv_assert_mutexes_unlocked(void) {
 // Tests
 ///////////////////////////////////////////////////////////
 void test_shared_prf_storage_v3__initialize(void) {
-  fake_spi_flash_init(FLASH_REGION_SHARED_PRF_STORAGE_BEGIN, SPRF_REGION_SIZE);
+  fake_spi_flash_init(PART_SHARED_PRF_STORAGE_OFFSET, SPRF_REGION_SIZE);
   shared_prf_storage_init();
 }
 
@@ -195,8 +193,8 @@ void test_shared_prf_storage_v3__cleanup(void) {
 }
 
 void test_shared_prf_storage_v3__init_all_zeros(void) {
-  uint8_t *flash_buf = kernel_zalloc(SPRF_REGION_SIZE);
-  flash_write_bytes(flash_buf, FLASH_REGION_SHARED_PRF_STORAGE_BEGIN, SPRF_REGION_SIZE);
+  uint8_t *flash_buf = pbl_zalloc(SPRF_REGION_SIZE);
+  pbl_flash_write(FLASH, PART_SHARED_PRF_STORAGE_OFFSET, flash_buf, SPRF_REGION_SIZE);
   shared_prf_storage_init();
   shared_prf_storage_set_getting_started_complete(true);
   cl_assert_equal_b(shared_prf_storage_get_getting_started_complete(), true);
@@ -215,13 +213,13 @@ void test_shared_prf_storage_v3__find_first_valid_sector(void) {
     // Invalidate all entries before it to simulate logging style
     for (uint32_t j = 0; j < page_idx[i]; j++) {
       SprfMagic inv_magic = SprfMagic_InvalidatedEntry;
-      flash_write_bytes((uint8_t *)&inv_magic, SPRF_PAGE_FLASH_OFFSET(j), sizeof(inv_magic));
+      pbl_flash_write(FLASH, SPRF_PAGE_FLASH_OFFSET(j), (uint8_t *)&inv_magic, sizeof(inv_magic));
     }
 
     // Write the valid page
-    flash_read_bytes((uint8_t *)&data, SPRF_PAGE_FLASH_OFFSET(page_idx[i]), sizeof(data));
+    pbl_flash_read(FLASH, SPRF_PAGE_FLASH_OFFSET(page_idx[i]), (uint8_t *)&data, sizeof(data));
     data.magic = SprfMagic_ValidEntry;
-    flash_write_bytes((uint8_t *)&data, SPRF_PAGE_FLASH_OFFSET(page_idx[i]), sizeof(data));
+    pbl_flash_write(FLASH, SPRF_PAGE_FLASH_OFFSET(page_idx[i]), (uint8_t *)&data, sizeof(data));
 
     // Call init and see if it found the valid page
     shared_prf_storage_init();
@@ -433,10 +431,10 @@ void test_shared_prf_storage_v3__local_identity_address_junk(void) {
 
   uint8_t junk[sizeof(SprfLocalIdentityAddress)];
   memset(junk, 0x17, sizeof(junk));
-  flash_write_bytes(junk,
-                    SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
-                        offsetof(SharedPRFData, local_identity_address),
-                    sizeof(junk));
+  pbl_flash_write(FLASH,
+                  SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
+                      offsetof(SharedPRFData, local_identity_address),
+                  junk, sizeof(junk));
 
   cl_assert_equal_b(shared_prf_storage_get_local_identity_address(nullptr), false);
   cl_assert_equal_i(shared_prf_storage_get_valid_page_number(), 0);
@@ -549,22 +547,19 @@ void test_shared_prf_storage_v3__handle_corrupt_field_same(void) {
   cl_assert_equal_i(shared_prf_storage_get_valid_page_number(), 0);
 
   SharedPRFData data;
-  flash_read_bytes((uint8_t *)&data,
-                   SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
-                   sizeof(data));
+  pbl_flash_read(FLASH, SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
+                 (uint8_t *)&data, sizeof(data));
   cl_assert(data.getting_started.crc != 0xFFFFFFFF);
 
   uint32_t new_crc = 0;
-  flash_write_bytes((uint8_t *)&new_crc,
-                    SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
-                        offsetof(SharedPRFData, getting_started) +
-                        offsetof(SprfGettingStarted, crc),
-                    sizeof(new_crc));
+  pbl_flash_write(FLASH,
+                  SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
+                      offsetof(SharedPRFData, getting_started) + offsetof(SprfGettingStarted, crc),
+                  (uint8_t *)&new_crc, sizeof(new_crc));
 
   // Confirm new CRC was written
-  flash_read_bytes((uint8_t *)&data,
-                   SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
-                   sizeof(data));
+  pbl_flash_read(FLASH, SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
+                 (uint8_t *)&data, sizeof(data));
   cl_assert_equal_i(data.getting_started.crc, new_crc);
 
   // Should be corrupt, so it should return false
@@ -576,11 +571,10 @@ void test_shared_prf_storage_v3__handle_corrupt_field_same(void) {
   fake_spi_flash_erase();
   shared_prf_storage_set_valid_page_number(SPRF_NUM_PAGES - 1);
   shared_prf_storage_set_getting_started_complete(GETTING_STARTED_COMPLETE);
-  flash_write_bytes((uint8_t *)&new_crc,
-                    SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
-                        offsetof(SharedPRFData, getting_started) +
-                        offsetof(SprfGettingStarted, crc),
-                    sizeof(new_crc));
+  pbl_flash_write(FLASH,
+                  SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
+                      offsetof(SharedPRFData, getting_started) + offsetof(SprfGettingStarted, crc),
+                  (uint8_t *)&new_crc, sizeof(new_crc));
   // Should be corrupt, so it should return false
   cl_assert_equal_b(shared_prf_storage_get_getting_started_complete(), false);
   // Should have moved to the next page, which is ZERO since we had to wrap around.
@@ -595,22 +589,19 @@ void test_shared_prf_storage_v3__handle_corrupt_field_during_setting(void) {
   cl_assert_equal_i(shared_prf_storage_get_valid_page_number(), 0);
 
   SharedPRFData data;
-  flash_read_bytes((uint8_t *)&data,
-                   SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
-                   sizeof(data));
+  pbl_flash_read(FLASH, SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
+                 (uint8_t *)&data, sizeof(data));
   cl_assert(data.getting_started.crc != 0xFFFFFFFF);
 
   uint32_t new_crc = 0;
-  flash_write_bytes((uint8_t *)&new_crc,
-                    SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
-                        offsetof(SharedPRFData, ble_pairing_data) +
-                        offsetof(SprfBlePairingData, crc),
-                    sizeof(new_crc));
+  pbl_flash_write(FLASH,
+                  SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()) +
+                      offsetof(SharedPRFData, ble_pairing_data) + offsetof(SprfBlePairingData, crc),
+                  (uint8_t *)&new_crc, sizeof(new_crc));
 
   // Confirm new CRC was written
-  flash_read_bytes((uint8_t *)&data,
-                   SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
-                   sizeof(data));
+  pbl_flash_read(FLASH, SPRF_PAGE_FLASH_OFFSET(shared_prf_storage_get_valid_page_number()),
+                 (uint8_t *)&data, sizeof(data));
   cl_assert_equal_i(data.ble_pairing_data.crc, new_crc);
 
   // Should be corrupt, so after a 'set', the page number should increment even though we are

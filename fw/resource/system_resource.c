@@ -7,14 +7,15 @@
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/size.h>
-#include <pbl/services/filesystem/pfs.h>
+#include <pbl/fs/fs.h>
 
 #include <applib/fonts/fonts.h>
 #include <applib/graphics/text_resources.h>
 #include <kernel/event_loop.h>
-#include <kernel/memory_layout.h>
-#include <kernel/panic.h>
-#include <kernel/pbl_malloc.h>
+#include <process_management/process_regions.h>
+#include <pbl/kernel/irq.h>
+#include <pbl/kernel/mpu.h>
+#include <pbl/kernel/malloc.h>
 #include <kernel/util/fw_reset.h>
 #include <resource/resource.h>
 #include <resource/language_pack.h>
@@ -33,15 +34,8 @@ void system_resource_init(void) {
   prv_watch_language_packs();
   if (!resource_init_app(SYSTEM_APP, &SYSTEM_RESOURCE_VERSION)) {
     // System resources are missing!
-#if defined(CONFIG_IS_BIGBOARD)
-    static const uint32_t ERROR_BAD_RESOURCES = 0xfe504505;
-    pbl_log(LOG_LEVEL_ERROR, __FILE_NAME__, __LINE__,
-            "System resources are missing or corrupt, time to sad watch");
-    launcher_panic(ERROR_BAD_RESOURCES);
-#else
     PBL_LOG_ERR("System resources are missing or corrupt! Going to PRF");
     fw_reset_into_prf();
-#endif
   }
 }
 
@@ -53,7 +47,7 @@ bool system_resource_is_valid(void) {
 
 // Total number of fonts = NUM_SYSTEM_FONTS + 1 for the fallback font
 FontInfo s_system_fonts_info_table[NUM_SYSTEM_FONTS + 1] KERNEL_READONLY_DATA;
-uint32_t g_font_language_generation KERNEL_READONLY_DATA;
+_Atomic uint32_t g_font_language_generation KERNEL_READONLY_DATA;
 
 #ifndef CONFIG_RECOVERY_FW
 #define NUM_LANGUAGE_FONTS \
@@ -87,11 +81,17 @@ static void prv_invalidate_system_fonts(void) {
   // Shared fonts reload lazily. A concurrent render may miss a glyph for one frame;
   // the next lookup retries after initialization completes.
   for (size_t i = 0; i < ARRAY_LENGTH(s_system_fonts_info_table); ++i) {
-    s_system_fonts_info_table[i].loaded = false;
+    FontInfo info = s_system_fonts_info_table[i];
+    info.loaded = false;
+    pbl_mpu_user_ro_write(&s_system_fonts_info_table[i], &info, sizeof(info));
   }
   // Publish last: a renderer that sees the new generation must find the fonts unloaded, or it
   // would refill its cache from the old ones under the new generation.
-  __atomic_store_n(&g_font_language_generation, g_font_language_generation + 1, __ATOMIC_RELEASE);
+  pbl_irq_lock();
+  const uint32_t generation =
+      atomic_load_explicit(&g_font_language_generation, memory_order_relaxed) + 1;
+  pbl_mpu_user_ro_write(&g_font_language_generation, &generation, sizeof(generation));
+  pbl_irq_unlock();
 }
 
 static void prv_language_changed(void *data) {
@@ -106,7 +106,7 @@ static void prv_language_pack_changed(void *data) {
                    language_pack_resource_id(slot, RESOURCE_ID_LECO_60_BOLD_NUMBERS_AM_PM_EXTENDED,
                                              RESOURCE_ID_STRINGS));
   pbl_mutex_lock(&s_language_fonts_mutex, PBL_FOREVER);
-  kernel_free(s_language_fonts[slot]);
+  pbl_free(s_language_fonts[slot]);
   s_language_fonts[slot] = NULL;
   s_language_pack_state[slot] = LanguagePackUnknown;
   ++s_language_pack_changes[slot];
@@ -128,7 +128,7 @@ static LanguageFonts *prv_get_language_fonts(uint8_t slot) {
     return NULL;
   }
   if (!s_language_fonts[slot]) {
-    s_language_fonts[slot] = kernel_zalloc(sizeof(LanguageFonts));
+    s_language_fonts[slot] = pbl_zalloc(sizeof(LanguageFonts));
   }
   return s_language_fonts[slot];
 }
@@ -159,8 +159,8 @@ static void prv_watch_language_packs(void) {
 #ifndef CONFIG_RECOVERY_FW
   pbl_mutex_init(&s_language_fonts_mutex);
   for (uint8_t slot = 0; slot < LANGUAGE_PACK_COUNT; ++slot) {
-    pfs_watch_file(language_pack_filename(slot), prv_language_pack_file_changed,
-                   FILE_CHANGED_EVENT_ALL, (void *)(uintptr_t)slot);
+    pbl_fs_watch_add(language_pack_filename(slot), PBL_FS_WATCH_ALL, prv_language_pack_file_changed,
+                     (void *)(uintptr_t)slot);
   }
 #endif
 }
@@ -208,13 +208,22 @@ PBL_SYSCALL(bool, sys_font_get_language_font, (VAL, uint32_t, base_resource_id),
 #endif
 }
 
+// The table is read-only to apps, so fonts are loaded into a copy that is written back.
+static bool prv_init_font(FontInfo *entry, ResAppNum app_num, uint32_t resource,
+                          uint32_t extension) {
+  FontInfo info = *entry;
+  const bool ok = text_resources_init_font(app_num, resource, extension, &info);
+  pbl_mpu_user_ro_write(entry, &info, sizeof(info));
+  return ok;
+}
+
 static GFont prv_load_system_font(const char *font_key) {
   if (font_key == nullptr) {
     PBL_LOG_DBG("GETTING FALLBACK FONT");
     // load fallback font
     if (!s_system_fonts_info_table[NUM_SYSTEM_FONTS].loaded) {
-      PBL_ASSERTN(text_resources_init_font(SYSTEM_APP, RESOURCE_ID_FONT_FALLBACK_INTERNAL, 0,
-                                           &s_system_fonts_info_table[NUM_SYSTEM_FONTS]));
+      PBL_ASSERTN(prv_init_font(&s_system_fonts_info_table[NUM_SYSTEM_FONTS], SYSTEM_APP,
+                                RESOURCE_ID_FONT_FALLBACK_INTERNAL, 0));
     }
     return &s_system_fonts_info_table[NUM_SYSTEM_FONTS];
   }
@@ -232,15 +241,14 @@ static GFont prv_load_system_font(const char *font_key) {
 #endif
       // if the font has not been initialized yet
       if (!fontinfo->loaded) {
-        if (!text_resources_init_font(SYSTEM_APP, resource, extension,
-                                      &s_system_fonts_info_table[i])) {
+        if (!prv_init_font(fontinfo, SYSTEM_APP, resource, extension)) {
           // Can't initialize the font for some reason
           return nullptr;
         }
         resource_get_and_cache(SYSTEM_APP, resource);
         resource_get_and_cache(SYSTEM_APP, extension);
       }
-      return &s_system_fonts_info_table[i];
+      return fontinfo;
     }
   }
 
@@ -255,8 +263,8 @@ GFont system_resource_get_font(const char *font_key) {
 
 PBL_SYSCALL(GFont, sys_font_get_system_font, (VAL, const char *, font_key)) {
   if (font_key && from_user) {
-    if (!memory_layout_is_cstring_in_region(memory_layout_get_app_region(), font_key, 100) &&
-        !memory_layout_is_cstring_in_region(memory_layout_get_microflash_region(), font_key, 100)) {
+    if (!pbl_mpu_region_contains_cstring(process_region_app(), font_key, 100) &&
+        !pbl_mpu_region_contains_cstring(pbl_mpu_region_firmware(), font_key, 100)) {
       PBL_LOG_ERR("Pointer %p not in app or microflash region", font_key);
       pbl_syscall_fail();
     }
@@ -292,5 +300,5 @@ PBL_SYSCALL(void, sys_font_reload_font, (VAL, FontInfo *, fontinfo)) {
     }
   }
 #endif
-  text_resources_init_font(fontinfo->base.app_num, fontinfo->base.resource_id, extension, fontinfo);
+  prv_init_font(fontinfo, fontinfo->base.app_num, fontinfo->base.resource_id, extension);
 }

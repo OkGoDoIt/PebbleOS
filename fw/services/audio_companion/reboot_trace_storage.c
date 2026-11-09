@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "reboot_trace.h"
-
-#include "pbl/services/settings/settings_file.h"
 #include "pbl/logging/logging.h"
+#include "pbl/settings/settings.h"
+#include "reboot_trace.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -13,7 +12,7 @@ PBL_LOG_MODULE_DEFINE(service_audio_companion, CONFIG_SERVICE_AUDIO_COMPANION_LO
 //! Shares the audio companion settings file with the receiver registry (auth.c);
 //! the reboot trace lives under its own key. One write per boot, so flash wear is
 //! negligible.
-#define REBOOT_TRACE_SETTINGS_FILE_NAME "audiocomp"
+#define REBOOT_TRACE_SETTINGS_FILE_NAME "/audiocomp"
 #define REBOOT_TRACE_SETTINGS_FILE_SIZE (1024)
 #define REBOOT_TRACE_KEY "reboottrace"
 //! Task watchdog channel -> PebbleTask map of the boot that saved it (reboot_trace.h). Written
@@ -96,66 +95,65 @@ void audio_companion_reboot_trace_load(AudioCompanionRebootTrace *trace) {
   }
   audio_companion_reboot_trace_clear(trace);
 
-  SettingsFile file;
-  if (settings_file_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME,
-                         REBOOT_TRACE_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME, REBOOT_TRACE_SETTINGS_FILE_SIZE) !=
+      0) {
     return;
   }
-  const int stored_len = settings_file_get_len(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY));
+  const int stored_len = pbl_settings_get_len(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY));
   if (stored_len == (int)sizeof(AudioCompanionRebootTrace)) {
     AudioCompanionRebootTrace stored;
-    const status_t status = settings_file_get(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY),
-                                              &stored, sizeof(stored));
-    if (status == S_SUCCESS && audio_companion_reboot_trace_is_valid(&stored)) {
+    const int status = pbl_settings_get(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY), &stored,
+                                        sizeof(stored));
+    if (status == 0 && audio_companion_reboot_trace_is_valid(&stored)) {
       *trace = stored;
     }
   } else if (stored_len == (int)sizeof(RebootTraceV2)) {
     RebootTraceV2 stored;
-    const status_t status = settings_file_get(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY),
-                                              &stored, sizeof(stored));
-    if (status == S_SUCCESS && stored.version == AUDIO_COMPANION_REBOOT_TRACE_VERSION_V2) {
+    const int status = pbl_settings_get(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY), &stored,
+                                        sizeof(stored));
+    if (status == 0 && stored.version == AUDIO_COMPANION_REBOOT_TRACE_VERSION_V2) {
       prv_migrate_v2(&stored, trace);
     }
   } else if (stored_len == (int)sizeof(RebootTraceV1)) {
     RebootTraceV1 stored;
-    const status_t status = settings_file_get(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY),
-                                              &stored, sizeof(stored));
-    if (status == S_SUCCESS && stored.version == AUDIO_COMPANION_REBOOT_TRACE_VERSION_V1) {
+    const int status = pbl_settings_get(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY), &stored,
+                                        sizeof(stored));
+    if (status == 0 && stored.version == AUDIO_COMPANION_REBOOT_TRACE_VERSION_V1) {
       prv_migrate_v1(&stored, trace);
     }
   }
-  settings_file_close(&file);
+  pbl_settings_close(&file);
 }
 
 void audio_companion_reboot_trace_save(const AudioCompanionRebootTrace *trace) {
   if (!trace) {
     return;
   }
-  SettingsFile file;
-  if (settings_file_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME,
-                         REBOOT_TRACE_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME, REBOOT_TRACE_SETTINGS_FILE_SIZE) !=
+      0) {
     return;
   }
-  const status_t status = settings_file_set(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY),
-                                             trace, sizeof(*trace));
-  settings_file_close(&file);
-  if (status != S_SUCCESS) {
+  const int status =
+      pbl_settings_set(&file, REBOOT_TRACE_KEY, strlen(REBOOT_TRACE_KEY), trace, sizeof(*trace));
+  pbl_settings_close(&file);
+  if (status != 0) {
     PBL_LOG_ERR("Failed to persist audio companion reboot trace: %" PRId32, (int32_t)status);
   }
 }
 
 bool audio_companion_wdt_channel_map_load(uint8_t channel_tasks[AUDIO_COMPANION_WDT_CHANNELS]) {
   memset(channel_tasks, AUDIO_COMPANION_WDT_CHANNEL_NONE, AUDIO_COMPANION_WDT_CHANNELS);
-  SettingsFile file;
-  if (settings_file_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME,
-                         REBOOT_TRACE_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME, REBOOT_TRACE_SETTINGS_FILE_SIZE) !=
+      0) {
     return false;
   }
-  const status_t status = settings_file_get(&file, WDT_CHANNEL_MAP_KEY,
-                                            strlen(WDT_CHANNEL_MAP_KEY), channel_tasks,
-                                            AUDIO_COMPANION_WDT_CHANNELS);
-  settings_file_close(&file);
-  if (status != S_SUCCESS) {
+  const int status = pbl_settings_get(&file, WDT_CHANNEL_MAP_KEY, strlen(WDT_CHANNEL_MAP_KEY),
+                                      channel_tasks, AUDIO_COMPANION_WDT_CHANNELS);
+  pbl_settings_close(&file);
+  if (status != 0) {
     memset(channel_tasks, AUDIO_COMPANION_WDT_CHANNEL_NONE, AUDIO_COMPANION_WDT_CHANNELS);
     return false;
   }
@@ -169,16 +167,15 @@ void audio_companion_wdt_channel_map_save(
       memcmp(stored, channel_tasks, sizeof(stored)) == 0) {
     return;
   }
-  SettingsFile file;
-  if (settings_file_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME,
-                         REBOOT_TRACE_SETTINGS_FILE_SIZE) != S_SUCCESS) {
+  struct pbl_settings_file file;
+  if (pbl_settings_open(&file, REBOOT_TRACE_SETTINGS_FILE_NAME, REBOOT_TRACE_SETTINGS_FILE_SIZE) !=
+      0) {
     return;
   }
-  const status_t status = settings_file_set(&file, WDT_CHANNEL_MAP_KEY,
-                                            strlen(WDT_CHANNEL_MAP_KEY), channel_tasks,
-                                            AUDIO_COMPANION_WDT_CHANNELS);
-  settings_file_close(&file);
-  if (status != S_SUCCESS) {
+  const int status = pbl_settings_set(&file, WDT_CHANNEL_MAP_KEY, strlen(WDT_CHANNEL_MAP_KEY),
+                                      channel_tasks, AUDIO_COMPANION_WDT_CHANNELS);
+  pbl_settings_close(&file);
+  if (status != 0) {
     PBL_LOG_ERR("Failed to persist the task watchdog channel map: %" PRId32, (int32_t)status);
   }
 }

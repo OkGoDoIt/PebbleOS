@@ -6,11 +6,14 @@
 #include "app_install_manager.h"
 #include "app_manager.h"
 #include "pebble_process_md.h"
+#include "process_regions.h"
 #include "worker_manager.h"
 
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/debug.h>
 #include <pbl/kernel/fatal.h>
+#include <pbl/kernel/heap.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/syscall.h>
 #include <pbl/kernel/types.h>
 #include <pbl/logging/logging.h>
@@ -25,7 +28,6 @@
 #include <pbl/services/persist.h>
 #include <pbl/services/touch/touch.h>
 #include <pbl/services/voice/voice.h>
-#include <pbl/util/heap.h>
 
 #include <applib/accel_service_private.h>
 #include <applib/app_logging.h>
@@ -33,7 +35,6 @@
 #include <applib/ui/dialogs/dialog.h>
 #include <applib/ui/dialogs/expandable_dialog.h>
 #include <apps/system/app_fetch_ui.h>
-#include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
 #include <kernel/ui/modals/modal_manager.h>
 #include <process_state/app_state/app_state.h>
@@ -263,7 +264,7 @@ void process_manager_launch_process(const ProcessLaunchConfig *config) {
       PBL_LOG_DBG("Cache entry did not exist on launch attempt");
 
       // Freed in app_fetch_ui.c
-      AppFetchUIArgs *fetch_args = kernel_malloc_check(sizeof(AppFetchUIArgs));
+      AppFetchUIArgs *fetch_args = pbl_malloc_check(sizeof(AppFetchUIArgs));
       *fetch_args = (AppFetchUIArgs){};
       fetch_args->common = config->common;
       fetch_args->app_id = id;
@@ -483,7 +484,7 @@ bool process_manager_make_process_safe_to_kill(PebbleTask task, bool gracefully)
 
   // If this is not a system app, output its heap usage stats.
   if (context->app_md->process_storage == ProcessStorageFlash) {
-    const Heap *heap;
+    const struct pbl_heap *heap;
     if (task == PebbleTask_App) {
       heap = app_state_get_heap();
     } else if (task == PebbleTask_Worker) {
@@ -496,7 +497,7 @@ bool process_manager_make_process_safe_to_kill(PebbleTask task, bool gracefully)
     // like the %zd formatter
     APP_LOG(APP_LOG_LEVEL_INFO,
             "Heap Usage for %s: Total Size <%dB> Used <%uB> Still allocated <%uB>",
-            pebble_task_get_name(task), (int)heap_size(heap), heap->high_water_mark,
+            pebble_task_get_name(task), (int)pbl_heap_size(heap), heap->high_water_mark,
             heap->current_size);
   }
 
@@ -527,6 +528,32 @@ const void *process_manager_get_current_process_args(void) {
 void process_manager_process_setup(PebbleTask task) {
   ProcessContext *context = prv_get_context_for_task(task);
   persist_service_client_open(&context->app_md->uuid);
+}
+
+// ---------------------------------------------------------------------------------------------
+struct pbl_thread *process_manager_thread_create(PebbleTask task, struct pbl_thread_attr *attr) {
+  static struct pbl_thread s_app_thread;
+  static struct pbl_thread s_worker_thread;
+
+  const bool is_app = (task == PebbleTask_App);
+  PBL_ASSERTN(is_app || task == PebbleTask_Worker);
+
+  struct pbl_mpu_region app_region = *process_region_app();
+  struct pbl_mpu_region worker_region = *process_region_worker();
+  struct pbl_mpu_region *user_region = is_app ? &app_region : &worker_region;
+  user_region->attr = (user_region->attr & ~PBL_MPU_ACCESS_MSK) | PBL_MPU_P_RW_U_RW;
+  attr->regions[PROCESS_REGIONS_THREAD_APP] = &app_region;
+  attr->regions[PROCESS_REGIONS_THREAD_WORKER] = &worker_region;
+
+#ifdef CONFIG_USERSPACE
+  attr->user_start = user_region->base;
+  attr->user_end = user_region->base + user_region->size;
+#endif
+
+  struct pbl_thread *thread = is_app ? &s_app_thread : &s_worker_thread;
+  PBL_ASSERTN(pbl_thread_create(thread, attr) == 0);
+  pebble_task_register(task, thread);
+  return thread;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -805,6 +832,20 @@ PBL_SYSCALL(bool, process_manager_compiled_with_legacy3_sdk) {
       process_metadata_get_app_sdk_type(sys_process_manager_get_current_process_md());
 
   return sdk_type == ProcessAppSDKType_Legacy3x;
+}
+
+// -------------------------------------------------------------------------------------------
+PBL_SYSCALL(bool, process_manager_expects_legacy_tm_gmtoff) {
+  PebbleTask task = pebble_task_get_current();
+  if (task != PebbleTask_App && task != PebbleTask_Worker) {
+    return false;
+  }
+
+  // SDK rev 89, the last frozen revision
+  const Version last_legacy_version = {.major = 0x5, .minor = 0x56};
+  const Version sdk_version =
+      process_metadata_get_sdk_version(sys_process_manager_get_current_process_md());
+  return version_compare(sdk_version, last_legacy_version) <= 0;
 }
 
 PBL_SYSCALL(Version, sys_get_current_process_sdk_version) {

@@ -10,11 +10,11 @@
 #include <pbl/util/size.h>
 
 #include <applib/app.h>
+#include <applib/app_malloc.h>
 #include <applib/event_service_client.h>
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/ui.h>
 #include <kernel/events.h>
-#include <kernel/pbl_malloc.h>
 #include <resource/resource_ids.auto.h>
 #include <shell/normal/app_idle_timeout.h>
 #include <shell/prefs.h>
@@ -46,9 +46,7 @@ static const uint32_t SETTINGS_MENU_ICON_RESOURCES[SettingsMenuItem_Count] = {
   [SettingsMenuItemDateTime] = RESOURCE_ID_SETTINGS_MENU_ICON_DATE_TIME,
   [SettingsMenuItemDisplay] = RESOURCE_ID_SETTINGS_MENU_ICON_DISPLAY,
   [SettingsMenuItemHealth] = RESOURCE_ID_SETTINGS_MENU_ICON_HEALTH,
-#ifdef CONFIG_THEMING
   [SettingsMenuItemThemes] = RESOURCE_ID_SETTINGS_MENU_ICON_THEMES,
-#endif
   [SettingsMenuItemActivity] = RESOURCE_ID_SETTINGS_MENU_ICON_BACKGROUND_APP,
   [SettingsMenuItemSystem] = RESOURCE_ID_SETTINGS_MENU_ICON_SYSTEM,
 };
@@ -116,7 +114,7 @@ static int16_t prv_get_cell_height_callback(MenuLayer *menu_layer, MenuIndex *ce
 
   const int16_t focused_cell_height = MENU_CELL_ROUND_FOCUSED_SHORT_CELL_HEIGHT;
   const int16_t unfocused_cell_height =
-      (((DISP_ROWS - focused_cell_height) / 2) -
+      (((PBL_DISPLAY_HEIGHT - focused_cell_height) / 2) -
        SETTINGS_CATEGORY_MENU_CELL_UNFOCUSED_ROUND_VERTICAL_PADDING) /
       SETTINGS_CATEGORY_MENU_NUM_UNFOCUSED_ROWS_PER_SIDE;
   return menu_layer_is_index_selected(menu_layer, cell_index) ? focused_cell_height
@@ -161,10 +159,6 @@ static void prv_window_load(Window *window) {
                              .select_click = prv_select_callback,
                              .get_separator_height = prv_get_separator_height_callback
                            });
-  GColor highlight_bg = shell_prefs_get_theme_highlight_color();
-  menu_layer_set_normal_colors(menu_layer, PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite),
-                               PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
-  menu_layer_set_highlight_colors(menu_layer, highlight_bg, gcolor_legible_over(highlight_bg));
   menu_layer_set_click_config_onto_window(menu_layer, &data->window);
   menu_layer_set_scroll_wrap_around(menu_layer, shell_prefs_get_menu_scroll_wrap_around_enable());
   menu_layer_set_scroll_vibe_on_wrap(
@@ -210,7 +204,6 @@ static void handle_init(void) {
                                        .load = prv_window_load,
                                        .unload = prv_window_unload,
                                      });
-  window_set_background_color(window, PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite));
   app_window_stack_push(window, true);
 }
 

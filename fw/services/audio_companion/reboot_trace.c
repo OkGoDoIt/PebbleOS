@@ -98,7 +98,6 @@ static const struct {
 } s_watched_tasks[] = {
   { PebbleTask_KernelBackground, "KernelBG" },
   { PebbleTask_KernelMain, "KernelMain" },
-  { PebbleTask_PULSE, "PULSE" },
   { PebbleTask_NewTimers, "Timers" },
 };
 
@@ -167,7 +166,7 @@ bool audio_companion_reboot_trace_tasks_from_channels(
       break;
     }
     if (task >= 8) {
-      continue; // PULSE: outside the 8-bit sets, as it always was
+      continue; // Historical task IDs outside the persisted 8-bit sets remain ignored.
     }
     mask |= (uint8_t)(1u << task);
     if (fed_channels & (1u << ch)) {

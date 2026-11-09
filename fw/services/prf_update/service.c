@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/board/partitions.h>
 #include <pbl/drivers/flash.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/math.h>
 
-#include <flash_region/flash_region.h>
 #include <system/bootbits.h>
 #include <system/firmware_storage.h>
 
@@ -15,25 +15,21 @@ PBL_LOG_MODULE_DEFINE(service_prf_update, CONFIG_SERVICE_PRF_UPDATE_LOG_LEVEL);
 #ifndef CONFIG_RECOVERY_FW
 static void prv_do_update(void) {
   PBL_LOG_INFO("Updating PRF!");
-  flash_prf_set_protection(false);
-
-  bool saved_sleep_when_idle = flash_get_sleep_when_idle();
-  flash_sleep_when_idle(false);
+  (void)pbl_flash_unprotect(FLASH);
 
 #ifndef CONFIG_PBLBOOT
   FirmwareDescription description =
-      firmware_storage_read_firmware_description(FLASH_REGION_FIRMWARE_DEST_BEGIN);
+      firmware_storage_read_firmware_description(PART_FIRMWARE_DEST_OFFSET);
 
-  if (!firmware_storage_check_valid_firmware_description(FLASH_REGION_FIRMWARE_DEST_BEGIN,
-                                                         &description)) {
+  if (!firmware_storage_check_valid_firmware_description(PART_FIRMWARE_DEST_OFFSET, &description)) {
     PBL_LOG_WRN("Invalid recovery firmware CRC in SPI flash!");
     goto done;
   }
 
   const uint32_t total_length = description.description_length + description.firmware_length;
 #else
-  FirmwareHeader header = firmware_storage_read_firmware_header(FLASH_REGION_FIRMWARE_DEST_BEGIN);
-  if (!firmware_storage_check_valid_firmware_header(FLASH_REGION_FIRMWARE_DEST_BEGIN, &header)) {
+  FirmwareHeader header = firmware_storage_read_firmware_header(PART_FIRMWARE_DEST_OFFSET);
+  if (!firmware_storage_check_valid_firmware_header(PART_FIRMWARE_DEST_OFFSET, &header)) {
     PBL_LOG_WRN("Invalid recovery firmware CRC in SPI flash!");
     goto done;
   }
@@ -41,10 +37,13 @@ static void prv_do_update(void) {
   const uint32_t total_length = header.fw_start + header.fw_length;
 #endif
 
+  if (total_length > PART_SAFE_FIRMWARE_SIZE) {
+    PBL_LOG_WRN("Recovery firmware does not fit the PRF slot!");
+    goto done;
+  }
+
   PBL_LOG_DBG("Erasing previous PRF...");
-  flash_region_erase_optimal_range(
-      FLASH_REGION_SAFE_FIRMWARE_BEGIN, FLASH_REGION_SAFE_FIRMWARE_BEGIN,
-      FLASH_REGION_SAFE_FIRMWARE_BEGIN + total_length, FLASH_REGION_SAFE_FIRMWARE_END);
+  pbl_flash_partition_erase(PART_SAFE_FIRMWARE, 0U, total_length);
 
   PBL_LOG_DBG("Copying PRF from scratch to the PRF slot");
   uint8_t buffer[512];
@@ -52,15 +51,14 @@ static void prv_do_update(void) {
   while (offset < total_length) {
     const uint32_t chunk_size = MIN(sizeof(buffer), (total_length - offset));
 
-    flash_read_bytes(buffer, FLASH_REGION_FIRMWARE_DEST_BEGIN + offset, chunk_size);
-    flash_write_bytes(buffer, FLASH_REGION_SAFE_FIRMWARE_BEGIN + offset, chunk_size);
+    pbl_flash_partition_read(PART_FIRMWARE_DEST, offset, buffer, chunk_size);
+    pbl_flash_partition_write(PART_SAFE_FIRMWARE, offset, buffer, chunk_size);
 
     offset += chunk_size;
   }
 
 done:
-  flash_prf_set_protection(true);
-  flash_sleep_when_idle(saved_sleep_when_idle);
+  (void)pbl_flash_partition_protect(PART_SAFE_FIRMWARE);
   PBL_LOG_DBG("Done!");
 }
 #endif

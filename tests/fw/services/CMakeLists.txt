@@ -19,16 +19,6 @@ pbl_clar_test(test_language_pack_protocol
   SOURCES fw/kernel/language_pack_protocol.c
 )
 
-pbl_clar_test(test_pfs
-  MODULES pfs
-  SOURCES
-    fw/system/hexdump.c
-    tests/fakes/fake_rtc.c
-  PLATFORMS emery
-  DEFINES DUMA_DISABLED
-  OVERRIDES dummy_board
-)
-
 pbl_clar_test(test_put_bytes
   SOURCES
     fw/services/put_bytes/put_bytes.c
@@ -61,11 +51,12 @@ pbl_clar_test(test_language_pack_storage
     fw/resource/resource_storage_builtin.c
     fw/resource/resource_storage_file.c
     fw/resource/resource_storage_flash.c
-    fw/services/filesystem/flash_translation.c
-    fw/services/filesystem/pfs.c
-    fw/services/filesystem/app_file.c
-    fw/flash_region/flash_region.c
-    fw/flash_region/filesystem_regions.c
+    subsys/fs/pfs/flash_translation.c
+    subsys/fs/pfs/pfs.c
+    subsys/fs/fs.c
+    subsys/fs/pfs/pfs_fs.c
+    tests/fakes/fake_pfs.c
+    fw/services/process_management/app_file.c
     drivers/flash/flash_crc.c
     tests/fakes/fake_bootbits.c
     tests/fakes/fake_spi_flash.c
@@ -138,8 +129,13 @@ pbl_clar_test(test_light
     subsys/cron/cron.c
     tests/fakes/fake_rtc.c
   MODULES time
-  DEFINES CONFIG_BACKLIGHT_HAS_COLOR CONFIG_ALS_SCREEN_COMPENSATION
-  OVERRIDES getafix_backlight
+  DEFINES
+    CONFIG_BACKLIGHT_HAS_COLOR
+    CONFIG_ALS_SCREEN_COMPENSATION
+    CONFIG_SERVICE_LIGHT_BACKLIGHT_ON_PERCENT=25
+    CONFIG_SERVICE_LIGHT_DARK_THRESHOLD=0
+    CONFIG_SERVICE_LIGHT_DARK_THRESHOLD_DELTA=0
+  OVERRIDES dummy_board
 )
 
 pbl_clar_test(test_als_screen_compensation
@@ -245,7 +241,7 @@ pbl_clar_test(test_speaker_service
     fw/services/speaker/pcm_stream.c
     fw/services/speaker/track_player.c
     tests/fakes/fake_events.c
-  DEFINES CONFIG_SPEAKER=1
+  DEFINES CONFIG_SPEAKER=1 CONFIG_SERVICE_SPEAKER_STANDBY_MS=0 CONFIG_BATTERY_HIGH_LOAD=1
   OVERRIDES dummy_board
 )
 
@@ -267,7 +263,7 @@ pbl_clar_test(test_voice_endpoint
 pbl_clar_test(test_app_cache
   MODULES settings
   SOURCES
-    fw/services/filesystem/app_file.c
+    fw/services/process_management/app_file.c
     fw/services/app_cache/service.c
     tests/fakes/fake_rtc.c
     tests/fakes/fake_events.c
@@ -296,7 +292,7 @@ pbl_clar_test(test_app_install_manager
     fw/resource/resource_storage_builtin.c
     fw/resource/resource_storage_file.c
     fw/resource/resource_storage_flash.c
-    fw/services/filesystem/app_file.c
+    fw/services/process_management/app_file.c
     fw/services/app_cache/service.c
     fw/services/process_management/app_storage.c
     fw/process_management/app_install_manager.c
@@ -325,7 +321,7 @@ pbl_clar_test(test_app_menu_data_source
     fw/resource/resource_storage_flash.c
     fw/services/app_cache/service.c
     fw/services/blob_db/app_db.c
-    fw/services/filesystem/app_file.c
+    fw/services/process_management/app_file.c
     fw/services/process_management/app_order_storage.c
     fw/services/process_management/app_storage.c
     tests/fakes/fake_rtc.c
@@ -343,6 +339,9 @@ pbl_clar_test(test_process_loader_storage
     fw/services/process_management/app_storage.c
     fw/services/process_management/process_loader_storage.c
     fw/process_management/process_runtime.c
+    subsys/loader/loader.c
+  DEFINES
+    CONFIG_LOADER_LOG_LEVEL=0
   OVERRIDES dummy_board
 )
 
@@ -358,10 +357,13 @@ pbl_clar_test(test_app_fetch_endpoint
 pbl_clar_test(test_accel_manager
   SOURCES
     drivers/base/device.c
+    drivers/timer/timer.c
     drivers/imu/accel.c
     fw/services/accel_manager/service.c
     tests/fakes/fake_events.c
   DEFINES
+    PBL_NO_LINKER_SCRIPT
+    CONFIG_DEVICE_LOG_LEVEL=0
     CONFIG_SERVICE_ACCEL_MANAGER_BATCH_SAMPLES=25
     CONFIG_DEVICE_LOG_LEVEL=0
     PBL_NO_LINKER_SCRIPT
@@ -371,15 +373,13 @@ pbl_clar_test(test_accel_manager
 pbl_clar_test(test_shared_prf_storage_v3
   SOURCES
     fw/services/shared_prf_storage/shared_prf_storage.c
-    tests/fakes/fake_flash_region.c
     tests/fakes/fake_spi_flash.c
   PLATFORMS emery
-  OVERRIDES shared_prf_storage_v3
 )
 
 pbl_clar_test(test_app_file
   SOURCES
-    fw/services/filesystem/app_file.c
+    fw/services/process_management/app_file.c
 )
 
 pbl_clar_test(test_do_not_disturb
@@ -465,7 +465,7 @@ pbl_clar_test(test_app_glance_service
     fw/services/blob_db/app_glance_db.c
     fw/services/timeline/attribute.c
     tests/fakes/fake_rtc.c
-    tests/fakes/fake_settings_file.c
+    tests/fakes/fake_settings.c
   OVERRIDES dummy_board
 )
 
@@ -502,22 +502,12 @@ pbl_clar_test(test_audio_companion_spool
 )
 
 pbl_clar_test(test_audio_companion_auth
+  MODULES settings time rand
   SOURCES
     fw/services/audio_companion/auth.c
-    fw/services/filesystem/flash_translation.c
-    fw/services/filesystem/pfs.c
-    fw/services/settings/settings_file.c
-    fw/services/settings/settings_raw_iter.c
-    fw/flash_region/flash_region.c
-    fw/flash_region/filesystem_regions.c
-    fw/kernel/rand.c
-    fw/services/clock/time.c
-    lib/util/gmtime.c
-    third_party/tinymt/TinyMT/tinymt/tinymt32.c
     third_party/mbedtls/mbedtls/library/sha256.c
     third_party/mbedtls/mbedtls/library/platform_util.c
     tests/fakes/fake_rtc.c
-    tests/fakes/fake_spi_flash.c
   INCLUDES
     third_party/mbedtls/mbedtls/include
     third_party/mbedtls/mbedtls/library
@@ -638,6 +628,7 @@ pbl_clar_test(test_system_task
     fw/services/system_task/service.c
     kernel/tick.c
     kernel/sched.c
+    kernel/timer.c
     kernel/thread.c
     kernel/mutex.c
     kernel/sem.c
@@ -647,11 +638,16 @@ pbl_clar_test(test_system_task
     kernel/debug.c
     kernel/arch/posix/arch.c
     kernel/arch/posix/test.c
+    kernel/timekeeping.c
+    drivers/base/device.c
+    drivers/timer/timer.c
   INCLUDES
     kernel
     kernel/arch
     kernel/arch/posix/include
   DEFINES
+    PBL_NO_LINKER_SCRIPT
+    CONFIG_DEVICE_LOG_LEVEL=0
     CONFIG_KERNEL_IDLE_STACK_SIZE=1024
     CONFIG_TASK_WDT_TIMEOUT_MS=5000
     CONFIG_SERVICE_SYSTEM_TASK_LOG_LEVEL=0
@@ -664,7 +660,15 @@ pbl_clar_test(test_mic_capture
     fw/services/mic_manager/mic_manager.c
     fw/services/blob_db/app_db.c
     tests/fakes/fake_events.c
-    tests/fakes/fake_settings_file.c
+    tests/fakes/fake_settings.c
   DEFINES CONFIG_SERVICE_MIC_CAPTURE
   OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_mic_source
+  SOURCES
+    fw/services/mic_manager/mic_source.c
+  DEFINES
+    CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI
+    CONFIG_SERVICE_MIC_MANAGER_LOG_LEVEL=0
 )

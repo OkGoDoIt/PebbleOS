@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include <pbl/bluetooth/responsiveness.h>
-#include <pbl/drivers/mic.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
@@ -16,6 +15,7 @@
 #ifdef CONFIG_SERVICE_MIC_STREAM
 #include <pbl/services/mic_stream.h>
 #endif
+#include <pbl/kernel/malloc.h>
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/services/voice/transcription.h>
 #include <pbl/services/voice/voice.h>
@@ -23,9 +23,7 @@
 #include <pbl/services/voice_endpoint.h>
 #include <pbl/util/uuid.h>
 
-#include <board/board.h>
 #include <kernel/events.h>
-#include <kernel/pbl_malloc.h>
 #include <process_management/app_manager.h>
 
 PBL_LOG_MODULE_DEFINE(service_voice, CONFIG_SERVICE_VOICE_LOG_LEVEL);
@@ -141,7 +139,7 @@ static void prv_cancel_recording(void) {
 
 static void prv_cancel_early_session(void) {
   // For early cancellation, only cancel the audio endpoint transfer
-  // Don't call mic_stop() since the microphone was never started
+  // The microphone was never started
   audio_endpoint_cancel_transfer(s_session_id);
   prv_teardown_session();
 }
@@ -691,7 +689,7 @@ void voice_handle_dictation_result(VoiceEndpointResult result, AudioEndpointSess
                               &sentence_size);
 
   const size_t event_size = sizeof(PebbleVoiceServiceEventData) + sentence_size;
-  PebbleVoiceServiceEventData *event_data = kernel_zalloc_check(event_size);
+  PebbleVoiceServiceEventData *event_data = pbl_zalloc_check(event_size);
 
   // TODO: Final UI will probably demand a more sophisticated input, but this service will be
   // updated to support additional features when the final UI is implemented
@@ -729,7 +727,7 @@ void voice_handle_nlp_result(VoiceEndpointResult result, AudioEndpointSessionId 
 
   const size_t sentence_size = strlen(reminder) + 1;
   const size_t event_size = sizeof(PebbleVoiceServiceEventData) + sentence_size;
-  PebbleVoiceServiceEventData *event_data = kernel_zalloc_check(event_size);
+  PebbleVoiceServiceEventData *event_data = pbl_zalloc_check(event_size);
   *event_data = (PebbleVoiceServiceEventData){
     .timestamp = timestamp,
   };

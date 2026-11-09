@@ -20,6 +20,7 @@
 #include <apps/system/timeline/timeline.h>
 #include <apps/system_app_ids.h>
 #include <kernel/events.h>
+#include <kernel/ui/modals/modal_manager.h>
 #include <popups/alarm_popup.h>
 #include <popups/bluetooth_pairing_ui.h>
 #include <popups/mic_banner.h>
@@ -29,6 +30,7 @@
 #include <process_management/app_manager.h>
 #include <shell/normal/app_idle_timeout.h>
 #include <shell/normal/battery_ui.h>
+#include <shell/normal/dark_mode_updater.h>
 #include <shell/normal/watchface.h>
 #include <shell/prefs.h>
 #include <shell/prefs_private.h>
@@ -53,6 +55,7 @@ static void prv_maybe_run_settings_dbs_compaction_migration(void) {
 
 void shell_event_loop_init(void) {
   shell_prefs_init();
+  dark_mode_updater_init();
   prv_maybe_run_settings_dbs_compaction_migration();
   notification_window_service_init();
   app_inbox_service_init();
@@ -182,6 +185,11 @@ void shell_event_loop_handle_event(PebbleEvent *e) {
       workout_service_workout_event_handler(workout_e);
       return;
     }
+    case PEBBLE_DARK_MODE_CHANGE_EVENT:
+      // Modal UI resolves the theme colors while drawing
+      modal_manager_mark_dirty();
+      return;
+
     default:
       break; // don't care
   }

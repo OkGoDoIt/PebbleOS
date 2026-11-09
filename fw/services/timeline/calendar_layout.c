@@ -11,12 +11,12 @@
 #include <pbl/util/string.h>
 #include <pbl/util/units.h>
 
+#include <applib/applib_malloc.auto.h>
 #include <applib/fonts/fonts.h>
 #include <applib/graphics/gtypes.h>
 #include <applib/graphics/text.h>
 #include <applib/preferred_content_size.h>
 #include <applib/ui/ui.h>
-#include <kernel/pbl_malloc.h>
 #include <process_state/app_state/app_state.h>
 
 //////////////////////////////////////////
@@ -318,7 +318,7 @@ static GTextNode *prv_create_icon_label_node_rect(const LayoutLayer *layout,
   }
   if (ctx->one_line) {
     // Keep the time on one line; what doesn't fit is cut off at the screen edge
-    node->margin.w = -DISP_COLS;
+    node->margin.w = -PBL_DISPLAY_WIDTH;
   }
   GTextNodeHorizontal *horizontal_node = graphics_text_node_create_horizontal(2);
   GTextNodeCustom *image_node = prv_create_image_node(ctx->image);
@@ -550,7 +550,7 @@ bool calendar_layout_verify(bool existing_attributes[]) {
 }
 
 LayoutLayer *calendar_layout_create(const LayoutLayerConfig *config) {
-  CalendarLayout *layout = task_zalloc_check(sizeof(CalendarLayout));
+  CalendarLayout *layout = applib_zalloc(sizeof(CalendarLayout));
 
   static const TimelineLayoutImpl s_timeline_layout_impl = {
     .attributes = {AttributeIdTitle, AttributeIdLocationName},

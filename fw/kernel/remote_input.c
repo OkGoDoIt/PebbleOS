@@ -3,6 +3,7 @@
 
 #include <pbl/input/input.h>
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/comm_session/session.h>
@@ -13,7 +14,6 @@
 #include <applib/event_service_client.h>
 #include <kernel/events.h>
 #include <kernel/input_buttons.h>
-#include <kernel/pbl_malloc.h>
 #include <kernel/remote_input.h>
 
 #if defined(CONFIG_SERVICE_TOUCH)
@@ -140,7 +140,7 @@ static void prv_button_timer_cb(void *cb_data) {
     new_timer_start(s_input_timer, was_held_down ? context->gap_ms : context->hold_ms,
                     prv_button_timer_cb, context, 0 /* flags */);
   } else {
-    kernel_free(context);
+    pbl_free(context);
     prv_sequence_finished();
   }
 }
@@ -155,7 +155,7 @@ RemoteInputResult remote_input_button_press(ButtonId button, uint32_t presses, u
     // and leaving the button stuck down.
     return RemoteInputResult_Ok;
   }
-  ButtonPressContext *context = kernel_malloc(sizeof(ButtonPressContext));
+  ButtonPressContext *context = pbl_malloc(sizeof(ButtonPressContext));
   if (!context) {
     return RemoteInputResult_Invalid;
   }
@@ -171,7 +171,7 @@ RemoteInputResult remote_input_button_press(ButtonId button, uint32_t presses, u
   // separate them.
   const RemoteInputResult result = prv_start_sequence(prv_button_timer_cb, context);
   if (result != RemoteInputResult_Ok) {
-    kernel_free(context);
+    pbl_free(context);
   }
   return result;
 }
@@ -223,7 +223,7 @@ RemoteInputResult remote_input_button_set(uint8_t buttons) {
 #define REMOTE_INPUT_SWIPE_TRAVEL_NUM 3
 #define REMOTE_INPUT_SWIPE_TRAVEL_DEN 5
 
-static_assert((MIN(DISP_COLS, DISP_ROWS) * REMOTE_INPUT_SWIPE_TRAVEL_NUM) /
+static_assert((MIN(PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT) * REMOTE_INPUT_SWIPE_TRAVEL_NUM) /
                       REMOTE_INPUT_SWIPE_TRAVEL_DEN >=
                   SWIPE_MIN_LENGTH_PX,
               "swipe travel is below the swipe recognizer's minimum length");
@@ -263,7 +263,7 @@ static void prv_path_timer_cb(void *cb_data) {
     emitted = prv_path_emit(TouchInjectPhase_Move, context->x, context->y);
   } else {
     prv_path_emit(TouchInjectPhase_End, context->x, context->y);
-    kernel_free(context);
+    pbl_free(context);
     prv_sequence_finished();
     return;
   }
@@ -274,7 +274,7 @@ static void prv_path_timer_cb(void *cb_data) {
     // carrying on would strand a half-finished path. The caller was already told Ok, so leave a
     // trace of the abort.
     PBL_LOG_DBG("Remote input: touch path aborted, injection refused");
-    kernel_free(context);
+    pbl_free(context);
     prv_sequence_finished();
     return;
   }
@@ -284,7 +284,7 @@ static void prv_path_timer_cb(void *cb_data) {
 
 static RemoteInputResult prv_start_path(int16_t x1, int16_t y1, int16_t x2, int16_t y2,
                                         uint8_t steps, uint16_t step_ms) {
-  PathContext *context = kernel_malloc(sizeof(PathContext));
+  PathContext *context = pbl_malloc(sizeof(PathContext));
   if (!context) {
     return RemoteInputResult_Invalid;
   }
@@ -301,13 +301,13 @@ static RemoteInputResult prv_start_path(int16_t x1, int16_t y1, int16_t x2, int1
 
   const RemoteInputResult result = prv_start_sequence(prv_path_timer_cb, context);
   if (result != RemoteInputResult_Ok) {
-    kernel_free(context);
+    pbl_free(context);
   }
   return result;
 }
 
 static bool prv_on_screen(int16_t x, int16_t y) {
-  return (x >= 0) && (x < DISP_COLS) && (y >= 0) && (y < DISP_ROWS);
+  return (x >= 0) && (x < PBL_DISPLAY_WIDTH) && (y >= 0) && (y < PBL_DISPLAY_HEIGHT);
 }
 
 RemoteInputResult remote_input_touch(int16_t x1, int16_t y1, int16_t x2, int16_t y2,
@@ -341,7 +341,7 @@ RemoteInputResult remote_input_swipe(RemoteInputSwipeDirection direction, uint16
 
   const bool vertical =
       (direction == RemoteInputSwipeDirection_Up) || (direction == RemoteInputSwipeDirection_Down);
-  const int16_t axis = vertical ? DISP_ROWS : DISP_COLS;
+  const int16_t axis = vertical ? PBL_DISPLAY_HEIGHT : PBL_DISPLAY_WIDTH;
   const int16_t travel =
       (int16_t)((axis * REMOTE_INPUT_SWIPE_TRAVEL_NUM) / REMOTE_INPUT_SWIPE_TRAVEL_DEN);
   // The finger starts on the far side of centre and travels towards the named direction.
@@ -350,8 +350,8 @@ RemoteInputResult remote_input_swipe(RemoteInputSwipeDirection direction, uint16
           ? -1
           : 1;
   const int16_t half = (int16_t)(travel / 2);
-  const int16_t x1 = (int16_t)(DISP_COLS / 2 - (vertical ? 0 : sign * half));
-  const int16_t y1 = (int16_t)(DISP_ROWS / 2 - (vertical ? sign * half : 0));
+  const int16_t x1 = (int16_t)(PBL_DISPLAY_WIDTH / 2 - (vertical ? 0 : sign * half));
+  const int16_t y1 = (int16_t)(PBL_DISPLAY_HEIGHT / 2 - (vertical ? sign * half : 0));
 
   // The touchdown-to-liftoff time covers the position updates plus the liftoff that follows
   // them. One divisor step beyond that count keeps the scheduled path strictly inside the

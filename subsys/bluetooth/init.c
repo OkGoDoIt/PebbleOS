@@ -31,11 +31,11 @@ extern void nimble_discover_init(void);
 extern void nimble_gattc_op_queue_init(void);
 
 #if NIMBLE_CFG_CONTROLLER
-static struct pbl_thread *s_ll_task_handle;
-PBL_THREAD_STACK_DEFINE(s_ll_task_stack, 1384);
+static struct pbl_thread s_ll_thread;
+PBL_THREAD_STACK_DEFINE(s_ll_task_stack, CONFIG_BT_LL_THREAD_STACK_SIZE);
 #endif
-static struct pbl_thread *s_host_task_handle;
-PBL_THREAD_STACK_DEFINE(s_host_task_stack, 5000);
+static struct pbl_thread s_host_thread;
+PBL_THREAD_STACK_DEFINE(s_host_task_stack, CONFIG_BT_HOST_THREAD_STACK_SIZE);
 static PBL_SEM_DEFINE(s_host_started, 0, 1);
 static PBL_SEM_DEFINE(s_host_stopped, 0, 1);
 static struct ble_hs_stop_listener s_listener;
@@ -51,8 +51,18 @@ typedef enum {
 // with the vendor's ble_hs_enabled_state (Stopped<->OFF, Started<->ON).
 static DriverState s_driver_state = DriverStateStopped;
 
+#define LL_MAX_TX_OCTETS  251
+#define LL_MAX_TX_TIME_US 2120
+
 static void prv_sync_cb(void) {
   PBL_LOG_DBG("NimBLE host synchronized");
+
+  // Controllers default to 27-byte LL PDUs when transmitting.
+  int rc = ble_gap_write_sugg_def_data_len(LL_MAX_TX_OCTETS, LL_MAX_TX_TIME_US);
+  if (rc != 0) {
+    PBL_LOG_WRN("Failed to set the default data length (0x%04x)", (uint16_t)rc);
+  }
+
   pbl_sem_give(&s_host_started);
   pbl_bt_handle_host_resynced();
 }
@@ -124,27 +134,27 @@ void pbl_bt_init(void) {
   struct pbl_thread_attr host_attr = {
     .name = "NimbleHost",
     .entry = prv_host_task_main,
-    .prio = PBL_PRIO_MAX - 1,
+    .prio = CONFIG_BT_HOST_THREAD_PRIO,
     .privileged = true,
     .stack = s_host_task_stack,
     .stack_size = sizeof(s_host_task_stack),
   };
 
-  s_host_task_handle = pebble_task_create(PebbleTask_BTHost, &host_attr);
-  PBL_ASSERTN(s_host_task_handle);
+  PBL_ASSERTN(pbl_thread_create(&s_host_thread, &host_attr) == 0);
+  pebble_task_register(PebbleTask_BTHost, &s_host_thread);
 
 #if NIMBLE_CFG_CONTROLLER
   struct pbl_thread_attr ll_attr = {
     .name = "NimbleLL",
     .entry = nimble_port_ll_task_func,
-    .prio = PBL_PRIO_MAX,
+    .prio = CONFIG_BT_LL_THREAD_PRIO,
     .privileged = true,
     .stack = s_ll_task_stack,
     .stack_size = sizeof(s_ll_task_stack),
   };
 
-  s_ll_task_handle = pebble_task_create(PebbleTask_BTController, &ll_attr);
-  PBL_ASSERTN(s_ll_task_handle);
+  PBL_ASSERTN(pbl_thread_create(&s_ll_thread, &ll_attr) == 0);
+  pebble_task_register(PebbleTask_BTController, &s_ll_thread);
 #endif
 }
 

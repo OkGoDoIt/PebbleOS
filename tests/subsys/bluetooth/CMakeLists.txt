@@ -21,6 +21,7 @@ pbl_clar_test(test_nimble_gatt
 pbl_clar_test(test_nimble_conn_lookup
   SOURCES
     subsys/bluetooth/nimble_type_conversions.c
+    subsys/bluetooth/responsiveness.c
   INCLUDES
     subsys/bluetooth
     third_party/nimble/port/include

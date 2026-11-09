@@ -178,12 +178,15 @@ typedef enum {
 // sdk.major:0x5 .minor:0x6b -- 24-bit app load and virtual sizes (no API changes) (rev 109)
 // sdk.major:0x5 .minor:0x6c -- Add mic_stream_to_phone_start() (rev 110)
 // sdk.major:0x5 .minor:0x6d -- Permission-gated local microphone PCM capture (rev 111)
-// sdk.major:0x5 .minor:0x6e -- Add Quick View widget publishing (peek_widget_publish) (rev 112)
-// sdk.major:0x5 .minor:0x6f -- Expose read-only music now-playing metadata to apps (rev 113)
-// sdk.major:0x5 .minor:0x70 -- Expose music playback information and controls to apps (rev 114)
+// sdk.major:0x5 .minor:0x6e -- Add layer_get_mic_accessory_bounds() (rev 112)
+// sdk.major:0x5 .minor:0x6f -- Add the dark mode service (rev 113)
+
+// sdk.major:0x5 .minor:0x70 -- Add Quick View widget publishing (rev 114)
+// sdk.major:0x5 .minor:0x71 -- Expose read-only music metadata to apps (rev 115)
+// sdk.major:0x5 .minor:0x72 -- Expose music playback information and controls (rev 116)
 
 #define PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR 0x5
-#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x70
+#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x72
 
 // The first SDK to ship with 2.x APIs
 #define PROCESS_INFO_FIRST_2X_SDK_VERSION_MAJOR 0x4

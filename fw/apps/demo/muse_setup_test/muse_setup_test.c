@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 #include <pbl/bluetooth/muse_setup.h>
-#include <pbl/drivers/rtc.h>
+#include <pbl/kernel/time.h>
 #include <pbl/services/system_task.h>
 
 #include <applib/app.h>
@@ -12,7 +12,7 @@
 #include <applib/ui/app_window_stack.h>
 #include <applib/ui/text_layer.h>
 #include <applib/ui/window.h>
-#include <kernel/pbl_malloc.h>
+#include <applib/app_malloc.h>
 #include <process_management/pebble_process_md.h>
 #include <process_state/app_state/app_state.h>
 
@@ -70,7 +70,7 @@ static void prv_select_click(ClickRecognizerRef recognizer, void *context) {
     system_task_add_callback(prv_close_cb, NULL);
   } else {
     // A fresh gadget suffix each time; the real one comes from the companion app's identity.
-    const uint32_t seed = (uint32_t)rtc_get_ticks() * 2654435761u;
+    const uint32_t seed = (uint32_t)pbl_uptime_ticks() * 2654435761u;
     snprintf(data->suffix, sizeof(data->suffix), "%06lX", (unsigned long)(seed >> 8) & 0xFFFFFF);
     system_task_add_callback(prv_open_cb, data->suffix);
   }

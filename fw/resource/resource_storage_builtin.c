@@ -7,9 +7,8 @@
 
 #include <string.h>
 
+#include <pbl/kernel/mpu.h>
 #include <pbl/services/process_management/app_storage.h>
-
-#include <kernel/memory_layout.h>
 
 extern const BuiltInResourceData g_builtin_resources[];
 extern const uint32_t g_num_builtin_resources;
@@ -39,12 +38,11 @@ bool resource_storage_builtin_bytes_are_readonly(const void *bytes) {
   }
   return false;
 #else
-  return memory_layout_is_pointer_in_region(memory_layout_get_microflash_region(), bytes);
+  return pbl_mpu_region_contains(pbl_mpu_region_firmware(), bytes);
 #endif
 }
 
-static const uint8_t *resource_storage_builtin_readonly_bytes(ResourceStoreEntry *entry,
-                                                              bool has_privileged_access) {
+static const uint8_t *resource_storage_builtin_readonly_bytes(ResourceStoreEntry *entry) {
   const BuiltInResourceData *builtin = entry->store_data;
   if (!builtin) {
     return nullptr;

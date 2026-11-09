@@ -6,7 +6,7 @@ config SERVICE_AUDIO_COMPANION
     select BT_SERVICE_AUDIO_COMPANION if BT
     select MBEDTLS
     select SERVICE_MIC_MANAGER
-    select MIC_SF32LB_CAPTURE_DEEP_WFI if MIC_SF32LB
+    select MIC_SF32LB_CAPTURE_DEEP_WFI if AUDIO_SF32LB52_PDM
     help
       Background microphone streaming to an authorized third-party audio
       companion app over a dedicated watch-hosted GATT service

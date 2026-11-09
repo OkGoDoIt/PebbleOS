@@ -4,6 +4,8 @@
 #include <stdio.h>
 
 #include <pbl/kernel/compiler.h>
+#include <pbl/kernel/malloc.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/activity/activity.h>
 #include <pbl/services/activity/activity_insights.h>
@@ -13,12 +15,12 @@
 #include <pbl/services/activity/insights_settings.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/i18n/i18n.h>
-#include <pbl/services/settings/settings_file.h>
 #include <pbl/services/system_task.h>
 #include <pbl/services/time.h>
 #include <pbl/services/timeline/health_layout.h>
 #include <pbl/services/timeline/timeline.h>
 #include <pbl/services/timeline/weather_layout.h>
+#include <pbl/settings/settings.h>
 #include <pbl/util/math.h>
 #include <pbl/util/stats.h>
 #include <pbl/util/string.h>
@@ -26,8 +28,8 @@
 #include <pbl/util/units.h>
 
 #include <applib/event_service_client.h>
-#include <kernel/pbl_malloc.h>
 #include <resource/timeline_resource_ids.auto.h>
+#include <system/status_errno.h>
 
 PBL_LOG_MODULE_DECLARE(service_activity, CONFIG_SERVICE_ACTIVITY_LOG_LEVEL);
 
@@ -41,6 +43,25 @@ PBL_LOG_MODULE_DECLARE(service_activity, CONFIG_SERVICE_ACTIVITY_LOG_LEVEL);
 // time-of-day window ([min, max)). The timeline pin is updated regardless.
 #define SLEEP_SUMMARY_NOTIF_WAKE_MINUTE_MIN (4 * PBL_MIN_PER_HOUR)
 #define SLEEP_SUMMARY_NOTIF_WAKE_MINUTE_MAX (18 * PBL_MIN_PER_HOUR)
+
+// Adults do best with 7 to 9 hours of sleep. Under 6 or over 10 hours is not recommended, though
+// a long night is normal when catching up on sleep debt or when ill.
+#define SLEEP_SHORT_MINUTES           (6 * PBL_MIN_PER_HOUR)
+#define SLEEP_RECOMMENDED_MIN_MINUTES (7 * PBL_MIN_PER_HOUR)
+#define SLEEP_RECOMMENDED_MAX_MINUTES (9 * PBL_MIN_PER_HOUR)
+#define SLEEP_VERY_LONG_MINUTES       (10 * PBL_MIN_PER_HOUR)
+
+typedef enum {
+  SleepBand_Short,
+  SleepBand_BelowRecommended,
+  SleepBand_Recommended,
+  SleepBand_Long,
+  SleepBand_VeryLong,
+} SleepBand;
+
+// Consecutive sleep windows start at least 23h apart (DST), so a smaller move of the window
+// start comes from a UTC offset change, not from a new window.
+#define SLEEP_WINDOW_TZ_SHIFT_MAX (12 * PBL_SEC_PER_HOUR)
 
 typedef struct NotificationConfig {
   time_t notif_time;
@@ -77,8 +98,8 @@ typedef struct InsightCopyVariants {
 // -----------------------------------------------------------------------------------------
 // Globals
 typedef struct InsightStateCommon {
-  bool history_valid;        // True if history requirements were met for the associated reward
-  time_t last_triggered_utc; // Last time reward was triggered, saved to flash
+  bool history_valid;          // True if history requirements were met for the associated reward
+  uint32_t last_triggered_utc; // Last time reward was triggered, saved to flash
 } InsightStateCommon;
 
 static struct {
@@ -97,8 +118,9 @@ static ActivityInsightSettings s_activity_reward_settings;
 static ActivityInsightSettings s_activity_summary_settings;
 static ActivityInsightSettings s_activity_session_settings;
 
-static PFSCallbackHandle s_pfs_cb_handle = nullptr; // Required for handling settings file changes
-static EventServiceInfo s_blobdb_event_info;        // Used to detect pin deletion events
+static struct pbl_fs_watch *s_settings_watch =
+    nullptr;                                 // Required for handling settings file changes
+static EventServiceInfo s_blobdb_event_info; // Used to detect pin deletion events
 
 // Timestamp and UUID of the last time we added a new summary pin - stored to flash to allow
 // us to continue to update the pin across reboots
@@ -115,27 +137,29 @@ typedef struct ActivityPinState {
 } ActivityPinState;
 static ActivityPinState s_activity_pin_state;
 
+// Saved to flash as is, so the times are 32 bits.
 typedef struct SleepPinState {
-  time_t last_triggered_utc;
+  uint32_t last_triggered_utc;
   Uuid uuid;
-  time_t first_enter_utc;
+  uint32_t first_enter_utc;
   int active_minutes;
   bool removed;
   bool notified;
   // Start of the sleep-day window this state belongs to. The summary notification fires at
   // most once per window, no matter how often the sleep bounds change within it.
   // Note: must stay the last field so older persisted states fail to restore cleanly.
-  time_t window_utc;
+  uint32_t window_utc;
 } SleepPinState;
+static_assert(sizeof(SleepPinState) == 36, "SleepPinState is persisted");
 static SleepPinState s_sleep_pin_state;
 
 typedef struct SessionPinState {
-  time_t start_utc;
+  uint32_t start_utc;
 } SessionPinState;
 static SessionPinState s_session_pin_state;
 
 typedef struct NapPinState {
-  time_t last_triggered_utc;
+  uint32_t last_triggered_utc;
 } NapPinState;
 static NapPinState s_nap_pin_state;
 
@@ -297,18 +321,18 @@ static const char *prv_get_variant(const InsightCopyVariants *set, int variant) 
 
 // ------------------------------------------------------------------------------------------------
 // Helper functions for saving insight state to settings file
-static bool prv_restore_state(SettingsFile *file, ActivitySettingsKey key, void *val_out,
-                              size_t val_out_len) {
-  return settings_file_get(file, &key, sizeof(key), val_out, val_out_len);
+static bool prv_restore_state(struct pbl_settings_file *file, ActivitySettingsKey key,
+                              void *val_out, size_t val_out_len) {
+  return status_from_errno(pbl_settings_get(file, &key, sizeof(key), val_out, val_out_len));
 }
 
 // ------------------------------------------------------------------------------------------------
 static bool prv_save_state(ActivitySettingsKey key, void *val, size_t val_len) {
   bool rv = false;
 
-  SettingsFile *file = activity_private_settings_open();
+  struct pbl_settings_file *file = activity_private_settings_open();
   if (file) {
-    rv = settings_file_set(file, &key, sizeof(key), val, val_len);
+    rv = status_from_errno(pbl_settings_set(file, &key, sizeof(key), val, val_len));
     activity_private_settings_close(file);
   }
   return rv;
@@ -445,7 +469,7 @@ static PBL_NOINLINE TimelineItem *prv_create_pin_with_response_items(
   TimelineItemActionGroup action_group = {
     .num_actions = num_actions,
     // Malloc the actions in order to save stack space
-    .actions = kernel_zalloc_check(sizeof(TimelineItemAction) * num_actions),
+    .actions = pbl_zalloc_check(sizeof(TimelineItemAction) * num_actions),
   };
   action_group.actions[0] = (TimelineItemAction){
     .id = 0,
@@ -476,7 +500,7 @@ static PBL_NOINLINE TimelineItem *prv_create_pin_with_response_items(
     ResponseItem *response_item = &response_items[i];
     attribute_list_destroy_list(&response_item->attr_list);
   }
-  kernel_free(action_group.actions);
+  pbl_free(action_group.actions);
   attribute_list_destroy_list(&open_attr_list);
   attribute_list_destroy_list(&remove_attr_list);
 
@@ -513,7 +537,8 @@ PercentTier prv_calc_percent_tier(const SummaryPinConfig *config, ActivityScalar
 static PBL_NOINLINE TimelineItem *prv_create_summary_pin(time_t pin_time_utc, time_t now_utc,
                                                          ActivityScalarStore cur_val,
                                                          ActivityScalarStore average,
-                                                         const SummaryPinConfig *config) {
+                                                         const SummaryPinConfig *config,
+                                                         const char *body) {
   AttributeList pin_attr_list = {};
   attribute_list_add_cstring(&pin_attr_list, AttributeIdShortTitle,
                              i18n_get(config->short_title, &pin_attr_list));
@@ -572,7 +597,7 @@ static PBL_NOINLINE TimelineItem *prv_create_summary_pin(time_t pin_time_utc, ti
       &pin_attr_list, PBL_IF_RECT_ELSE(AttributeIdLocationName, AttributeIdTitle), detail_text);
 
   attribute_list_add_cstring(&pin_attr_list, AttributeIdBody,
-                             i18n_get(percent_config->body, &pin_attr_list));
+                             i18n_get(body ? body : percent_config->body, &pin_attr_list));
   attribute_list_add_resource_id(&pin_attr_list, AttributeIdIconTiny, config->icon);
   attribute_list_add_resource_id(&pin_attr_list, AttributeIdIconSmall,
                                  s_tier_config[tier].card_icon);
@@ -580,7 +605,7 @@ static PBL_NOINLINE TimelineItem *prv_create_summary_pin(time_t pin_time_utc, ti
   attribute_list_add_uint8(&pin_attr_list, AttributeIdDisplayTime, WeatherTimeType_None);
   attribute_list_add_uint32(&pin_attr_list, AttributeIdLastUpdated, now_utc);
 
-  char *percentage_buf = kernel_malloc_check(SUBTITLE_BUFFER_LENGTH);
+  char *percentage_buf = pbl_malloc_check(SUBTITLE_BUFFER_LENGTH);
   if (percentage == 0) {
     strcpy(percentage_buf, "0%");
   } else {
@@ -591,7 +616,7 @@ static PBL_NOINLINE TimelineItem *prv_create_summary_pin(time_t pin_time_utc, ti
   TimelineItem *item = prv_create_pin(pin_time_utc, now_utc, 0, LayoutIdWeather, &pin_attr_list,
                                       config->health_card_type);
 
-  kernel_free(percentage_buf);
+  pbl_free(percentage_buf);
   i18n_free_all(&pin_attr_list);
   attribute_list_destroy_list(&pin_attr_list);
 
@@ -624,8 +649,9 @@ static bool prv_push_pin(TimelineItem *item, Uuid *existing_uuid) {
 // ------------------------------------------------------------------------------------------------
 static bool prv_push_summary_pin(time_t pin_time_utc, time_t now_utc, Uuid *existing_uuid,
                                  ActivityScalarStore cur_val, ActivityScalarStore average,
-                                 const SummaryPinConfig *config) {
-  TimelineItem *item = prv_create_summary_pin(pin_time_utc, now_utc, cur_val, average, config);
+                                 const SummaryPinConfig *config, const char *body) {
+  TimelineItem *item =
+      prv_create_summary_pin(pin_time_utc, now_utc, cur_val, average, config, body);
   return prv_push_pin(item, existing_uuid);
 }
 
@@ -653,7 +679,7 @@ static bool prv_stats_filter(int index, int32_t value, void *context) {
 // total and consecutive days of history
 PBL_T_STATIC void prv_calculate_metric_history_stats(ActivityMetric metric,
                                                      ActivityInsightMetricHistoryStats *stats) {
-  int32_t *history = kernel_malloc_check(sizeof(int32_t[ACTIVITY_HISTORY_DAYS]));
+  int32_t *history = pbl_malloc_check(sizeof(int32_t[ACTIVITY_HISTORY_DAYS]));
   activity_get_metric(metric, ACTIVITY_HISTORY_DAYS, history);
 
   const enum pbl_stats_op op = (PBL_STATS_OP_AVERAGE | PBL_STATS_OP_COUNT |
@@ -677,7 +703,7 @@ PBL_T_STATIC void prv_calculate_metric_history_stats(ActivityMetric metric,
     .median = result.median,
   };
 
-  kernel_free(history);
+  pbl_free(history);
 
   PBL_LOG_DBG("Metric history stats - med: %" PRIu32 " mean: %" PRIu32 " tot: %" PRIu8
               " cons: %" PRIu8,
@@ -854,6 +880,45 @@ static void prv_generate_sleep_pin_strings(int32_t sleep_enter_seconds, int32_t 
 }
 
 // -----------------------------------------------------------------------------------------
+static SleepBand prv_get_sleep_band(int32_t sleep_total_seconds) {
+  const int32_t minutes = sleep_total_seconds / PBL_SEC_PER_MIN;
+  if (minutes < SLEEP_SHORT_MINUTES) {
+    return SleepBand_Short;
+  } else if (minutes < SLEEP_RECOMMENDED_MIN_MINUTES) {
+    return SleepBand_BelowRecommended;
+  } else if (minutes <= SLEEP_RECOMMENDED_MAX_MINUTES) {
+    return SleepBand_Recommended;
+  } else if (minutes < SLEEP_VERY_LONG_MINUTES) {
+    return SleepBand_Long;
+  }
+  return SleepBand_VeryLong;
+}
+
+// -----------------------------------------------------------------------------------------
+// Pin body for a night outside the recommended range, or nullptr to use the tier's body
+PBL_T_STATIC const char *prv_get_sleep_pin_body(int32_t sleep_total_seconds,
+                                                int32_t sleep_average_seconds) {
+  int percentage;
+  const PercentTier tier = prv_calc_percent_tier(&SLEEP_SUMMARY_PIN_CONFIG, sleep_total_seconds,
+                                                 sleep_average_seconds, &percentage);
+  switch (prv_get_sleep_band(sleep_total_seconds)) {
+    case SleepBand_Short:
+      return i18n_noop("Short night! Try going to bed a little earlier tonight.");
+    case SleepBand_BelowRecommended:
+      if (tier == PercentTier_AboveAverage || tier == PercentTier_OnAverage) {
+        return i18n_noop("Almost there! A little more sleep tonight would help.");
+      }
+      return nullptr;
+    case SleepBand_Long:
+    case SleepBand_VeryLong:
+      return i18n_noop("A long night! Great for catching up; a steady routine helps most.");
+    case SleepBand_Recommended:
+      break;
+  }
+  return nullptr;
+}
+
+// -----------------------------------------------------------------------------------------
 static bool prv_push_sleep_summary_pin(time_t now_utc, time_t pin_time_utc,
                                        int32_t sleep_enter_seconds, int32_t sleep_exit_seconds,
                                        int32_t sleep_total_seconds,
@@ -862,7 +927,8 @@ static bool prv_push_sleep_summary_pin(time_t now_utc, time_t pin_time_utc,
 
   // Insert or update the pin
   return prv_push_summary_pin(pin_time_utc, now_utc, uuid, sleep_total_seconds,
-                              sleep_average_seconds, &SLEEP_SUMMARY_PIN_CONFIG);
+                              sleep_average_seconds, &SLEEP_SUMMARY_PIN_CONFIG,
+                              prv_get_sleep_pin_body(sleep_total_seconds, sleep_average_seconds));
 }
 
 // -----------------------------------------------------------------------------------------
@@ -880,8 +946,8 @@ static PBL_NOINLINE TimelineItem *prv_create_nap_pin(time_t now_utc, ActivitySes
 
   // Fits the maximum strings "10H 30M of sleep", "10:00AM - 11:00PM" and i18n variants
   const size_t max_attr_length = 64;
-  char *elapsed = kernel_zalloc_check(max_attr_length);
-  char *short_subtitle = kernel_zalloc_check(max_attr_length);
+  char *elapsed = pbl_zalloc_check(max_attr_length);
+  char *short_subtitle = pbl_zalloc_check(max_attr_length);
   const uint32_t duration_s = session->length_min * PBL_SEC_PER_MIN;
   health_util_format_hours_and_minutes(elapsed, max_attr_length, duration_s, &pin_attr_list);
   const char *short_subtitle_fmt = i18n_get("%s of sleep", &pin_attr_list); /// "10H 30M of sleep"
@@ -894,9 +960,9 @@ static PBL_NOINLINE TimelineItem *prv_create_nap_pin(time_t now_utc, ActivitySes
                              PBL_IF_RECT_ELSE(AttributeIdTitle, AttributeIdLocationName),
                              i18n_get(title_i18n, &pin_attr_list));
 
-  char *start_time = kernel_zalloc_check(TIME_STRING_TIME_LENGTH);
-  char *end_time = kernel_zalloc_check(TIME_STRING_TIME_LENGTH);
-  char *time_range = kernel_zalloc_check(max_attr_length);
+  char *start_time = pbl_zalloc_check(TIME_STRING_TIME_LENGTH);
+  char *end_time = pbl_zalloc_check(TIME_STRING_TIME_LENGTH);
+  char *time_range = pbl_zalloc_check(max_attr_length);
   const char *time_range_fmt = i18n_get("%s - %s", &pin_attr_list); /// "10:00AM - 11:00PM"
   clock_copy_time_string_timestamp(start_time, TIME_STRING_TIME_LENGTH, session->start_utc);
   clock_copy_time_string_timestamp(end_time, TIME_STRING_TIME_LENGTH,
@@ -911,7 +977,7 @@ static PBL_NOINLINE TimelineItem *prv_create_nap_pin(time_t now_utc, ActivitySes
   attribute_list_add_uint8(&pin_attr_list, AttributeIdBgColor, GColorSunsetOrangeARGB8);
 
   const int num_responses = 2;
-  ResponseItem *response_items = kernel_zalloc_check(num_responses * sizeof(ResponseItem));
+  ResponseItem *response_items = pbl_zalloc_check(num_responses * sizeof(ResponseItem));
   response_items[0] = (ResponseItem){
     .type = ActivityInsightResponseTypePositive,
     .text = i18n_noop("I feel great!"),
@@ -925,12 +991,12 @@ static PBL_NOINLINE TimelineItem *prv_create_nap_pin(time_t now_utc, ActivitySes
       session->start_utc, now_utc, session->length_min, LayoutIdWeather, &pin_attr_list,
       HealthCardType_Sleep, num_responses, response_items);
 
-  kernel_free(response_items);
-  kernel_free(time_range);
-  kernel_free(end_time);
-  kernel_free(start_time);
-  kernel_free(short_subtitle);
-  kernel_free(elapsed);
+  pbl_free(response_items);
+  pbl_free(time_range);
+  pbl_free(end_time);
+  pbl_free(start_time);
+  pbl_free(short_subtitle);
+  pbl_free(elapsed);
   i18n_free_all(&pin_attr_list);
   attribute_list_destroy_list(&pin_attr_list);
 
@@ -946,7 +1012,7 @@ static void prv_push_nap_session_notification(time_t notif_time, ActivitySession
 
   // Enough to fit the filled out format string below and i18n variants
   const int max_notif_length = 128;
-  char *body = kernel_malloc_check(max_notif_length);
+  char *body = pbl_malloc_check(max_notif_length);
   snprintf(body, max_notif_length,
            i18n_get("Aren't naps great? You knocked out for %dH %dM!", body), hours, minutes);
   i18n_free_all(body);
@@ -968,7 +1034,7 @@ static void prv_push_nap_session_notification(time_t notif_time, ActivitySession
     },
   };
   prv_create_and_push_notification(&config);
-  kernel_free(body);
+  pbl_free(body);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -1059,8 +1125,16 @@ static void prv_do_sleep_summary(time_t now_utc) {
   // Bounds changes within one window (merged sessions, evening extensions) update the pin
   // below without re-arming the notification.
   const time_t window_utc = activity_sessions_prv_get_sleep_window_start_utc(now_utc);
-  if (window_utc != s_sleep_pin_state.window_utc ||
-      now_utc < s_sleep_pin_state.last_triggered_utc) {
+  const time_t window_shift = window_utc - (time_t)s_sleep_pin_state.window_utc;
+  if (window_shift != 0 && window_shift > -SLEEP_WINDOW_TZ_SHIFT_MAX &&
+      window_shift < SLEEP_WINDOW_TZ_SHIFT_MAX) {
+    // A UTC offset change (travel, DST) moves the local 9pm cutoff without starting a new
+    // window. Follow it, keeping the notified state.
+    PBL_LOG_DBG("Sleep window moved by %ld s, keeping pin state", (long)window_shift);
+    s_sleep_pin_state.window_utc = window_utc;
+  }
+  if (window_utc != (time_t)s_sleep_pin_state.window_utc ||
+      now_utc < (time_t)s_sleep_pin_state.last_triggered_utc) {
     // Checking "now_utc < s_sleep_pin_state.last_triggered_utc" catches cases where
     // the activity_test integration test might have created a pin in the future (because it
     // mucks with the real time clock)
@@ -1088,8 +1162,8 @@ static void prv_do_sleep_summary(time_t now_utc) {
 
   // If the bounds haven't changed since we last pushed the pin, send the notification for it
   // now if we haven't already.
-  if (sleep_exit_utc <= s_sleep_pin_state.last_triggered_utc &&
-      sleep_enter_utc == s_sleep_pin_state.first_enter_utc) {
+  if (sleep_exit_utc <= (time_t)s_sleep_pin_state.last_triggered_utc &&
+      sleep_enter_utc == (time_t)s_sleep_pin_state.first_enter_utc) {
     // Notify about the sleep pin
     prv_do_sleep_notification(now_utc, sleep_exit_utc, sleep_total_seconds);
     PBL_LOG_DBG("Not adding sleep pin - already checked session %ld", (long)sleep_exit_utc);
@@ -1149,7 +1223,7 @@ static PBL_NOINLINE void prv_do_activity_reward(time_t now_utc) {
 // Returns the step average corresponding to the current time of day
 static ActivityScalarStore prv_cur_step_avg(time_t now_utc, int minute_of_day) {
   // Determine the current chunk
-  ActivityMetricAverages *averages = kernel_malloc_check(sizeof(ActivityMetricAverages));
+  ActivityMetricAverages *averages = pbl_malloc_check(sizeof(ActivityMetricAverages));
   activity_get_step_averages(time_util_get_day_in_week(now_utc), averages);
 
   // Sum up the averages
@@ -1162,7 +1236,7 @@ static ActivityScalarStore prv_cur_step_avg(time_t now_utc, int minute_of_day) {
     }
   }
 
-  kernel_free(averages);
+  pbl_free(averages);
 
   return total_steps_avg;
 }
@@ -1357,7 +1431,7 @@ static void prv_push_activity_summary_notification(time_t notif_time, int32_t st
     return;
   }
 
-  char *body = kernel_malloc_check(max_notif_length);
+  char *body = pbl_malloc_check(max_notif_length);
   snprintf(body, max_notif_length, i18n_get(fmt, body), steps_total, ABS(percentage));
   i18n_free_all(body);
 
@@ -1372,14 +1446,54 @@ static void prv_push_activity_summary_notification(time_t notif_time, int32_t st
     },
   };
   prv_create_and_push_notification(&config);
-  kernel_free(body);
+  pbl_free(body);
 }
 
 // ------------------------------------------------------------------------------------------------
-// Creates a notification to notify the user of the sleep summary
-static void prv_push_sleep_summary_notification(time_t notif_time, int32_t sleep_total_seconds,
-                                                int32_t sleep_average_seconds, int variant) {
-  static InsightCopyVariants s_tier_config[PercentTierCount] = {
+// Picks the sleep summary notification copy. Its format takes hours, minutes and the percentage
+// difference from the typical, in that order. Returns nullptr for an invalid variant.
+PBL_T_STATIC const char *prv_get_sleep_summary_fmt(int32_t sleep_total_seconds,
+                                                   int32_t sleep_average_seconds, int variant) {
+  static const InsightCopyVariants s_short_copy = {
+    .num_variants = 2,
+    .variants = {
+      /// Sleep notification on wake up, slept under 6 hours
+      i18n_noop("Short night? You slept for %dH %dM. Most adults need at least 7 hours, so try "
+                "heading to bed earlier tonight."),
+      i18n_noop("You slept for %dH %dM. Sleep fuels everything you do; let's aim for more "
+                "tonight 😉"),
+    },
+  };
+  static const InsightCopyVariants s_almost_copy = {
+    .num_variants = 2,
+    .variants = {
+      /// Sleep notification on wake up, slept 6 to 7 hours, not below their typical
+      i18n_noop("You slept for %dH %dM. You're close! A little extra tonight goes a long way."),
+      i18n_noop("Good morning! You slept for %dH %dM. Just a bit more sleep would help you feel "
+                "your best."),
+    },
+  };
+  static const InsightCopyVariants s_long_copy = {
+    .num_variants = 2,
+    .variants = {
+      /// Sleep notification on wake up, slept 9 to 10 hours
+      i18n_noop("You slept for %dH %dM. A long night can help you catch up after short ones; a "
+                "steady routine is what counts."),
+      i18n_noop("Well rested? You slept for %dH %dM. Extra sleep helps you recover, but most "
+                "adults do best with 7 to 9 hours."),
+    },
+  };
+  static const InsightCopyVariants s_very_long_copy = {
+    .num_variants = 2,
+    .variants = {
+      /// Sleep notification on wake up, slept 10 hours or more
+      i18n_noop("You slept for %dH %dM. That's a long night! Great for recovering, but a regular "
+                "bedtime and wake time will help you feel your best."),
+      i18n_noop("You slept for %dH %dM, more than most adults need. Catching up now and then is "
+                "fine; try to keep a steady routine."),
+    },
+  };
+  static const InsightCopyVariants s_tier_config[PercentTierCount] = {
     [PercentTier_AboveAverage] =
         {
           .num_variants = 5,
@@ -1447,8 +1561,6 @@ static void prv_push_sleep_summary_notification(time_t notif_time, int32_t sleep
     },
   };
 
-  const int hours = sleep_total_seconds / PBL_SEC_PER_HOUR;
-  const int minutes = (sleep_total_seconds / PBL_SEC_PER_MIN) % PBL_MIN_PER_HOUR;
   int percentage;
   PercentTier tier = prv_calc_percent_tier(&SLEEP_SUMMARY_PIN_CONFIG, sleep_total_seconds,
                                            sleep_average_seconds, &percentage);
@@ -1460,15 +1572,45 @@ static void prv_push_sleep_summary_notification(time_t notif_time, int32_t sleep
     tier = PercentTier_OnAverage;
   }
 
+  // Outside the recommended range, the duration matters more than the user's typical: praising a
+  // short or very long night just because it beats the average sends the wrong message.
+  switch (prv_get_sleep_band(sleep_total_seconds)) {
+    case SleepBand_Short:
+      return prv_get_variant(&s_short_copy, variant);
+    case SleepBand_BelowRecommended:
+      if (tier == PercentTier_AboveAverage || tier == PercentTier_OnAverage) {
+        return prv_get_variant(&s_almost_copy, variant);
+      }
+      break;
+    case SleepBand_Long:
+      return prv_get_variant(&s_long_copy, variant);
+    case SleepBand_VeryLong:
+      return prv_get_variant(&s_very_long_copy, variant);
+    case SleepBand_Recommended:
+      break;
+  }
+  return prv_get_variant(&s_tier_config[tier], variant);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Creates a notification to notify the user of the sleep summary
+static void prv_push_sleep_summary_notification(time_t notif_time, int32_t sleep_total_seconds,
+                                                int32_t sleep_average_seconds, int variant) {
+  const int hours = sleep_total_seconds / PBL_SEC_PER_HOUR;
+  const int minutes = (sleep_total_seconds / PBL_SEC_PER_MIN) % PBL_MIN_PER_HOUR;
+  int percentage;
+  prv_calc_percent_tier(&SLEEP_SUMMARY_PIN_CONFIG, sleep_total_seconds, sleep_average_seconds,
+                        &percentage);
+
   // Enough to fit any filled out format string above and i18n variants
   const int max_notif_length = 256;
-  const char *fmt = prv_get_variant(&s_tier_config[tier], variant);
+  const char *fmt = prv_get_sleep_summary_fmt(sleep_total_seconds, sleep_average_seconds, variant);
   if (fmt == nullptr) {
     // invalid variant
     return;
   }
 
-  char *body = kernel_malloc_check(max_notif_length);
+  char *body = pbl_malloc_check(max_notif_length);
   snprintf(body, max_notif_length, i18n_get(fmt, body), hours, minutes, ABS(percentage));
   i18n_free_all(body);
 
@@ -1484,7 +1626,7 @@ static void prv_push_sleep_summary_notification(time_t notif_time, int32_t sleep
   };
 
   prv_create_and_push_notification(&config);
-  kernel_free(body);
+  pbl_free(body);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1497,7 +1639,7 @@ static bool prv_push_activity_summary_pin(time_t now_utc, time_t pin_time_utc, i
   i18n_free_all(&ACTIVITY_SUMMARY_PIN_CONFIG);
 
   return prv_push_summary_pin(pin_time_utc, now_utc, uuid, steps, total_steps_avg,
-                              &ACTIVITY_SUMMARY_PIN_CONFIG);
+                              &ACTIVITY_SUMMARY_PIN_CONFIG, nullptr);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1760,15 +1902,15 @@ void activity_insights_push_activity_session_notification(time_t notif_time,
   TimelineResourceId icon;
 
   const int body_buf_size = 100;
-  char *body = kernel_zalloc_check(body_buf_size);
+  char *body = pbl_zalloc_check(body_buf_size);
   const char *intro_str = prv_get_intro_str_for_activity(session);
   snprintf(body, body_buf_size, "%s", i18n_get(intro_str, body));
 
   const int headings_buf_size = 128;
-  struct pbl_string_list *headings = kernel_zalloc_check(headings_buf_size);
+  struct pbl_string_list *headings = pbl_zalloc_check(headings_buf_size);
 
   const int values_buf_size = 128;
-  struct pbl_string_list *values = kernel_zalloc_check(values_buf_size);
+  struct pbl_string_list *values = pbl_zalloc_check(values_buf_size);
 
   if (session->type == ActivitySessionType_Run) {
     type = ActivityInsightType_ActivitySessionRun;
@@ -1830,9 +1972,9 @@ cleanup:
   i18n_free_all(body);
   i18n_free_all(headings);
   i18n_free_all(values);
-  kernel_free(body);
-  kernel_free(headings);
-  kernel_free(values);
+  pbl_free(body);
+  pbl_free(headings);
+  pbl_free(values);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1845,7 +1987,7 @@ static void prv_do_activity_session(time_t now_utc, ActivitySession *session) {
     return;
   }
 
-  if (s_session_pin_state.start_utc >= session->start_utc) {
+  if ((time_t)s_session_pin_state.start_utc >= session->start_utc) {
     PBL_LOG_DBG("Not adding session pin - session too old");
     return;
   }
@@ -1886,7 +2028,7 @@ static void prv_do_activity_session(time_t now_utc, ActivitySession *session) {
 // ------------------------------------------------------------------------------------------------
 void prv_process_activity_sessions(time_t now_utc) {
   uint32_t num_sessions = ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT;
-  ActivitySession *sessions = task_zalloc_check(num_sessions * sizeof(ActivitySession));
+  ActivitySession *sessions = pbl_zalloc_check(num_sessions * sizeof(ActivitySession));
 
   if (activity_get_sessions(&num_sessions, sessions)) {
     for (unsigned int i = 0; i < num_sessions; i++) {
@@ -1909,7 +2051,7 @@ void prv_process_activity_sessions(time_t now_utc) {
     }
   }
 
-  task_free(sessions);
+  pbl_free(sessions);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1945,8 +2087,8 @@ static void prv_settings_file_changed_cb(void *data);
 static void prv_reload_settings(void *not_used) {
   PBL_LOG_DBG("Reloading insights settings");
 
-  if (s_pfs_cb_handle) {
-    activity_insights_settings_unwatch(s_pfs_cb_handle);
+  if (s_settings_watch) {
+    activity_insights_settings_unwatch(s_settings_watch);
   }
 
   if (!activity_insights_settings_read(ACTIVITY_INSIGHTS_SETTINGS_ACTIVITY_REWARD,
@@ -1974,7 +2116,7 @@ static void prv_reload_settings(void *not_used) {
     s_activity_session_settings.enabled = false; // worst-case, we disable the insight
   }
 
-  s_pfs_cb_handle = activity_insights_settings_watch(prv_settings_file_changed_cb);
+  s_settings_watch = activity_insights_settings_watch(prv_settings_file_changed_cb);
 }
 
 static void prv_settings_file_changed_cb(void *data) {
@@ -2017,7 +2159,7 @@ void activity_insights_init(time_t now_utc) {
   // Load in previous saved state
   // No need to lock mutex since this should only be called from activity_init
   SummaryPinLastState activity_pin_last_state;
-  SettingsFile *file = activity_private_settings_open();
+  struct pbl_settings_file *file = activity_private_settings_open();
   if (file) {
     prv_restore_state(file, ActivitySettingsKeyInsightSleepRewardTime,
                       &s_sleep_reward_state.common.last_triggered_utc,
@@ -2067,7 +2209,7 @@ void activity_insights_init(time_t now_utc) {
 // ------------------------------------------------------------------------------------------------
 // QA Testing functions
 static void prv_test_push_summary_pins(void *unused) {
-  time_t now_utc = rtc_get_time();
+  time_t now_utc = pbl_realtime();
   int minute_of_day = (20 * PBL_MIN_PER_HOUR) + 30; // Activity pins only trigger after 8:30
 
   Uuid uuid_way_below = UUID_INVALID;
@@ -2123,7 +2265,7 @@ static void prv_test_push_summary_pins(void *unused) {
 }
 
 static void prv_test_push_rewards(void *unused) {
-  time_t now_utc = rtc_get_time();
+  time_t now_utc = pbl_realtime();
 
   if (activity_prefs_sleep_insights_are_enabled()) {
     prv_push_reward(now_utc, &SLEEP_REWARD_NOTIF_CONFIG);
@@ -2135,7 +2277,7 @@ static void prv_test_push_rewards(void *unused) {
 }
 
 static void prv_test_push_walk_run_session(void *unused) {
-  const time_t now_utc = rtc_get_time();
+  const time_t now_utc = pbl_realtime();
   ActivitySession walk_session = {
     .type = ActivitySessionType_Walk,
     .start_utc = now_utc - 30 * PBL_SEC_PER_MIN - 15 * PBL_SEC_PER_MIN,
@@ -2189,7 +2331,7 @@ static void prv_test_push_walk_run_session(void *unused) {
 }
 
 static void prv_test_push_nap_session(void *unused) {
-  const time_t now_utc = rtc_get_time();
+  const time_t now_utc = pbl_realtime();
   const int length_min = PBL_MIN_PER_HOUR + PBL_MIN_PER_HOUR / 2;
   ActivitySession session = {
     .type = ActivitySessionType_Nap,

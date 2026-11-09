@@ -1,21 +1,18 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <pbl/services/filesystem/pfs.h>
+#include <pbl/fs/fs.h>
 #include <pbl/services/notifications/notification_storage.h>
 #include <pbl/services/notifications/notification_storage_private.h>
 #include <pbl/util/size.h>
 
 #include <clar.h>
-#include <flash_region/flash_region.h>
 
 // Stubs
 ////////////////////////////////////
+#include <fake_pfs.h>
 #include <fake_rtc.h>
 #include <fake_spi_flash.h>
-
-#define TEST_START FLASH_REGION_FILE_TEST_SPACE_BEGIN
-#define TEST_SIZE  (FLASH_REGION_FILE_TEST_SPACE_END - FLASH_REGION_FILE_TEST_SPACE_BEGIN)
 
 extern void notification_storage_reset(void);
 
@@ -77,8 +74,8 @@ PebblePhoneCaller *phone_call_util_create_caller(const char *number, const char 
 
 void test_notification_storage__initialize(void) {
   fake_spi_flash_init(0, 0x1000000);
-  pfs_init(false);
-  pfs_format(false /* write erase headers */);
+  fake_pfs_mount();
+  pbl_fs_format("/");
   notification_storage_reset();
 }
 
@@ -437,6 +434,37 @@ void test_notification_storage__remove_single(void) {
 
   notification_storage_remove(&i);
   cl_assert_equal_b(notification_storage_get(&i, &r), false);
+}
+
+void test_notification_storage__exists_matches_deleted(void) {
+  Uuid i;
+  uuid_generate(&i);
+  TimelineItem e = {
+    .header =
+        {
+          .id = i,
+          .type = TimelineItemTypeNotification,
+          .layout = LayoutIdGeneric,
+          .timestamp = 0x53f0dda5,
+        },
+    .attr_list = {
+      .num_attributes = ARRAY_LENGTH(attributes),
+      .attributes = attributes,
+    },
+  };
+
+  notification_storage_store(&e);
+  notification_storage_remove(&i);
+
+  uint8_t status;
+  cl_assert(notification_storage_notification_exists(&i));
+  cl_assert_equal_b(notification_storage_get_status(&i, &status), false);
+  cl_assert_equal_i(notification_storage_get_len(&i), 0);
+
+  notification_storage_set_status(&i, TimelineItemStatusActioned);
+  TimelineItem r;
+  cl_assert_equal_b(notification_storage_get(&i, &r), false);
+  cl_assert_equal_b(notification_storage_get_status(&i, &status), false);
 }
 
 void test_notification_storage__set_actioned_flag(void) {

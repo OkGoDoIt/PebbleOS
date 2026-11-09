@@ -1,16 +1,17 @@
 /* SPDX-FileCopyrightText: 2024 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <pbl/drivers/rtc.h>
+#include <pbl/board/partitions.h>
 #include <pbl/kernel/delay.h>
+#include <pbl/kernel/reboot.h>
 #include <pbl/logging/logging.h>
+#include <pbl/services/clock.h>
 #include <pbl/services/event_service.h>
 #include <pbl/services/runlevel.h>
 #include <pbl/services/shared_prf_storage/shared_prf_storage.h>
 #include <pbl/services/system_task.h>
 #include <pbl/task_wdt/task_wdt.h>
 
-#include <flash_region/filesystem_regions.h>
 #include <kernel/event_loop.h>
 #include <kernel/util/factory_reset.h>
 #include <kernel/util/standby.h>
@@ -19,12 +20,14 @@
 #include <system/bootbits.h>
 #include <system/firmware_storage.h>
 #include <system/reboot_reason.h>
-#include <system/reset.h>
 
 #if !defined(CONFIG_RECOVERY_FW)
+#include <string.h>
+
+#include <pbl/fs/fs.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/services/blob_db/pin_db.h>
 #include <pbl/services/blob_db/reminder_db.h>
-#include <pbl/services/filesystem/pfs.h>
 #include <pbl/services/timeline/event.h>
 #endif
 
@@ -51,13 +54,13 @@ static void prv_factory_reset_non_pfs_data() {
     pbl_sleep_ms(3);
   }
 
-  rtc_timezone_clear();
+  clock_timezone_clear();
 }
 
 void factory_reset_set_reason_and_reset(void) {
   RebootReason reason = {RebootReasonCode_FactoryResetReset, 0};
   reboot_reason_set(&reason);
-  system_reset();
+  pbl_reboot();
 }
 
 static void prv_factory_reset_post(bool should_shutdown) {
@@ -85,11 +88,11 @@ void factory_reset(bool should_shutdown) {
   firmware_storage_invalidate_firmware_slot(1);
 #endif
 
-  // pfs_format() holds the PFS mutex across the erase, blocking concurrent
+  // Formatting PFS holds its mutex across the erase, blocking concurrent
   // writes from the App task that would otherwise survive into a freshly-erased region.
-  pfs_format(false /* write_erase_headers */);
+  pbl_fs_format("/");
 #else
-  filesystem_regions_erase_all();
+  pbl_flash_partition_erase(PART_FILESYSTEM, 0U, PART_FILESYSTEM_SIZE);
 #endif
 
   prv_factory_reset_post(should_shutdown);
@@ -103,6 +106,25 @@ void close_db_files() {
   pin_db_deinit();
 }
 
+static void prv_remove_all_files(void) {
+  struct pbl_fs_dir dir;
+  if (pbl_fs_opendir(&dir, "/") < 0) {
+    return;
+  }
+
+  struct pbl_fs_dirent *entry = pbl_malloc_check(sizeof(*entry));
+  char *path = pbl_malloc_check(sizeof("/") + PBL_FS_NAME_MAX);
+  while ((pbl_fs_readdir(&dir, entry) == 0) && (entry->name[0] != '\0')) {
+    strcpy(path, "/");
+    strcat(path, entry->name);
+    pbl_fs_unlink(path);
+  }
+
+  pbl_free(path);
+  pbl_free(entry);
+  pbl_fs_closedir(&dir);
+}
+
 void factory_reset_fast(void *unused) {
   s_in_factory_reset = true;
 
@@ -113,7 +135,7 @@ void factory_reset_fast(void *unused) {
 
   prv_factory_reset_non_pfs_data();
 
-  pfs_remove_files(nullptr);
+  prv_remove_all_files();
 
   prv_factory_reset_post(false /* should_shutdown */);
 }

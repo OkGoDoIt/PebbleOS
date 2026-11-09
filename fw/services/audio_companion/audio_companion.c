@@ -16,17 +16,14 @@
 #endif
 
 #include "applib/event_service_client.h"
-#include <pbl/bluetooth/audio_companion.h>
 #include "comm/bt_conn_mgr.h"
-#include "board/board.h"
-#include <pbl/drivers/mic.h>
-#include <pbl/drivers/rtc.h>
-#include <pbl/drivers/watchdog.h>
-#include <pbl/task_wdt/task_wdt.h>
 #include "kernel/events.h"
 #include "kernel/pebble_tasks.h"
-#include "kernel/pbl_malloc.h"
+#include "pbl/board.h"
+#include "pbl/kernel/assert.h"
+#include "pbl/kernel/malloc.h"
 #include "pbl/kernel/mutex.h"
+#include "pbl/logging/logging.h"
 #include "pbl/services/battery/battery_state.h"
 #include "pbl/services/mic_manager.h"
 #include "pbl/services/music.h"
@@ -35,12 +32,15 @@
 #include "pbl/services/system_task.h"
 #include "pbl/services/voice/voice_speex.h"
 #include "shell/prefs.h"
-#include "pbl/logging/logging.h"
-#include "pbl/kernel/assert.h"
 #include "system/reboot_reason.h"
 #include "system/version.h"
-#include <pbl/util/rand32.h>
+
+#include <pbl/bluetooth/audio_companion.h>
+#include <pbl/drivers/watchdog.h>
+#include <pbl/kernel/time.h>
 #include <pbl/services/time.h>
+#include <pbl/task_wdt/task_wdt.h>
+#include <pbl/util/rand32.h>
 
 #ifndef UNITTEST
 #include "pbl/services/notifications/notifications.h"
@@ -431,7 +431,7 @@ static bool s_drain_cb_pending;        //!< a drain callback is queued; coalesce
 static bool s_capture_parked;          //!< capture stopped after offline overflow
 //! Tick at which the last frame counted into the stream ended: a pause's gap runs from here to
 //! the first frame after it.
-static RtcTicks s_last_frame_end_ticks;
+static uint64_t s_last_frame_end_ticks;
 static uint8_t s_pending_resume_gap_reason;
 static uint32_t s_last_receiver_activity_ms;  //!< uptime of the last control message received
 static uint32_t s_offline_since_ms;    //!< uptime capture went offline; 0 while a receiver is ready
@@ -626,10 +626,7 @@ static bool prv_room_is_quiet_locked(void);
 static uint32_t prv_uptime_ms(void) { return time_get_uptime_seconds() * 1000; }
 
 static uint64_t prv_wall_clock_ms(void) {
-  time_t seconds = 0;
-  uint16_t ms = 0;
-  rtc_get_time_ms(&seconds, &ms);
-  return (uint64_t)seconds * 1000 + ms;
+  return pbl_realtime_ms();
 }
 
 static bool prv_session_ready_locked(void) {
@@ -1185,7 +1182,7 @@ static void prv_post_loss_alert(void) {
                              "Some audio could not be delivered to your audio app and was "
                              "skipped.");
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attr_list, NULL);
+      pbl_realtime(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attr_list, NULL);
   attribute_list_destroy_list(&attr_list);
   if (item) {
     item->header.from_watch = true;
@@ -1206,7 +1203,7 @@ static void prv_post_stand_down_alert(void) {
                              "Background audio turned itself off after your watch restarted "
                              "several times. Settings shows what happened.");
   TimelineItem *item = timeline_item_create_with_attributes(
-      rtc_get_time(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attr_list, NULL);
+      pbl_realtime(), 0, TimelineItemTypeNotification, LayoutIdNotification, &attr_list, NULL);
   attribute_list_destroy_list(&attr_list);
   if (item) {
     item->header.from_watch = true;
@@ -1358,7 +1355,7 @@ static void prv_apply_capture(void) {
     // threshold, or a checkpoint whose pause flag CHANGED -- and the phone's ordinary traffic
     // hits none of them: RECEIVER_HEALTH just ACKs, and an unchanged checkpoint returns early.
     // So a transient failure -- dictation holding the mic for a few seconds, or
-    // voice_speex_init()'s kernel_malloc() losing a race under heap pressure -- became a
+    // voice_speex_init()'s pbl_malloc() losing a race under heap pressure -- became a
     // permanent PausedConflict. Note it does not even set s_mic_conflict_active, so it is a pure
     // latch with no tracked input that could clear it.
     //
@@ -1411,12 +1408,12 @@ static void prv_begin_gap_pause_locked(uint8_t gap_reason) {
 //! data stay self-consistent. Called with the first frame after the pause, which ended at
 //! `frame_end_ticks`: the gap is all the time since the last frame before it, mic start-up
 //! included, because the sample counter is the recording's clock.
-static void prv_finish_gap_pause_locked(RtcTicks frame_end_ticks) {
+static void prv_finish_gap_pause_locked(uint64_t frame_end_ticks) {
   if (s_pending_resume_gap_reason == 0 || !s_stream_active) {
     s_pending_resume_gap_reason = 0;
     return;
   }
-  const uint64_t paused_ms = (frame_end_ticks - s_last_frame_end_ticks) * 1000 / RTC_TICKS_HZ;
+  const uint64_t paused_ms = (frame_end_ticks - s_last_frame_end_ticks) * 1000 / PBL_TICK_HZ;
   const uint64_t gap_ms = (paused_ms > AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS)
                               ? paused_ms - AUDIO_COMPANION_DEFAULT_FRAME_DURATION_MS
                               : 0;
@@ -1658,7 +1655,7 @@ static bool prv_assistant_is_exchange(const AudioCompanionAssistantView *view) {
 }
 
 static void prv_assistant_drop_before_locked(void) {
-  kernel_free(s_assistant_before);
+  pbl_free(s_assistant_before);
   s_assistant_before = NULL;
 }
 
@@ -1670,7 +1667,7 @@ static void prv_assistant_keep_before_locked(void) {
     return;
   }
   if (!s_assistant_before) {
-    s_assistant_before = kernel_malloc(sizeof(*s_assistant_before));
+    s_assistant_before = pbl_malloc(sizeof(*s_assistant_before));
   }
   if (s_assistant_before) {
     *s_assistant_before = s_assistant;
@@ -2005,7 +2002,7 @@ void audio_companion_ptt_commit(void) {
   s_ptt.start_pending = true;
   prv_assistant_keep_before_locked();
   assistant_view_begin(&s_assistant, s_ptt.turn, AUDIO_COMPANION_PTT_MAX_SECONDS);
-  s_assistant.began_at = rtc_get_time();
+  s_assistant.began_at = pbl_realtime();
   prv_ptt_start_fast_link_locked();
   prv_ptt_post_send_locked();
   PBL_LOG_INFO("Push-to-talk %u: listening", s_ptt.turn);
@@ -2148,7 +2145,7 @@ static void prv_assistant_remove_system_task_cb(void *data) {
   for (uint8_t i = 0; notifier && i < taken->count; i++) {
     notifier->remove(&taken->ids[i]);
   }
-  kernel_free(taken);
+  pbl_free(taken);
 }
 
 void audio_companion_assistant_take_back(const AudioCompanionAssistantMissed *missed,
@@ -2156,7 +2153,7 @@ void audio_companion_assistant_take_back(const AudioCompanionAssistantMissed *mi
   if (!s_initialized || !missed || count == 0) {
     return;
   }
-  AssistantNotifiedIds *taken = kernel_malloc(sizeof(*taken));
+  AssistantNotifiedIds *taken = pbl_malloc(sizeof(*taken));
   if (!taken) {
     return;
   }
@@ -2282,7 +2279,7 @@ static void prv_mic_data_handler(int16_t *samples, size_t sample_count, void *co
   bool schedule_drain = false;
   bool suppressed = false;
   if (recording) {
-    const RtcTicks now = rtc_get_ticks();
+    const uint64_t now = pbl_uptime_ticks();
     prv_finish_gap_pause_locked(now);
     s_last_frame_end_ticks = now;
     suppressed = prv_maybe_suppress_silence_locked(samples, sample_count, &schedule_drain);
@@ -2828,7 +2825,7 @@ static void prv_begin_stream_locked(void) {
   s_offline_baseline_dropped = 0;
   s_alert_baseline_dropped = 0;
   s_pending_resume_gap_reason = 0;  // a fresh stream carries no pending gap
-  s_last_frame_end_ticks = rtc_get_ticks();
+  s_last_frame_end_ticks = pbl_uptime_ticks();
   prv_reset_silence_suppression_locked();
   audio_companion_spool_reset();
   s_stream_active = true;
@@ -3392,7 +3389,7 @@ static void prv_handle_control_msg_locked(const AudioCompanionControlMsg *msg) {
                            update->text, update->length);
       if (update->turn == s_assistant.turn) {
         if (update->kind == AudioCompanionAssistantUpdateBegin) {
-          s_assistant.began_at = rtc_get_time();
+          s_assistant.began_at = pbl_realtime();
         }
         if (update->kind == AudioCompanionAssistantUpdateDone ||
             update->kind == AudioCompanionAssistantUpdateError) {
@@ -3460,14 +3457,14 @@ static void prv_control_write_system_task_cb(void *data) {
   }
   pbl_mutex_unlock(&s_lock);
   prv_apply_pending();
-  kernel_free(work);
+  pbl_free(work);
 }
 
 void audio_companion_handle_control_write(const uint8_t *data, size_t length) {
   if (!s_initialized || !data || length == 0 || length > AUDIO_COMPANION_MAX_CONTROL_WRITE_BYTES) {
     return;
   }
-  ControlWriteWork *work = kernel_malloc(sizeof(ControlWriteWork) + length);
+  ControlWriteWork *work = pbl_malloc(sizeof(ControlWriteWork) + length);
   if (!work) {
     return;
   }
@@ -3771,7 +3768,7 @@ static void prv_record_boot_reboot_trace(void) {
 
   AudioCompanionRebootTrace trace;
   audio_companion_reboot_trace_load(&trace);
-  audio_companion_reboot_trace_record(&trace, reason, enabled, (uint32_t)rtc_get_time(), &detail);
+  audio_companion_reboot_trace_record(&trace, reason, enabled, (uint32_t)pbl_realtime(), &detail);
 
   // Fail closed on a crash run. The bootloader escalates to recovery firmware when the watch keeps
   // restarting before it stabilizes, which costs the user a reflash to get their watch back --
@@ -4273,7 +4270,7 @@ void audio_companion_test_reset(void) {
   s_ptt_retry_timer = TIMER_INVALID_ID;
   s_ptt_fast_link_timer = TIMER_INVALID_ID;
   memset(&s_assistant, 0, sizeof(s_assistant));
-  kernel_free(s_assistant_before);
+  pbl_free(s_assistant_before);
   s_assistant_before = NULL;
   s_ptt_quiet_backstop = false;
   s_assistant_screen_open = false;

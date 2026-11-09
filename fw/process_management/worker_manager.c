@@ -10,13 +10,12 @@
 // Pebble stuff
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/syscall.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/light.h>
 #include <pbl/services/speaker/speaker_service.h>
 #include <pbl/services/vibe_pattern.h>
 
-#include <kernel/memory_layout.h>
-#include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
 #include <kernel/util/segment.h>
 #include <kernel/util/task_init.h>
@@ -45,7 +44,6 @@ static PBL_MSGQ_DEFINE(s_to_worker_event_queue, sizeof(PebbleEvent), MAX_TO_WORK
 
 extern char __WORKER_RAM__[];
 extern char __WORKER_RAM_end__[];
-extern char __stack_guard_size__[];
 
 //! Used by the "pebble gdb" command to locate the loaded worker in memory.
 void *volatile g_worker_load_address;
@@ -122,6 +120,14 @@ static size_t prv_get_worker_stack_size(const PebbleProcessMd *app_md) {
   return 1400;
 }
 
+static bool prv_has_user_stack(const PebbleProcessMd *app_md) {
+#ifdef CONFIG_USERSPACE
+  return app_md->is_unprivileged;
+#else
+  return false;
+#endif
+}
+
 // ------------------------------------------------------------------------------------------------
 bool worker_manager_launch_new_worker_with_args(const PebbleProcessMd *app_md, const void *args) {
   PBL_ASSERT_TASK(PebbleTask_KernelMain);
@@ -166,9 +172,10 @@ bool worker_manager_launch_new_worker_with_args(const PebbleProcessMd *app_md, c
   // Set up the worker's memory and load the binary into it.
   const size_t worker_segment_size = prv_get_worker_segment_size(app_md);
   // The stack guard is counted as part of the app segment size...
-  const size_t stack_guard_size = MEMORY_LAYOUT_STACK_GUARD_SIZE;
-  // ...and is carved out of the stack.
-  const size_t stack_size = prv_get_worker_stack_size(app_md) - stack_guard_size;
+  const size_t stack_guard_size = prv_has_user_stack(app_md) ? CONFIG_KERNEL_USER_STACK_GUARD_SIZE
+                                                             : CONFIG_KERNEL_STACK_GUARD_SIZE;
+  // ...and the smaller one is carved out of the stack, so all workers keep the same usable size.
+  const size_t stack_size = prv_get_worker_stack_size(app_md) - CONFIG_KERNEL_USER_STACK_GUARD_SIZE;
 
   MemorySegment worker_ram = {__WORKER_RAM__, __WORKER_RAM_end__};
   memset((char *)worker_ram.start + stack_guard_size, 0,
@@ -205,14 +212,12 @@ bool worker_manager_launch_new_worker_with_args(const PebbleProcessMd *app_md, c
   }
   // The remaining space in worker_segment is assigned to the worker's
   // heap. Worker state needs to be configured before initializing the
-  // heap as the WorkerState struct holds the worker heap's Heap object.
-  Heap *worker_heap = worker_state_get_heap();
+  // heap as the WorkerState struct holds the worker heap.
+  struct pbl_heap *worker_heap = worker_state_get_heap();
   PBL_LOG_DBG("Worker heap init %p %p", worker_segment.start, worker_segment.end);
-  heap_init(worker_heap, worker_segment.start, worker_segment.end,
-            /* enable_heap_fuzzing */ false);
-  heap_set_lock_impl(worker_heap, (HeapLockImpl){
-                                    .lock_function = prv_heap_lock,
-                                  });
+  pbl_heap_init(worker_heap, worker_segment.start, worker_segment.end,
+                /* enable_heap_fuzzing */ false);
+  pbl_heap_set_lock(worker_heap, (struct pbl_heap_lock){.lock = prv_heap_lock});
   process_heap_set_exception_handlers(worker_heap, app_md);
 
   // Init services required for this process before it starts to execute
@@ -226,10 +231,11 @@ bool worker_manager_launch_new_worker_with_args(const PebbleProcessMd *app_md, c
     .name = task_name,
     .entry = prv_worker_task_main,
     .arg = entry_point,
-    .prio = PBL_PRIO_IDLE + 1,
+    .prio = CONFIG_WORKER_THREAD_PRIO,
     .privileged = true,
-    .stack = stack,
-    .stack_size = stack_size,
+    .user_stack = prv_has_user_stack(app_md),
+    .stack = (char *)stack - stack_guard_size,
+    .stack_size = stack_size + stack_guard_size,
   };
 
   PBL_LOG_DBG("Starting %s", task_name);
@@ -238,7 +244,7 @@ bool worker_manager_launch_new_worker_with_args(const PebbleProcessMd *app_md, c
   pebble_task_attr_set_syscall_stack(PebbleTask_Worker, &attr);
 #endif
 
-  s_worker_task_context.task_handle = pebble_task_create(PebbleTask_Worker, &attr);
+  s_worker_task_context.task_handle = process_manager_thread_create(PebbleTask_Worker, &attr);
 
   // If no default yet, set as the default so that it can be relaunched upon system reset
   if (worker_manager_get_default_install_id() == INSTALL_ID_INVALID) {
@@ -326,7 +332,7 @@ void worker_manager_close_current_worker(bool gracefully) {
   if (closing_worker_install_id == app_manager_get_current_app_id()) {
     app_manager_force_quit_to_launcher();
   } else {
-    const time_t current_time = rtc_get_time();
+    const time_t current_time = pbl_realtime();
     const time_t WORKER_CRASH_RESET_TIMEOUT_SECONDS = 60;
     if ((closing_worker_install_id == s_last_worker_crashed_install_id) &&
         ((current_time - s_last_worker_crash_timestamp) <= WORKER_CRASH_RESET_TIMEOUT_SECONDS)) {

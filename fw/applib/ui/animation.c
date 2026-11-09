@@ -10,6 +10,8 @@
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/fatal.h>
 #include <pbl/kernel/irq.h>
+#include <pbl/kernel/mpu.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/animation_service.h>
 #include <pbl/util/math.h>
@@ -19,7 +21,6 @@
 #include <applib/legacy2/ui/animation_legacy2.h>
 #include <applib/legacy2/ui/animation_private_legacy2.h>
 #include <kernel/kernel_applib_state.h>
-#include <kernel/memory_layout.h>
 #include <process_state/app_state/app_state.h>
 
 #ifdef CONFIG_SHELL
@@ -162,7 +163,7 @@ static int prv_scheduler_comparator(void *a, void *b) {
 
 // -------------------------------------------------------------------------------------------
 inline static uint32_t prv_get_ms_since_system_start(void) {
-  return ((sys_get_ticks() * 1000 + RTC_TICKS_HZ / 2) / RTC_TICKS_HZ);
+  return ((sys_get_ticks() * 1000 + PBL_TICK_HZ / 2) / PBL_TICK_HZ);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -1781,70 +1782,69 @@ Animation *animation_clone(Animation *animation_h) {
 
 // -------------------------------------------------------------------------------------------
 void animation_private_pause(void) {
-  s_paused = true;
+  KERNEL_READONLY_DATA_SET(s_paused, true);
 }
 
 // -------------------------------------------------------------------------------------------
 void animation_private_resume(void) {
-  s_paused = false;
+  KERNEL_READONLY_DATA_SET(s_paused, false);
 }
 
 #ifdef CONFIG_SHELL
-static void prv_dump_animations(ListNode *node, bool is_scheduled, char *buffer, int buffer_size) {
+static void prv_dump_animations(const struct pbl_shell *sh, ListNode *node, bool is_scheduled) {
   while (node) {
     AnimationPrivate *animation = (AnimationPrivate *)node;
 
-    dbgserial_putstr_fmt(
-        buffer, buffer_size,
-        "<%p> { sch: %s, handle = %p, abs_start_time_ms = %" PRIu32 ", delay = %" PRIu32
-        ", "
-        "duration = %" PRIu32 ", curve = %i, run = %p }",
-        animation, is_scheduled ? "yes" : "no", animation->handle,
-        (uint32_t)animation->abs_start_time_ms, (uint32_t)animation->delay_ms,
-        (uint32_t)animation->duration_ms, animation->curve, animation->implementation->update);
+    pbl_shell_print(sh,
+                    "<%p> { sch: %s, handle = %p, abs_start_time_ms = %" PRIu32 ", delay = %" PRIu32
+                    ", "
+                    "duration = %" PRIu32 ", curve = %i, run = %p }",
+                    animation, is_scheduled ? "yes" : "no", animation->handle,
+                    (uint32_t)animation->abs_start_time_ms, (uint32_t)animation->delay_ms,
+                    (uint32_t)animation->duration_ms, animation->curve,
+                    animation->implementation->update);
 
     node = node->next;
   }
 }
 
-static void prv_dump_legacy_animations(ListNode *head, char *buffer, int buffer_size) {
+static void prv_dump_legacy_animations(const struct pbl_shell *sh, ListNode *head) {
   AnimationLegacy2 *animation = (AnimationLegacy2 *)head;
 
   while (animation) {
-    dbgserial_putstr_fmt(buffer, buffer_size,
-                         "<%p> { sch: yes, start handle = %p, stop handle = %p,"
-                         "abs_start_time_ms = %" PRIu32 ", delay = %" PRIu32
-                         ", "
-                         "duration = %" PRIu32 ", curve = %i, run = %p }",
-                         animation, animation->handlers.started, animation->handlers.stopped,
-                         animation->abs_start_time_ms, animation->delay_ms, animation->duration_ms,
-                         animation->curve, animation->implementation->update);
+    pbl_shell_print(sh,
+                    "<%p> { sch: yes, start handle = %p, stop handle = %p,"
+                    "abs_start_time_ms = %" PRIu32 ", delay = %" PRIu32
+                    ", "
+                    "duration = %" PRIu32 ", curve = %i, run = %p }",
+                    animation, animation->handlers.started, animation->handlers.stopped,
+                    animation->abs_start_time_ms, animation->delay_ms, animation->duration_ms,
+                    animation->curve, animation->implementation->update);
 
     animation = (AnimationLegacy2 *)list_get_next(&animation->list_node);
   }
 }
 
-static void prv_dump_scheduler(char *buffer, int buffer_size, AnimationState *state) {
+static void prv_dump_scheduler(const struct pbl_shell *sh, AnimationState *state) {
   pbl_irq_lock();
   if (animation_private_using_legacy_2(state)) {
     AnimationLegacy2Scheduler *legacy_state = (AnimationLegacy2Scheduler *)state;
-    prv_dump_legacy_animations(legacy_state->head, buffer, buffer_size);
+    prv_dump_legacy_animations(sh, legacy_state->head);
   } else {
-    prv_dump_animations(state->scheduled_head, true, buffer, buffer_size);
-    prv_dump_animations(state->unscheduled_head, false, buffer, buffer_size);
+    prv_dump_animations(sh, state->scheduled_head, true);
+    prv_dump_animations(sh, state->unscheduled_head, false);
   }
   pbl_irq_unlock();
 }
 
 static int prv_cmd_anim_info(const struct pbl_shell *sh, size_t argc, char **argv) {
-  char buffer[128];
-  dbgserial_putstr_fmt(buffer, sizeof(buffer), "Now: %" PRIu32, prv_get_ms_since_system_start());
+  pbl_shell_print(sh, "Now: %" PRIu32, prv_get_ms_since_system_start());
 
-  dbgserial_putstr_fmt(buffer, sizeof(buffer), "Kernel Animations:");
-  prv_dump_scheduler(buffer, sizeof(buffer), kernel_applib_get_animation_state());
+  pbl_shell_print(sh, "Kernel Animations:");
+  prv_dump_scheduler(sh, kernel_applib_get_animation_state());
 
-  dbgserial_putstr_fmt(buffer, sizeof(buffer), "App Animations:");
-  prv_dump_scheduler(buffer, sizeof(buffer), app_state_get_animation_state());
+  pbl_shell_print(sh, "App Animations:");
+  prv_dump_scheduler(sh, app_state_get_animation_state());
   return 0;
 }
 

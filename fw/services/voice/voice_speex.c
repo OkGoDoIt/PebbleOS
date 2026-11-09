@@ -4,14 +4,13 @@
 #include <inttypes.h>
 #include <string.h>
 
-#include <pbl/drivers/mic.h>
 #include <pbl/kernel/assert.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
+#include <pbl/services/mic_manager.h>
 #include <pbl/services/voice/voice_speex.h>
 
-#include <board/board.h>
-#include <kernel/pbl_malloc.h>
 #include <speex/speex.h>
 #include <speex/speex_bits.h>
 #include <speex/speex_header.h>
@@ -62,7 +61,7 @@ static bool prv_init_locked(void) {
   memset(&s_encoder, 0, sizeof(s_encoder));
 
   // Get channel count from mic device (default to mono if not specified)
-  s_encoder.channels = (uint8_t)mic_get_channels(MIC);
+  s_encoder.channels = MIC_MANAGER_CHANNELS;
   PBL_LOG_DBG("Mic channels: %" PRIu8, s_encoder.channels);
 
   // Initialize Speex encoder - use wideband mode for 16kHz sample rate
@@ -117,20 +116,20 @@ static bool prv_init_locked(void) {
 
   // Allocate frame buffer (16-bit samples, multiplied by channel count for stereo)
   s_encoder.frame_buffer_size = s_encoder.frame_size * sizeof(int16_t) * s_encoder.channels;
-  s_encoder.frame_buffer = kernel_malloc(s_encoder.frame_buffer_size);
+  s_encoder.frame_buffer = pbl_malloc(s_encoder.frame_buffer_size);
 
   // Allocate encoded buffer
   s_encoder.encoded_buffer_size = SPEEX_ENCODED_BUFFER_SIZE;
-  s_encoder.encoded_buffer = kernel_malloc(s_encoder.encoded_buffer_size);
+  s_encoder.encoded_buffer = pbl_malloc(s_encoder.encoded_buffer_size);
 
   if (!s_encoder.frame_buffer || !s_encoder.encoded_buffer) {
     PBL_LOG_ERR("Failed to allocate Speex buffers (%u + %u bytes)",
                 (unsigned)s_encoder.frame_buffer_size, (unsigned)s_encoder.encoded_buffer_size);
     if (s_encoder.frame_buffer) {
-      kernel_free(s_encoder.frame_buffer);
+      pbl_free(s_encoder.frame_buffer);
     }
     if (s_encoder.encoded_buffer) {
-      kernel_free(s_encoder.encoded_buffer);
+      pbl_free(s_encoder.encoded_buffer);
     }
     speex_bits_destroy(&s_encoder.bits);
     speex_encoder_destroy(s_encoder.enc_state);
@@ -145,9 +144,9 @@ static bool prv_init_locked(void) {
               s_encoder.sample_rate, s_encoder.bit_rate, s_encoder.frame_size, s_encoder.channels);
 
   // Verify sample rates match
-  if (s_encoder.sample_rate != MIC_SAMPLE_RATE) {
+  if (s_encoder.sample_rate != MIC_MANAGER_SAMPLE_RATE) {
     PBL_LOG_WRN("Speex sample rate (%" PRIu32 ") != Mic sample rate (%d)", s_encoder.sample_rate,
-                MIC_SAMPLE_RATE);
+                MIC_MANAGER_SAMPLE_RATE);
   }
 
   return true;
@@ -175,12 +174,12 @@ void voice_speex_deinit(void) {
   speex_bits_destroy(&s_encoder.bits);
 
   if (s_encoder.frame_buffer) {
-    kernel_free(s_encoder.frame_buffer);
+    pbl_free(s_encoder.frame_buffer);
     s_encoder.frame_buffer = nullptr;
   }
 
   if (s_encoder.encoded_buffer) {
-    kernel_free(s_encoder.encoded_buffer);
+    pbl_free(s_encoder.encoded_buffer);
     s_encoder.encoded_buffer = nullptr;
   }
 

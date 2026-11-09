@@ -9,12 +9,9 @@
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/intc.h>
-#include <pbl/drivers/rtc.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/mcu/cache.h>
 #include <pbl/services/regular_timer.h>
-
-#include <board/board.h>
 
 /**
  * @defgroup drivers_imu_lis2dw12 LIS2DW12
@@ -46,7 +43,7 @@ typedef struct LIS2DW12State {
   /** Watchdog timer detecting a stalled INT1 stream. */
   RegularTimerInfo int1_wdt_timer;
   /** Time of the last FIFO read. */
-  RtcTicks last_fifo_read_tick;
+  uint64_t last_fifo_read_tick;
   /** Expected INT1 period in milliseconds. */
   uint32_t int1_period_ms;
   /** Number of stream recoveries performed. */

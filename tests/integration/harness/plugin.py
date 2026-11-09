@@ -3,11 +3,11 @@
 
 """pytest plugin: options, test classification and reporting."""
 
-import logging
 import os
 import re
 
 import pytest
+from pbl.lab import default_path as default_lab_path
 
 from harness import lab as labs
 from harness.build import Build
@@ -43,13 +43,15 @@ def pytest_addoption(parser):
     group.addoption(
         "--lab",
         metavar="PATH",
-        default=labs.default_lab_path(),
+        default=default_lab_path(),
         help="Lab file: the hardware wired to this host (watches, power "
         "supplies, Bluetooth dongles), which the setup is taken from (default: "
-        "$PBL_ITEST_LAB); the options below override it",
+        "$PBL_LAB, else ~/.config/pbl/lab.yaml); the options below override it",
     )
     group.addoption(
+        "--watch",
         "--lab-watch",
+        dest="lab_watch",
         metavar="NAME",
         help="The lab's watch to test, when several run the build",
     )
@@ -92,7 +94,7 @@ def pytest_addoption(parser):
     group.addoption(
         "--device-serial-baud",
         type=int,
-        help="Baudrate of the legacy (non-PULSE) console (default: 115200)",
+        help="Baudrate of the console (default: the build's)",
     )
     group.addoption(
         "--connection",
@@ -100,7 +102,7 @@ def pytest_addoption(parser):
         default=[],
         metavar="SCHEME:ADDRESS",
         help="Connect with this backend instead of the device's default; may "
-        "be repeated (pulse:TTY, serial:TTY[@BAUD], devconn:HOST[:PORT], "
+        "be repeated (serial:TTY[@BAUD], devconn:HOST[:PORT], "
         "qemu:HOST:PORT)",
     )
     group.addoption(
@@ -112,7 +114,7 @@ def pytest_addoption(parser):
         "--erase-fs",
         action="store_true",
         help="Erase the watch's filesystem (bondings, settings, apps, data) "
-        "and the bonding kept for PRF before the tests",
+        "and the bonding kept for PRF, and clear its timezone, before the tests",
     )
     group.addoption(
         "--flash-command",
@@ -184,10 +186,6 @@ def pytest_addoption(parser):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
-    # The PULSE state machines log every transition.
-    for name in ("transitions", "pebble.pulse2"):
-        logging.getLogger(name).setLevel(logging.WARNING)
-
     for name, help in SCOPE_MARKERS.items():
         config.addinivalue_line("markers", f"{name}: {help}")
 
@@ -225,7 +223,7 @@ def pytest_configure(config):
 
 def _resolve_setup(config, build, board, device_type):
     lab_path = config.getoption("lab")
-    lab = labs.Lab.load(lab_path) if lab_path else None
+    lab = labs.load(lab_path) if lab_path else None
     return labs.resolve(
         build if build is not None and board == build.board else None,
         device_type,

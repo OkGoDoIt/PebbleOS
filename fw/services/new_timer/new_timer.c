@@ -9,7 +9,6 @@
 #include <pbl/services/new_timer/new_timer.h>
 #include <pbl/task_wdt/task_wdt.h>
 
-#include <kernel/pbl_malloc.h>
 #include <kernel/pebble_tasks.h>
 #include <kernel/task_timer_manager.h>
 #include <kernel/util/task_init.h>
@@ -27,10 +26,10 @@ static PBL_SEM_DEFINE(s_wake_srv_loop, 1, 1);
 
 //! Queue of pointers to that should be called on the new_timer thread. This allows very high
 //! priority pieces of work to be done on the new_timer thread in between timers.
-#define WORK_QUEUE_SIZE       5
-#define TASK_STACK_SIZE_BYTES 1380
+#define WORK_QUEUE_SIZE 5
 
-PBL_THREAD_STACK_DEFINE(s_new_timer_stack, TASK_STACK_SIZE_BYTES);
+static struct pbl_thread s_new_timer_thread;
+PBL_THREAD_STACK_DEFINE(s_new_timer_stack, CONFIG_SERVICE_NEW_TIMER_THREAD_STACK_SIZE);
 static PBL_MSGQ_DEFINE(s_work_queue, sizeof(NewTimerWorkItem), WORK_QUEUE_SIZE);
 
 // Used by debugging facility
@@ -120,13 +119,14 @@ void new_timer_service_init(void) {
   struct pbl_thread_attr attr = {
     .name = "NewTimer",
     .entry = new_timer_service_loop,
-    .prio = PBL_PRIO_MAX,
+    .prio = CONFIG_SERVICE_NEW_TIMER_THREAD_PRIO,
     .privileged = true,
     .stack = s_new_timer_stack,
     .stack_size = sizeof(s_new_timer_stack),
   };
 
-  pebble_task_create(PebbleTask_NewTimers, &attr);
+  PBL_ASSERTN(pbl_thread_create(&s_new_timer_thread, &attr) == 0);
+  pebble_task_register(PebbleTask_NewTimers, &s_new_timer_thread);
 }
 
 // -----------------------------------------------------------------------------------------------------

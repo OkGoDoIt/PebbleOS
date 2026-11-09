@@ -8,7 +8,6 @@
 //! For now this will just be woefully incomplete.
 
 #include <pbl/cron/cron.h>
-#include <pbl/drivers/touch/touch_sensor.h>
 #include <pbl/services/accel_manager.h>
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION
 #include <pbl/services/audio_companion.h>
@@ -85,14 +84,6 @@ static struct ServiceRunLevelSetting s_runlevel_settings[] = {
     .keep_enabled_fn = audio_companion_keeps_bluetooth_enabled,
 #endif
   },
-#if defined(CONFIG_TOUCH) && defined(CONFIG_RECOVERY_FW)
-  // Only keep touch enabled on recovery (and so manufacturing as well)
-  // Once supported in main firmware, this should be removed.
-  {
-    .set_enable_fn = touch_sensor_set_enabled,
-    .enable_mask = R_Normal,
-  },
-#endif
 #ifdef CONFIG_HRM
   {
     .set_enable_fn = hrm_manager_enable,

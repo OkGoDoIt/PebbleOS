@@ -4,10 +4,10 @@
 pbl_library_sources(
   arch.c
   cache.c
+  debug.c
   fpu.c
   interrupts.c
   irq.c
-  mpu.c
   reset.c
   vector_table.c
 )

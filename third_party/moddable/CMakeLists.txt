@@ -266,7 +266,7 @@ pbl_library_named(libxs)
 pbl_library_kind(stlib)
 pbl_library_sources(${sources})
 pbl_library_compile_options(
-  -Og
+  -Os
   -Dpebble
   -DmxUseDefaultSharedChunks=1
   -DkCommodettoBitmapFormat=kCommodettoBitmapMonochromeAligned

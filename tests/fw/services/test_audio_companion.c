@@ -1,34 +1,32 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "pbl/services/audio_companion.h"
-
 #include "applib/event_service_client.h"
-#include "pbl/bluetooth/audio_companion.h"
-#include "pbl/services/audio_companion_private.h"
-#include "pbl/services/runlevel_impl.h"
-#include "pbl/services/battery/battery_state.h"
-#include "services/audio_companion/auth.h"
-#include "services/audio_companion/reboot_trace.h"
-#include "services/audio_companion/spool.h"
-#include "kernel/pebble_tasks.h"
-#include "system/reboot_reason.h"
-
-#include <pbl/drivers/mic.h>
-#include <pbl/services/mic_manager.h>
-#include <pbl/drivers/rtc.h>
-#include <pbl/drivers/watchdog.h>
-#include <pbl/task_wdt/task_wdt.h>
-
 #include "clar.h"
 #include "fake_mutex.h"
 #include "fake_new_timer.h"
 #include "fake_system_task.h"
-
+#include "kernel/pebble_tasks.h"
+#include "pbl/bluetooth/audio_companion.h"
+#include "pbl/services/audio_companion.h"
+#include "pbl/services/audio_companion_private.h"
+#include "pbl/services/battery/battery_state.h"
+#include "pbl/services/runlevel_impl.h"
+#include "services/audio_companion/auth.h"
+#include "services/audio_companion/reboot_trace.h"
+#include "services/audio_companion/spool.h"
 #include "stubs_logging.h"
+#include "system/reboot_reason.h"
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+
+#include <pbl/drivers/watchdog.h>
+#include <pbl/kernel/time.h>
+#include <pbl/services/mic_manager.h>
+#include <pbl/task_wdt/task_wdt.h>
+
+#include <services/mic_manager/mic_source.h>
 
 #ifdef CONFIG_SERVICE_AUDIO_COMPANION_PTT
 #include "kernel/event_loop.h"
@@ -296,17 +294,16 @@ uint32_t time_get_uptime_seconds(void) {
   return s_uptime_seconds;
 }
 
-RtcTicks rtc_get_ticks(void) {
-  return ((RtcTicks)s_uptime_seconds * 1000 + s_ticks_extra_ms) * RTC_TICKS_HZ / 1000;
+uint64_t pbl_uptime_ticks(void) {
+  return ((uint64_t)s_uptime_seconds * 1000 + s_ticks_extra_ms) * PBL_TICK_HZ / 1000;
 }
 
-time_t rtc_get_time(void) {
+time_t pbl_realtime(void) {
   return s_rtc_time;
 }
 
-void rtc_get_time_ms(time_t *out_seconds, uint16_t *out_ms) {
-  *out_seconds = s_rtc_time;
-  *out_ms = s_rtc_ms;
+uint64_t pbl_realtime_ms(void) {
+  return (uint64_t)pbl_realtime() * 1000 + s_rtc_ms;
 }
 
 uint32_t pbl_rand32(void) {
@@ -508,8 +505,8 @@ int voice_speex_encode_frame(int16_t *samples, uint8_t *encoded_data, size_t max
   return 4;
 }
 
-bool mic_start(MicDevice *this, MicDataHandlerCB data_handler, void *context,
-               int16_t *audio_buffer, size_t audio_buffer_len) {
+bool mic_source_start(MicDataHandlerCB data_handler, void *context,
+                      int16_t *audio_buffer, size_t audio_buffer_len) {
   prv_assert_service_lock_not_held();
   if (!s_mic_start_succeeds || s_mic_running) {
     return false;
@@ -521,13 +518,9 @@ bool mic_start(MicDevice *this, MicDataHandlerCB data_handler, void *context,
   return true;
 }
 
-void mic_stop(MicDevice *this) {
+void mic_source_stop(void) {
   prv_assert_service_lock_not_held();
   s_mic_running = false;
-}
-
-bool mic_is_running(MicDevice *this) {
-  return s_mic_running;
 }
 
 // ---- Test helpers ----
@@ -846,7 +839,7 @@ void test_audio_companion__initialize(void) {
   memset(s_wdt_channel_map, AUDIO_COMPANION_WDT_CHANNEL_NONE, sizeof(s_wdt_channel_map));
   s_wdt_channel_map[0] = PebbleTask_NewTimers;
   s_wdt_channel_map[1] = PebbleTask_KernelBackground;
-  s_wdt_channel_map[2] = PebbleTask_PULSE;
+  s_wdt_channel_map[2] = 8; // Historical PULSE ID; excluded from the 8-bit task masks.
   s_wdt_channel_map[3] = PebbleTask_KernelMain;
   s_wdt_channel_map_present = true;
   s_wdt_channel_map_saves = 0;
@@ -2088,7 +2081,7 @@ void test_audio_companion__silence_probe_asks_before_presuming_the_receiver_gone
   cl_assert_equal_b(stub_new_timer_fire(probe), true);
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(audio_companion_get_state(), AudioCompanionServiceStateAuthorizedIdle);
-  cl_assert_equal_b(mic_is_running(NULL), true);
+  cl_assert_equal_b(s_mic_running, true);
 }
 
 // ...and audio resuming retires the probe outright: the drain timer is running again, and it
@@ -2439,7 +2432,7 @@ void test_audio_companion__boot_trace_names_no_task_without_a_channel_map(void) 
 // The next boot reads this boot's masks through this boot's map, saved once every channel is up.
 void test_audio_companion__boot_saves_its_watchdog_channel_map(void) {
   s_wdt_threads[0] = PebbleTask_NewTimers;
-  s_wdt_threads[1] = PebbleTask_PULSE;
+  s_wdt_threads[1] = PebbleTask_BTHost;
   s_wdt_threads[2] = PebbleTask_KernelBackground;
   s_wdt_threads[3] = PebbleTask_KernelMain;
 
@@ -2458,7 +2451,7 @@ void test_audio_companion__boot_saves_its_watchdog_channel_map(void) {
   fake_system_task_callbacks_invoke_pending();
   cl_assert_equal_i(s_wdt_channel_map_saves, 1);
   cl_assert_equal_i(s_wdt_channel_map[0], PebbleTask_NewTimers);
-  cl_assert_equal_i(s_wdt_channel_map[1], PebbleTask_PULSE);
+  cl_assert_equal_i(s_wdt_channel_map[1], PebbleTask_BTHost);
   cl_assert_equal_i(s_wdt_channel_map[2], PebbleTask_KernelBackground);
   cl_assert_equal_i(s_wdt_channel_map[3], PebbleTask_KernelMain);
   cl_assert_equal_i(s_wdt_channel_map[4], AUDIO_COMPANION_WDT_CHANNEL_NONE);
@@ -2840,7 +2833,7 @@ static void prv_feed_timed_frames_at_level(uint32_t amplitude, uint32_t count) {
 //! files every recording by it. It lost about two seconds a cycle before (G17, 2026-10-26).
 void test_audio_companion__stationary_listen_cycles_keep_the_counter_on_time(void) {
   prv_start_capture_with_mode(AudioCompanionSilenceModeLight);
-  const RtcTicks born = rtc_get_ticks();
+  const uint64_t born = pbl_uptime_ticks();
   prv_feed_timed_frames_at_level(TEST_QUIET_LEVEL, TEST_LIGHT_WINDOW_FRAMES);
   audio_companion_set_runlevel(RunLevel_Stationary);
   cl_assert(!s_mic_running);
@@ -2871,7 +2864,7 @@ void test_audio_companion__stationary_listen_cycles_keep_the_counter_on_time(voi
   fake_system_task_callbacks_invoke_pending();
   cl_assert(s_mic_running);
   s_ticks_extra_ms += 900;
-  const uint64_t began_ms = (rtc_get_ticks() - born) * 1000 / RTC_TICKS_HZ;
+  const uint64_t began_ms = (pbl_uptime_ticks() - born) * 1000 / PBL_TICK_HZ;
   s_data_count = 0;
   prv_feed_timed_frames_at_level(900, TEST_DRAIN_PUSH_FRAMES);
   fake_system_task_callbacks_invoke_pending();

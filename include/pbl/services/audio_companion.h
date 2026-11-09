@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "pbl/drivers/button_id.h"
+#include "applib/ui/click.h"
 #include "pbl/services/audio_companion_private.h"
 #include "pbl/services/runlevel.h"
 #include "pbl/util/uuid.h"

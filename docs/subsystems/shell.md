@@ -32,7 +32,11 @@ negative errno; `-EINPROGRESS` keeps the shell busy until
 
 Shell code is wrapped in `#ifdef CONFIG_SHELL`, and modules with a group of
 commands can gate them further; for example `drivers/imu/shell.c`
-builds with `CONFIG_IMU_SHELL`.
+builds with `CONFIG_IMU_SHELL`. Such options are off by default, as most of
+these commands are bring-up tools; only the commands the integration tests
+rely on are built with `CONFIG_SHELL` alone. `CONFIG_DRIVER_SHELL` and
+`CONFIG_SUBSYS_SHELL` turn on every driver or subsystem command group at
+once, e.g. `pbl configure --board obelix@pvt -DCONFIG_DRIVER_SHELL=y`.
 
 ```c
 static int prv_accel_read(const struct pbl_shell *sh, size_t argc, char **argv) {
@@ -63,9 +67,9 @@ every instance run on KernelBG.
   `pbl_shell_execute_line()`, and get a `done` callback when the command
   finishes.
 
-The firmware has two backends, both in `fw/console/`:
+The firmware's backend is `subsys/console/console.c`, interactive, on the
+{doc}`console`: the shell is always listening, and log lines print above the
+prompt, which comes back with the line being edited.
 
-- `shell_dbgserial.c`: interactive, on the debug serial. Ctrl-C switches
-  the serial port from logs to the shell, Ctrl-D back to logs.
-- `shell_pulse.c`: line-based, on the PULSE prompt protocol, which is what
-  `pbl console` talks to. Each output line is one prompt message.
+Release firmware has no shell: it needs `CONFIG_CONSOLE`, which is off there
+unless it is manufacturing firmware.

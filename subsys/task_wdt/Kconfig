@@ -14,8 +14,8 @@ config TASK_WDT_TIMEOUT_MS
     int "System thread timeout in milliseconds"
     default 5000
     help
-      Timeout the system threads (KernelMain, KernelBackground, NewTimers,
-      PULSE) register their channels with.
+      Timeout the system threads (KernelMain, KernelBackground, NewTimers)
+      register their channels with.
 
 config TASK_WDT_CHECK_PERIOD_MS
     int "Check period in milliseconds"
@@ -34,6 +34,10 @@ config TASK_WDT_GRACE_MS
       expired, with its callback running on every check, before the
       system resets with a core dump. While a channel is expired, the
       checks run at most this far apart.
+
+config TASK_WDT_THREAD_PRIO
+    int "Watchdog thread priority"
+    default 4
 
 config TASK_WDT_THREAD_STACK_SIZE
     int "Watchdog thread stack size in bytes"

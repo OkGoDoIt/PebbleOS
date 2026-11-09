@@ -3,7 +3,6 @@
 
 #include "graph_card.h"
 
-#include <pbl/drivers/rtc.h>
 #include <pbl/services/clock.h>
 #include <pbl/services/i18n/i18n.h>
 #include <pbl/services/time.h>
@@ -12,13 +11,13 @@
 #include <pbl/util/time.h>
 #include <pbl/util/units.h>
 
+#include <applib/app_malloc.h>
 #include <applib/graphics/graphics.h>
 #include <applib/graphics/text.h>
-#include <board/display.h>
-#include <kernel/pbl_malloc.h>
+#include <applib/platform.h>
 
 // Compile-time display offset calculations
-#define DISPLAY_Y_OFFSET ((DISP_ROWS - LEGACY_2X_DISP_ROWS) / 2)
+#define DISPLAY_Y_OFFSET ((PBL_DISPLAY_HEIGHT - LEGACY_2X_DISP_ROWS) / 2)
 
 //! Marks where the graph begins - base values for 168px height
 #define GRAPH_OFFSET_Y_BASE PBL_IF_RECT_ELSE(38, 48)
@@ -32,7 +31,7 @@
 #define GRAPH_HEIGHT (LABEL_OFFSET_Y - GRAPH_OFFSET_Y)
 
 // Compile-time bar width calculation
-#define HEALTH_BAR_WIDTH (23 + (DISP_COLS - LEGACY_2X_DISP_COLS) / 19)
+#define HEALTH_BAR_WIDTH (23 + (PBL_DISPLAY_WIDTH - LEGACY_2X_DISP_COLS) / 19)
 #define HEALTH_BAR_INSET 3
 #define HEALTH_TOTAL_BAR_WIDTHS \
   PBL_IF_RECT_ELSE((HEALTH_BAR_WIDTH * 7 + 3) - (HEALTH_BAR_INSET * 6), 141)
@@ -42,10 +41,10 @@
 #define HEALTH_WEEKEND_WIDTH_BASE PBL_IF_RECT_ELSE(38, 58)
 #define HEALTH_WEEKDAY_WIDTH   \
   (HEALTH_WEEKDAY_WIDTH_BASE + \
-   (DISP_COLS - LEGACY_2X_DISP_COLS) * HEALTH_WEEKDAY_WIDTH_BASE / LEGACY_2X_DISP_COLS)
+   (PBL_DISPLAY_WIDTH - LEGACY_2X_DISP_COLS) * HEALTH_WEEKDAY_WIDTH_BASE / LEGACY_2X_DISP_COLS)
 #define HEALTH_WEEKEND_WIDTH   \
   (HEALTH_WEEKEND_WIDTH_BASE + \
-   (DISP_COLS - LEGACY_2X_DISP_COLS) * HEALTH_WEEKEND_WIDTH_BASE / LEGACY_2X_DISP_COLS)
+   (PBL_DISPLAY_WIDTH - LEGACY_2X_DISP_COLS) * HEALTH_WEEKEND_WIDTH_BASE / LEGACY_2X_DISP_COLS)
 
 #define AVG_LINE_HEIGHT       4
 #define AVG_LINE_LEGEND_WIDTH 10
