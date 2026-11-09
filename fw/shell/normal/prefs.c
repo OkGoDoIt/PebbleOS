@@ -1171,6 +1171,24 @@ typedef struct {
 #include "prefs_values.h.inc"
 #undef PREFS_MACRO
 
+// Every preference must fit at once; otherwise later settings silently stop saving.
+#define PREFS_MACRO(key, var) \
+  +sizeof(key) - 1 + sizeof(var) + sizeof(struct pbl_settings_record_hdr)
+enum {
+  PREFS_REQUIRED_BYTES = 0
+#include "prefs_values.h.inc"
+};
+#undef PREFS_MACRO
+// The store checks capacity before replacing the old record; leave room for each update too.
+#define PREFS_MACRO(key, var)                                                          \
+  static_assert(PREFS_REQUIRED_BYTES + sizeof(struct pbl_settings_file_hdr) +          \
+                        2 * sizeof(struct pbl_settings_record_hdr) + sizeof(key) - 1 + \
+                        sizeof(var) <=                                                 \
+                    SHELL_PREFS_FILE_LEN,                                              \
+                "shell preference store needs room for every record and a replacement");
+#include "prefs_values.h.inc"
+#undef PREFS_MACRO
+
 // Create a time containing the key name and global variable name for each pref
 #define PREFS_MACRO(key, var) {key, &var, sizeof(var), prv_set_##var##_cb},
 static const PrefsTableEntry s_prefs_table[] = {

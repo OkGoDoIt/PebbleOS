@@ -13,8 +13,6 @@
 #include <fake_spi_flash.h>
 #include <shell/prefs_private.h>
 
-#define NOTIF_PREFS_FILE_NAME         "/notifpref"
-#define NOTIF_PREFS_FILE_LEN          1024
 #define PREF_KEY_NOTIF_TEXT_SIZE      "notifTextSize"
 #define PREF_KEY_TEXT_STYLE           "textStyle"
 #define PREF_KEY_NOTIF_WINDOW_TIMEOUT "notifWindowTimeout"

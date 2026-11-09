@@ -23,6 +23,11 @@
  * @{
  */
 
+/** @brief Shared notification preference storage for local and phone-originated writes. */
+#define NOTIF_PREFS_FILE_NAME "/notifpref"
+// All current keys use 1009 bytes; atomic replacement also needs room for the new record.
+#define NOTIF_PREFS_FILE_LEN (2048)
+
 /** @brief Notification window timeout meaning "never time out". */
 #define NOTIF_WINDOW_TIMEOUT_INFINITE ((uint32_t)~0)
 /** @brief Default notification window timeout, in milliseconds. */

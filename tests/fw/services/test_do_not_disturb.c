@@ -8,6 +8,7 @@
 #include <pbl/cron/cron.h>
 #include <pbl/fs/fs.h>
 #include <pbl/services/new_timer/new_timer.h>
+#include <pbl/services/notifications/alerts_preferences.h>
 #include <pbl/services/notifications/alerts_preferences_private.h>
 #include <pbl/services/notifications/do_not_disturb.h>
 #include <pbl/services/system_task.h>
@@ -1350,4 +1351,80 @@ void test_do_not_disturb__phone_focus_outlasts_a_schedule_ending(void) {
   do_not_disturb_set_phone_focus(false);
   cl_assert(!do_not_disturb_is_active());
 #endif
+}
+
+void test_do_not_disturb__all_notification_preferences_remain_writable(void) {
+  static const struct {
+    const char *key;
+    size_t size;
+  } prefs[] = {
+    {"mask", sizeof(uint8_t)},
+    {"vibeIntensity", sizeof(uint8_t)},
+    {"vibeScoreNotifications", sizeof(uint8_t)},
+    {"vibeScoreIncomingCalls", sizeof(uint8_t)},
+    {"vibeScoreAlarms", sizeof(uint8_t)},
+    {"vibeScoreHourly", sizeof(uint8_t)},
+    {"vibeScoreOnDisconnect", sizeof(uint8_t)},
+    {"dndManuallyEnabled", sizeof(uint8_t)},
+    {"dndSmartEnabled", sizeof(uint8_t)},
+    {"dndInterruptionsMask", sizeof(uint8_t)},
+    {"dndShowNotifications", sizeof(uint8_t)},
+    {"dndMotionBacklight", sizeof(uint8_t)},
+    {"dndTouchBacklight", sizeof(uint8_t)},
+    {"dndNotificationBacklight", sizeof(uint8_t)},
+    {"dndMuteSpeaker", sizeof(uint8_t)},
+    {"speakerMuted", sizeof(uint8_t)},
+    {"speakerVolume", sizeof(uint8_t)},
+    {"firstUseComplete", sizeof(uint32_t)},
+    {"notifWindowTimeout", sizeof(uint32_t)},
+    {"notifDesignStyle", sizeof(uint8_t)},
+    {"notifVibeDelay", sizeof(uint8_t)},
+    {"notifBacklight", sizeof(uint8_t)},
+    {"notifRespectPhoneSilence", sizeof(uint8_t)},
+    {"notifDismissalSync", sizeof(uint8_t)},
+    {"notifGroupingRange", sizeof(uint8_t)},
+    {"notifStatusBarStyle", sizeof(uint8_t)},
+    {"notifTextSize", sizeof(uint8_t)},
+    {"dndAutoDismiss", sizeof(uint8_t)},
+    {"dndWeekdaySchedule", sizeof(DoNotDisturbSchedule)},
+    {"dndWeekdayScheduleEnabled", sizeof(uint8_t)},
+    {"dndWeekendSchedule", sizeof(DoNotDisturbSchedule)},
+    {"dndWeekendScheduleEnabled", sizeof(uint8_t)},
+    {"qtSchedule0", sizeof(DoNotDisturbScheduleSlot)},
+    {"qtSchedule1", sizeof(DoNotDisturbScheduleSlot)},
+    {"qtSchedule2", sizeof(DoNotDisturbScheduleSlot)},
+    {"qtSchedule3", sizeof(DoNotDisturbScheduleSlot)},
+    {"qtSchedule4", sizeof(DoNotDisturbScheduleSlot)},
+  };
+  const uint8_t zero[sizeof(DoNotDisturbScheduleSlot)] = {0};
+  struct pbl_settings_file file;
+  // Populate an old-size file, as a watch with every preference configured would have it.
+  cl_must_pass(pbl_fs_unlink("/notifpref"));
+  cl_must_pass(pbl_settings_open(&file, "/notifpref", 1024));
+  for (size_t i = 0; i < ARRAY_LENGTH(prefs); i++) {
+    cl_must_pass(pbl_settings_set(&file, prefs[i].key, strlen(prefs[i].key), zero, prefs[i].size));
+  }
+  cl_assert_equal_i(file.used_space, 1009);
+  pbl_settings_close(&file);
+  alerts_preferences_init();
+
+  const bool enabled = true;
+  alerts_preferences_set_notification_dismissal_sync(enabled);
+  prv_assert_settings_value("notifDismissalSync", strlen("notifDismissalSync"), &enabled,
+                            sizeof(enabled));
+
+  const uint8_t volume = 37;
+  alerts_preferences_set_speaker_volume(volume);
+  prv_assert_settings_value("speakerVolume", strlen("speakerVolume"), &volume, sizeof(volume));
+
+  const DoNotDisturbScheduleSlot slot = {
+    .used = true,
+    .enabled = true,
+    .kind = DoNotDisturbScheduleKindEveryday,
+    .schedule = {.from_hour = 22, .to_hour = 7},
+  };
+  alerts_preferences_dnd_set_schedule_slot(DND_NUM_SCHEDULE_SLOTS - 1, &slot);
+  const char *const slot_keys[] = {DND_SCHEDULE_SLOT_KEYS};
+  const char *key = slot_keys[DND_NUM_SCHEDULE_SLOTS - 1];
+  prv_assert_settings_value(key, strlen(key), &slot, sizeof(slot));
 }

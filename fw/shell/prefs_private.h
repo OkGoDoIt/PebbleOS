@@ -8,8 +8,11 @@
 #include <kernel/events.h>
 
 #define SHELL_PREFS_FILE_NAME "/shellpref"
-// A full page would be ideal, but requesting such a size can end up using two pages
+#if defined(CONFIG_SERVICE_PEEK_WIDGETS) || defined(CONFIG_SERVICE_AUDIO_COMPANION)
+#define SHELL_PREFS_FILE_LEN (4096)
+#else
 #define SHELL_PREFS_FILE_LEN (2048)
+#endif
 
 //! Update the backing store for the given preference.
 //! @param[in] key the preference's name, as defined in prefs.c

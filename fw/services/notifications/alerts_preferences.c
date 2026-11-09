@@ -21,9 +21,6 @@
 
 PBL_LOG_MODULE_DECLARE(service_notifications, CONFIG_SERVICE_NOTIFICATIONS_LOG_LEVEL);
 
-#define FILE_NAME "/notifpref"
-#define FILE_LEN  (1024)
-
 static PBL_MUTEX_DEFINE(s_mutex);
 
 ///////////////////////////////////
@@ -421,7 +418,7 @@ static void prv_migrate_vibe_intensity_to_vibe_scores(struct pbl_settings_file *
 
 void alerts_preferences_init(void) {
   struct pbl_settings_file file = {};
-  if (pbl_settings_open(&file, FILE_NAME, FILE_LEN) != 0) {
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) != 0) {
     return;
   }
 
@@ -522,7 +519,7 @@ void alerts_preferences_init(void) {
 static void prv_set_pref(const void *key, size_t key_len, const void *value, size_t value_len) {
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
   struct pbl_settings_file file = {};
-  if (pbl_settings_open(&file, FILE_NAME, FILE_LEN) != 0) {
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) != 0) {
     goto cleanup;
   }
   pbl_settings_set(&file, key, key_len, value, value_len);
@@ -816,7 +813,7 @@ void alerts_preferences_dnd_set_schedule_slot(unsigned int index,
     s_dnd_schedule_slots[index].legacy = false;
   }
   struct pbl_settings_file file = {};
-  if (pbl_settings_open(&file, FILE_NAME, FILE_LEN) == 0) {
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) == 0) {
     pbl_settings_set(&file, s_dnd_schedule_slot_keys[index],
                      strlen(s_dnd_schedule_slot_keys[index]), &s_dnd_schedule_slots[index],
                      sizeof(s_dnd_schedule_slots[index]));
@@ -956,7 +953,7 @@ void alerts_preferences_handle_blob_db_event(PebbleBlobDBEvent *event) {
   pbl_mutex_lock(&s_mutex, PBL_FOREVER);
 
   struct pbl_settings_file file = {};
-  if (pbl_settings_open(&file, FILE_NAME, FILE_LEN) != 0) {
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) != 0) {
     pbl_mutex_unlock(&s_mutex);
     return;
   }
