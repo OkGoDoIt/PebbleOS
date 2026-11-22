@@ -11,6 +11,13 @@
 #include <pbl/kernel/mutex.h>
 
 #include <host/ble_hs.h>
+#include <nimble/nimble_port.h>
+
+/* A discovery step that NimBLE refuses for want of memory (msys or procedure pool) is retried,
+ * as the link carrying the audio stream runs those pools low for moments at a time. Failing at
+ * once would leave the client without its service until the next reconnect. */
+#define START_RETRY_MS    25U
+#define START_MAX_RETRIES 40U
 
 struct discovery {
   uint16_t conn_handle;
@@ -25,10 +32,75 @@ struct discovery {
   uint16_t *chr_end_handles;
   /* The characteristic asked for that was found last and whose end is not known yet. */
   uint8_t open_chr;
+  /* Identifies this discovery to a pending retry; addresses get reused. */
+  uint32_t seq;
+  uint8_t start_retries;
   struct pbl_bt_gattc_chr chrs[];
 };
 
 #define NO_CHR UINT8_MAX
+
+typedef int (*prv_step_fn)(struct discovery *d);
+
+static int prv_start(void *ctx);
+static int prv_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      const struct ble_gatt_svc *svc, void *arg);
+static int prv_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      const struct ble_gatt_chr *chr, void *arg);
+static int prv_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg);
+
+/* Discoveries run one at a time through the op queue, so one pending retry is enough. Both run
+ * on the host task. */
+static struct ble_npl_callout s_retry_callout;
+static bool s_retry_callout_initialized;
+static struct discovery *s_retry;
+static uint32_t s_retry_seq;
+static prv_step_fn s_retry_step;
+static uint32_t s_next_seq;
+
+static int prv_step_svc(struct discovery *d) {
+  return ble_gattc_disc_svc_by_uuid(d->conn_handle, d->svc_uuid, prv_svc_cb, d);
+}
+
+static int prv_step_chrs(struct discovery *d) {
+  return ble_gattc_disc_all_chrs(d->conn_handle, d->start_handle, d->end_handle, prv_chr_cb, d);
+}
+
+static int prv_step_dscs(struct discovery *d) {
+  return ble_gattc_disc_all_dscs(d->conn_handle, d->start_handle, d->end_handle, prv_dsc_cb, d);
+}
+
+static void prv_done(struct discovery *d, int status);
+
+/* Starts a step, or schedules a retry of it on BLE_HS_ENOMEM: 0 while it runs or waits. */
+static int prv_try_step(struct discovery *d, prv_step_fn step) {
+  const int rc = step(d);
+
+  if (rc != BLE_HS_ENOMEM || d->start_retries >= START_MAX_RETRIES) {
+    return rc;
+  }
+  d->start_retries++;
+  s_retry = d;
+  s_retry_seq = d->seq;
+  s_retry_step = step;
+  ble_npl_callout_reset(&s_retry_callout, ble_npl_time_ms_to_ticks32(START_RETRY_MS));
+  return 0;
+}
+
+static void prv_retry_cb(struct ble_npl_event *ev) {
+  struct discovery *d = s_retry;
+
+  s_retry = nullptr;
+  /* A host reset drops the queue and frees the discovery. */
+  if (d == nullptr || !nimble_gattc_op_queue_is_running(prv_start, d) || d->seq != s_retry_seq) {
+    return;
+  }
+  const int rc = prv_try_step(d, s_retry_step);
+  if (rc != 0) {
+    prv_done(d, rc);
+  }
+}
 
 /* The queue frees the discovery, which is its op's context: call back first. */
 static void prv_done(struct discovery *d, int status) {
@@ -99,7 +171,7 @@ static int prv_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
   }
 
   /* All the attributes of the service at once: the descriptors are picked from them. */
-  rc = ble_gattc_disc_all_dscs(conn_handle, d->start_handle, d->end_handle, prv_dsc_cb, d);
+  rc = prv_try_step(d, prv_step_dscs);
   if (rc != 0) {
     prv_done(d, rc);
   }
@@ -129,7 +201,7 @@ static int prv_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
     return 0;
   }
 
-  rc = ble_gattc_disc_all_chrs(conn_handle, d->start_handle, d->end_handle, prv_chr_cb, d);
+  rc = prv_try_step(d, prv_step_chrs);
   if (rc != 0) {
     prv_done(d, rc);
   }
@@ -141,7 +213,12 @@ static int prv_start(void *ctx) {
   struct discovery *d = ctx;
   int rc;
 
-  rc = ble_gattc_disc_svc_by_uuid(d->conn_handle, d->svc_uuid, prv_svc_cb, d);
+  if (!s_retry_callout_initialized) {
+    ble_npl_callout_init(&s_retry_callout, nimble_port_get_dflt_eventq(), prv_retry_cb, nullptr);
+    s_retry_callout_initialized = true;
+  }
+
+  rc = prv_try_step(d, prv_step_svc);
   if (rc != 0) {
     d->cb(d->conn_handle, rc, d->chrs, d->arg);
   }
@@ -174,6 +251,7 @@ int pbl_bt_gattc_discover(uint16_t conn_handle, const ble_uuid_t *svc_uuid,
   d->chr_end_handles = (uint16_t *)&d->chrs[num_chrs];
   d->open_chr = NO_CHR;
 
+  d->seq = ++s_next_seq;
   d->conn_handle = conn_handle;
   d->svc_uuid = svc_uuid;
   d->chr_uuids = chr_uuids;

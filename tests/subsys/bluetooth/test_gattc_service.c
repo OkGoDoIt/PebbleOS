@@ -13,6 +13,7 @@
 
 #include <clar.h>
 #include <host/ble_hs.h>
+#include <nimble/nimble_port.h>
 
 #define CONN_HANDLE 1
 
@@ -63,8 +64,52 @@ void nimble_gattc_op_queue_push(NimbleGattClientOpStartFn start, void *ctx) {
 void nimble_gattc_op_queue_complete(void) {
 }
 
+/* The discovery prv_run_discovery() is running. */
+static void *s_running_ctx;
+
+bool nimble_gattc_op_queue_is_running(NimbleGattClientOpStartFn start, const void *ctx) {
+  return ctx == s_running_ctx;
+}
+
+/* NimBLE refuses this many service discovery starts for want of memory. */
+static int s_svc_refusals;
+
+/* The retry callout. */
+static ble_npl_event_fn *s_callout_fn;
+static bool s_callout_armed;
+
+static struct ble_npl_eventq s_eventq;
+
+struct ble_npl_eventq *nimble_port_get_dflt_eventq(void) {
+  return &s_eventq;
+}
+
+void npl_pebble_callout_init(struct ble_npl_callout *co, struct ble_npl_eventq *evq,
+                             ble_npl_event_fn *ev_cb, void *ev_arg) {
+  s_callout_fn = ev_cb;
+}
+
+ble_npl_error_t npl_pebble_callout_reset(struct ble_npl_callout *co, ble_npl_time_t ticks) {
+  s_callout_armed = true;
+  return 0;
+}
+
+/* Fires the retry callout, if armed. */
+static bool prv_fire_retry(void) {
+  if (!s_callout_armed) {
+    return false;
+  }
+  s_callout_armed = false;
+  s_callout_fn(nullptr);
+  return true;
+}
+
 int ble_gattc_disc_svc_by_uuid(uint16_t conn_handle, const ble_uuid_t *uuid,
                                ble_gatt_disc_svc_fn *cb, void *cb_arg) {
+  if (s_svc_refusals > 0) {
+    s_svc_refusals--;
+    return BLE_HS_ENOMEM;
+  }
   s_svc_cb = cb;
   s_disc_arg = cb_arg;
   return 0;
@@ -118,9 +163,12 @@ static void prv_run_discovery(uint16_t start_handle) {
 
   cl_assert(s_num_ops > 0);
   ctx = s_ops[0].ctx;
+  s_running_ctx = ctx;
   cl_assert_equal_i(s_ops[0].start(ctx), 0);
   s_num_ops--;
   memmove(&s_ops[0], &s_ops[1], s_num_ops * sizeof(s_ops[0]));
+  while (prv_fire_retry()) {
+  }
 
   if (start_handle != 0) {
     const struct ble_gatt_svc svc = {
@@ -156,6 +204,7 @@ static void prv_run_discovery(uint16_t start_handle) {
     s_svc_cb(CONN_HANDLE, &done, nullptr, s_disc_arg);
   }
 
+  s_running_ctx = nullptr;
   pbl_free(ctx);
 }
 
@@ -194,6 +243,8 @@ static const struct pbl_bt_gattc_service_cb s_cb = {
 };
 
 void test_gattc_service__initialize(void) {
+  s_svc_refusals = 0;
+  s_callout_armed = false;
   s_num_ops = 0;
   s_num_writes = 0;
   s_num_discovered = 0;
@@ -299,4 +350,30 @@ void test_gattc_service__rediscovery_from_before_a_restart_is_dropped(void) {
   cl_assert_equal_i(s_num_discovered, 2);
   cl_assert_equal_i(pbl_bt_gattc_service_write(&s_svc, CHR_B, "x", 1), 0);
   cl_assert_equal_i(prv_answer_write(), 0x15);
+}
+
+/* An empty msys pool refuses a discovery's start for a moment: it is retried, not failed. */
+void test_gattc_service__discovery_refused_for_memory_is_retried(void) {
+  cl_assert_equal_i(pbl_bt_gattc_service_rediscover(&s_svc), 0);
+  s_svc_refusals = 3;
+  prv_run_discovery(0x20);
+  cl_assert_equal_i(s_svc_refusals, 0);
+  cl_assert_equal_i(s_num_discovered, 2);
+  cl_assert_equal_i(s_discovered_status, 0);
+  cl_assert_equal_i(pbl_bt_gattc_service_write(&s_svc, CHR_B, "x", 1), 0);
+  cl_assert_equal_i(prv_answer_write(), 0x25);
+}
+
+/* A retry that finds its discovery gone, as after a host reset, does nothing. */
+void test_gattc_service__retry_after_the_discovery_is_gone_does_nothing(void) {
+  cl_assert_equal_i(pbl_bt_gattc_service_rediscover(&s_svc), 0);
+  s_svc_refusals = 1;
+  void *ctx = s_ops[0].ctx;
+  s_running_ctx = ctx;
+  cl_assert_equal_i(s_ops[0].start(ctx), 0);
+  s_num_ops--;
+  s_running_ctx = nullptr;
+  pbl_free(ctx);
+  cl_assert(prv_fire_retry());
+  cl_assert_equal_i(s_num_discovered, 1);
 }

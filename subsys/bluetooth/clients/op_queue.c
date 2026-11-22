@@ -94,6 +94,14 @@ void nimble_gattc_op_queue_complete(void) {
   pbl_mutex_unlock(&s_lock);
 }
 
+bool nimble_gattc_op_queue_is_running(NimbleGattClientOpStartFn start, const void *ctx) {
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const GattClientOp *op = (const GattClientOp *)s_ops;
+  const bool running = s_op_running && (op != nullptr) && (op->start == start) && (op->ctx == ctx);
+  pbl_mutex_unlock(&s_lock);
+  return running;
+}
+
 void nimble_gattc_op_queue_init(void) {
   pbl_mutex_lock(&s_lock, PBL_FOREVER);
   while (s_ops != nullptr) {

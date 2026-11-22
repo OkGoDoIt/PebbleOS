@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 //! Serializes GATT client procedures.
 //!
 //! NimBLE runs GATT client procedures concurrently and dispatches incoming ATT
@@ -27,5 +29,8 @@ void nimble_gattc_op_queue_push(NimbleGattClientOpStartFn start, void *ctx);
 
 //! Signals completion of the running operation and kicks the next one.
 void nimble_gattc_op_queue_complete(void);
+
+//! Whether the running operation is the one started with @p start and @p ctx.
+bool nimble_gattc_op_queue_is_running(NimbleGattClientOpStartFn start, const void *ctx);
 
 void nimble_gattc_op_queue_init(void);
