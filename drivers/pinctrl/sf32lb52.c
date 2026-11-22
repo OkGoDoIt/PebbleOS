@@ -3,13 +3,15 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
+#include <pbl/drivers/gpio/sf32lb.h>
 #include <pbl/drivers/pinctrl/sf32lb52.h>
 #include <pbl/kernel/mmio.h>
 #include <pbl/util/bits.h>
 #include <pbl/util/misc.h>
 
+#include <devicetree/devices.h>
 #include <hardware/sf32lb52_hpsys_aon.h>
-#include <hardware/sf32lb52_memorymap.h>
 #include <hardware/sf32lb52_pinmux.h>
 #include <hardware/sf32lb52_rtc.h>
 
@@ -40,7 +42,7 @@
    PINMUX_PAD_DS_MASK)
 
 static const struct pbl_pinctrl_sf32lb52 *prv_ctrl(const struct pbl_pinctrl_controller *ctrl) {
-  return container_of(ctrl, const struct pbl_pinctrl_sf32lb52, ctrl);
+  return PBL_CONTAINER_OF(ctrl, const struct pbl_pinctrl_sf32lb52, ctrl);
 }
 
 static int prv_pad_value(uint32_t pin, uint32_t pad, bool mode_pad, uint32_t *val) {
@@ -79,24 +81,25 @@ static int prv_pad_value(uint32_t pin, uint32_t pad, bool mode_pad, uint32_t *va
   return 0;
 }
 
-static void prv_rtc_pull(uint32_t pad, uint32_t val) {
+static void prv_rtc_pull(const struct pbl_pinctrl_sf32lb52 *ctrl, uint32_t pad, uint32_t val) {
   bool pe = (val & PINMUX_PAD_PE) != 0U;
   bool ps = (val & PINMUX_PAD_PS) != 0U;
 
   if (pad >= AON_PULL_FIRST_PAD && pad <= AON_PULL_LAST_PAD) {
     uint32_t bit = RTC_PAWK_PIN(pad - AON_PULL_PAWK_BASE);
 
-    pbl_modifyl(bit, pe ? bit : 0U, SF32LB52_RTC_BASE + SF32LB52_RTC_PAWK1R_OFFSET);
-    pbl_modifyl(bit, ps ? bit : 0U, SF32LB52_RTC_BASE + SF32LB52_RTC_PAWK2R_OFFSET);
+    pbl_modifyl(bit, pe ? bit : 0U, ctrl->rtc + SF32LB52_RTC_PAWK1R_OFFSET);
+    pbl_modifyl(bit, ps ? bit : 0U, ctrl->rtc + SF32LB52_RTC_PAWK2R_OFFSET);
   } else if (pad >= PBR_FIRST_PAD && pad <= PBR_LAST_PAD) {
     pbl_modifyl(RTC_PBR_PE | RTC_PBR_PS, (pe ? RTC_PBR_PE : 0U) | (ps ? RTC_PBR_PS : 0U),
-                SF32LB52_RTC_BASE + SF32LB52_RTC_PBR_OFFSET(pad - PBR_FIRST_PAD));
+                ctrl->rtc + SF32LB52_RTC_PBR_OFFSET(pad - PBR_FIRST_PAD));
   }
 }
 
 // Backup output of function select fsel, or none for 0
-static void prv_pbr_configure(uint32_t pad, uint32_t fsel) {
-  uintptr_t reg = SF32LB52_RTC_BASE + SF32LB52_RTC_PBR_OFFSET(pad - PBR_FIRST_PAD);
+static void prv_pbr_configure(const struct pbl_pinctrl_sf32lb52 *ctrl, uint32_t pad,
+                              uint32_t fsel) {
+  uintptr_t reg = ctrl->rtc + SF32LB52_RTC_PBR_OFFSET(pad - PBR_FIRST_PAD);
   uint32_t aon_mask = 0U;
   uint32_t aon_val = 0U;
   uint32_t sel;
@@ -130,7 +133,7 @@ static void prv_pbr_configure(uint32_t pad, uint32_t fsel) {
   }
 
   if (aon_mask != 0U) {
-    pbl_modifyl(aon_mask, aon_val, SF32LB52_HPSYS_AON_BASE + SF32LB52_HPSYS_AON_CR1_OFFSET);
+    pbl_modifyl(aon_mask, aon_val, ctrl->aon + SF32LB52_HPSYS_AON_CR1_OFFSET);
   }
   pbl_modifyl(RTC_PBR_SEL_MASK, PBL_FIELD_PREP(RTC_PBR_SEL_MASK, sel), reg);
   pbl_modifyl(RTC_PBR_OE, RTC_PBR_OE, reg);
@@ -180,20 +183,48 @@ static int prv_configure_pin(const struct pbl_pinctrl_sf32lb52 *ctrl, uint32_t p
   pbl_modifyl(mask, val & mask, reg);
 
   if (pa && (mask & (PINMUX_PAD_PE | PINMUX_PAD_PS)) != 0U) {
-    prv_rtc_pull(pad, val);
+    prv_rtc_pull(ctrl, pad, val);
   }
 
   if (pa && pad >= PBR_FIRST_PAD && pad <= PBR_LAST_PAD && (mask & PINMUX_PAD_FSEL_MASK) != 0U) {
-    prv_pbr_configure(pad, pbr ? PBL_FIELD_GET(PINMUX_PAD_FSEL_MASK, pin) : 0U);
+    prv_pbr_configure(ctrl, pad, pbr ? PBL_FIELD_GET(PINMUX_PAD_FSEL_MASK, pin) : 0U);
   }
 
   return 0;
 }
 
+#ifdef CONFIG_PINCTRL_SF32LB52_OUTPUT_LOW
+// The GPIO driver drives the pad and selects its GPIO function
+static int prv_output_low(uint32_t pin) {
+  struct pbl_gpio gpio = PBL_GPIO(&dt_gpio1, PBL_FIELD_GET(PBL_PINCTRL_SF32LB52_PAD_MSK, pin), 0);
+
+  if (PBL_FIELD_GET(PBL_PINCTRL_SF32LB52_PORT_MSK, pin) != PBL_PINCTRL_SF32LB52_PORT_PA ||
+      PBL_FIELD_GET(PBL_PINCTRL_SF32LB52_FSEL_MSK, pin) != 0U) {
+    return -EINVAL;
+  }
+
+  if (pbl_device_init(&dt_gpio1.dev) != 0) {
+    return -ENODEV;
+  }
+
+  return pbl_gpio_configure(&gpio, PBL_GPIO_OUTPUT_LOW);
+}
+#endif
+
 static int prv_configure(const struct pbl_pinctrl_controller *ctrl, const uint32_t *pins,
                          uint8_t num_pins, uintptr_t reg) {
   for (uint8_t i = 0U; i < num_pins; i++) {
-    int ret = prv_configure_pin(prv_ctrl(ctrl), pins[i], PAD_MSK);
+    int ret;
+
+    if ((pins[i] & PBL_PINCTRL_SF32LB52_OUTPUT_LOW) != 0U) {
+#ifdef CONFIG_PINCTRL_SF32LB52_OUTPUT_LOW
+      ret = prv_output_low(pins[i]);
+#else
+      ret = -ENOTSUP;
+#endif
+    } else {
+      ret = prv_configure_pin(prv_ctrl(ctrl), pins[i], PAD_MSK);
+    }
 
     if (ret != 0) {
       return ret;
@@ -218,7 +249,7 @@ static int prv_get(const struct pbl_pinctrl_controller *ctrl, uint16_t pad, uint
 }
 
 int pbl_pinctrl_sf32lb52_modify(uint32_t pin, uint32_t mask) {
-  return prv_configure_pin(&pbl_pinctrl_sf32lb52_hpsys, pin, mask);
+  return prv_configure_pin(&pbl_pinctrl_sf32lb52_hpsys_inst, pin, mask);
 }
 
 static const struct pbl_pinctrl_controller_ops s_ops = {
@@ -226,12 +257,22 @@ static const struct pbl_pinctrl_controller_ops s_ops = {
   .get = prv_get,
 };
 
-PBL_DEVICE_STATE_DEFINE(pbl_pinctrl_sf32lb52_hpsys);
-const struct pbl_pinctrl_sf32lb52 pbl_pinctrl_sf32lb52_hpsys = {
-  .ctrl = PBL_PINCTRL_CONTROLLER_INIT(pbl_pinctrl_sf32lb52_hpsys, "pinctrl", &s_ops,
-                                      NUM_SA_PADS + NUM_PA_PADS),
-  .pad_sa = SF32LB52_PINMUX1_BASE + SF32LB52_PINMUX_PAD_SA_OFFSET(0),
-  .pad_pa = SF32LB52_PINMUX1_BASE + SF32LB52_PINMUX_PAD_PA_OFFSET(0),
-  .cfg = SF32LB52_HPSYS_CFG_BASE,
-};
-PBL_DEVICE_REGISTER(pbl_pinctrl_sf32lb52_hpsys, &pbl_pinctrl_sf32lb52_hpsys.ctrl.dev);
+#define PBL_PINCTRL_SF32LB52_DEFINE(sym, _name, _base, _cfg, _rtc, _aon)                         \
+  PBL_DEVICE_STATE_DEFINE(sym);                                                                  \
+  PBL_DEVICE_INSTANCE(sym, struct pbl_pinctrl_sf32lb52, struct pbl_pinctrl_controller, ctrl) {   \
+    .ctrl = PBL_PINCTRL_CONTROLLER_INIT(sym, _name, nullptr, &s_ops, NUM_SA_PADS + NUM_PA_PADS), \
+    .pad_sa = (_base) + SF32LB52_PINMUX_PAD_SA_OFFSET(0),                                        \
+    .pad_pa = (_base) + SF32LB52_PINMUX_PAD_PA_OFFSET(0), .cfg = (_cfg), .rtc = (_rtc),          \
+    .aon = (_aon),                                                                               \
+  }
+
+#define PBL_PINCTRL_SF32LB52_DT_STATE(sym, ...)       \
+  static const uint32_t sym##_pins[] = {__VA_ARGS__}; \
+  const struct pbl_pinctrl_state sym = {              \
+    .ctrl = SF32LB52_PINCTRL,                         \
+    .pins = sym##_pins,                               \
+    .num_pins = PBL_ARRAY_SIZE(sym##_pins),           \
+  }
+
+#include PBL_DT_INSTANCES(sifli_sf32lb52_pinctrl_pinctrl_controller)
+#include PBL_DT_INSTANCES(sifli_sf32lb52_pinctrl_pinctrl)

@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+compatible: sifli,sf32lb52-gpio
+config: GPIO_SF32LB
+class: [gpio, intc]
+define: PBL_GPIO_SF32LB52_DEFINE
+symbol:
+  gpio: "{sym}"
+  intc: "{sym}_intc"
+args:
+  - name: true
+  - reg: 0
+  - irq: 0
+  - clock: 0
+  - prop: ngpios
+  - reg: 0
+    of: sifli,hpsys-aon
+  - reg: 0
+    of: sifli,pmuc

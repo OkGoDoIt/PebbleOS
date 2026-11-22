@@ -21,6 +21,8 @@ typedef enum {
   MsgIdDictationResult = 0x02,
   /** NLP result, from the phone. */
   MsgIdNLPResult = 0x03,
+  /** The phone switched to another dictation service, from the phone. */
+  MsgIdServiceRetry = 0x04,
 } MsgId;
 
 /** @brief Attribute identifier in voice endpoint messages. */
@@ -44,6 +46,8 @@ typedef union PBL_PACKED {
   struct {
     /** The session was started by an app. */
     uint32_t app_initiated : 1;
+    /** The watch accepts #MsgIdServiceRetry for this session. Zero on older firmware. */
+    uint32_t service_retry_support : 1;
   };
   /** All flags. */
   uint32_t all;
@@ -95,5 +99,17 @@ typedef struct PBL_PACKED {
   /** Result attributes. */
   struct pbl_generic_attr_list attr_list;
 } VoiceSessionResultMsg;
+
+/** @brief Service retry, from the phone. */
+typedef struct PBL_PACKED {
+  /** #MsgIdServiceRetry. */
+  MsgId msg_id : 8;
+  /** Flags. */
+  VEFlags flags;
+  /** Audio endpoint session. */
+  AudioEndpointSessionId session_id;
+  /** Service the phone is retrying with. */
+  VoiceEndpointService service : 8;
+} ServiceRetryMsg;
 
 /** @} */

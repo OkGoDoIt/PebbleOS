@@ -8,9 +8,9 @@
  * @ingroup services
  * @brief Firmware-side Bluetooth management on top of the Bluetooth stack.
  *
- * Covers starting and stopping the stack, the bonding database, the local identity and
- * address, pairability, and the GATT services the firmware implements (battery, heart rate,
- * device information).
+ * Covers starting and stopping the stack, the local identity and
+ * address, pairability, and the GATT services the firmware implements (battery, device
+ * information).
  *
  * The stack runs while it is enabled (by the runlevel system) and either airplane mode is off
  * or the override forces it on:
@@ -75,7 +75,7 @@ bool bt_ctl_is_bluetooth_running(void);
 /**
  * @brief Set and persist airplane mode.
  *
- * The stack is started or stopped later from KernelBG.
+ * The stack is started or stopped later from SysWorkq.
  *
  * @param enabled True to turn airplane mode on.
  */
@@ -100,7 +100,7 @@ void bt_ctl_set_enabled(bool enabled);
 void bt_ctl_set_override_mode(BtCtlModeOverride override);
 
 /**
- * @brief Restart the stack from KernelBG.
+ * @brief Restart the stack from SysWorkq.
  *
  * No-op if Bluetooth is not active.
  */

@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+rsource "c/Kconfig"
+
+menu "Libraries"
+
+config BTUTIL
+    bool "Bluetooth utilities"
+    help
+      Build the Bluetooth device address, UUID and security manager
+      helpers.
+
+config KRAEPELIN
+    bool "Kraepelin"
+    help
+      Build the Kraepelin step and sleep tracking algorithm.
+
+rsource "fuel_gauge/Kconfig"
+
+config VANHEES
+    bool "van Hees"
+    help
+      Build the van Hees wrist angle sleep classifier.
+
+endmenu

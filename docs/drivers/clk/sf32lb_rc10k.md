@@ -6,14 +6,15 @@ in deep sleep. Its real rate is only known by measurement. It drives the
 system clock source (LPTIM1), the calendar RTC and the LPTIM PWM, so every
 error in its assumed rate is an error in the kernel's time.
 
-`drivers/clk/sf32lb_rc10k.c` provides it as a {doc}`calibrated clock
-<index>`, `SF32LB_RC10K`. This page describes the hardware, the oscillator
-as measured on a watch, the vendor algorithm it replaces and the results.
+`drivers/clk/sf32lb52_pmuc.c` provides it as a {doc}`calibrated clock
+<index>`, the LRC10 clock of the PMUC, `<&pmuc SF32LB52_PMUC_CLK_LRC10>`.
+This page describes the hardware, the oscillator as measured on a watch, the
+vendor algorithm it replaces and the results.
 
 ## Hardware
 
 The Bluetooth controller's RCCAL counter counts 48 MHz crystal cycles over
-$N$ RC10K cycles (`CONFIG_CLK_SF32LB_RC10K_CAL_GATE_CYCLES`, 2000 by default,
+$N$ RC10K cycles (`CONFIG_CLK_SF32LB52_PMUC_LRC10_CAL_GATE_CYCLES`, 2000 by default,
 207 ms). The counter resolution is 0.1 ppm.
 
 The LCPU calibrates the RC10K on its own with the same counter, for its
@@ -36,6 +37,19 @@ The system clock source and the RTC follow the rate through notifiers; the
 RTC prescaler can be rewritten while the calendar runs, so the calendar keeps
 its time across updates. The PWM reads the rate when it programs its
 prescaler.
+
+## SF32LB57
+
+The SF32LB57 has the same counter in its HPSYS RCC, RC10CAL, so
+`drivers/clk/sf32lb57_pmuc.c` measures the RC10K without the low-power
+domain, the LCPU or its mutex. The vendor HAL does not use it, and calibrates
+through the Bluetooth controller as on the SF32LB52. The driver holds off deep
+WFI for the 207 ms of a gate, so the crystal keeps counting. RC10CAL1.CAL_SEL
+switches the counter to the LRC32, which a gate measured at 26.86 kHz.
+
+On a SiFli SF32LB57x-DPI-HDK the RC10K ran at 9666 Hz, with gates within 1 Hz
+of each other. The oscillator is not characterized on this series: the driver
+uses the SF32LB52 model below.
 
 ## The oscillator
 

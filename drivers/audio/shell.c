@@ -5,7 +5,7 @@
 #include <inttypes.h>
 
 #include <pbl/drivers/audio.h>
-#include <pbl/drivers/battery.h>
+#include <pbl/drivers/charger.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/shell/shell.h>
 #include <pbl/util/math.h>
@@ -38,23 +38,23 @@ struct prv_session {
 
 //! The speaker draws more than the default battery discharge limit allows
 static void prv_high_load(bool on) {
-#ifdef CONFIG_BATTERY_HIGH_LOAD
+#ifdef CONFIG_CHARGER_HIGH_LOAD
   if (on) {
-    (void)battery_high_load_request();
+    (void)pbl_charger_high_load_request(CHARGER);
   } else {
-    (void)battery_high_load_release();
+    (void)pbl_charger_high_load_release(CHARGER);
   }
 #endif
 }
 
 static const char *prv_dir_name(const struct pbl_audio *audio) {
-  return audio->dir == PBL_AUDIO_PLAYBACK ? "playback" : "capture";
+  return pbl_audio_dir(audio) == PBL_AUDIO_PLAYBACK ? "playback" : "capture";
 }
 
 static uint32_t prv_pick_rate(const struct pbl_audio_caps *caps) {
   static const uint32_t preferred[] = {16000U, 48000U, 8000U};
 
-  for (size_t i = 0U; i < ARRAY_LENGTH(preferred); i++) {
+  for (size_t i = 0U; i < PBL_ARRAY_SIZE(preferred); i++) {
     if ((pbl_audio_rate_bit(preferred[i]) & caps->rates) != 0U) {
       return preferred[i];
     }
@@ -73,8 +73,8 @@ static const struct pbl_audio *prv_find(const struct pbl_shell *sh, const char *
     return nullptr;
   }
 
-  audio = container_of(dev, const struct pbl_audio, dev);
-  if (audio->dir != dir) {
+  audio = PBL_CONTAINER_OF(dev, const struct pbl_audio, dev);
+  if (pbl_audio_dir(audio) != dir) {
     pbl_shell_error(sh, "%s is not a %s device", name,
                     dir == PBL_AUDIO_PLAYBACK ? "playback" : "capture");
     return nullptr;
@@ -87,18 +87,18 @@ static int prv_cmd_list(const struct pbl_shell *sh, size_t argc, char **argv) {
   const struct pbl_device *dev;
 
   PBL_DEVICE_CLASS_FOREACH(&pbl_audio_class, dev) {
-    const struct pbl_audio *audio = container_of(dev, const struct pbl_audio, dev);
+    const struct pbl_audio *audio = PBL_CONTAINER_OF(dev, const struct pbl_audio, dev);
     struct pbl_audio_caps caps;
 
     if (pbl_audio_get_caps(audio, &caps) != 0) {
-      pbl_shell_print(sh, "%s: %s (not ready)", dev->name, prv_dir_name(audio));
+      pbl_shell_print(sh, "%s: %s (not ready)", pbl_device_name(dev), prv_dir_name(audio));
       continue;
     }
 
     pbl_shell_print(sh,
                     "%s: %s rates 0x%" PRIx32 " channels %u-%u gain %" PRId32 "..%" PRId32
                     " mdB step %" PRId32 "%s",
-                    dev->name, prv_dir_name(audio), caps.rates, caps.min_channels,
+                    pbl_device_name(dev), prv_dir_name(audio), caps.rates, caps.min_channels,
                     caps.max_channels, caps.gain_min_mdb, caps.gain_max_mdb, caps.gain_step_mdb,
                     pbl_audio_is_running(audio) ? " (running)" : "");
   }
@@ -110,13 +110,13 @@ static void prv_record_done(const struct pbl_audio *audio, void *period,
                             const struct pbl_audio_pos *pos, void *arg) {
   struct prv_session *s = arg;
   const int16_t *samples = period;
-  size_t frames = MIN(s->period_frames, s->frames_left);
+  size_t frames = PBL_MIN(s->period_frames, s->frames_left);
 
   for (size_t i = 0U; i < frames; i++) {
     for (uint8_t ch = 0U; ch < s->channels; ch++) {
       int32_t v = samples[i * s->channels + ch];
 
-      s->peak[ch] = MAX(s->peak[ch], (int16_t)MIN(ABS(v), INT16_MAX));
+      s->peak[ch] = PBL_MAX(s->peak[ch], (int16_t)PBL_MIN(PBL_ABS(v), INT16_MAX));
       s->sum_sq[ch] += (uint64_t)(v * v);
     }
   }
@@ -132,7 +132,7 @@ static void prv_record_done(const struct pbl_audio *audio, void *period,
 }
 
 static void prv_tone_fill(struct prv_session *s, int16_t *samples) {
-  size_t frames = MIN(s->period_frames, s->frames_left);
+  size_t frames = PBL_MIN(s->period_frames, s->frames_left);
 
   for (size_t i = 0U; i < frames; i++) {
     int16_t v = (int16_t)(sin_lookup((int32_t)(s->phase >> 16)) * TONE_AMPLITUDE / TRIG_MAX_RATIO);
@@ -181,7 +181,7 @@ static int prv_run(const struct pbl_shell *sh, const struct pbl_audio *audio, st
     return -ENOMEM;
   }
 
-  if (audio->dir == PBL_AUDIO_PLAYBACK) {
+  if (pbl_audio_dir(audio) == PBL_AUDIO_PLAYBACK) {
     for (uint8_t i = 0U; i < PERIODS; i++) {
       prv_tone_fill(s, (int16_t *)stream.buf + i * s->period_frames * s->channels);
     }
@@ -219,7 +219,7 @@ static int prv_setup(const struct pbl_shell *sh, const struct pbl_audio *audio,
 
   *s = (struct prv_session){
     .rate = prv_pick_rate(&caps),
-    .channels = channels != 0U ? channels : MIN(caps.max_channels, MAX_CHANNELS),
+    .channels = channels != 0U ? channels : PBL_MIN(caps.max_channels, MAX_CHANNELS),
   };
   s->period_frames = s->rate * PERIOD_MS / MS_PER_S;
 
@@ -270,7 +270,7 @@ static int prv_cmd_rec(const struct pbl_shell *sh, size_t argc, char **argv) {
                   s.xruns);
   for (uint8_t ch = 0U; ch < s.channels; ch++) {
     pbl_shell_print(sh, "ch%u: peak %d rms %" PRId32, ch, s.peak[ch],
-                    integer_sqrt((int64_t)(s.sum_sq[ch] / MAX(s.frames, 1U))));
+                    integer_sqrt((int64_t)(s.sum_sq[ch] / PBL_MAX(s.frames, 1U))));
   }
 
   return 0;

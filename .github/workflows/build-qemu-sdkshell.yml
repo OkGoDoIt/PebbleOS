@@ -27,7 +27,7 @@ jobs:
               - 'boards/**'
               - 'cmake/**'
               - 'drivers/**'
-              - 'fw/**'
+              - 'pebble/**'
               - 'include/**'
               - 'kernel/**'
               - 'lib/**'
@@ -38,7 +38,7 @@ jobs:
               - 'third_party/**'
               - 'tools/**'
               - 'CMakeLists.txt'
-              - 'Kconfig'
+              - 'Kconfig*'
               - 'SDK_VERSION'
               - 'pbl.yml'
               - 'requirements.txt'
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: ghcr.io/coredevices/pebbleos-docker:v10
+      image: ghcr.io/coredevices/pebbleos-docker:v16
 
     strategy:
       matrix:
@@ -63,7 +63,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          submodules: true
 
       - name: Fetch tags
         run: git fetch --tags --force
@@ -72,6 +71,11 @@ jobs:
         uses: ./.github/actions/rebase
         with:
           submodules: true
+
+      - name: Restore the compiler cache
+        uses: ./.github/actions/ccache
+        with:
+          key: sdkshell-${{ matrix.board }}
 
       - name: Install Python dependencies
         run: |
@@ -88,6 +92,11 @@ jobs:
 
       - name: Build
         run: pbl build qemu_image_micro qemu_image_spi
+
+      - name: Save the compiler cache
+        uses: ./.github/actions/ccache-save
+        with:
+          key: sdkshell-${{ matrix.board }}
 
       - name: Copy artifacts
         run: |

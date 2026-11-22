@@ -11,8 +11,8 @@ gives the overall picture; each layer has its own section with the details.
 block-beta
   columns 2
   apps["Apps and workers"]:2
-  applib["Application framework<br/>fw/applib"]:2
-  services["Services<br/>fw/services"]:2
+  applib["Application framework<br/>pebble/applib"]:2
+  services["Services<br/>pebble/services"]:2
   subsys["Subsystems<br/>subsys/"] libs["Libraries<br/>lib/"]
   drivers["Drivers<br/>drivers/"]:2
   kernel["Kernel<br/>kernel/"]:2
@@ -48,13 +48,13 @@ From the bottom up:
   to the phone and feed events to apps.
 
 Application framework
-: `fw/applib` is the API apps are written against, from windows and
+: `pebble/applib` is the API apps are written against, from windows and
   layers to graphics and text. Its exported part is the
   {doc}`Application SDK <../sdk/index>`.
 
 Apps
 : System apps (launcher, settings, notifications, health, …) are built
-  into the firmware from `fw/apps`; third-party apps and workers are
+  into the firmware from `pebble/apps`; third-party apps and workers are
   installed from the phone.
 
 The public interfaces of each layer live under `include/pbl/`, documented
@@ -68,11 +68,11 @@ The firmware runs a fixed set of tasks, each a kernel thread:
 | Task | Role |
 | --- | --- |
 | KernelMain | The system's event loop: input, UI and most services |
-| KernelBackground | Deferred work kept off KernelMain |
+| SysWorkq | Deferred work kept off KernelMain |
 | App | The foreground app or watchface |
 | Worker | The app's background worker, if it has one |
 | Bluetooth host, controller, HCI | The Bluetooth stack |
-| NewTimers | Timer callbacks |
+| SysWorkqHigh | Timer callbacks |
 
 Services and drivers post events to KernelMain, which handles them and
 forwards what concerns the app to the app's own event queue. Only one app
@@ -86,7 +86,7 @@ apps run privileged. {doc}`../sdk/how_it_works` describes the boundary.
 
 A bootloader, outside this tree, starts the firmware image in flash. The
 kernel's reset handler sets up memory and the SoC, then starts the scheduler
-with `main()` (`fw/main.c`) on the main thread, KernelMain. `main()` brings up
+with `main()` (`pebble/main.c`) on the main thread, KernelMain. `main()` brings up
 the drivers and services and launches the first app, normally the watchface.
 {doc}`../kernel/boot` details the early steps.
 
@@ -102,7 +102,7 @@ The same tree builds three firmwares:
   functions.
 
 The variant, and everything else that is optional, is chosen at build time
-with Kconfig, from the board's defconfig and the variant's configuration;
+with Kconfig, from the board's defconfig and the firmware's configuration;
 see {doc}`../development/build_system/index`.
 
 ## Hardware support

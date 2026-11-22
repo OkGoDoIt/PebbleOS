@@ -43,43 +43,89 @@
 #endif
 
 /**
- * @def PBL_UNSORTED_SECTION
- * @brief Gather the object in a named section, without a linker script.
+ * @def PBL_ITERABLE_SECTION
+ * @brief Add the object to an iterable section, a table gathered at link time from any file.
  *
- * For builds linked without the firmware linker script (@c PBL_NO_LINKER_SCRIPT), where
- * @ref PBL_SECTION is a no-op: the linker collects such a section on its own, in no particular
- * order, and names its bounds PBL_UNSORTED_SECTION_START() and PBL_UNSORTED_SECTION_END(). The
- * objects must be @ref PBL_USED. The section may be empty.
+ * Where the firmware linker script gathers the section, the entries are sorted by @p key, or
+ * kept in link order if the section is registered as unsorted; elsewhere they come in no
+ * particular order. The section is registered with @c pbl_iterable_section() in CMake, and may
+ * be empty. Objects must be constant.
  *
  * @code{.c}
- * extern const struct foo foo_start[] PBL_UNSORTED_SECTION_START(foos);
- * extern const struct foo foo_end[] PBL_UNSORTED_SECTION_END(foos);
+ * // where the table is walked
+ * PBL_ITERABLE_SECTION_DECLARE(const struct foo, foos);
  *
- * static const struct foo s_foo PBL_USED PBL_UNSORTED_SECTION(foos) = {...};
+ * PBL_ITERABLE_SECTION_FOREACH(const struct foo, foos, foo) {
+ *   ...
+ * }
+ *
+ * // any file
+ * static const struct foo s_foo PBL_ITERABLE_SECTION(struct foo, foos, "bar") = {...};
  * @endcode
  *
- * @param name Section name, a C identifier of at most 14 characters (Mach-O allows 16).
+ * @param type Type of the entries.
+ * @param tag Table name, a C identifier of at most 14 characters. Its section is named after it
+ * with an @c i_ prefix, which fits the 16 characters Mach-O allows.
+ * @param key Sort key, a string.
  */
 
 /**
- * @def PBL_UNSORTED_SECTION_START
- * @brief Name a declaration after the start of a @ref PBL_UNSORTED_SECTION.
+ * @def PBL_ITERABLE_SECTION_DECLARE
+ * @brief Declare the bounds of an iterable section.
+ *
+ * @param type Type of the entries.
+ * @param tag Section name.
  */
 
 /**
- * @def PBL_UNSORTED_SECTION_END
- * @brief Name a declaration after the end of a @ref PBL_UNSORTED_SECTION.
+ * @def PBL_ITERABLE_SECTION_START
+ * @brief First entry of an iterable section declared with @ref PBL_ITERABLE_SECTION_DECLARE.
+ *
+ * @param tag Section name.
  */
+#define PBL_ITERABLE_SECTION_START(tag) __start_i_##tag
 
+/**
+ * @def PBL_ITERABLE_SECTION_END
+ * @brief End of an iterable section declared with @ref PBL_ITERABLE_SECTION_DECLARE.
+ *
+ * @param tag Section name.
+ */
+#define PBL_ITERABLE_SECTION_END(tag) __stop_i_##tag
+
+/**
+ * @def PBL_ITERABLE_SECTION_FOREACH
+ * @brief Loop over the entries of an iterable section.
+ *
+ * @param type Type of the entries.
+ * @param tag Section name.
+ * @param var Name of the loop variable, a pointer to the entry.
+ */
+#define PBL_ITERABLE_SECTION_FOREACH(type, tag, var) \
+  for (type *var = PBL_ITERABLE_SECTION_START(tag); var < PBL_ITERABLE_SECTION_END(tag); var++)
+
+#if UNITTEST || defined(PBL_NO_LINKER_SCRIPT)
 #ifdef __APPLE__
-#define PBL_UNSORTED_SECTION(name) PBL_SECTION_IMPL("__DATA_CONST,__" #name) PBL_NO_SANITIZE_ADDRESS
-#define PBL_UNSORTED_SECTION_START(name) __asm("section$start$__DATA_CONST$__" #name)
-#define PBL_UNSORTED_SECTION_END(name)   __asm("section$end$__DATA_CONST$__" #name)
+#define PBL_ITERABLE_SECTION(type, tag, key)                                   \
+  PBL_USED PBL_ALIGNED(alignof(type)) PBL_SECTION_IMPL("__DATA_CONST,i_" #tag) \
+      PBL_NO_SANITIZE_ADDRESS
+#define PBL_ITERABLE_SECTION_DECLARE(type, tag)                                              \
+  extern type PBL_ITERABLE_SECTION_START(tag)[] __asm("section$start$__DATA_CONST$i_" #tag); \
+  extern type PBL_ITERABLE_SECTION_END(tag)[] __asm("section$end$__DATA_CONST$i_" #tag)
 #else
-#define PBL_UNSORTED_SECTION(name)       PBL_SECTION_IMPL(#name) PBL_NO_SANITIZE_ADDRESS
+#define PBL_ITERABLE_SECTION(type, tag, key) \
+  PBL_USED PBL_ALIGNED(alignof(type)) PBL_SECTION_IMPL("i_" #tag) PBL_NO_SANITIZE_ADDRESS
 // ELF linkers only define the bounds of a section that exists
-#define PBL_UNSORTED_SECTION_START(name) __asm("__start_" #name) PBL_WEAK
-#define PBL_UNSORTED_SECTION_END(name)   __asm("__stop_" #name) PBL_WEAK
+#define PBL_ITERABLE_SECTION_DECLARE(type, tag)           \
+  extern type PBL_ITERABLE_SECTION_START(tag)[] PBL_WEAK; \
+  extern type PBL_ITERABLE_SECTION_END(tag)[] PBL_WEAK
+#endif
+#else
+#define PBL_ITERABLE_SECTION(type, tag, key) \
+  PBL_USED PBL_ALIGNED(alignof(type)) PBL_SECTION_IMPL(".i_" #tag "." key)
+#define PBL_ITERABLE_SECTION_DECLARE(type, tag)  \
+  extern type PBL_ITERABLE_SECTION_START(tag)[]; \
+  extern type PBL_ITERABLE_SECTION_END(tag)[]
 #endif
 
 /** @} */

@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "nimble_gattc_op_queue.h"
+#include "clients/op_queue.h"
 #include "nimble_type_conversions.h"
 
 #include <pbl/bluetooth/gatt.h>
@@ -343,7 +343,7 @@ static uint16_t prv_get_last_dsc_handle(GATTServiceDiscoveryContext *context) {
       (GATTServiceDiscoveryCharacteristicNode *)list_get_next(context->current_characteristic);
 
   if (next_chr != nullptr) {
-    return MIN(next_chr->characteristic.def_handle, next_chr->characteristic.val_handle) - 1;
+    return PBL_MIN(next_chr->characteristic.def_handle, next_chr->characteristic.val_handle) - 1;
   } else {
     return ((GATTServiceDiscoveryServiceNode *)context->current_service)->service.end_handle;
   }
@@ -425,7 +425,7 @@ static void prv_discover_next_dscs(uint16_t conn_handle, GATTServiceDiscoveryCon
       (GATTServiceDiscoveryCharacteristicNode *)context->current_characteristic;
 
   uint16_t start_handle =
-      MIN(chr_node->characteristic.val_handle, chr_node->characteristic.def_handle);
+      PBL_MIN(chr_node->characteristic.val_handle, chr_node->characteristic.def_handle);
   uint16_t end_handle = prv_get_last_dsc_handle(context);
   int rc = ble_gattc_disc_all_dscs(conn_handle, start_handle, end_handle, prv_find_dsc_cb, context);
   if (rc != 0) {

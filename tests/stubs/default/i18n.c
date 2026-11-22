@@ -3,31 +3,12 @@
 
 #include <string.h>
 
+#include <pbl/i18n/i18n.h>
 #include <pbl/kernel/compiler.h>
-#include <pbl/services/i18n/i18n.h>
 
 #include <applib/i18n.h>
 
-bool PBL_WEAK i18n_get_pack_info(uint8_t slot, I18nPackInfo *info) {
-  return false;
-}
-
-bool PBL_WEAK i18n_pack_has_fonts(uint8_t slot) {
-  return false;
-}
-
-const char *PBL_WEAK i18n_pack_install_begin(const char *filename) {
-  return filename;
-}
-
-void PBL_WEAK i18n_pack_install_end(bool success) {
-}
-
-bool PBL_WEAK i18n_remove_pack(uint8_t slot) {
-  return false;
-}
-
-const char *PBL_WEAK i18n_get(const char *msgid, const void *owner) {
+const char *PBL_WEAK pbl_i18n_get(const char *msgid, const void *owner) {
   // If a string wasn't found, we want to return the original string.
   // However, if we have a context, this string needs to not show the context.
   // So we just find EOT and if it's present return the next character.
@@ -40,42 +21,36 @@ const char *PBL_WEAK i18n_get(const char *msgid, const void *owner) {
   return message + 1;
 }
 
-void PBL_WEAK i18n_get_with_buffer(const char *string, char *buffer, size_t length) {
-  strncpy(buffer, i18n_get(string, (void *)0x1234), length);
+void PBL_WEAK pbl_i18n_get_with_buffer(const char *string, char *buffer, size_t length) {
+  strncpy(buffer, pbl_i18n_get(string, (void *)0x1234), length);
   buffer[length - 1] = '\0';
-  i18n_free(string, (void *)0x1234);
+  pbl_i18n_free(string, (void *)0x1234);
 }
 
-size_t PBL_WEAK i18n_get_length(const char *string) {
-  size_t size = strlen(i18n_get(string, (void *)0x1234));
-  i18n_free(string, (void *)0x1234);
+size_t PBL_WEAK pbl_i18n_get_length(const char *string) {
+  size_t size = strlen(pbl_i18n_get(string, (void *)0x1234));
+  pbl_i18n_free(string, (void *)0x1234);
   return size;
 }
 
-void PBL_WEAK i18n_free(const char *original, const void *owner) {
+void PBL_WEAK pbl_i18n_free(const char *original, const void *owner) {
 }
 
-void PBL_WEAK i18n_free_all(const void *owner) {
+void PBL_WEAK pbl_i18n_free_all(const void *owner) {
 }
 
 void PBL_WEAK sys_i18n_get_with_buffer(const char *string, char *buffer, size_t length) {
-  i18n_get_with_buffer(string, buffer, length);
+  pbl_i18n_get_with_buffer(string, buffer, length);
 }
 
 size_t PBL_WEAK sys_i18n_get_length(const char *string) {
-  return i18n_get_length(string);
+  return pbl_i18n_get_length(string);
 }
 
 void PBL_WEAK sys_i18n_get_locale(char *buf) {
-  strncpy(buf, "en_US", ISO_LOCALE_LENGTH);
+  strncpy(buf, "en_US", PBL_I18N_LOCALE_LEN);
 }
 
 const char *PBL_WEAK app_get_system_locale(void) {
   return "en_US";
-}
-
-void PBL_WEAK i18n_enable(bool enable) {
-}
-
-void PBL_WEAK i18n_set_resource(uint32_t resource_id) {
 }

@@ -11,7 +11,7 @@
 #include <pbl/kernel/mutex.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/kernel/thread.h>
-#include <pbl/services/new_timer/new_timer.h>
+#include <pbl/kernel/work.h>
 
 // Program and erase units of the NOR parts in use, for sizes known at build time
 #define PAGE_SIZE_BYTES (0x100)
@@ -34,7 +34,7 @@
  *
  * @code{.c}
  * static void prv_erased(int status, void *arg) {
- *   // Runs on the timer task: keep it short
+ *   // Runs on the high priority system work queue: keep it short
  * }
  *
  * ret = pbl_flash_erase(FLASH, addr, len);
@@ -68,7 +68,8 @@ struct pbl_flash;
 /**
  * @brief Completion callback of pbl_flash_erase_async().
  *
- * Runs from the timer task, or from the caller if there is nothing to erase, with no lock held:
+ * Runs on @ref pbl_sys_workq_high, or from the caller if there is nothing to erase, with no lock
+ * held:
  * it may start another erase.
  *
  * @param status 0 or a negative errno.
@@ -161,6 +162,18 @@ struct pbl_flash_ops {
   int (*erase_resume)(const struct pbl_flash *flash);
   /** Optional. Power down while @p fn runs, with interrupts disabled. */
   void (*power_down)(const struct pbl_flash *flash, pbl_flash_pm_fn_t fn, void *arg);
+  /**
+   * Optional, not for a flash the CPU executes from. Power down until @c pm_resume, with
+   * interrupts disabled. Returns 0, or @c -EBUSY while a transfer is in progress.
+   */
+  int (*pm_suspend)(const struct pbl_flash *flash);
+  /** With @c pm_suspend. Power back up. */
+  void (*pm_resume)(const struct pbl_flash *flash);
+  /**
+   * With @c pm_suspend. Get the time the part takes to power down and back up, in microseconds;
+   * valid once initialized.
+   */
+  void (*pm_times)(const struct pbl_flash *flash, uint32_t *enter_us, uint32_t *exit_us);
   /** Optional. Return the hardware to the state the boot code expects, before a reset. */
   void (*stop)(const struct pbl_flash *flash);
   /** With OTP. Read @p len bytes at @p offs of OTP region @p region. */
@@ -179,6 +192,7 @@ struct pbl_flash_ops {
 
 /** @cond INTERNAL_HIDDEN */
 struct pbl_flash_state {
+  const struct pbl_flash *flash;
   struct pbl_mutex lock;
   struct pbl_sem erase_sem;
   bool coredump;
@@ -201,8 +215,8 @@ struct pbl_flash_state {
     pbl_flash_erase_cb_t cb;
     void *arg;
   } erase;
-  TimerID poll_timer;
-  TimerID resume_timer;
+  struct pbl_delayed_work poll_timer;
+  struct pbl_delayed_work resume_timer;
   const uint8_t *map;
   uint32_t map_len;
 };
@@ -231,17 +245,25 @@ struct pbl_flash {
 extern const struct pbl_flash *const FLASH;
 
 /**
+ * @brief Get the geometry of a flash.
+ *
+ * @param flash Flash.
+ * @return Its geometry.
+ */
+static inline const struct pbl_flash_geometry *pbl_flash_get_geometry(
+    const struct pbl_flash *flash) {
+  return flash->geometry;
+}
+
+/**
  * @brief Define the class state of flash @p sym, for the @c PBL_FLASH_*_DEFINE() macro of a
  * driver.
  *
  * @param sym Symbol of the flash instance.
  */
-#define PBL_FLASH_STATE_DEFINE(sym)                   \
-  PBL_DEVICE_STATE_DEFINE(sym);                       \
-  static struct pbl_flash_state sym##_flash_state = { \
-    .lock = PBL_MUTEX_INITIALIZER,                    \
-    .erase_sem = PBL_SEM_INITIALIZER(1, 1),           \
-  }
+#define PBL_FLASH_STATE_DEFINE(sym) \
+  PBL_DEVICE_STATE_DEFINE(sym);     \
+  static struct pbl_flash_state sym##_flash_state
 
 /**
  * @brief Initializer for the struct pbl_flash of flash @p sym.
@@ -249,21 +271,19 @@ extern const struct pbl_flash *const FLASH;
  * @param sym Symbol of the flash instance, with its state defined by PBL_FLASH_STATE_DEFINE().
  * @param _name Name.
  * @param _parent Parent device, e.g. the memory controller, or NULL.
- * @param _deps Dependencies from PBL_DEVICE_DEPS(), or NULL.
  * @param _ops Driver operations.
  * @param _geometry Geometry.
  * @param _otp OTP organization, or NULL.
  * @param _otp_layout OTP cells, or NULL.
  */
-#define PBL_FLASH_INIT(sym, _name, _parent, _deps, _ops, _geometry, _otp, _otp_layout)           \
-  {                                                                                              \
-    .dev =                                                                                       \
-        PBL_DEVICE_INIT_CLASS(sym, _name, pbl_flash_dev_init, _parent, _deps, &pbl_flash_class), \
-    .ops = (_ops),                                                                               \
-    .state = &sym##_flash_state,                                                                 \
-    .geometry = (_geometry),                                                                     \
-    .otp = (_otp),                                                                               \
-    .otp_layout = (_otp_layout),                                                                 \
+#define PBL_FLASH_INIT(sym, _name, _parent, _ops, _geometry, _otp, _otp_layout)              \
+  {                                                                                          \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_flash_dev_init, _parent, &pbl_flash_class), \
+    .ops = (_ops),                                                                           \
+    .state = &sym##_flash_state,                                                             \
+    .geometry = (_geometry),                                                                 \
+    .otp = (_otp),                                                                           \
+    .otp_layout = (_otp_layout),                                                             \
   }
 
 /**
@@ -393,6 +413,25 @@ int pbl_flash_coredump_init(const struct pbl_flash *flash);
  * @param arg Argument of @p fn.
  */
 void pbl_flash_power_down(const struct pbl_flash *flash, pbl_flash_pm_fn_t fn, void *arg);
+
+/**
+ * @brief Power the flash down until pbl_flash_pm_resume(), with interrupts disabled.
+ *
+ * For a flash the CPU does not execute from, see pbl_flash_power_down() otherwise.
+ *
+ * @param flash Flash.
+ * @retval 0 Powered down.
+ * @retval -EBUSY An erase or a transfer is in progress.
+ * @retval -ENOTSUP The driver cannot.
+ */
+int pbl_flash_pm_suspend(const struct pbl_flash *flash);
+
+/**
+ * @brief Power the flash back up after pbl_flash_pm_suspend().
+ *
+ * @param flash Flash.
+ */
+void pbl_flash_pm_resume(const struct pbl_flash *flash);
 
 /**
  * @brief CRC-32 of a range.

@@ -19,7 +19,7 @@
  * drain), so callers deal in logical levels.
  *
  * @code{.c}
- * static const struct pbl_gpio s_reset = PBL_GPIO(SF32LB_GPIO1, 28, PBL_GPIO_ACTIVE_LOW);
+ * static const struct pbl_gpio s_reset = PBL_GPIO(&dt_gpio1, 28, PBL_GPIO_ACTIVE_LOW);
  *
  * pbl_gpio_configure(&s_reset, PBL_GPIO_OUTPUT_ACTIVE);
  * pbl_gpio_set(&s_reset, false);
@@ -120,13 +120,23 @@ struct pbl_gpio_port {
  * @param _num_pins Number of pins.
  * @param _intc Interrupt controller of the pins, or NULL.
  */
-#define PBL_GPIO_PORT_INIT(sym, _name, _init, _parent, _ops, _num_pins, _intc)               \
-  {                                                                                          \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, nullptr, &pbl_gpio_port_class), \
-    .ops = (_ops),                                                                           \
-    .num_pins = (_num_pins),                                                                 \
-    .intc = (_intc),                                                                         \
+#define PBL_GPIO_PORT_INIT(sym, _name, _init, _parent, _ops, _num_pins, _intc)      \
+  {                                                                                 \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, &pbl_gpio_port_class), \
+    .ops = (_ops),                                                                  \
+    .num_pins = (_num_pins),                                                        \
+    .intc = (_intc),                                                                \
   }
+
+/**
+ * @brief Pin flags from the flags cell of a devicetree GPIO specifier.
+ *
+ * @param f Flags, those of <dt-bindings/gpio/gpio.h>.
+ */
+#define PBL_GPIO_DT_FLAGS(f)                                                                       \
+  ((((f) & 0x1U) ? PBL_GPIO_ACTIVE_LOW : 0U) |                                                     \
+   ((((f) & 0x6U) == 0x6U) ? PBL_GPIO_OPEN_DRAIN : 0U) | (((f) & 0x10U) ? PBL_GPIO_PULL_UP : 0U) | \
+   (((f) & 0x20U) ? PBL_GPIO_PULL_DOWN : 0U))
 
 /** @brief A pin as wired on the board. */
 struct pbl_gpio {

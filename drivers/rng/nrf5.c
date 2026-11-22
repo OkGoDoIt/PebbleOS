@@ -8,6 +8,7 @@
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mmio.h>
 
+#include <hardware/nrf52_memorymap.h>
 #include <hardware/nrf52_rng.h>
 
 #define CACHE_SIZE 32U
@@ -55,7 +56,7 @@ static void prv_init(void) {
   s_inited = true;
 }
 
-bool rng_rand(uint32_t *rand_out) {
+int rng_rand(uint32_t *rand_out) {
   uint8_t *out = (uint8_t *)rand_out;
   size_t n = 0U;
 
@@ -77,5 +78,5 @@ bool rng_rand(uint32_t *rand_out) {
     pbl_irq_unlock();
   }
 
-  return true;
+  return 0;
 }

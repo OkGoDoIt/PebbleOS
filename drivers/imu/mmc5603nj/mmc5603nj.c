@@ -4,6 +4,7 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/imu/mmc5603nj/mmc5603nj.h>
 #include <pbl/drivers/imu/mmc5603nj/registers.h>
@@ -11,10 +12,11 @@
 #include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/imu/units.h>
+#include <pbl/util/byteorder.h>
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
 
-PBL_LOG_MODULE_DEFINE(driver_mag_mmc5603nj, CONFIG_DRIVER_IMU_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_mag, CONFIG_DRIVER_IMU_LOG_LEVEL);
 
 #define MMC5603NJ_RATE_HZ_MAX 255U
 
@@ -79,7 +81,7 @@ static int prv_read_sample(MagData *sample) {
 
   // Unsigned, offset by 2^15
   for (uint8_t i = 0U; i < 3U; i++) {
-    raw[i] = (int16_t)((((uint16_t)data[2U * i] << 8) | data[2U * i + 1U]) - (1U << 15));
+    raw[i] = (int16_t)(pbl_get_be16(&data[2U * i]) - (1U << 15));
   }
 
   sample->x = prv_get_axis(raw, AXIS_X);
@@ -154,14 +156,19 @@ static int prv_set_rate_hw(uint8_t rate_hz) {
                                             MMC5603NJ_CTRL2_PRD_SET_EN | MMC5603NJ_CTRL2_CMM_EN);
 }
 
-static void prv_poll_cb(void *data) {
+static pbl_tick_t prv_poll_period_ticks(uint8_t rate_hz) {
+  return pbl_ms_to_ticks(PBL_DIV_ROUND_UP(1000U, rate_hz));
+}
+
+static void prv_poll_fn(struct pbl_work *work) {
+  struct pbl_mmc5603nj_state *state = s_dev->state;
   MagData sample;
   bool ready;
   int ret;
 
   pbl_mag_lock(&s_dev->mag);
 
-  if (s_dev->state->rate_hz == 0U) {
+  if (state->rate_hz == 0U) {
     goto out;
   }
 
@@ -177,7 +184,7 @@ static void prv_poll_cb(void *data) {
   if (ret != 0) {
     PBL_LOG_WRN("Read failed (%d), restarting sampling", ret);
     if (prv_set_rate_hw(0U) == 0) {
-      (void)prv_set_rate_hw(s_dev->state->rate_hz);
+      (void)prv_set_rate_hw(state->rate_hz);
     }
     goto out;
   }
@@ -185,6 +192,11 @@ static void prv_poll_cb(void *data) {
   pbl_mag_report_sample(&s_dev->mag, &sample);
 
 out:
+  // Rate changes hold the lock too
+  if (state->rate_hz != 0U && !pbl_delayed_work_is_pending(&state->poll_timer)) {
+    pbl_delayed_work_schedule_next(&state->poll_timer, prv_poll_period_ticks(state->rate_hz));
+  }
+
   pbl_mag_unlock(&s_dev->mag);
 }
 
@@ -192,7 +204,8 @@ static int prv_init(const struct pbl_mag *mag) {
   uint8_t whoami;
   int ret;
 
-  s_dev = container_of(mag, const struct pbl_mmc5603nj, mag);
+  s_dev = PBL_CONTAINER_OF(mag, const struct pbl_mmc5603nj, mag);
+  pbl_delayed_work_init(&s_dev->state->poll_timer, prv_poll_fn);
 
   ret = prv_read(MMC5603NJ_REG_WHO_AM_I, &whoami, 1);
   if (ret != 0) {
@@ -226,7 +239,8 @@ static int prv_set_sampling_interval(const struct pbl_mag *mag, uint32_t interva
   int ret;
 
   if (interval_us > 0U) {
-    rate_hz = (uint8_t)CLIP(DIVIDE_CEIL(1000000U, interval_us), 1U, MMC5603NJ_RATE_HZ_MAX);
+    rate_hz =
+        (uint8_t)PBL_CLAMP(PBL_DIV_ROUND_UP(1000000U, interval_us), 1U, MMC5603NJ_RATE_HZ_MAX);
   }
 
   if (rate_hz != state->rate_hz) {
@@ -240,17 +254,10 @@ static int prv_set_sampling_interval(const struct pbl_mag *mag, uint32_t interva
     state->rate_hz = rate_hz;
 
     if (rate_hz == 0U) {
-      new_timer_stop(state->poll_timer);
+      pbl_delayed_work_cancel(&state->poll_timer);
     } else {
-      if (state->poll_timer == TIMER_INVALID_ID) {
-        state->poll_timer = new_timer_create();
-        if (state->poll_timer == TIMER_INVALID_ID) {
-          return -ENOMEM;
-        }
-      }
-
-      new_timer_start(state->poll_timer, DIVIDE_CEIL(1000U, rate_hz), prv_poll_cb, nullptr,
-                      TIMER_START_FLAG_REPEATING);
+      pbl_delayed_work_reschedule(&pbl_sys_workq_high, &state->poll_timer,
+                                  PBL_TICKS(prv_poll_period_ticks(rate_hz)));
     }
   }
 
@@ -273,3 +280,5 @@ const struct pbl_mag_ops pbl_mmc5603nj_ops = {
   .set_sampling_interval = prv_set_sampling_interval,
   .peek = prv_peek,
 };
+
+#include PBL_DT_INSTANCES(memsic_mmc5603)

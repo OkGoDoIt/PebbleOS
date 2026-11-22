@@ -6,8 +6,6 @@
 #include <pbl/services/timeline/item.h>
 #include <pbl/util/iterator.h>
 
-#include <system/status_codes.h>
-
 /**
  * @defgroup services_timeline Timeline
  * @ingroup services
@@ -32,9 +30,7 @@
  *
  * timeline_init(&timeline);
  * if (timeline_iter_init(&iter, &state, &timeline, TimelineIterDirectionFuture, pbl_realtime()) ==
- *     S_SUCCESS) {
- *   do {
- *     const char *title = attribute_get_string(&state.pin.attr_list, AttributeIdTitle, "");
+ * 0) { do { const char *title = attribute_get_string(&state.pin.attr_list, AttributeIdTitle, "");
  *     ...
  *   } while (iter_next(&iter));
  * }
@@ -82,9 +78,9 @@ typedef struct {
  * Expired pins are deleted from the database on the way.
  *
  * @param[out] timeline Head of the new list.
- * @return S_SUCCESS or an error from the Pins database.
+ * @return 0 or a negative errno from the Pins database.
  */
-status_t timeline_init(TimelineNode **timeline);
+int timeline_init(TimelineNode **timeline);
 
 /**
  * @brief Add a pin created on the watch to the Pins database.
@@ -133,6 +129,16 @@ bool timeline_exists(Uuid *id);
  * @param enable true to enable.
  */
 void timeline_enable_ancs_bulk_action_mode(bool enable);
+
+/**
+ * @brief Enable or disable asynchronous sending of remote actions.
+ *
+ * When enabled, actions sent to the phone are queued on the background work queue instead of
+ * blocking the caller until there is room in the send buffer.
+ *
+ * @param enable true to enable.
+ */
+void timeline_enable_async_remote_action_mode(bool enable);
 
 /**
  * @brief Check whether bulk mode for ANCS actions is enabled.
@@ -223,10 +229,11 @@ bool timeline_item_should_show(CommonTimelineItemHeader *header, TimelineIterDir
  * @param timeline Ordered pin list from timeline_init().
  * @param direction Iteration direction.
  * @param timestamp Time to start from.
- * @return S_SUCCESS, S_NO_MORE_ITEMS if no pin is shown in @p direction, or a Pins database error.
+ * @return 0, -ENOENT if no pin is shown in @p direction, or a negative errno from the Pins
+ * database.
  */
-status_t timeline_iter_init(Iterator *iter, TimelineIterState *iter_state, TimelineNode **timeline,
-                            TimelineIterDirection direction, time_t timestamp);
+int timeline_iter_init(Iterator *iter, TimelineIterState *iter_state, TimelineNode **timeline,
+                       TimelineIterDirection direction, time_t timestamp);
 
 /**
  * @brief Copy an iterator into another one.

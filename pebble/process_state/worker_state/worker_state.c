@@ -1,0 +1,148 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <string.h>
+
+#include <kernel/util/segment.h>
+#include <process_management/process_manager.h>
+#include <process_state/worker_state/worker_state.h>
+#include <syscall/syscall.h>
+#include <tinymt32.h>
+
+#if defined(CONFIG_MALLOC_INSTRUMENTATION) && defined(CONFIG_SHELL)
+#include <pbl/kernel/mpu.h>
+#include <pbl/shell/shell.h>
+#endif
+
+typedef struct {
+  struct pbl_heap heap;
+
+  struct pbl_tm gmtime_tm;
+  struct pbl_tm localtime_tm;
+
+  tinymt32_t rand_seed;
+
+  AccelServiceState accel_state;
+
+  CompassServiceConfig *compass_config;
+
+  EventServiceInfo event_service_state;
+
+  PluginServiceState plugin_service_state;
+
+  LogState log_state;
+  char localtime_zone[PBL_TZ_LEN];
+
+  BatteryStateServiceState battery_state_service_state;
+
+  BacklightServiceState backlight_service_state;
+
+  TickTimerServiceState tick_timer_service_state;
+
+  ConnectionServiceState connection_service_state;
+
+  HealthServiceState health_service_state;
+} WorkerState;
+
+static_assert(sizeof(WorkerState) <= CONFIG_WORKER_RAM_RUNTIME_SIZE);
+
+PBL_KERNEL_READONLY_DATA static WorkerState *s_worker_state_ptr;
+
+bool worker_state_configure(MemorySegment *worker_state_ram) {
+  PBL_KERNEL_READONLY_DATA_SET(
+      s_worker_state_ptr, memory_segment_split(worker_state_ram, nullptr, sizeof(WorkerState)));
+  return s_worker_state_ptr != nullptr;
+}
+
+void worker_state_init(void) {
+  s_worker_state_ptr->rand_seed.mat1 = 0; // Uninitialized
+
+  accel_service_state_init(worker_state_get_accel_state());
+
+  plugin_service_state_init(worker_state_get_plugin_service());
+
+  battery_state_service_state_init(worker_state_get_battery_state_service_state());
+
+  backlight_service_state_init(worker_state_get_backlight_service_state());
+
+  connection_service_state_init(worker_state_get_connection_service_state());
+
+  tick_timer_service_state_init(worker_state_get_tick_timer_service_state());
+
+  health_service_state_init(worker_state_get_health_service_state());
+}
+
+void worker_state_deinit(void) {
+  health_service_state_deinit(worker_state_get_health_service_state());
+}
+
+struct pbl_heap *worker_state_get_heap(void) {
+  return &s_worker_state_ptr->heap;
+}
+
+struct pbl_tm *worker_state_get_gmtime_tm(void) {
+  return &s_worker_state_ptr->gmtime_tm;
+}
+struct pbl_tm *worker_state_get_localtime_tm(void) {
+  return &s_worker_state_ptr->localtime_tm;
+}
+char *worker_state_get_localtime_zone(void) {
+  return s_worker_state_ptr->localtime_zone;
+}
+void *worker_state_get_rand_ptr(void) {
+  return &s_worker_state_ptr->rand_seed;
+}
+
+AccelServiceState *worker_state_get_accel_state(void) {
+  return &s_worker_state_ptr->accel_state;
+}
+
+CompassServiceConfig **worker_state_get_compass_config(void) {
+  return &s_worker_state_ptr->compass_config;
+}
+
+EventServiceInfo *worker_state_get_event_service_state(void) {
+  return &s_worker_state_ptr->event_service_state;
+}
+
+PluginServiceState *worker_state_get_plugin_service(void) {
+  return &s_worker_state_ptr->plugin_service_state;
+}
+
+LogState *worker_state_get_log_state(void) {
+  return &s_worker_state_ptr->log_state;
+}
+
+BatteryStateServiceState *worker_state_get_battery_state_service_state(void) {
+  return &s_worker_state_ptr->battery_state_service_state;
+}
+
+BacklightServiceState *worker_state_get_backlight_service_state(void) {
+  return &s_worker_state_ptr->backlight_service_state;
+}
+
+TickTimerServiceState *worker_state_get_tick_timer_service_state(void) {
+  return &s_worker_state_ptr->tick_timer_service_state;
+}
+
+ConnectionServiceState *worker_state_get_connection_service_state(void) {
+  return &s_worker_state_ptr->connection_service_state;
+}
+
+HealthServiceState *worker_state_get_health_service_state(void) {
+  return &s_worker_state_ptr->health_service_state;
+}
+
+#if defined(CONFIG_MALLOC_INSTRUMENTATION) && defined(CONFIG_SHELL)
+static void prv_heap_dump_line(const char *line, void *arg) {
+  pbl_shell_print(arg, "%s", line);
+}
+
+static int prv_cmd_heap_worker(const struct pbl_shell *sh, size_t argc, char **argv) {
+  pbl_heap_dump(worker_state_get_heap(), prv_heap_dump_line, (void *)sh);
+  return 0;
+}
+
+PBL_SHELL_SUBCMD_ADD(sub_sys_heap, worker, nullptr, "Dump the worker heap", prv_cmd_heap_worker, 0,
+                     0);
+#endif

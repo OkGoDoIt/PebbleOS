@@ -1,0 +1,365 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <pbl/logging/logging.h>
+#include <pbl/services/blob_db/pin_db.h>
+#include <pbl/services/timeline/calendar.h>
+#include <pbl/services/timeline/event.h>
+#include <pbl/services/timeline/timeline.h>
+
+#include <clar.h>
+#include <kernel/events.h>
+
+// Stubs
+////////////////////////////////////////////////////////////////
+
+// Fakes
+////////////////////////////////////////////////////////////////
+#include <fake_events.h>
+#include <fake_pbl_malloc.h>
+#include <fake_pebble_tasks.h>
+#include <fake_rtc.h>
+#include <fake_settings.h>
+#include <fake_spi_flash.h>
+#include <fake_work.h>
+
+bool calendar_layout_verify(bool existing_attributes[]) {
+  return true;
+}
+
+bool weather_layout_verify(bool existing_attributes[]) {
+  return true;
+}
+
+const TimelineEventImpl *timeline_peek_get_event_service(void) {
+  return nullptr;
+}
+
+// Helpers
+////////////////////////////////////////////////////////////////
+static bool s_in_calendar_event = false;
+
+static bool prv_get_calendar_ongoing(void) {
+  PebbleEvent event = fake_event_get_last();
+  if (event.type == PEBBLE_CALENDAR_EVENT) {
+    s_in_calendar_event = event.calendar.is_event_ongoing;
+  }
+  return s_in_calendar_event;
+}
+
+// Fake pins
+////////////////////////////////////////////////////////////////
+
+static Attribute title_attr = {
+  .id = AttributeIdTitle,
+  .cstring = "title",
+};
+
+static TimelineItem item1 = {
+  .header =
+      {
+        .id =
+            {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 10 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
+  .attr_list = {
+    .num_attributes = 1,
+    .attributes = &title_attr,
+  },
+};
+
+static TimelineItem item2 = {
+  .header =
+      {
+        .id =
+            {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 15 * 60,
+        .duration = 20,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
+  .attr_list = {
+    .num_attributes = 1,
+    .attributes = &title_attr,
+  },
+};
+
+static TimelineItem item3 = {
+  .header =
+      {
+        .id =
+            {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 25 * 60,
+        .duration = 5,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
+  .attr_list = {
+    .num_attributes = 1,
+    .attributes = &title_attr,
+  },
+};
+
+static TimelineItem item4 = {
+  .header =
+      {
+        .id =
+            {0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 100 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdCalendar,
+      },
+  .attr_list = {
+    .num_attributes = 1,
+    .attributes = &title_attr,
+  },
+};
+
+// NOT A CALENDAR PIN
+static TimelineItem item5 = {
+  .header =
+      {
+        .id =
+            {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 10 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = false,
+        .layout = LayoutIdWeather,
+      },
+  .attr_list = {
+    .num_attributes = 1,
+    .attributes = &title_attr,
+  },
+};
+
+// ALL DAY PIN
+static TimelineItem item6 = {
+  .header =
+      {
+        .id =
+            {0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00},
+        .timestamp = 100 * 60,
+        .duration = 10,
+        .type = TimelineItemTypePin,
+        .all_day = true,
+        .layout = LayoutIdCalendar,
+      },
+  .attr_list = {
+    .num_attributes = 1,
+    .attributes = &title_attr,
+  },
+};
+
+// Setup
+////////////////////////////////////////////////////////////////
+
+void test_calendar__initialize(void) {
+  s_in_calendar_event = false;
+  pbl_realtime_set(0);
+  fake_event_init();
+  pin_db_init();
+}
+
+void test_calendar__cleanup(void) {
+  timeline_event_deinit();
+  fake_work_cleanup();
+  fake_settings_reset();
+}
+
+// Tests
+////////////////////////////////////////////////////////////////
+
+void test_calendar__no_events(void) {
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar__init_with_future_event(void) {
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 2);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(10 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+}
+
+void test_calendar_handle__future_event_added_and_removed(void) {
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 2);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(10 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  cl_assert(timeline_remove(&item1.header.id));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 3);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar__init_with_ongoing_event(void) {
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  pbl_realtime_set(15 * 60);
+
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(5 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+}
+
+void test_calendar_handle__ongoing_event_added_and_removed(void) {
+  pbl_realtime_set(15 * 60);
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 2);
+  cl_assert(prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(5 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  cl_assert(timeline_remove(&item1.header.id));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 3);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar__init_with_past_event(void) {
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  pbl_realtime_set(30 * 60);
+
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar_handle__past_event_added_and_removed(void) {
+  pbl_realtime_set(30 * 60);
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 2);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+
+  cl_assert(timeline_remove(&item1.header.id));
+  timeline_event_handle_blobdb_event();
+  cl_assert_equal_i(fake_event_get_count(), 3);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar__timer_test(void) {
+  cl_assert(timeline_add(&item1));
+  timeline_event_handle_blobdb_event();
+  cl_assert(timeline_add(&item2));
+  timeline_event_handle_blobdb_event();
+  cl_assert(timeline_add(&item3));
+  timeline_event_handle_blobdb_event();
+  cl_assert(timeline_add(&item4));
+  timeline_event_handle_blobdb_event();
+
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(10 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  pbl_realtime_set(10 * 60);
+  fake_work_fire(fake_work_get_next());
+  cl_assert_equal_i(fake_event_get_count(), 2);
+  cl_assert(prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(10 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  pbl_realtime_set(20 * 60);
+  fake_work_fire(fake_work_get_next());
+  cl_assert_equal_i(fake_event_get_count(), 3);
+  cl_assert(prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(15 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  pbl_realtime_set(35 * 60);
+  fake_work_fire(fake_work_get_next());
+  cl_assert_equal_i(fake_event_get_count(), 4);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(65 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  pbl_realtime_set(100 * 60);
+  fake_work_fire(fake_work_get_next());
+  cl_assert_equal_i(fake_event_get_count(), 5);
+  cl_assert(prv_get_calendar_ongoing());
+  cl_assert(fake_work_get_next() != nullptr);
+  cl_assert_equal_i(10 * 60, fake_work_timeout_ms(fake_work_get_next()) / 1000);
+
+  pbl_realtime_set(110 * 60);
+  fake_work_fire(fake_work_get_next());
+  cl_assert_equal_i(fake_event_get_count(), 6);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar__handle_non_calendar_pins(void) {
+  // Insert a random pin (non calendar event)
+  cl_assert(timeline_add(&item5));
+  timeline_event_handle_blobdb_event();
+
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}
+
+void test_calendar__handle_all_day_pins(void) {
+  // Insert an all day pin
+  cl_assert(timeline_add(&item6));
+  timeline_event_handle_blobdb_event();
+
+  timeline_event_init();
+  cl_assert_equal_i(fake_event_get_count(), 1);
+  cl_assert(!prv_get_calendar_ongoing());
+  cl_assert_equal_p(fake_work_get_next(), nullptr);
+}

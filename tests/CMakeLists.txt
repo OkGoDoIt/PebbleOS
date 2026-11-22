@@ -50,7 +50,9 @@ pbl_test_init()
 add_compile_options(${PBL_TEST_C_FLAGS})
 set(PBL_TEST_DEFINES
   "CLAR_FIXTURE_PATH=\"${PBL_BASE}/tests/fixtures/\""
+  CONFIG_ANALYTICS=1
   CONFIG_LOG=1
+  CONFIG_DEVICE_NAMES=1
   # The flash layout every test sees; it belongs to no platform.
   CONFIG_BOARD_PARTITIONS_DUAL_SLOT=1
   CONFIG_PBLBOOT=1
@@ -67,11 +69,15 @@ set(PBL_TEST_DEFINES
   CONFIG_KERNEL_USER_STACK_GUARD_SIZE=0
   CONFIG_APP_THREAD_PRIO=2
   CONFIG_WORKER_THREAD_PRIO=1
-  CONFIG_SERVICE_NEW_TIMER_THREAD_STACK_SIZE=1380
-  CONFIG_SERVICE_NEW_TIMER_THREAD_PRIO=4
-  CONFIG_SERVICE_SYSTEM_TASK_THREAD_STACK_SIZE=4096
-  CONFIG_SERVICE_SYSTEM_TASK_THREAD_PRIO=1
-  CONFIG_SERVICE_SYSTEM_TASK_THREAD_RAISED_PRIO=3
+  CONFIG_KERNEL_SYS_WORKQ_STACK_SIZE=4096
+  CONFIG_KERNEL_SYS_WORKQ_PRIO=1
+  CONFIG_KERNEL_SYS_WORKQ_BOOST_PRIO=3
+  CONFIG_KERNEL_SYS_WORKQ_CALLS=30
+  CONFIG_KERNEL_SYS_WORKQ_CALL_TIMEOUT_MS=3000
+  CONFIG_KERNEL_SYS_WORKQ_HIGH_CALLS=5
+  CONFIG_KERNEL_SYS_WORKQ_HIGH_CALL_TIMEOUT_MS=50
+  CONFIG_KERNEL_SYS_WORKQ_HIGH_STACK_SIZE=1380
+  CONFIG_KERNEL_SYS_WORKQ_HIGH_PRIO=4
   CONFIG_SERVICE_BOOT_SPLASH_THREAD_STACK_SIZE=2048
   CONFIG_SERVICE_BOOT_SPLASH_THREAD_PRIO=3
   CONFIG_TASK_WDT_THREAD_PRIO=4
@@ -106,13 +112,16 @@ add_custom_target(pbl_generated_headers)
 pbl_include_directories(${PBL_BASE}/include ${PBL_BASE}/include/pbl)
 
 add_subdirectory(${PBL_BASE}/third_party/nanopb ${CMAKE_BINARY_DIR}/third_party/nanopb)
-add_subdirectory(${PBL_BASE}/fw/services/protobuf_log/proto
-                 ${CMAKE_BINARY_DIR}/fw/services/protobuf_log/proto)
+add_subdirectory(${PBL_BASE}/pebble/services/protobuf_log/proto
+                 ${CMAKE_BINARY_DIR}/pebble/services/protobuf_log/proto)
 add_subdirectory(${PBL_BASE}/lib/util ${CMAKE_BINARY_DIR}/lib/util)
+add_subdirectory(${PBL_BASE}/third_party/speex ${CMAKE_BINARY_DIR}/third_party/speex)
 add_subdirectory(${PBL_BASE}/lib/btutil ${CMAKE_BINARY_DIR}/lib/btutil)
+add_subdirectory(${PBL_BASE}/lib/kraepelin ${CMAKE_BINARY_DIR}/lib/kraepelin)
+add_subdirectory(${PBL_BASE}/lib/vanhees ${CMAKE_BINARY_DIR}/lib/vanhees)
 add_subdirectory(${PBL_BASE}/subsys/crc ${CMAKE_BINARY_DIR}/libcrc)
 add_subdirectory(${PBL_BASE}/tools/pdc2png ${CMAKE_BINARY_DIR}/tools/pdc2png)
-set(PBL_PROTO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/fw/services/protobuf_log/proto)
+set(PBL_PROTO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/pebble/services/protobuf_log/proto)
 
 add_subdirectory(vendor/duma)
 
@@ -195,7 +204,6 @@ pbl_test_broken(
   # Crash (round-display segfault) and build (rect/round, platform)
   # issues are fixed; what is left is missing gabbro golden .pbi images
   # that need visual review before they can be regenerated.
-  test_gap_le_connect
 )
 
 include(modules.cmake)

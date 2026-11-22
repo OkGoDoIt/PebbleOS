@@ -15,7 +15,8 @@
  *
  * A power rail is a struct pbl_regulator device. Consumers enable and disable it with a use
  * count; a rail marked always-on is switched on at init and stays on, and any other rail starts
- * off.
+ * off. Switching a rail on waits its enable time, so the rail is up when the call returns; the
+ * time what it feeds needs after that is up to the consumer.
  *
  * @code{.c}
  * pbl_regulator_enable(dev->vdd);
@@ -52,6 +53,8 @@ struct pbl_regulator {
   const struct pbl_regulator_ops *ops;
   /** Runtime state. */
   struct pbl_regulator_state *state;
+  /** Time from switching on until the rail is up, in microseconds. */
+  uint32_t enable_time_us;
   /** Switched on at init and never off. */
   bool always_on;
 };
@@ -66,6 +69,10 @@ struct pbl_regulator {
   PBL_DEVICE_STATE_DEFINE(sym);         \
   static struct pbl_regulator_state sym##_regulator_state
 
+/** @cond INTERNAL_HIDDEN */
+extern const struct pbl_device_class pbl_regulator_class;
+/** @endcond */
+
 /**
  * @brief Initializer for the struct pbl_regulator of regulator @p sym.
  *
@@ -74,14 +81,17 @@ struct pbl_regulator {
  * @param _name Name.
  * @param _parent Parent device, or NULL.
  * @param _ops Driver operations.
+ * @param _enable_time_us Time from switching on until the rail is up, in microseconds.
  * @param _always_on Switched on at init and never off.
  */
-#define PBL_REGULATOR_INIT(sym, _name, _parent, _ops, _always_on)                 \
-  {                                                                               \
-    .dev = PBL_DEVICE_INIT(sym, _name, pbl_regulator_dev_init, _parent, nullptr), \
-    .ops = (_ops),                                                                \
-    .state = &sym##_regulator_state,                                              \
-    .always_on = (_always_on),                                                    \
+#define PBL_REGULATOR_INIT(sym, _name, _parent, _ops, _enable_time_us, _always_on)                \
+  {                                                                                               \
+    .dev =                                                                                        \
+        PBL_DEVICE_INIT_CLASS(sym, _name, pbl_regulator_dev_init, _parent, &pbl_regulator_class), \
+    .ops = (_ops),                                                                                \
+    .state = &sym##_regulator_state,                                                              \
+    .enable_time_us = (_enable_time_us),                                                          \
+    .always_on = (_always_on),                                                                    \
   }
 
 /**
@@ -95,6 +105,8 @@ int pbl_regulator_dev_init(const struct pbl_device *dev);
 
 /**
  * @brief Take a reference on a rail, switching it on for the first user.
+ *
+ * Returns once the rail is up.
  *
  * @param reg Regulator.
  * @return 0 or a negative errno.

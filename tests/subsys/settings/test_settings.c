@@ -1036,7 +1036,8 @@ void test_settings__watch(void) {
   pbl_settings_close(&watched);
 }
 
-static int prv_refused_transaction(struct pbl_settings_file *old, struct pbl_settings_file *replacement, void *data) {
+static int prv_refused_transaction(struct pbl_settings_file *old,
+                                   struct pbl_settings_file *replacement, void *data) {
   uint32_t key = 1, changed = 99;
   cl_must_pass(pbl_settings_set(replacement, &key, sizeof(key), &changed, sizeof(changed)));
   return -ENOSPC;
@@ -1047,8 +1048,7 @@ void test_settings__failed_transaction_preserves_original_after_reopen(void) {
   uint32_t key = 1, original = 42, read = 0;
   cl_must_pass(pbl_settings_open(&file, "/test-transaction", 4096));
   cl_must_pass(pbl_settings_set(&file, &key, sizeof(key), &original, sizeof(original)));
-  cl_assert_equal_i(pbl_settings_transaction(&file, prv_refused_transaction, NULL),
-                    -ENOSPC);
+  cl_assert_equal_i(pbl_settings_transaction(&file, prv_refused_transaction, NULL), -ENOSPC);
   cl_must_pass(pbl_settings_get(&file, &key, sizeof(key), &read, sizeof(read)));
   cl_assert_equal_i(read, original);
   pbl_settings_close(&file);
@@ -1063,8 +1063,8 @@ typedef struct {
   jmp_buf recovery;
 } TransactionPowerLoss;
 
-static int prv_power_loss_transaction(struct pbl_settings_file *old, struct pbl_settings_file *replacement,
-                                           void *data) {
+static int prv_power_loss_transaction(struct pbl_settings_file *old,
+                                      struct pbl_settings_file *replacement, void *data) {
   TransactionPowerLoss *test = data;
   uint32_t key = 1, changed = 99;
   cl_must_pass(pbl_settings_set(replacement, &key, sizeof(key), &changed, sizeof(changed)));

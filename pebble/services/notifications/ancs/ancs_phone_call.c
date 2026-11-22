@@ -1,0 +1,88 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <stdint.h>
+#include <string.h>
+
+#include <pbl/kernel/work.h>
+#include <pbl/services/notifications/ancs/ancs_notifications.h>
+#include <pbl/services/notifications/ancs/ancs_notifications_util.h>
+#include <pbl/services/notifications/ancs/ancs_phone_call.h>
+#include <pbl/services/phone_call_util.h>
+
+#include <applib/graphics/utf8.h>
+#include <kernel/events.h>
+
+static struct pbl_wallclock_work s_missed_call_work;
+
+static void prv_put_call_event(PhoneEventType type, uint32_t call_identifier,
+                               PebblePhoneCaller *caller) {
+  PebbleEvent event = {
+    .type = PEBBLE_PHONE_EVENT,
+    .phone = {
+      .type = type,
+      .source = PhoneCallSource_ANCS,
+      .call_identifier = call_identifier,
+      .caller = caller,
+    }
+  };
+
+  event_put(&event);
+}
+
+static void prv_strip_formatting_chars(char *text) {
+  const size_t len = strlen(text);
+  utf8_t *w_cursor = (uint8_t *)text;
+  utf8_t *r_cursor = (uint8_t *)text;
+
+  utf8_t *next;
+  uint32_t codepoint;
+  while (true) {
+    codepoint = utf8_peek_codepoint(r_cursor, &next);
+    if (codepoint == 0) {
+      break;
+    }
+
+    if (!codepoint_is_formatting_indicator(codepoint)) {
+      uint8_t c_len = utf8_copy_character(w_cursor, r_cursor, len);
+      w_cursor += c_len;
+    }
+
+    r_cursor = next;
+  }
+  *w_cursor = '\0';
+}
+
+void ancs_phone_call_handle_incoming(uint32_t uid,
+                                     const struct pbl_bt_ancs_attr *const *notif_attributes) {
+  // This field holds the caller's name if the phone number belongs to a contact,
+  // or the actual phone number if it does not belong to a contact
+  const struct pbl_bt_ancs_attr *caller_id = notif_attributes[ANCS_NOTIF_ATTR_TITLE];
+
+  char caller_id_str[caller_id->len + 1];
+  ancs_attr_to_cstring(caller_id, caller_id_str);
+  prv_strip_formatting_chars(caller_id_str);
+  PebblePhoneCaller *caller = phone_call_util_create_caller(caller_id_str, nullptr);
+
+  prv_put_call_event(PhoneEventType_Incoming, uid, caller);
+}
+
+void ancs_phone_call_handle_removed(uint32_t uid) {
+  prv_put_call_event(PhoneEventType_Hide, uid, nullptr);
+}
+
+bool ancs_phone_call_should_ignore_missed_calls(void) {
+  return pbl_wallclock_work_is_running(&s_missed_call_work);
+}
+
+static void prv_handle_missed_call_timer_timeout(struct pbl_work *work) {
+  pbl_wallclock_work_stop(&s_missed_call_work);
+}
+
+void ancs_phone_call_temporarily_block_missed_calls(void) {
+  const int BLOCK_MISS_CALL_TIME_S = 7;
+  if (!pbl_wallclock_work_is_running(&s_missed_call_work)) {
+    pbl_wallclock_work_init(&s_missed_call_work, prv_handle_missed_call_timer_timeout);
+  }
+  pbl_wallclock_work_start(&pbl_sys_workq_high, &s_missed_call_work, 1, BLOCK_MISS_CALL_TIME_S);
+}

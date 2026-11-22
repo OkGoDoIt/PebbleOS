@@ -160,7 +160,7 @@ def parse_dls_session_size_caps(dls_private_h_path, comm_protocol_h_path):
 
     with open(comm_protocol_h_path, encoding="utf-8") as f:
         comm_src = f.read()
-    match = re.search(r"#define\s+COMM_MAX_OUTBOUND_PAYLOAD_SIZE\s+(\d+)", comm_src)
+    match = re.search(r"#define\s+(?:COMM_MAX_OUTBOUND_PAYLOAD_SIZE|PBL_PP_MAX_OUTBOUND_PAYLOAD)\s+(\d+)", comm_src)
     if not match:
         raise ValueError("COMM_MAX_OUTBOUND_PAYLOAD_SIZE not found")
     # DLS_ENDPOINT_MAX_PAYLOAD = COMM_MAX_OUTBOUND_PAYLOAD_SIZE - sizeof(DataLoggingSendDataMessage)

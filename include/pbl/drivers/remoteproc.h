@@ -33,6 +33,9 @@ struct pbl_rproc;
 /** @brief Class of the remote processors. */
 extern const struct pbl_device_class pbl_rproc_class;
 
+/** @brief The board's processor running the Bluetooth controller. */
+extern const struct pbl_rproc *const BT_CONTROLLER;
+
 /** @brief Remote processor operations, implemented by the providers, called with the lock held. */
 struct pbl_rproc_ops {
   /** Start the processor and its firmware. Returns 0 or a negative errno. */
@@ -74,14 +77,14 @@ struct pbl_rproc {
  * @param sym Remote processor symbol, with its PBL_RPROC_STATE_DEFINE().
  * @param _name Device name.
  * @param _init Device init function.
- * @param _deps Device dependencies.
+ * @param _parent Parent device, or NULL.
  * @param _ops Operations.
  */
-#define PBL_RPROC_INIT(sym, _name, _init, _deps, _ops)                                 \
-  {                                                                                    \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, nullptr, _deps, &pbl_rproc_class), \
-    .ops = (_ops),                                                                     \
-    .state = &sym##_rproc_state,                                                       \
+#define PBL_RPROC_INIT(sym, _name, _init, _parent, _ops)                        \
+  {                                                                             \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, &pbl_rproc_class), \
+    .ops = (_ops),                                                              \
+    .state = &sym##_rproc_state,                                                \
   }
 
 /**

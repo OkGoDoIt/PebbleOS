@@ -5,7 +5,10 @@
 
 #include <pbl/drivers/touch.h>
 #include <pbl/input/input.h>
+#include <pbl/logging/logging.h>
 #include <pbl/util/misc.h>
+
+PBL_LOG_MODULE_DEFINE(driver_touch, CONFIG_DRIVER_TOUCH_LOG_LEVEL);
 
 PBL_DEVICE_CLASS_DEFINE(pbl_touch_class, "touch");
 
@@ -18,7 +21,7 @@ void pbl_touch_unlock(const struct pbl_touch *touch) {
 }
 
 int pbl_touch_dev_init(const struct pbl_device *dev) {
-  const struct pbl_touch *touch = container_of(dev, const struct pbl_touch, dev);
+  const struct pbl_touch *touch = PBL_CONTAINER_OF(dev, const struct pbl_touch, dev);
   int ret;
 
   pbl_touch_lock(touch);

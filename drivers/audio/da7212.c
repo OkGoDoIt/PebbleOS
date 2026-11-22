@@ -3,13 +3,14 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/audio/da7212.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
 
-PBL_LOG_MODULE_DEFINE(driver_audio_da7212, CONFIG_DRIVER_AUDIO_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_audio, CONFIG_DRIVER_AUDIO_LOG_LEVEL);
 
 #define DA7212_PLL_STATUS          0x03U
 #define DA7212_CIF_CTRL            0x1dU
@@ -107,7 +108,7 @@ static const struct prv_reg_seq s_dai_master[] = {
 };
 
 static const struct pbl_audio_da7212 *prv_dev(const struct pbl_audio_codec *codec) {
-  return container_of(codec, const struct pbl_audio_da7212, codec);
+  return PBL_CONTAINER_OF(codec, const struct pbl_audio_da7212, codec);
 }
 
 static int prv_write(const struct pbl_audio_da7212 *dev, uint8_t reg, uint8_t val) {
@@ -168,7 +169,7 @@ static int prv_recover(const struct pbl_audio_da7212 *dev) {
 
 int pbl_audio_da7212_init(const struct pbl_device *dev) {
   const struct pbl_audio_da7212 *da7212 =
-      container_of(dev, const struct pbl_audio_da7212, codec.dev);
+      PBL_CONTAINER_OF(dev, const struct pbl_audio_da7212, codec.dev);
   int ret;
 
   ret = pbl_device_init(&da7212->vdd->dev);
@@ -207,7 +208,7 @@ static int prv_power_up(const struct pbl_audio_codec *codec,
   uint8_t status;
   int ret;
 
-  ret = prv_write_seq(dev, s_power_up, ARRAY_LENGTH(s_power_up));
+  ret = prv_write_seq(dev, s_power_up, PBL_ARRAY_SIZE(s_power_up));
   if (ret != 0) {
     return ret;
   }
@@ -222,7 +223,7 @@ static int prv_power_up(const struct pbl_audio_codec *codec,
     return -EIO;
   }
 
-  ret = prv_write_seq(dev, s_path, ARRAY_LENGTH(s_path));
+  ret = prv_write_seq(dev, s_path, PBL_ARRAY_SIZE(s_path));
   if (ret != 0) {
     return ret;
   }
@@ -241,7 +242,7 @@ static int prv_power_up(const struct pbl_audio_codec *codec,
     return 0;
   }
 
-  return prv_write_seq(dev, s_dai_master, ARRAY_LENGTH(s_dai_master));
+  return prv_write_seq(dev, s_dai_master, PBL_ARRAY_SIZE(s_dai_master));
 }
 
 static int prv_enable(const struct pbl_audio_codec *codec, const struct pbl_audio_codec_cfg *cfg) {
@@ -278,3 +279,5 @@ const struct pbl_audio_codec_ops pbl_audio_da7212_ops = {
   .set_gain = prv_set_gain,
   .set_mute = prv_set_mute,
 };
+
+#include PBL_DT_INSTANCES(dlg_da7212)

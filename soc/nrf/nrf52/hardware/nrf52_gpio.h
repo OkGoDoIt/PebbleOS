@@ -5,8 +5,6 @@
 
 #include <pbl/util/bits.h>
 
-#include <hardware/nrf52_memorymap.h>
-
 /* Register offsets */
 
 #define NRF52_GPIO_OUT_OFFSET        0x0504
@@ -30,3 +28,5 @@
 #define GPIO_PIN_CNF_DRIVE_S0S1       0U
 #define GPIO_PIN_CNF_DRIVE_S0D1       6U
 #define GPIO_PIN_CNF_SENSE_MASK       PBL_GENMASK(17, 16)
+#define GPIO_PIN_CNF_SENSE_HIGH       2U
+#define GPIO_PIN_CNF_SENSE_LOW        3U

@@ -1,0 +1,661 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# The timezone database the tests check against, as a C array. The
+# firmware bakes the same bytes into a resource.
+set(timezone_fixture ${CMAKE_CURRENT_BINARY_DIR}/timezone_fixture.auto.h)
+set(timezones_olson ${PBL_BASE}/resources/normal/base/tzdata/timezones_olson.txt)
+add_custom_command(
+  OUTPUT ${timezone_fixture}
+  COMMAND ${PYTHON_EXECUTABLE} ${PBL_BASE}/tools/cmake/resources.py tzdata-header
+          --input ${timezones_olson} --output ${timezone_fixture}
+  DEPENDS ${timezones_olson} ${PBL_BASE}/tools/cmake/resources.py
+  COMMENT "Generating timezone test fixture"
+  VERBATIM
+)
+add_custom_target(pbl_timezone_fixture DEPENDS ${timezone_fixture})
+
+pbl_clar_test(test_language_pack_protocol
+  SOURCES pebble/kernel/language_pack_protocol.c
+)
+
+pbl_clar_test(test_put_bytes
+  SOURCES
+    pebble/services/put_bytes/put_bytes.c
+    pebble/services/put_bytes/put_bytes_storage.c
+    tests/fakes/fake_session.c
+    tests/fakes/fake_events.c
+    tests/fakes/fake_put_bytes_storage_mem.c
+    tests/fakes/fake_resource_storage.c
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_spi_flash.c
+  PLATFORMS emery gabbro flint
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_get_bytes
+  SOURCES
+    pebble/services/get_bytes/get_bytes.c
+    tests/fakes/fake_session.c
+    tests/fakes/fake_events.c
+    tests/fakes/fake_rtc.c
+  DEFINES CONFIG_SOC_POSIX
+)
+
+pbl_clar_test(test_language_pack
+  MODULES resources
+  SOURCES
+    subsys/i18n/i18n.c
+    pebble/services/language_pack/language_pack.c
+    tests/fakes/fake_bootbits.c
+    tests/fakes/fake_rtc.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_language_pack_storage
+  SOURCES
+    pebble/services/put_bytes/put_bytes_storage_file.c
+    subsys/i18n/i18n.c
+    pebble/services/language_pack/language_pack.c
+    pebble/resource/resource.c
+    pebble/resource/resource_storage.c
+    pebble/resource/resource_storage_builtin.c
+    pebble/resource/resource_storage_file.c
+    pebble/resource/resource_storage_flash.c
+    subsys/fs/pfs/flash_translation.c
+    subsys/fs/pfs/pfs.c
+    subsys/fs/fs.c
+    subsys/fs/pfs/pfs_fs.c
+    tests/fakes/fake_pfs.c
+    pebble/services/process_management/app_file.c
+    drivers/flash/flash_crc.c
+    tests/fakes/fake_bootbits.c
+    tests/fakes/fake_spi_flash.c
+    tests/fakes/fake_rtc.c
+    tests/fixtures/resources/builtin_resources.auto.c
+    tests/fixtures/resources/pfs_resource_table.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_tick_timer
+  SOURCES
+    pebble/services/tick_timer/service.c
+)
+
+pbl_clar_test(test_cron
+  MODULES time
+  SOURCES
+    tests/fakes/fake_rtc.c
+    subsys/cron/cron.c
+)
+
+pbl_clar_test(test_contacts
+  MODULES settings timeline_item time rand
+  SOURCES
+    tests/fakes/fake_rtc.c
+    pebble/services/contacts/attributes_address.c
+    pebble/services/contacts/contacts.c
+    pebble/services/blob_db/contacts_db.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_evented_timer
+  SOURCES
+    pebble/services/evented_timer/service.c
+)
+
+pbl_clar_test(test_music_endpoint
+  SOURCES
+    tests/fakes/fake_events.c
+    tests/fakes/fake_session.c
+    tests/fakes/fake_rtc.c
+    pebble/services/music/endpoint.c
+    pebble/services/music/service.c
+  DEFINES CONFIG_MUSIC_ALBUM_ART_RECENTS=2
+)
+
+pbl_clar_test(test_ping
+  SOURCES
+    pebble/services/ping/service.c
+)
+
+pbl_clar_test(test_imaging
+  SOURCES
+    tests/fakes/fake_session.c
+    pebble/services/imaging/imaging.c
+    kernel/scratch.c
+  DEFINES CONFIG_SCRATCH_HEAP_SHARED
+)
+
+pbl_clar_test(test_notification_image
+  SOURCES
+    pebble/services/notifications/notification_image.c
+  DEFINES CONFIG_NOTIFICATION_IMAGE_RECENTS=2
+)
+
+pbl_clar_test(test_compass_cal
+  SOURCES
+    pebble/services/ecompass/correction.c
+)
+
+pbl_clar_test(test_light
+  SOURCES
+    pebble/services/light/service.c
+    subsys/cron/cron.c
+    tests/fakes/fake_rtc.c
+  MODULES time
+  DEFINES
+    CONFIG_BACKLIGHT_HAS_COLOR
+    CONFIG_ALS_SCREEN_COMPENSATION
+    CONFIG_SERVICE_LIGHT_BACKLIGHT_ON_PERCENT=25
+    CONFIG_SERVICE_LIGHT_DARK_THRESHOLD=0
+    CONFIG_SERVICE_LIGHT_DARK_THRESHOLD_DELTA=0
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_als_screen_compensation
+  SOURCES
+    pebble/services/light/als_screen_compensation_math.c
+    pebble/services/light/als_screen_compensation_region.c
+  DEFINES CONFIG_ALS_SCREEN_COMPENSATION CONFIG_ALS_BITS=16
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_phone_pp
+  SOURCES
+    tests/fakes/fake_events.c
+    tests/fakes/fake_session.c
+    pebble/services/phone_call/util.c
+    pebble/services/phone_pp/service.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_phone_call
+  SOURCES
+    pebble/services/phone_call/service.c
+)
+
+pbl_clar_test(test_debounced_connection_service
+  SOURCES
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_session.c
+    pebble/services/debounced_connection_service/service.c
+    pebble/services/clock/time.c
+)
+
+pbl_clar_test(test_timeline_item
+  MODULES timeline_item time rand
+  SOURCES
+    tests/fakes/fake_rtc.c
+)
+
+pbl_clar_test(test_clock
+  MODULES resources time
+  SOURCES
+    subsys/i18n/i18n.c
+    tests/fakes/fake_bootbits.c
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_events.c
+    pebble/services/timezone_database/service.c
+    pebble/services/clock/service.c
+    pebble/applib/pbl_std/strftime.c
+    pebble/applib/pbl_std/timelocal.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_timezone_database
+  SOURCES
+    tests/fakes/fake_spi_flash.c
+    pebble/services/timezone_database/service.c
+  OVERRIDES test_timezone  DEPENDS pbl_timezone_fixture
+)
+
+pbl_clar_test(test_wakeup
+  MODULES resources settings rand
+  SOURCES
+    pebble/process_management/pebble_process_info.c
+    pebble/services/wakeup/service.c
+    tests/fakes/fake_bootbits.c
+    tests/fakes/fake_rtc.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_migrate_wakeup
+  MODULES resources settings rand
+  SOURCES
+    pebble/process_management/pebble_process_info.c
+    pebble/services/wakeup/service.c
+    tests/fakes/fake_bootbits.c
+    tests/fakes/fake_rtc.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_registry_endpoint
+  SOURCES
+    pebble/services/registry_endpoint/service.c
+)
+
+pbl_clar_test(test_audio_endpoint
+  SOURCES
+    pebble/services/audio_endpoint/service.c
+    tests/fakes/fake_session.c
+)
+
+pbl_clar_test(test_speaker_service
+  SOURCES
+    pebble/services/speaker/speaker_service.c
+    pebble/services/speaker/note_sequence.c
+    pebble/services/speaker/pcm_stream.c
+    pebble/services/speaker/track_player.c
+    tests/fakes/fake_events.c
+  DEFINES CONFIG_SPEAKER=1 CONFIG_SERVICE_SPEAKER_STANDBY_MS=0 CONFIG_CHARGER_HIGH_LOAD=1
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_transcription
+  SOURCES
+    pebble/services/voice/transcription.c
+)
+
+pbl_clar_test(test_voice
+  SOURCES
+    pebble/services/voice/transcription.c
+    pebble/services/voice/voice.c
+    tests/fakes/fake_events.c
+  DEFINES CONFIG_MIC
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_voice_endpoint
+  MODULES rand
+  SOURCES
+    pebble/services/voice/transcription.c
+    pebble/services/voice_endpoint/service.c
+    tests/fakes/fake_session.c
+  DEFINES CONFIG_MIC
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_app_cache
+  MODULES settings
+  SOURCES
+    pebble/services/process_management/app_file.c
+    pebble/services/app_cache/service.c
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_events.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_mic_manager
+  SOURCES
+    pebble/services/mic_manager/mic_manager.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_mic_stream
+  SOURCES
+    pebble/services/mic_stream/mic_stream.c
+    pebble/services/mic_manager/mic_manager.c
+    tests/fakes/fake_events.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_app_install_manager
+  MODULES settings rand gtypes
+  SOURCES
+    pebble/resource/resource.c
+    pebble/resource/resource_storage.c
+    pebble/resource/resource_storage_builtin.c
+    pebble/resource/resource_storage_file.c
+    pebble/resource/resource_storage_flash.c
+    pebble/services/process_management/app_file.c
+    pebble/services/app_cache/service.c
+    pebble/services/process_management/app_storage.c
+    pebble/process_management/app_install_manager.c
+    pebble/process_management/pebble_process_md.c
+    pebble/services/blob_db/app_db.c
+    pebble/process_management/pebble_process_info.c
+    drivers/flash/flash_crc.c
+    tests/fakes/fake_rtc.c
+    tests/fixtures/resources/builtin_resources.auto.c
+    tests/fakes/fake_system_app_registry_apps.c
+  OVERRIDES dummy_board fake_app_registry
+)
+
+pbl_clar_test(test_app_menu_data_source
+  MODULES settings rand gtypes
+  SOURCES
+    drivers/flash/flash_crc.c
+    pebble/process_management/app_install_manager.c
+    pebble/process_management/app_menu_data_source.c
+    pebble/process_management/pebble_process_info.c
+    pebble/process_management/pebble_process_md.c
+    pebble/resource/resource.c
+    pebble/resource/resource_storage.c
+    pebble/resource/resource_storage_builtin.c
+    pebble/resource/resource_storage_file.c
+    pebble/resource/resource_storage_flash.c
+    pebble/services/app_cache/service.c
+    pebble/services/blob_db/app_db.c
+    pebble/services/process_management/app_file.c
+    pebble/services/process_management/app_order_storage.c
+    pebble/services/process_management/app_storage.c
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_system_app_registry_apps.c
+    tests/fixtures/resources/builtin_resources.auto.c
+  OVERRIDES dummy_board fake_app_registry
+)
+
+pbl_clar_test(test_process_loader_storage
+  SOURCES
+    lib/util/build_id.c
+    pebble/kernel/util/segment.c
+    pebble/process_management/pebble_process_info.c
+    pebble/process_management/pebble_process_md.c
+    pebble/services/process_management/app_storage.c
+    pebble/services/process_management/process_loader_storage.c
+    pebble/process_management/process_runtime.c
+    subsys/loader/loader.c
+  DEFINES
+    CONFIG_LOADER_LOG_LEVEL=0
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_app_fetch_endpoint
+  MODULES rand
+  SOURCES
+    pebble/services/app_fetch_endpoint/service.c
+    tests/fakes/fake_events.c
+    tests/fakes/fake_session.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_accel_manager
+  SOURCES
+    drivers/base/device.c
+    drivers/timer/timer.c
+    drivers/imu/accel.c
+    pebble/services/accel_manager/service.c
+    tests/fakes/fake_events.c
+  DEFINES
+    CONFIG_DEVICE_LOG_LEVEL=0
+    CONFIG_SERVICE_ACCEL_MANAGER_BATCH_SAMPLES=25
+    CONFIG_DEVICE_LOG_LEVEL=0
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_app_file
+  SOURCES
+    pebble/services/process_management/app_file.c
+)
+
+pbl_clar_test(test_do_not_disturb
+  MODULES settings time
+  SOURCES
+    pebble/services/notifications/alerts_preferences.c
+    pebble/services/notifications/do_not_disturb.c
+    subsys/cron/cron.c
+    tests/fakes/fake_rtc.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_do_not_disturb_focus
+  SOURCE test_do_not_disturb.c
+  MODULES settings time
+  SOURCES
+    pebble/services/notifications/alerts_preferences.c
+    pebble/services/notifications/do_not_disturb.c
+    subsys/cron/cron.c
+    tests/fakes/fake_rtc.c
+  DEFINES CONFIG_SERVICE_AUDIO_COMPANION=1
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_weather_service
+  MODULES settings time
+  SOURCES
+    tests/fakes/fake_rtc.c
+    pebble/services/blob_db/weather_db.c
+    pebble/services/weather/weather_service.c
+    tests/pebble/services/blob_db/weather_data_shared.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_vibe
+  SOURCES
+    pebble/services/vibe_pattern/service.c
+    pebble/applib/ui/vibes.c
+    tests/fakes/fake_events.c
+    tests/fakes/fake_rtc.c
+)
+
+pbl_clar_test(test_vibe_intensity
+  SOURCES
+    pebble/services/vibes/vibe_intensity.c
+)
+
+pbl_clar_test(test_vibe_score
+  SOURCES
+    pebble/services/vibes/vibe_score.c
+)
+
+pbl_clar_test(test_vibe_score_info
+  SOURCES
+    pebble/services/vibes/vibe_score_info.c
+)
+
+pbl_clar_test(test_touch
+  SOURCES
+    pebble/services/touch/touch.c
+    tests/fakes/fake_events.c
+)
+
+pbl_clar_test(test_touch_session
+  SOURCES
+    pebble/services/touch/touch_session.c
+    tests/fakes/fake_rtc.c
+)
+
+pbl_clar_test(test_hrm_manager
+  SOURCES
+    pebble/services/hrm/hrm_manager.c
+    kernel/tick.c
+    tests/fakes/fake_events.c
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_accel_service.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_app_glance_service
+  SOURCES
+    pebble/services/app_glances/app_glance_service.c
+    pebble/services/blob_db/app_glance_db.c
+    pebble/services/timeline/attribute.c
+    tests/fakes/fake_rtc.c
+    tests/fakes/fake_settings.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_clock_time
+  MODULES time
+  SOURCES
+    tests/fakes/fake_rtc.c
+)
+
+pbl_clar_test(test_music_service
+  SOURCES
+    tests/fakes/fake_events.c
+    tests/fakes/fake_rtc.c
+    pebble/services/music/service.c
+  DEFINES CONFIG_MUSIC_ALBUM_ART_RECENTS=2
+)
+
+pbl_clar_test(test_audio_companion_protocol
+  SOURCES
+    pebble/services/audio_companion/protocol.c
+)
+
+# The heartbeat the official Core Devices app's Battery screen is built from. See
+# UPSTREAM_MERGE_CHECKLIST.md Trap 1: the schema guard checks the record's shape, this checks the
+# bytes the firmware actually hands to DLS.
+pbl_clar_test(test_analytics_native_heartbeat
+  SOURCES
+    subsys/analytics/native.c
+    tests/fakes/fake_rtc.c
+)
+
+pbl_clar_test(test_audio_companion_spool
+  SOURCES
+    pebble/services/audio_companion/spool.c
+)
+
+pbl_clar_test(test_audio_companion_auth
+  MODULES settings time rand
+  SOURCES
+    pebble/services/audio_companion/auth.c
+    third_party/mbedtls/mbedtls/library/sha256.c
+    third_party/mbedtls/mbedtls/library/platform_util.c
+    tests/fakes/fake_rtc.c
+  INCLUDES
+    third_party/mbedtls/mbedtls/include
+    third_party/mbedtls/mbedtls/library
+    third_party/mbedtls/include
+  DEFINES
+    MBEDTLS_CONFIG_FILE="pebble_mbedtls_config.h"
+    CONFIG_SERVICE_AUDIO_COMPANION=1
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_audio_companion
+  SOURCES
+    pebble/services/audio_companion/audio_companion.c
+    pebble/services/mic_manager/mic_manager.c
+    pebble/services/audio_companion/protocol.c
+    pebble/services/audio_companion/reboot_trace.c
+    pebble/services/audio_companion/spool.c
+  # Real watchdog API declarations, so the test can fake the SoC's reset cause.
+  DEFINES CONFIG_WATCHDOG=1 CONFIG_SERVICE_AUDIO_COMPANION=1
+  OVERRIDES dummy_board
+)
+
+# The same suite with push-to-talk and watch actions built in: every recording test must hold
+# unchanged with the second mic consumer present, and the push-to-talk tests run only here.
+pbl_clar_test(test_audio_companion_ptt
+  SOURCE test_audio_companion.c
+  SOURCES
+    pebble/services/audio_companion/audio_companion.c
+    pebble/services/mic_manager/mic_manager.c
+    pebble/services/audio_companion/assistant_view.c
+    pebble/services/audio_companion/protocol.c
+    pebble/services/audio_companion/reboot_trace.c
+    pebble/services/audio_companion/spool.c
+    pebble/services/audio_companion/watch_actions.c
+  DEFINES
+    CONFIG_WATCHDOG=1
+    CONFIG_SERVICE_AUDIO_COMPANION_PTT=1
+    CONFIG_SERVICE_AUDIO_COMPANION=1
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_audio_companion_assistant_view
+  SOURCES
+    pebble/services/audio_companion/assistant_view.c
+)
+
+pbl_clar_test(test_audio_companion_muse
+  SOURCES
+    pebble/services/audio_companion/muse_setup_relay.c
+    pebble/services/audio_companion/protocol.c
+)
+
+pbl_clar_test(test_audio_companion_reboot_trace
+  SOURCES
+    pebble/services/audio_companion/reboot_trace.c
+  OVERRIDES dummy_board
+)
+
+# Real-Speex golden bitstream test: compiles the vendored fixed-point encoder and
+# decoder for the host with the same defines third_party/speex/CMakeLists.txt uses,
+# so the bitstream matches the watch byte-for-byte.
+set(audio_companion_speex_sources
+  bits.c cb_search.c exc_10_16_table.c exc_10_32_table.c
+  exc_20_32_table.c exc_5_256_table.c exc_5_64_table.c exc_8_128_table.c
+  filters.c gain_table.c gain_table_lbr.c hexc_10_32_table.c
+  hexc_table.c high_lsp_tables.c kiss_fft.c kiss_fftr.c lpc.c lsp.c
+  lsp_tables_nb.c ltp.c modes.c modes_wb.c nb_celp.c quant_lsp.c
+  smallft.c speex.c speex_callbacks.c speex_header.c
+  stereo.c vbr.c vorbis_psy.c vq.c window.c
+)
+list(TRANSFORM audio_companion_speex_sources
+     PREPEND third_party/speex/speex/libspeex/)
+# sb_celp.c goes through a wrapper that silences its dead locals under clang -Werror.
+list(APPEND audio_companion_speex_sources
+     tests/pebble/services/audio_companion_speex_sb_celp.c)
+
+pbl_clar_test(test_audio_companion_speex
+  SOURCES ${audio_companion_speex_sources}
+  INCLUDES
+    third_party/speex
+    third_party/speex/speex/include
+    third_party/speex/speex/libspeex
+  DEFINES
+    HAVE_CONFIG_H
+    OS_SUPPORT_CUSTOM
+    FIXED_POINT
+    DISABLE_FLOAT_API
+    DISABLE_VBR
+    DISABLE_WARNINGS
+    DISABLE_NOTIFICATIONS
+    "NB_ENC_STACK=(2000*sizeof(spx_sig_t))"
+    "NB_DEC_STACK=(1500*sizeof(spx_sig_t))"
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_audio_companion_platform
+  MODULES rand
+  SOURCES pebble/services/audio_companion/watch_actions_platform.c
+  DEFINES CONFIG_SERVICE_AUDIO_COMPANION
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_audio_companion_alarms
+  SOURCES pebble/services/audio_companion/watch_actions_alarms.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_audio_companion_timers
+  MODULES settings
+  SOURCES
+    pebble/services/audio_companion/watch_actions_timers.c
+    tests/fakes/fake_rtc.c
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_mic_capture
+  SOURCES
+    pebble/services/mic_capture/mic_capture.c
+    pebble/services/mic_manager/mic_manager.c
+    pebble/services/blob_db/app_db.c
+    tests/fakes/fake_events.c
+    tests/fakes/fake_settings.c
+  DEFINES CONFIG_SERVICE_MIC_CAPTURE
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_voice_speex
+  SOURCES pebble/services/voice/voice_speex.c kernel/scratch.c
+  DEFINES CONFIG_SCRATCH_HEAP_SIZE=1048576
+  LIBS speex
+  INCLUDES third_party/speex third_party/speex/speex/include
+  OVERRIDES dummy_board
+)
+
+pbl_clar_test(test_mic_source
+  SOURCES
+    pebble/services/mic_manager/mic_source.c
+  DEFINES
+    CONFIG_MIC_SF32LB_CAPTURE_DEEP_WFI
+    # The watch's scratch heap is the kernel heap, so the Bluetooth reserve applies.
+    CONFIG_SCRATCH_HEAP_SHARED
+    CONFIG_SERVICE_MIC_MANAGER_LOG_LEVEL=0
+)

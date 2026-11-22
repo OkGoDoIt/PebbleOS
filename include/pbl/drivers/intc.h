@@ -22,7 +22,7 @@
  * requests the line once and enables it while it wants interrupts:
  *
  * @code{.c}
- * .int1 = PBL_IRQ_SPEC(SF32LB_GPIO1_INTC, 38, PBL_IRQ_TYPE_EDGE_RISING),
+ * .int1 = PBL_IRQ_SPEC(&dt_gpio1_intc, 38, PBL_IRQ_TYPE_EDGE_RISING),
  *
  * static void prv_int1_handler(void *arg) {
  *   // ISR context
@@ -70,6 +70,8 @@ struct pbl_intc_ops {
   int (*enable)(const struct pbl_intc *intc, uint32_t hwirq);
   /** Mask a line. Returns 0 or a negative errno. */
   int (*disable)(const struct pbl_intc *intc, uint32_t hwirq);
+  /** Make a line a wake source from power-off, or not. Optional. Returns 0 or a negative errno. */
+  int (*set_wake)(const struct pbl_intc *intc, uint32_t hwirq, bool on);
 };
 
 /** @brief Runtime state of a line. */
@@ -78,10 +80,6 @@ struct pbl_intc_line {
   pbl_intc_handler_t handler;
   /** Handler argument. */
   void *arg;
-  /** Trigger type. */
-  uint8_t type;
-  /** Whether the line is enabled. */
-  bool enabled;
 };
 
 /** @brief An interrupt controller. */
@@ -92,6 +90,8 @@ struct pbl_intc {
   const struct pbl_intc_ops *ops;
   /** State of each line. */
   struct pbl_intc_line *lines;
+  /** Enabled lines, one bit each. */
+  uint32_t *enabled;
   /** Number of lines. */
   uint16_t num_irqs;
 };
@@ -102,9 +102,10 @@ struct pbl_intc {
  * @param sym Symbol of the controller instance.
  * @param _num_irqs Number of lines.
  */
-#define PBL_INTC_STATE_DEFINE(sym, _num_irqs) \
-  PBL_DEVICE_STATE_DEFINE(sym);               \
-  static struct pbl_intc_line sym##_intc_lines[_num_irqs]
+#define PBL_INTC_STATE_DEFINE(sym, _num_irqs)              \
+  PBL_DEVICE_STATE_DEFINE(sym);                            \
+  static struct pbl_intc_line sym##_intc_lines[_num_irqs]; \
+  static uint32_t sym##_intc_enabled[((_num_irqs) + 31U) / 32U]
 
 /**
  * @brief Initializer for the struct pbl_intc of controller @p sym.
@@ -116,12 +117,13 @@ struct pbl_intc {
  * @param _parent Parent device, or NULL.
  * @param _ops Driver operations.
  */
-#define PBL_INTC_INIT(sym, _name, _init, _parent, _ops)                                 \
-  {                                                                                     \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, nullptr, &pbl_intc_class), \
-    .ops = (_ops),                                                                      \
-    .lines = sym##_intc_lines,                                                          \
-    .num_irqs = ARRAY_LENGTH(sym##_intc_lines),                                         \
+#define PBL_INTC_INIT(sym, _name, _init, _parent, _ops)                        \
+  {                                                                            \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, &pbl_intc_class), \
+    .ops = (_ops),                                                             \
+    .lines = sym##_intc_lines,                                                 \
+    .enabled = sym##_intc_enabled,                                             \
+    .num_irqs = PBL_ARRAY_SIZE(sym##_intc_lines),                              \
   }
 
 /** @brief An interrupt line, as used by a consumer. */
@@ -189,6 +191,19 @@ int pbl_intc_enable(const struct pbl_irq_spec *spec);
  * @return 0, @c -EINVAL if the line is not requested, or another negative errno.
  */
 int pbl_intc_disable(const struct pbl_irq_spec *spec);
+
+/**
+ * @brief Let a requested line wake the system from power-off, or stop it.
+ *
+ * The controller arms the line when the SoC powers off; it then wakes the system on a change of
+ * the line, whatever its trigger type.
+ *
+ * @param spec Requested line.
+ * @param on Whether the line wakes the system.
+ * @return 0, @c -EINVAL if the line is not requested, @c -ENOTSUP if the controller cannot wake
+ * the system on it, or another negative errno.
+ */
+int pbl_intc_set_wake(const struct pbl_irq_spec *spec, bool on);
 
 /**
  * @brief Run the handler of a pending line, for the controller driver.

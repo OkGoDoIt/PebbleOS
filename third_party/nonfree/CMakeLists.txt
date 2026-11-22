@@ -4,10 +4,15 @@
 set(nonfree pebbleos-nonfree)
 
 if(CONFIG_NRF_FUEL_GAUGE)
+  if(CONFIG_CPU_HAS_FPU AND NOT CONFIG_FP_SOFTFP_ABI)
+    set(fuel_gauge_float hard-float)
+  else()
+    set(fuel_gauge_float soft-float)
+  endif()
   if(CONFIG_CPU_CORTEX_M4)
-    set(fuel_gauge_lib ${nonfree}/npm1300/nrf_fuel_gauge/lib/cortex-m4/soft-float)
+    set(fuel_gauge_lib ${nonfree}/npm1300/nrf_fuel_gauge/lib/cortex-m4/${fuel_gauge_float})
   elseif(CONFIG_CPU_CORTEX_M33)
-    set(fuel_gauge_lib ${nonfree}/npm1300/nrf_fuel_gauge/lib/cortex-m33/soft-float)
+    set(fuel_gauge_lib ${nonfree}/npm1300/nrf_fuel_gauge/lib/cortex-m33/${fuel_gauge_float})
   endif()
   pbl_include_directories(
     ${nonfree}/npm1300/nrf_fuel_gauge/include
@@ -23,6 +28,14 @@ if(CONFIG_CST816_FW)
     pbl_include_directories(${nonfree}/cst816/getafix)
   else()
     message(FATAL_ERROR "no CST816 firmware for board ${PBL_BOARD}")
+  endif()
+endif()
+
+if(CONFIG_REMOTEPROC_SF32LB)
+  if(CONFIG_SOC_SF32LB57)
+    pbl_include_directories(${nonfree}/sf32lb57)
+  else()
+    pbl_include_directories(${nonfree}/sf32lb52)
   endif()
 endif()
 

@@ -4,8 +4,7 @@
 #include <pbl/drivers/rtc.h>
 #include <pbl/drivers/rtc/retained.h>
 #include <pbl/kernel/time.h>
-
-#include <system/rtc_registers.h>
+#include <pbl/system/rtc_registers.h>
 
 // The time last set, and the uptime when it was: a reset restarts the uptime, so the time
 // resumes from the last value set.
@@ -31,5 +30,6 @@ static const struct pbl_rtc_ops s_ops = {
 };
 
 PBL_DEVICE_STATE_DEFINE(pbl_rtc_retained);
-const struct pbl_rtc pbl_rtc_retained = PBL_RTC_INIT(pbl_rtc_retained, "rtc", nullptr, &s_ops);
+const struct pbl_rtc pbl_rtc_retained =
+    PBL_RTC_INIT(pbl_rtc_retained, "rtc", nullptr, nullptr, &s_ops);
 PBL_DEVICE_REGISTER(pbl_rtc_retained, &pbl_rtc_retained.dev);

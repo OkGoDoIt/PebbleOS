@@ -1,34 +1,20 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-if SOC_QEMU
+if SOC_QEMU_PEBBLE
 
-choice BT_ID_ADDR_SOURCE
-    default BT_ID_ADDR_STORAGE
+choice NIMBLE_ID_ADDR_SOURCE
+    default NIMBLE_ID_ADDR_QEMU
 endchoice
 
-# 4 MiB of emulated flash, all of it available to the firmware.
+# 4 MiB of emulated flash.
 config FLASH_BASE
     default 0x00000000
 
 config FLASH_SIZE
     default 0x400000
 
-config FLASH_OFFSET
-    default 0x0
-
-config FW_FLASH_SIZE
-    default 0x400000
-
-# QEMU mirrors the SRAM layout of the platform it emulates.
-config SRAM_BASE
-    default 0x20000100 if PLATFORM_FLINT
-    default 0x20000000
-
-config SRAM_SIZE
-    default 0x3ff00 if PLATFORM_FLINT
-    default 0x7fc00
-
+# The SRAM layout is the machine's, and so given by the board.
 
 config NUM_IRQS
     default 13
@@ -36,4 +22,4 @@ config NUM_IRQS
 config NUM_IRQ_PRIO_BITS
     default 3
 
-endif # SOC_QEMU
+endif # SOC_QEMU_PEBBLE

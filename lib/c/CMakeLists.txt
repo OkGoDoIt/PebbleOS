@@ -4,8 +4,12 @@
 pbl_library()
 pbl_library_sources(
   assert.c
+  libutil.c
   syscalls.c
 )
-if(CONFIG_LIBC_NEWLIB_NANO)
+pbl_library_sources_ifdef(CONFIG_LIBC_NEWLIB lock.c)
+pbl_library_sources_ifdef(CONFIG_LIBC_NEWLIB_NANO lock.c)
+pbl_library_sources_ifdef(CONFIG_LIBC_PICOLIBC lock.c)
+if(CONFIG_LIBC_NEWLIB OR CONFIG_LIBC_NEWLIB_NANO)
   add_subdirectory(newlib)
 endif()

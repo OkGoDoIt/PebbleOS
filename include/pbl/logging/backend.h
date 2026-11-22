@@ -52,8 +52,6 @@ struct pbl_log_backend;
 
 /** @brief Backend operations. */
 struct pbl_log_backend_api {
-  /** Bring up the backend's output before main(), from @ref pbl_log_early_init. Optional. */
-  void (*early_init)(const struct pbl_log_backend *backend);
   /** Initialize the backend, from @ref pbl_log_init. Optional. */
   void (*init)(const struct pbl_log_backend *backend);
   /** Write a message. */
@@ -91,27 +89,17 @@ struct pbl_log_backend {
  * @param _autostart Whether the backend starts enabled, or waits for
  *                   @ref pbl_log_backend_enable.
  */
-#ifdef PBL_NO_LINKER_SCRIPT
-#define PBL_LOG_BACKEND_DEFINE(_name, _api, _level, _autostart)                        \
-  static struct pbl_log_backend_state _pbl_log_backend_state_##_name = {               \
-    .level = (_level),                                                                 \
-    .enabled = (_autostart)                                                            \
-  };                                                                                   \
-  const struct pbl_log_backend _pbl_log_backend_##_name PBL_USED PBL_UNSORTED_SECTION( \
-      pbl_log_be) = {.name = #_name, .api = &(_api), .state = &_pbl_log_backend_state_##_name}
-#else
-#define PBL_LOG_BACKEND_DEFINE(_name, _api, _level, _autostart)                 \
-  static struct pbl_log_backend_state _pbl_log_backend_state_##_name = {        \
-    .level = (_level),                                                          \
-    .enabled = (_autostart)                                                     \
-  };                                                                            \
-  const struct pbl_log_backend _pbl_log_backend_##_name PBL_USED PBL_ALIGNED(4) \
-      PBL_SECTION(".pbl_log_backends." #_name) = {                              \
-        .name = #_name,                                                         \
-        .api = &(_api),                                                         \
-        .state = &_pbl_log_backend_state_##_name,                               \
+#define PBL_LOG_BACKEND_DEFINE(_name, _api, _level, _autostart)               \
+  static struct pbl_log_backend_state _pbl_log_backend_state_##_name = {      \
+    .level = (_level),                                                        \
+    .enabled = (_autostart)                                                   \
+  };                                                                          \
+  const struct pbl_log_backend _pbl_log_backend_##_name PBL_ITERABLE_SECTION( \
+      const struct pbl_log_backend, log_backends, #_name) = {                 \
+    .name = #_name,                                                           \
+    .api = &(_api),                                                           \
+    .state = &_pbl_log_backend_state_##_name,                                 \
   }
-#endif
 
 /**
  * @brief Get a backend defined with @ref PBL_LOG_BACKEND_DEFINE.
@@ -152,9 +140,6 @@ void pbl_log_backend_set_level(const struct pbl_log_backend *backend, int level)
  * @return The backend, or NULL if there is none called @p name.
  */
 const struct pbl_log_backend *pbl_log_backend_get_by_name(const char *name);
-
-/** @brief Bring up the backends' output, called by the kernel before main(). */
-void pbl_log_early_init(void);
 
 /** @brief Initialize the backends. */
 void pbl_log_init(void);

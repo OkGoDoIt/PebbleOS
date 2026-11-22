@@ -11,6 +11,18 @@ firmware: no shell, no serial logs, and nothing listening on the port.
 Use `pbl console` to get log lines dehashed on builds that hash them; it is
 otherwise a plain terminal.
 
+The console is set up during boot, before the device model, and is where the
+kernel's `pbl_print()` writes, such as the boot banner: see
+{doc}`../kernel/print`.
+
+With `CONFIG_CONSOLE_STDOUT`, the C library's standard output and error go to
+the console too, so `printf()` prints there, under the console lock. Picolibc
+writes one character at a time, so a log line can land in the middle of a
+printed one; interrupts must not print. With newlib, stdio is made thread safe
+with kernel mutexes, and the full newlib's `printf()` takes about 2.5 KB of
+stack. Native builds print to the process's standard output and error,
+unbuffered, as their console goes there.
+
 ## Frames
 
 Binary data travels in frames between the text lines:
@@ -21,7 +33,7 @@ ESC _ <channel> <base64(seq, payload, crc32)> ESC \
 
 The channel is one character. The CRC-32 is `pbl_crc32()` of the channel, the
 sequence number and the payload, little-endian. A payload is at most
-`CONSOLE_FRAME_MTU` (512) bytes. The firmware only sends frames once a host has
+`PBL_CONSOLE_FRAME_MTU` (512) bytes. The firmware only sends frames once a host has
 started using them, so a terminal does not see them. Anything received that
 does not look like a frame goes back to being text, which keeps a stray escape
 sequence from wedging the console.
@@ -33,7 +45,7 @@ sequence from wedging the console.
 | `B` | Flash imaging |
 
 The host sends one frame at a time, and repeats it after a second without
-acknowledgment. The firmware handles a frame on KernelBG and acknowledges it
+acknowledgment. The firmware handles a frame on SysWorkq and acknowledges it
 afterwards, so the acknowledgment says that it was handled, and whatever the
 firmware sent in response comes before it. A repeated sequence number is
 acknowledged without handling the frame again, except 0, for frames that do no
@@ -54,7 +66,7 @@ restart.
 ## Flash imaging
 
 `pbl image_resources` and `pbl image_recovery` use this channel where sftool is
-not used. The payload starts with an opcode, and integers are little-endian:
+not used. The firmware enables it with the console (`CONFIG_CONSOLE_IMAGING`). The payload starts with an opcode, and integers are little-endian:
 
 | Opcode | Arguments | Response |
 |---|---|---|

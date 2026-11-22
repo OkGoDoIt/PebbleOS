@@ -8,17 +8,21 @@
 
 #include <pbl/drivers/display/sdl.h>
 
+#ifdef CONFIG_DISPLAY_SDL_ROUND
+#include <pbl/drivers/panel/ls013b7dd02.h>
+#endif
+
 static uint8_t s_fb[CONFIG_DISPLAY_SDL_WIDTH * CONFIG_DISPLAY_SDL_HEIGHT];
 static bool s_enabled;
 
 static void prv_flush(const struct pbl_display *disp) {
   if (s_enabled) {
-    display_sdl_bottom_update(s_fb, disp->width, disp->height);
+    display_sdl_bottom_update(s_fb, disp->props.width, disp->props.height);
   }
 }
 
 static int prv_init(const struct pbl_display *disp) {
-  if ((uint32_t)disp->width * disp->height > sizeof(s_fb)) {
+  if ((uint32_t)disp->props.width * disp->props.height > sizeof(s_fb)) {
     return -EINVAL;
   }
 
@@ -47,14 +51,14 @@ static int prv_update(const struct pbl_display *disp, const struct pbl_display_b
                       uint16_t y0, uint16_t y1) {
   for (uint16_t y = y0; y <= y1; y++) {
     const uint8_t *src = &buf->data[y * buf->pitch];
-    uint8_t *dst = &s_fb[y * disp->width];
+    uint8_t *dst = &s_fb[y * disp->props.width];
 
-    if (disp->format == PBL_DISPLAY_FORMAT_MONO) {
-      for (uint16_t x = 0U; x < disp->width; x++) {
+    if (disp->props.format == PBL_DISPLAY_FORMAT_MONO) {
+      for (uint16_t x = 0U; x < disp->props.width; x++) {
         dst[x] = (src[x / 8U] & (1U << (x % 8U))) != 0U ? 0xffU : 0xc0U;
       }
     } else {
-      memcpy(dst, src, disp->width);
+      memcpy(dst, src, disp->props.width);
     }
   }
 
@@ -79,3 +83,18 @@ const struct pbl_display_ops pbl_display_sdl_ops = {
   .update = prv_update,
   .clear = prv_clear,
 };
+
+#ifdef CONFIG_DISPLAY_SDL_MONO
+#define FORMAT PBL_DISPLAY_FORMAT_MONO
+#else
+#define FORMAT PBL_DISPLAY_FORMAT_ARGB2222
+#endif
+
+#ifdef CONFIG_DISPLAY_SDL_ROUND
+#define ROUND_MASK pbl_panel_ls013b7dd02_round_mask
+#else
+#define ROUND_MASK nullptr
+#endif
+
+PBL_DISPLAY_SDL_DEFINE(pbl_display_sdl, "display", CONFIG_DISPLAY_SDL_WIDTH,
+                       CONFIG_DISPLAY_SDL_HEIGHT, FORMAT, .round_mask = ROUND_MASK);

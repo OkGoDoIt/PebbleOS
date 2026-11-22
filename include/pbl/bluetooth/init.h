@@ -13,22 +13,22 @@
  * @ingroup subsys
  * @brief Bluetooth Low Energy stack interface (@c pbl/bluetooth).
  *
- * The firmware's Bluetooth code (@c fw/comm/ble and @c fw/services/bluetooth) talks to the stack
- * only through the @c pbl_bt_* API declared in these headers. It is implemented in
+ * The firmware's Bluetooth code (@c pebble/comm/ble and @c pebble/services/bluetooth) talks to the
+ * stack only through the @c pbl_bt_* API declared in these headers. It is implemented in
  * @c subsys/bluetooth on top of the NimBLE host, which runs in its own task.
  *
  * The API has two directions:
- * - Calls into the stack, such as pbl_bt_start(), pbl_bt_advert_advertising_enable() or
+ * - Calls into the stack, such as pbl_bt_start(), ble_gap_adv_start() or
  *   pbl_bt_gatt_read().
  * - Callbacks, declared @c extern and named @c pbl_bt_handle_* or @c pbl_bt_cb_*, that the
  *   firmware implements and the stack invokes to report events. Unless stated otherwise they run
  *   on the NimBLE host task without @c bt_lock() held.
  *
  * The NimBLE host reaches its controller through the HCI transport selected with the
- * @c BT_HCI_* Kconfig choice: the in-image NimBLE link layer (@c BT_HCI_NRF52), the SiFli LCPU
- * over IPC (@c BT_HCI_SF32LB52), H4 over UART (@c BT_HCI_UART) or a fake controller
- * (@c BT_HCI_FAKE). The fake controller, used on QEMU, accepts every HCI command and never raises
- * an event: the host synchronizes and the GATT server runs, but no link is ever established.
+ * @c NIMBLE_HCI_* Kconfig choice: the in-image NimBLE link layer (@c NIMBLE_HCI_NRF52), the SiFli
+ * LCPU over IPC (@c NIMBLE_HCI_SF32LB), H4 over UART (@c NIMBLE_HCI_UART) or a fake controller
+ * (@c NIMBLE_HCI_FAKE). The fake controller, used on QEMU, accepts every HCI command and never
+ * raises an event: the host synchronizes and the GATT server runs, but no link is ever established.
  *
  * The watch is a peripheral only. Typical bring-up:
  *
@@ -37,8 +37,6 @@
  *
  * struct pbl_bt_config *config = pbl_zalloc_check(sizeof(*config));
  * dis_get_info(&config->dis_info);
- * // Bondings registered before starting are restored by the host.
- * bt_persistent_storage_register_existing_ble_bondings();
  * bool running = pbl_bt_start(config);
  * pbl_free(config);
  *
@@ -54,23 +52,21 @@ struct PBL_PACKED pbl_bt_config {
   /**
    * @brief Root keys, indexed by enum pbl_bt_sm_root_key_type.
    *
-   * Not used by the NimBLE backend, which reads and generates the root keys through the
-   * persistent storage service.
+   * The identity root key is the local Identity Resolving Key. The encryption root key is not
+   * used: the keys of a bond are generated and stored by the host.
    */
   struct pbl_bt_sm_key root_keys[PBL_BT_SM_ROOT_KEY_TYPE_NUM];
   /** Values served by the Device Information Service. */
   struct pbl_bt_dis_info dis_info;
   /** Identity address. Not used by the NimBLE backend, see pbl_bt_id_addr_get(). */
   struct pbl_bt_addr identity_addr;
-  /** Whether the heart rate service may be exposed. Not used by the NimBLE backend. */
-  bool is_hrm_supported_and_enabled;
 };
 
 /**
  * @brief One-time initialization of the Bluetooth stack.
  *
  * Creates the NimBLE host task (and the link layer task when the controller runs in the same
- * image) and installs the bonding store. Call once at boot, before any other function of this
+ * image) and installs the bond store. Call once at boot, before any other function of this
  * API.
  */
 void pbl_bt_init(void);
@@ -89,8 +85,7 @@ bool pbl_bt_start(struct pbl_bt_config *config);
 /**
  * @brief Stop the Bluetooth stack.
  *
- * Blocks until the host has stopped, then resets the GATT server and drops the in-memory bonding
- * store. No bonding removal callbacks are issued.
+ * Blocks until the host has stopped, then resets the GATT server. Bonds are kept.
  */
 void pbl_bt_stop(void);
 

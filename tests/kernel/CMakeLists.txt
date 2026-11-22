@@ -6,6 +6,7 @@ pbl_clar_test(test_kernel
     kernel/tick.c
     kernel/time.c
     kernel/timer.c
+    kernel/work.c
     kernel/sched.c
     kernel/thread.c
     kernel/mutex.c
@@ -18,6 +19,7 @@ pbl_clar_test(test_kernel
     kernel/arch/posix/cycle.c
     kernel/arch/posix/test.c
     kernel/timekeeping.c
+    kernel/wallclock.c
     drivers/base/device.c
     drivers/timer/timer.c
   INCLUDES
@@ -25,13 +27,13 @@ pbl_clar_test(test_kernel
     kernel/arch
     kernel/arch/posix/include
   DEFINES
-    PBL_NO_LINKER_SCRIPT
     CONFIG_DEVICE_LOG_LEVEL=0
     CONFIG_KERNEL_IDLE_STACK_SIZE=1024
 )
 
 pbl_clar_test(test_timekeeping
   SOURCES
+    kernel/idle.c
     kernel/timekeeping.c
     drivers/base/device.c
     drivers/timer/timer.c
@@ -40,8 +42,66 @@ pbl_clar_test(test_timekeeping
     kernel/arch
     kernel/arch/posix/include
   DEFINES
-    PBL_NO_LINKER_SCRIPT
     CONFIG_DEVICE_LOG_LEVEL=0
+    CONFIG_CPU_IDLE=1
+    CONFIG_SOC_HAS_IDLE_STATES=1
+)
+
+pbl_clar_test(test_idle
+  SOURCES
+    kernel/idle.c
+  INCLUDES
+    kernel
+    kernel/arch
+    kernel/arch/posix/include
+  DEFINES
+    CONFIG_CPU_IDLE=1
+    CONFIG_SOC_HAS_IDLE_STATES=1
 )
 
 pbl_clar_test(test_mmio)
+
+pbl_clar_test(test_kernel_sys_work
+  SOURCES
+    kernel/sys_work.c
+    kernel/tick.c
+    kernel/time.c
+    kernel/timer.c
+    kernel/work.c
+    kernel/sched.c
+    kernel/thread.c
+    kernel/mutex.c
+    kernel/sem.c
+    kernel/msgq.c
+    kernel/poll.c
+    kernel/irq.c
+    kernel/debug.c
+    kernel/arch/posix/arch.c
+    kernel/arch/posix/cycle.c
+    kernel/arch/posix/test.c
+    kernel/timekeeping.c
+    kernel/wallclock.c
+    drivers/base/device.c
+    drivers/timer/timer.c
+  INCLUDES
+    kernel
+    kernel/arch
+    kernel/arch/posix/include
+  DEFINES
+    CONFIG_DEVICE_LOG_LEVEL=0
+    CONFIG_KERNEL_IDLE_STACK_SIZE=1024
+)
+
+pbl_clar_test(test_scratch
+  SOURCES
+    kernel/scratch.c
+  DEFINES
+    CONFIG_SCRATCH_HEAP_SIZE=65536
+)
+
+pbl_clar_test(test_print
+  SOURCES
+    kernel/print.c
+  DEFINES
+    CONFIG_KERNEL_PRINT_BUFFER_SIZE=128
+)

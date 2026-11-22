@@ -8,16 +8,11 @@
 
 #include <pbl/drivers/flash.h>
 #include <pbl/kernel/malloc.h>
-#include <pbl/kernel/time.h>
-#include <pbl/logging/logging.h>
-#include <pbl/services/system_task.h>
 #include <pbl/shell/shell.h>
+#ifdef CONFIG_TASK_WDT
 #include <pbl/task_wdt/task_wdt.h>
+#endif
 #include <pbl/util/math.h>
-#include <pbl/util/rand32.h>
-#include <pbl/util/size.h>
-
-#include <system/firmware_storage.h>
 
 #define ERASED_BYTE 0xFFU
 
@@ -60,9 +55,9 @@ static int prv_parse_range(const struct pbl_shell *sh, const char *addr_str, con
 }
 
 static int prv_cmd_info(const struct pbl_shell *sh, size_t argc, char **argv) {
-  const struct pbl_flash_geometry *geo = FLASH->geometry;
+  const struct pbl_flash_geometry *geo = pbl_flash_get_geometry(FLASH);
 
-  pbl_shell_print(sh, "%s: %" PRIu32 " bytes%s", FLASH->dev.name, geo->size,
+  pbl_shell_print(sh, "%s: %" PRIu32 " bytes%s", pbl_device_name(&FLASH->dev), geo->size,
                   pbl_device_is_ready(&FLASH->dev) ? "" : " (not ready)");
   pbl_shell_print(sh, "page %" PRIu32 ", sector %" PRIu32 ", subsector %" PRIu32, geo->page_size,
                   geo->sector_size, geo->subsector_size);
@@ -101,7 +96,7 @@ static int prv_cmd_dump(const struct pbl_shell *sh, size_t argc, char **argv) {
   }
 
   while (len > 0U) {
-    uint32_t chunk = MIN(len, sizeof(buf));
+    uint32_t chunk = PBL_MIN(len, sizeof(buf));
 
     ret = pbl_flash_read(FLASH, addr, buf, chunk);
     if (ret != 0) {
@@ -114,12 +109,15 @@ static int prv_cmd_dump(const struct pbl_shell *sh, size_t argc, char **argv) {
 
     addr += chunk;
     len -= chunk;
-    system_task_watchdog_feed();
+#ifdef CONFIG_TASK_WDT
+    pbl_task_wdt_feed_self();
+#endif
   }
 
   return 0;
 }
 
+#ifdef CONFIG_FLASH_CRC
 static int prv_cmd_crc(const struct pbl_shell *sh, size_t argc, char **argv) {
   uint32_t addr;
   uint32_t len;
@@ -134,6 +132,7 @@ static int prv_cmd_crc(const struct pbl_shell *sh, size_t argc, char **argv) {
 
   return 0;
 }
+#endif
 
 static int prv_cmd_unprotect(const struct pbl_shell *sh, size_t argc, char **argv) {
   return pbl_flash_unprotect(FLASH);
@@ -142,18 +141,16 @@ static int prv_cmd_unprotect(const struct pbl_shell *sh, size_t argc, char **arg
 PBL_SHELL_SUBCMD_ADD(sub_flash, info, nullptr, "Show the flash", prv_cmd_info, 0, 0);
 PBL_SHELL_SUBCMD_ADD(sub_flash, erase, nullptr, "Erase the subsectors covering <addr> <len>",
                      prv_cmd_erase, 3, 0);
+#ifdef CONFIG_FLASH_CRC
 PBL_SHELL_SUBCMD_ADD(sub_flash, crc, nullptr, "Legacy CRC of <addr> <len>", prv_cmd_crc, 3, 0);
+#endif
 PBL_SHELL_SUBCMD_ADD(sub_flash, dump, nullptr, "Hex dump <addr> <len>", prv_cmd_dump, 3, 0);
 PBL_SHELL_SUBCMD_ADD(sub_flash, unprotect, nullptr, "Remove the flash write protection",
                      prv_cmd_unprotect, 0, 0);
 
-#ifdef CONFIG_RECOVERY_FW
-#define MAX_READ_SIZE     1024U
-#define FILL_CHUNK_SIZE   64U
-#define VALIDATE_BUF_SIZE 256U
-// Above 128 bytes reads take another path on some controllers
-#define VALIDATE_MIXED_READ_SIZE 130U
-#define VALIDATE_MIXED_LEN       1000U
+#ifdef CONFIG_FLASH_SHELL_TEST
+#define MAX_READ_SIZE   1024U
+#define FILL_CHUNK_SIZE 64U
 
 static int prv_cmd_read(const struct pbl_shell *sh, size_t argc, char **argv) {
   uint32_t addr;
@@ -166,14 +163,14 @@ static int prv_cmd_read(const struct pbl_shell *sh, size_t argc, char **argv) {
     return ret;
   }
 
-  buf = pbl_malloc(MIN(MAX_READ_SIZE, len));
+  buf = pbl_malloc(PBL_MIN(MAX_READ_SIZE, len));
   if (buf == nullptr) {
     pbl_shell_error(sh, "unable to allocate read buffer");
     return -ENOMEM;
   }
 
   while (len > 0U) {
-    uint32_t chunk = MIN(len, MAX_READ_SIZE);
+    uint32_t chunk = PBL_MIN(len, MAX_READ_SIZE);
 
     ret = pbl_flash_read(FLASH, addr, buf, chunk);
     if (ret != 0) {
@@ -216,7 +213,7 @@ static int prv_cmd_fill(const struct pbl_shell *sh, size_t argc, char **argv) {
   }
 
   while (len > 0U) {
-    uint32_t chunk = MIN(len, FILL_CHUNK_SIZE);
+    uint32_t chunk = PBL_MIN(len, FILL_CHUNK_SIZE);
 
     ret = pbl_flash_write(FLASH, addr, chunk_buf, chunk);
     if (ret != 0) {
@@ -231,93 +228,8 @@ static int prv_cmd_fill(const struct pbl_shell *sh, size_t argc, char **argv) {
   return 0;
 }
 
-static int prv_validate_erase(const struct pbl_shell *sh, uint32_t addr, uint32_t len) {
-  int ret;
-
-  ret = pbl_flash_erase(FLASH, addr, len);
-  if (ret != 0) {
-    pbl_shell_error(sh, "erase failed (%d)", ret);
-    return ret;
-  }
-
-  if (!pbl_flash_is_erased(FLASH, addr, len)) {
-    pbl_shell_error(sh, "not erased");
-    return -EIO;
-  }
-
-  return 0;
-}
-
-static int prv_cmd_validate(const struct pbl_shell *sh, size_t argc, char **argv) {
-  const uint32_t test_addr = PART_FIRMWARE_DEST_OFFSET;
-  const uint32_t test_len = FLASH->geometry->sector_size;
-  uint8_t buf[VALIDATE_BUF_SIZE];
-  int ret;
-
-  ret = prv_validate_erase(sh, test_addr, test_len);
-  if (ret != 0) {
-    return ret;
-  }
-
-  for (uint32_t i = 0U; i < sizeof(buf); i++) {
-    buf[i] = (uint8_t)i;
-  }
-
-  for (uint32_t offset = 0U; offset < test_len; offset += sizeof(buf)) {
-    ret = pbl_flash_write(FLASH, test_addr + offset, buf, sizeof(buf));
-    if (ret != 0) {
-      pbl_shell_error(sh, "write failed (%d)", ret);
-      return ret;
-    }
-  }
-
-  for (uint32_t offset = 0U; offset < test_len; offset += sizeof(buf)) {
-    memset(buf, 0, sizeof(buf));
-    ret = pbl_flash_read(FLASH, test_addr + offset, buf, sizeof(buf));
-    if (ret != 0) {
-      pbl_shell_error(sh, "read failed (%d)", ret);
-      return ret;
-    }
-
-    for (uint32_t i = 0U; i < sizeof(buf); i++) {
-      if (buf[i] != (uint8_t)i) {
-        pbl_shell_error(sh, "incorrect value at 0x%" PRIx32, test_addr + offset + i);
-        return -EIO;
-      }
-    }
-  }
-
-  // Mixing single byte reads with longer ones has caused issues before
-  for (uint32_t offset = 0U; offset < VALIDATE_MIXED_LEN; offset++) {
-    const uint32_t pre_addr = test_addr + offset - MIN(offset, 1U);
-    const size_t len = MIN(VALIDATE_MIXED_READ_SIZE, VALIDATE_MIXED_LEN - offset);
-    uint8_t pre_byte;
-
-    (void)pbl_flash_read(FLASH, pre_addr, &pre_byte, sizeof(pre_byte));
-
-    memset(buf, 0, sizeof(buf));
-    (void)pbl_flash_read(FLASH, test_addr + offset, buf, len);
-    for (size_t i = 0U; i < len; i++) {
-      if (buf[i] != (uint8_t)(offset + i)) {
-        pbl_shell_error(sh, "failed at offset %" PRIu32 ", got %u, wanted %u", offset, buf[i],
-                        (uint8_t)(offset + i));
-        return -EIO;
-      }
-    }
-  }
-
-  ret = prv_validate_erase(sh, test_addr, test_len);
-  if (ret != 0) {
-    return ret;
-  }
-
-  pbl_shell_print(sh, "OK");
-
-  return 0;
-}
-
 static int prv_cmd_erased_sectors(const struct pbl_shell *sh, size_t argc, char **argv) {
-  const struct pbl_flash_geometry *geo = FLASH->geometry;
+  const struct pbl_flash_geometry *geo = pbl_flash_get_geometry(FLASH);
   const bool show_subsectors = (argc > 1) && (strcmp(argv[1], "1") == 0);
 
   for (uint32_t addr = 0U; addr < geo->size; addr += geo->sector_size) {
@@ -330,7 +242,9 @@ static int prv_cmd_erased_sectors(const struct pbl_shell *sh, size_t argc, char 
                         pbl_flash_is_erased(FLASH, sub, geo->subsector_size) ? "true" : "false");
       }
     }
+#ifdef CONFIG_TASK_WDT
     pbl_task_wdt_feed_self();
+#endif
   }
 
   return 0;
@@ -340,166 +254,8 @@ PBL_SHELL_SUBCMD_ADD(sub_flash, read, nullptr, "Write raw flash bytes to the con
                      prv_cmd_read, 3, 0);
 PBL_SHELL_SUBCMD_ADD(sub_flash, fill, nullptr,
                      "Fill with an incrementing pattern <addr> <len> <start>", prv_cmd_fill, 4, 0);
-PBL_SHELL_SUBCMD_ADD(sub_flash, validate, nullptr, "Erase, write and read back a test sector",
-                     prv_cmd_validate, 0, 0);
 PBL_SHELL_SUBCMD_ADD(sub_flash, erased_sectors, nullptr,
                      "List erased sectors [1 = show subsectors]", prv_cmd_erased_sectors, 1, 1);
-#else
-#define STRESS_MAX_CHUNK  1024U
-#define STRESS_READBACKS  8U
-#define BENCH_MIN_TICKS   300U
-#define BENCH_START_ITERS 4096U
-
-static uint32_t s_stress_addr = PART_FIRMWARE_DEST_OFFSET;
-static uint32_t s_stress_erased_end = PART_FIRMWARE_DEST_OFFSET;
-
-static uint32_t prv_xorshift32(uint32_t x) {
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-
-  return x;
-}
-
-static void prv_stress_cb(void *data) {
-  const uint32_t sector_size = FLASH->geometry->sector_size;
-  uint32_t iters = (uint32_t)(uintptr_t)data;
-  uint32_t len = pbl_rand32() % STRESS_MAX_CHUNK;
-  uint32_t seed = pbl_rand32() | 1U;
-  uint32_t addr;
-  uint32_t x;
-  uint8_t *buf;
-
-  if (iters == 0U) {
-    PBL_LOG_ALWAYS("flash stress test complete");
-    return;
-  }
-
-  buf = pbl_malloc(len);
-  if (buf == nullptr) {
-    PBL_LOG_ALWAYS("flash stress test: malloc of size %" PRIu32 " failed", len);
-    system_task_add_callback(prv_stress_cb, (void *)(uintptr_t)(iters - 1U));
-    return;
-  }
-
-  if (s_stress_addr + len > PART_FIRMWARE_DEST_OFFSET + PART_FIRMWARE_DEST_SIZE) {
-    s_stress_addr = PART_FIRMWARE_DEST_OFFSET;
-    s_stress_erased_end = PART_FIRMWARE_DEST_OFFSET;
-  }
-
-  addr = s_stress_addr;
-  s_stress_addr += len;
-
-  // Chunks are smaller than a sector
-  if (s_stress_addr > s_stress_erased_end) {
-    PBL_LOG_ALWAYS("flash stress test: erasing 0x%" PRIx32, s_stress_erased_end);
-    if (pbl_flash_erase(FLASH, s_stress_erased_end, sector_size) != 0 ||
-        !pbl_flash_is_erased(FLASH, s_stress_erased_end, sector_size)) {
-      PBL_LOG_ALWAYS("flash stress test: erase of 0x%" PRIx32 " failed", s_stress_erased_end);
-      pbl_free(buf);
-      return;
-    }
-    s_stress_erased_end += sector_size;
-  }
-
-  x = seed;
-  for (uint32_t i = 0U; i < len; i++) {
-    buf[i] = (uint8_t)x;
-    x = prv_xorshift32(x);
-  }
-
-  (void)pbl_flash_write(FLASH, addr, buf, len);
-
-  for (uint32_t j = 0U; j < STRESS_READBACKS; j++) {
-    memset(buf, 0, len);
-    (void)pbl_flash_read(FLASH, addr, buf, len);
-
-    x = seed;
-    for (uint32_t i = 0U; i < len; i++) {
-      if (buf[i] != (uint8_t)x) {
-        PBL_LOG_ALWAYS("flash stress test: miscompare at 0x%" PRIx32 ", giving up", addr + i);
-        pbl_free(buf);
-        return;
-      }
-      x = prv_xorshift32(x);
-    }
-  }
-
-  pbl_free(buf);
-
-  PBL_LOG_ALWAYS("flash stress test: %" PRIu32 " bytes at 0x%" PRIx32 " OK, %" PRIu32 " to go", len,
-                 addr, iters - 1U);
-  system_task_add_callback(prv_stress_cb, (void *)(uintptr_t)(iters - 1U));
-}
-
-static int prv_cmd_stress(const struct pbl_shell *sh, size_t argc, char **argv) {
-  uint32_t count;
-  int ret;
-
-  ret = prv_parse_u32(sh, argv[1], &count);
-  if (ret != 0) {
-    return ret;
-  }
-
-  // This wears the flash out: erases repeat on the same sectors far faster than specified
-  pbl_shell_print(sh, "flash stress test running in background");
-  system_task_add_callback(prv_stress_cb, (void *)(uintptr_t)count);
-
-  return 0;
-}
-
-static int prv_benchmark(const struct pbl_shell *sh, size_t size) {
-  const uint32_t window = 2U * FLASH->geometry->subsector_size;
-  uint64_t elapsed;
-  uint32_t iters = BENCH_START_ITERS / 2U;
-  void *buf;
-
-  buf = pbl_malloc(size);
-  if (buf == nullptr) {
-    pbl_shell_error(sh, "OOM allocating read buffer");
-    return -ENOMEM;
-  }
-
-  do {
-    uint64_t start = pbl_uptime_ticks();
-    uint32_t offset = 0U;
-
-    iters *= 2U;
-    for (uint32_t i = 0U; i < iters; i++) {
-      (void)pbl_flash_partition_read(PART_FIRMWARE_DEST, offset, buf, size);
-      offset = (offset + size) % window;
-    }
-
-    elapsed = pbl_uptime_ticks() - start;
-  } while (elapsed < BENCH_MIN_TICKS);
-
-  pbl_shell_print(sh, "%u bytes: %" PRIu32 " iters in %" PRIu64 " ticks = %" PRIu32 " us/iter",
-                  (unsigned int)size, iters, elapsed,
-                  (uint32_t)((elapsed * 1000000U) / ((uint64_t)iters * PBL_TICK_HZ)));
-
-  pbl_free(buf);
-  pbl_task_wdt_feed_self();
-
-  return 0;
-}
-
-static int prv_cmd_benchmark(const struct pbl_shell *sh, size_t argc, char **argv) {
-  static const size_t sizes[] = {4, 5, 16, 64, 128, 256, 512, 1024};
-
-  for (size_t i = 0U; i < ARRAY_LENGTH(sizes); i++) {
-    int ret = prv_benchmark(sh, sizes[i]);
-    if (ret != 0) {
-      return ret;
-    }
-  }
-
-  return 0;
-}
-
-PBL_SHELL_SUBCMD_ADD(sub_flash, stress, nullptr, "Write/read stress test in the background <count>",
-                     prv_cmd_stress, 2, 0);
-PBL_SHELL_SUBCMD_ADD(sub_flash, benchmark, nullptr, "Benchmark flash reads", prv_cmd_benchmark, 0,
-                     0);
 #endif
 
 #ifdef CONFIG_FLASH_OTP
@@ -571,7 +327,7 @@ static int prv_cmd_otp_read(const struct pbl_shell *sh, size_t argc, char **argv
   }
 
   while (len > 0U) {
-    uint32_t chunk = MIN(len, sizeof(buf));
+    uint32_t chunk = PBL_MIN(len, sizeof(buf));
 
     ret = pbl_flash_otp_read(FLASH, offs, buf, chunk);
     if (ret != 0) {

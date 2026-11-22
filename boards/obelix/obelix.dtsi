@@ -1,0 +1,448 @@
+// SPDX-FileCopyrightText: 2026 Core Devices LLC
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+
+#include "sifli/sf32lb52j.dtsi"
+#include "sifli/sf32lb52xud.dtsi"
+#include "obelix-pinctrl.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "Core Devices Pebble Time 2";
+
+	battery: battery {
+		compatible = "simple-battery";
+		constant-charge-current-max-microamp = <190000>;
+		charge-term-current-microamp = <19000>;
+		constant-charge-voltage-max-microvolt = <4350000>;
+	};
+
+	vddp: regulator-vddp {
+		compatible = "regulator-fixed";
+		regulator-name = "vddp";
+		gpios = <&gpio1 28 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	vlcd: regulator-vlcd {
+		compatible = "regulator-fixed";
+		regulator-name = "vlcd";
+		gpios = <&gpio1 29 GPIO_ACTIVE_LOW>;
+	};
+
+	panel: panel {
+		compatible = "jdi,lpm015m135a";
+		vddp-supply = <&vddp>;
+		vlcd-supply = <&vlcd>;
+		pwms = <&lptim2_pwm 0 16666666 0>;
+		jdi,enable-start = <3>;
+		jdi,enable-end = <99>;
+
+		panel-timing {
+			clock-frequency = <746268>;
+			hactive = <200>;
+			vactive = <228>;
+			hback-porch = <2>;
+			hfront-porch = <6>;
+			hsync-len = <0>;
+			vback-porch = <0>;
+			vfront-porch = <6>;
+			vsync-len = <0>;
+		};
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&lcdc1_out>;
+			};
+		};
+	};
+
+	buttons: gpio-keys {
+		compatible = "gpio-keys";
+
+		button-back {
+			label = "Back";
+			gpios = <&gpio1 34 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_BACK>;
+			debounce-interval = <40>;
+			wakeup-source;
+		};
+
+		button-up {
+			label = "Up";
+			gpios = <&gpio1 35 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			linux,code = <KEY_UP>;
+			debounce-interval = <40>;
+		};
+
+		button-select {
+			label = "Select";
+			gpios = <&gpio1 36 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			linux,code = <KEY_SELECT>;
+			debounce-interval = <40>;
+		};
+
+		button-down {
+			label = "Down";
+			gpios = <&gpio1 37 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			linux,code = <KEY_DOWN>;
+			debounce-interval = <40>;
+		};
+	};
+
+	backlight: backlight {
+		compatible = "led-backlight";
+		leds = <&backlight_led>;
+	};
+
+	dmic: dmic {
+		compatible = "dmic-codec";
+		#sound-dai-cells = <0>;
+		vref-supply = <&ldsw2>;
+	};
+
+	mic: sound-mic {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "mic";
+		simple-audio-card,format = "pdm";
+
+		simple-audio-card,cpu {
+			sound-dai = <&pdm1>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&dmic>;
+		};
+	};
+
+	speaker_amp: audio-amplifier {
+		compatible = "awinic,aw8155";
+		mode-gpios = <&gpio1 0 GPIO_ACTIVE_HIGH>;
+		awinic,mode = <1>;
+	};
+
+	speaker: sound-speaker {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "speaker";
+		simple-audio-card,aux-devs = <&speaker_amp>;
+
+		simple-audio-card,cpu {
+			sound-dai = <&audcodec>;
+		};
+	};
+};
+
+&i2c1 {
+	pinctrl-0 = <&i2c1_default>;
+	pinctrl-names = "default";
+	clock-frequency = <400000>;
+	status = "okay";
+
+	pmic: pmic@6b {
+		compatible = "nordic,npm1300";
+		reg = <0x6b>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <26 IRQ_TYPE_EDGE_RISING>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		monitored-battery = <&battery>;
+		system-power-controller;
+		nordic,reduced-charge-voltage-microvolt = <4000000>;
+		nordic,thermistor-ohms = <10000>;
+		nordic,thermistor-beta = <3380>;
+		nordic,thermistor-hot-celsius = <45>;
+		nordic,discharge-current-limit-microamp = <200000>;
+		input-current-limit-microamp = <500000>;
+		nordic,startup-input-current-limit-microamp = <500000>;
+
+		regulators {
+			buck1: BUCK1 {
+				regulator-name = "npm1300_buck1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			ldsw1: LDSW1 {
+				regulator-name = "npm1300_ldsw1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-always-on;
+				nordic,ldo-mode;
+			};
+
+			ldsw2: LDSW2 {
+				regulator-name = "npm1300_ldsw2";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				nordic,ldo-mode;
+			};
+		};
+	};
+
+	haptics: haptics@58 {
+		compatible = "awinic,aw86225";
+		reg = <0x58>;
+		reset-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&ldsw1>;
+		awinic,lra-f0-hz = <240>;
+		awinic,lra-f0-tolerance-hz = <20>;
+		awinic,lra-rated-microvolt = <1200000>;
+		awinic,output-gain-percent = <93>;
+	};
+
+	/*
+	 * Bench-calibrated on three production units (unit spread 1.3%); the dark
+	 * floor is under 20 counts, so no offset is needed.
+	 */
+	w1160: light-sensor@48 {
+		compatible = "sensortek,w1160";
+		reg = <0x48>;
+		vdd-supply = <&ldsw1>;
+		sensortek,lux-scale = <100 483>;
+	};
+
+	led-controller@64 {
+		compatible = "awinic,aw2016";
+		reg = <0x64>;
+
+		backlight_led: multi-led {
+			color = <LED_COLOR_ID_RGB>;
+			function = LED_FUNCTION_BACKLIGHT;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			led@0 {
+				reg = <0>;
+				color = <LED_COLOR_ID_RED>;
+			};
+
+			led@1 {
+				reg = <1>;
+				color = <LED_COLOR_ID_GREEN>;
+			};
+
+			led@2 {
+				reg = <2>;
+				color = <LED_COLOR_ID_BLUE>;
+			};
+		};
+	};
+};
+
+&i2c2 {
+	pinctrl-0 = <&i2c2_default>;
+	pinctrl-names = "default";
+	clock-frequency = <400000>;
+	dmas = <&dmac1 5 23 2>;
+	dma-names = "rx";
+	status = "okay";
+
+	lsm6dso: imu@6a {
+		compatible = "st,lsm6dso";
+		reg = <0x6a>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <38 IRQ_TYPE_EDGE_RISING>;
+		mount-matrix = "-1", "0", "0",
+			       "0", "1", "0",
+			       "0", "0", "1";
+	};
+
+	mmc5603nj: magnetometer@30 {
+		compatible = "memsic,mmc5603";
+		reg = <0x30>;
+		mount-matrix = "0", "1", "0",
+			       "-1", "0", "0",
+			       "0", "0", "1";
+	};
+};
+
+&i2c3 {
+	pinctrl-0 = <&i2c3_default>;
+	pinctrl-names = "default";
+	clock-frequency = <400000>;
+	status = "okay";
+
+	touchscreen: touchscreen@15 {
+		compatible = "hynitron,cst816s";
+		reg = <0x15>;
+		pinctrl-0 = <&touch_default>;
+		pinctrl-names = "default";
+		interrupt-parent = <&gpio1>;
+		interrupts = <27 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&pmic 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		touchscreen-size-x = <200>;
+		touchscreen-size-y = <228>;
+	};
+};
+
+&i2c4 {
+	pinctrl-0 = <&i2c4_default>;
+	pinctrl-names = "default";
+	clock-frequency = <400000>;
+	status = "okay";
+};
+
+&mpi1 {
+	status = "okay";
+};
+
+/* VDD_SIP is supplied by BUCK1, more efficient than LDO18 */
+&ldo18 {
+	/delete-property/ regulator-pull-down;
+};
+
+&psram {
+	vcc-supply = <&buck1>;
+};
+
+/* DLL2 clocks the flash */
+&hpsys_rcc {
+	assigned-clocks = <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_PERI>,
+			  <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_DLL1>,
+			  <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_DLL2>,
+			  <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_SYS>,
+			  <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_HCLK>,
+			  <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_PCLK>,
+			  <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_PCLK2>;
+	assigned-clock-parents = <&pmuc SF32LB52_PMUC_CLK_HRC48>, <0>, <0>,
+				 <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_DLL1>,
+				 <0>, <0>, <0>;
+	assigned-clock-rates = <0>, <240000000>, <288000000>, <0>, <240000000>,
+			       <120000000>, <3750000>;
+};
+
+&mpi2 {
+	status = "okay";
+	assigned-clocks = <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_MPI2_K>;
+	assigned-clock-parents = <&hpsys_rcc SF32LB52_HPSYS_RCC_CLK_DLL2>;
+
+	flash0: flash@0 {
+		compatible = "gigadevice,gd25q256e", "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <72000000>;
+		spi-rx-bus-width = <4>;
+		spi-tx-bus-width = <4>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/* Boot ROM flash table, then the factory calibration data */
+			partition@0 {
+				label = "ptable";
+				reg = <0x0 0x10000>;
+			};
+
+			partition@10000 {
+				label = "code";
+				reg = <0x10000 0x3f0000>;
+			};
+
+			/* Factory data */
+			partition@1ffe000 {
+				label = "mfg-info";
+				reg = <0x1ffe000 0x1000>;
+			};
+		};
+
+		otp {
+			compatible = "user-otp";
+
+			nvmem-layout {
+				compatible = "fixed-layout";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				hw-version@0 {
+					reg = <0x0 0x20>;
+				};
+
+				serial-number@20 {
+					reg = <0x20 0x20>;
+				};
+
+				pcba-serial-number@40 {
+					reg = <0x40 0x20>;
+				};
+
+				soc_config_user: soc-config-user@800 {
+					reg = <0x800 0x100>;
+				};
+
+				soc_config_cust: soc-config-cust@1000 {
+					reg = <0x1000 0x100>;
+				};
+			};
+		};
+	};
+};
+
+&usart1 {
+	pinctrl-0 = <&usart1_default>;
+	pinctrl-names = "default";
+	current-speed = <1000000>;
+	dmas = <&dmac1 0 5 1>;
+	dma-names = "rx";
+	status = "okay";
+};
+
+&lptim2 {
+	status = "okay";
+};
+
+&lptim2_pwm {
+	pinctrl-0 = <&lptim2_default>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&lcdc1 {
+	pinctrl-0 = <&lcdc1_default>;
+	pinctrl-1 = <&lcdc1_sleep>;
+	pinctrl-names = "default", "sleep";
+	status = "okay";
+
+	port {
+		lcdc1_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
+	};
+};
+
+&mailbox1 {
+	status = "okay";
+};
+
+&mailbox2 {
+	status = "okay";
+};
+
+&lcpu {
+	status = "okay";
+};
+
+&pmuc {
+	nvmem-cells = <&soc_config_user>, <&soc_config_cust>;
+	nvmem-cell-names = "soc-config-user", "soc-config-cust";
+};
+
+&pdm1 {
+	pinctrl-0 = <&pdm1_default>;
+	pinctrl-names = "default";
+	dmas = <&dmac1 4 36 0>;
+	dma-names = "rx";
+	status = "okay";
+};
+
+&audcodec {
+	dmas = <&dmac1 3 41 2>;
+	dma-names = "tx";
+	status = "okay";
+};
+
+&wdt1 {
+	status = "okay";
+};

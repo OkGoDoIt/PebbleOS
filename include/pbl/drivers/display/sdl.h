@@ -30,8 +30,15 @@ extern const struct pbl_display_ops pbl_display_sdl_ops;
  */
 #define PBL_DISPLAY_SDL_DEFINE(sym, _name, _width, _height, _format, ...)                        \
   PBL_DISPLAY_STATE_DEFINE(sym);                                                                 \
-  const struct pbl_display sym = PBL_DISPLAY_INIT(sym, _name, &pbl_display_sdl_ops, nullptr,     \
+  const struct pbl_display sym = PBL_DISPLAY_INIT(sym, _name, nullptr, &pbl_display_sdl_ops,     \
                                                   _width, _height, _format, false, __VA_ARGS__); \
   PBL_DEVICE_REGISTER(sym, &sym.dev)
+
+/** @cond INTERNAL_HIDDEN */
+extern const struct pbl_display pbl_display_sdl;
+/** @endcond */
+
+/** @brief The SDL display, of @c CONFIG_DISPLAY_SDL_WIDTH by @c CONFIG_DISPLAY_SDL_HEIGHT. */
+#define SDL_DISPLAY (&pbl_display_sdl)
 
 /** @} */

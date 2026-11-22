@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include <pbl/kernel/assert.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
 #include <pbl/kernel/heap.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/logging.h>
@@ -192,7 +194,7 @@ void pbl_heap_init(struct pbl_heap *heap, void *start, void *end, bool fuzz_on_f
   uint32_t heap_size = ((uintptr_t)end - (uintptr_t)start) / ALIGNMENT_SIZE;
   // If we have more space than we can use, just limit it to the usable space. This limit is caused
   // by the width of .Size and .PrevSize in HeapInfo_t
-  heap_size = MIN(SEGMENT_SIZE_MAX, heap_size);
+  heap_size = PBL_MIN(SEGMENT_SIZE_MAX, heap_size);
   end = ((char *)start) + (heap_size * ALIGNMENT_SIZE);
 
   memset(start, 0, heap_size * ALIGNMENT_SIZE);
@@ -525,7 +527,7 @@ void *pbl_heap_realloc(struct pbl_heap *heap, void *ptr, size_t nbytes, uintptr_
     // Copy over old data.
     const HeapInfo_t *heap_info_ptr = HEAP_INFO_FOR_PTR(ptr);
     const size_t original_size = (heap_info_ptr->Size - HEAP_INFO_BLOCK_SIZE(0)) * ALIGNMENT_SIZE;
-    memcpy(new_ptr, ptr, MIN(nbytes, original_size));
+    memcpy(new_ptr, ptr, PBL_MIN(nbytes, original_size));
     pbl_heap_free(heap, ptr, caller);
   }
   return new_ptr;
@@ -555,6 +557,11 @@ char *pbl_heap_strdup(struct pbl_heap *heap, const char *s, uintptr_t caller) {
     memcpy(dup, s, size);
   }
   return dup;
+}
+
+[[noreturn]] PBL_WEAK void pbl_heap_oom_handler(struct pbl_heap *heap, size_t size,
+                                                uintptr_t caller) {
+  pbl_fatal_error_handler(caller);
 }
 
 [[noreturn]] void pbl_heap_oom(struct pbl_heap *heap, size_t size, uintptr_t caller) {
@@ -617,7 +624,7 @@ void pbl_heap_dump(struct pbl_heap *heap, pbl_heap_dump_cb_t cb, void *arg) {
       type = "FREE";
       num_free_blocks++;
       num_free_bytes += block_size;
-      largest_free = MAX(largest_free, block_size);
+      largest_free = PBL_MAX(largest_free, block_size);
     }
 
     snprintf(buffer, sizeof(buffer), "PC:0x%08lX Addr:0x%08lX Bytes:%-8lu %s", (long)pc,

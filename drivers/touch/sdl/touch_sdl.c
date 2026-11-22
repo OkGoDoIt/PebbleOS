@@ -5,7 +5,7 @@
 
 #include <pbl/drivers/touch.h>
 #include <pbl/drivers/touch/sdl.h>
-#include <pbl/services/system_task.h>
+#include <pbl/kernel/work.h>
 #include <pbl/util/math.h>
 
 #include <pbl_arch_posix.h>
@@ -31,15 +31,15 @@ static void prv_touch_isr(void *arg) {
 
   s_last = (struct prv_touch_event){
     .pressed = e->pressed,
-    .x = CLIP(e->x, 0, CONFIG_TOUCH_SDL_SIZE_X - 1),
-    .y = CLIP(e->y, 0, CONFIG_TOUCH_SDL_SIZE_Y - 1),
+    .x = PBL_CLAMP(e->x, 0, CONFIG_TOUCH_SDL_SIZE_X - 1),
+    .y = PBL_CLAMP(e->y, 0, CONFIG_TOUCH_SDL_SIZE_Y - 1),
   };
 
   if (!s_enabled || s_work_pending) {
     return;
   }
 
-  s_work_pending = system_task_add_callback_from_isr(prv_work, nullptr);
+  s_work_pending = pbl_sys_work_call_from_isr(prv_work, nullptr);
 }
 
 void touch_sdl_changed(bool pressed, int x, int y) {

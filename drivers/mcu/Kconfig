@@ -1,25 +1,30 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-menu "MCU"
+menuconfig MCU
+    bool "MCU information"
+    help
+      MCU information (pbl/drivers/mcu.h), such as the unique ID.
+
+if MCU
 
 config MCU_NRF5
     bool "Nordic nRF5"
     default y if SOC_NRF52
-    select HAL_NORDIC
     help
       Support for Nordic nRF5 MCU information.
 
 config MCU_SF32LB
     bool "SiFli SF32LB"
     default y if SOC_SF32LB52
-    depends on NVMEM_SF32LB52
+    depends on SOC_SF32LB52
+    select NVMEM
     help
       Support for SiFli SF32LB MCU information.
 
 config MCU_QEMU
     bool "QEMU"
-    default y if SOC_QEMU
+    default y if SOC_QEMU_PEBBLE
     help
       QEMU MCU information. QEMU emulates no unique ID, so it reports a
       fixed serial.
@@ -30,4 +35,4 @@ config MCU_POSIX
     help
       MCU information for a native build.
 
-endmenu
+endif # MCU

@@ -1,10 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/drivers/clk/nrf52.h>
 #include <pbl/drivers/timer.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mmio.h>
 
+#include <hardware/nrf52_memorymap.h>
 #include <hardware/nrf52_rtc.h>
 
 #define CC_EVENT 0U
@@ -12,6 +14,9 @@
 // A compare value 0 or 1 count ahead of the counter may not trigger; one more covers an
 // increment between reading the counter and writing the compare value.
 #define MIN_DELTA 3U
+
+static const struct pbl_clk s_lfclk = PBL_CLK(NRF52_CLOCK, NRF52_CLK_LFCLK);
+static uint32_t s_rate_hz;
 
 static inline uint32_t prv_getreg(uint32_t offset) {
   return pbl_readl(NRF52_RTC1_BASE + offset);
@@ -49,11 +54,11 @@ static const struct pbl_clockevent_ops s_ce_ops = {
 
 PBL_DEVICE_STATE_DEFINE(s_rtc1_cs);
 static const struct pbl_clocksource s_rtc1_cs =
-    PBL_CLOCKSOURCE_INIT(s_rtc1_cs, "rtc1", prv_init, &s_cs_ops, 24);
+    PBL_CLOCKSOURCE_INIT(s_rtc1_cs, "rtc1", prv_init, nullptr, &s_cs_ops, 24);
 
 PBL_DEVICE_STATE_DEFINE(s_rtc1_ce);
-static const struct pbl_clockevent s_rtc1_ce =
-    PBL_CLOCKEVENT_INIT(s_rtc1_ce, "rtc1", prv_init, &s_ce_ops, MIN_DELTA, RTC_COUNTER_MASK / 2U);
+static const struct pbl_clockevent s_rtc1_ce = PBL_CLOCKEVENT_INIT(
+    s_rtc1_ce, "rtc1", prv_init, nullptr, &s_ce_ops, MIN_DELTA, RTC_COUNTER_MASK / 2U);
 
 const struct pbl_clocksource *const pbl_system_clocksource = &s_rtc1_cs;
 const struct pbl_clockevent *const pbl_system_clockevent = &s_rtc1_ce;
@@ -76,8 +81,24 @@ PBL_IRQ_CONNECT(RTC1, (1U << CONFIG_NUM_IRQ_PRIO_BITS) - 1U, prv_isr, , 0);
 // Both devices share the timer.
 static int prv_init(const struct pbl_device *dev) {
   static bool s_started;
+  uint64_t rate_mhz;
+  int ret;
 
   if (!s_started) {
+    ret = pbl_device_init(&NRF52_CLOCK->dev);
+    if (ret != 0) {
+      return ret;
+    }
+    ret = pbl_clk_get_rate(&s_lfclk, &rate_mhz);
+    if (ret != 0) {
+      return ret;
+    }
+    s_rate_hz = (uint32_t)(rate_mhz / 1000U);
+    ret = pbl_clk_enable(&s_lfclk);
+    if (ret != 0) {
+      return ret;
+    }
+
     prv_putreg(NRF52_RTC_TASKS_STOP_OFFSET, 1U);
     prv_putreg(NRF52_RTC_INTENCLR_OFFSET, UINT32_MAX);
     prv_putreg(NRF52_RTC_EVTEN_OFFSET, 0U);
@@ -89,9 +110,9 @@ static int prv_init(const struct pbl_device *dev) {
   }
 
   if (dev == &s_rtc1_cs.dev) {
-    pbl_clocksource_set_hz(&s_rtc1_cs, NRF52_RTC_CLOCK_HZ);
+    pbl_clocksource_set_hz(&s_rtc1_cs, s_rate_hz);
   } else {
-    pbl_clockevent_set_hz(&s_rtc1_ce, NRF52_RTC_CLOCK_HZ);
+    pbl_clockevent_set_hz(&s_rtc1_ce, s_rate_hz);
   }
 
   return 0;

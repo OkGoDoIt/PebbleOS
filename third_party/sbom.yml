@@ -5,6 +5,27 @@
 # submodule record the commit their version was taken from.
 
 components:
+  - name: pblboot
+    paths:
+      - bootloaders/pebbleos-bootloaders/pr2-bootloader.hex
+      - bootloaders/pebbleos-bootloaders/pt2-bootloader.hex
+    type: firmware
+    supplier: Core Devices LLC
+    description: Bootloader of PR2 and PT2, flashed along with the firmware
+    version: 0.9.21
+    commit: 2cb5d5330d1fb4929dccf13dfa88ac1b4b8bcc75
+    license: Apache-2.0
+    url: https://github.com/coredevices/pblboot
+
+  - name: asterix-bootloader
+    path: bootloaders/pebbleos-bootloaders/p2d-bootloader.hex
+    type: firmware
+    supplier: Core Devices LLC
+    description: Bootloader of P2D, flashed along with the firmware
+    commit: 2cb5d5330d1fb4929dccf13dfa88ac1b4b8bcc75
+    license: Apache-2.0
+    url: https://github.com/coredevices/PebbleOS-legacy-bootloaders
+
   - name: CMSIS
     path: cmsis_core/CMSIS
     supplier: Arm Limited
@@ -13,6 +34,15 @@ components:
     license: Apache-2.0
     purl: pkg:github/ARM-software/CMSIS_5@55b19837f5703e418ca37894d5745b1dc05e4c91
     url: https://github.com/ARM-software/CMSIS_5
+
+  - name: devicetree-rebasing
+    path: devicetree/devicetree-rebasing
+    supplier: The Linux Kernel Organization
+    description: Linux devicetree bindings, used only to check devicetrees
+    version: v7.3-dts
+    commit: 44ab80381f4714c7e073a85fe9796f1cff8801c0
+    license: GPL-2.0-only
+    url: https://git.kernel.org/pub/scm/linux/kernel/git/devicetree/devicetree-rebasing.git
 
   - name: fff
     path: fff/fff
@@ -33,22 +63,16 @@ components:
     purl: pkg:github/NordicSemiconductor/nrfx@v3.11.0
     url: https://github.com/NordicSemiconductor/nrfx
 
-  - name: SiFli-SDK
-    path: hal_sifli/SiFli-SDK
-    nested: [external]
-    supplier: SiFli Technology
-    description: SiFli-SDK v2.4.0 with PebbleOS changes
-    commit: 1f7536a53379207a048a846a804c2eefe165ebe1
-    license: Apache-2.0
-    purl: pkg:github/coredevices/SiFli-SDK@1f7536a53379207a048a846a804c2eefe165ebe1
-    url: https://github.com/coredevices/SiFli-SDK
-
-  - name: SiFli-SDK-CMSIS
-    path: hal_sifli/SiFli-SDK/external/CMSIS
-    supplier: Arm Limited
-    description: CMSIS headers as bundled in SiFli-SDK
-    commit: 1f7536a53379207a048a846a804c2eefe165ebe1
-    license: Apache-2.0
+  - name: lvgl
+    path: lvgl/lvgl
+    supplier: LVGL Kft
+    description: LVGL graphics library
+    version: 9.6.0
+    commit: 80ca777e37a2b176770726a02e07a6fb79ef0b39
+    license: MIT
+    cpe: cpe:2.3:a:lvgl:lvgl:{version}:*:*:*:*:*:*:*
+    purl: pkg:github/lvgl/lvgl@v9.6.0
+    url: https://github.com/lvgl/lvgl
 
   - name: mbedtls
     path: mbedtls/mbedtls
@@ -65,9 +89,9 @@ components:
     path: moddable/moddable
     supplier: Moddable Tech, Inc.
     description: Moddable SDK (XS JavaScript engine) with PebbleOS changes
-    commit: 077018472e755788f56c860018c0c9b10a648349
+    commit: 93d672187554afca37502ec51c22ad4bd3644248
     license: LGPL-3.0-or-later AND Apache-2.0
-    purl: pkg:github/coredevices/moddable@077018472e755788f56c860018c0c9b10a648349
+    purl: pkg:github/coredevices/moddable@93d672187554afca37502ec51c22ad4bd3644248
     url: https://github.com/coredevices/moddable
 
   - name: nanopb
@@ -95,7 +119,7 @@ components:
     type: library
     supplier: Nordic Semiconductor ASA
     description: nRF Fuel Gauge library and battery models, from sdk-nrfxlib 8f9ab9b01dd3
-    commit: 92d088674bf10bee71709b7b0d8d258d56d2770e
+    commit: 8482325ed10f3c727010287e3c702fef6b154a4e
     license: LicenseRef-Nordic-5-Clause
     url: https://github.com/nrfconnect/sdk-nrfxlib
 
@@ -104,14 +128,14 @@ components:
     type: firmware
     supplier: Shanghai Hynitron Microelectronics Co., Ltd
     description: CST816 touch controller firmware
-    commit: 92d088674bf10bee71709b7b0d8d258d56d2770e
+    commit: 8482325ed10f3c727010287e3c702fef6b154a4e
     license: LicenseRef-Hynitron-5-Clause
 
   - name: gh3x2x
     path: nonfree/pebbleos-nonfree/gh3x2x
     supplier: Shenzhen Goodix Technology Co., Ltd.
     description: GH3x2x heart rate sensor driver and algorithms
-    commit: 92d088674bf10bee71709b7b0d8d258d56d2770e
+    commit: 8482325ed10f3c727010287e3c702fef6b154a4e
     license: LicenseRef-Goodix-5-Clause
 
   - name: sf32lb52-lcpu-patch
@@ -119,7 +143,15 @@ components:
     type: firmware
     supplier: SiFli Technology
     description: SF32LB52 LCPU (Bluetooth controller) firmware patches
-    commit: 92d088674bf10bee71709b7b0d8d258d56d2770e
+    commit: 8482325ed10f3c727010287e3c702fef6b154a4e
+    license: LicenseRef-SiFli-5-Clause
+
+  - name: sf32lb57-lcpu-patch
+    path: nonfree/pebbleos-nonfree/sf32lb57
+    type: firmware
+    supplier: SiFli Technology
+    description: SF32LB57 LCPU (Bluetooth controller) firmware patches
+    commit: 8482325ed10f3c727010287e3c702fef6b154a4e
     license: LicenseRef-SiFli-5-Clause
 
   - name: picolibc

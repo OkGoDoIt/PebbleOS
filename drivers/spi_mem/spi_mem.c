@@ -13,7 +13,7 @@ PBL_LOG_MODULE_DEFINE(driver_spi_mem, CONFIG_DRIVER_SPI_MEM_LOG_LEVEL);
 PBL_DEVICE_CLASS_DEFINE(pbl_spi_mem_class, "spi_mem");
 
 int pbl_spi_mem_dev_init(const struct pbl_device *dev) {
-  const struct pbl_spi_mem *mem = container_of(dev, const struct pbl_spi_mem, dev);
+  const struct pbl_spi_mem *mem = PBL_CONTAINER_OF(dev, const struct pbl_spi_mem, dev);
 
   if (pbl_spi_mem_is_xip(mem) && mem->ops->poll_status == nullptr) {
     return -EINVAL;
@@ -141,6 +141,16 @@ void pbl_spi_mem_power_down(const struct pbl_spi_mem *mem, const struct pbl_spi_
     return;
   }
 
+  if (mem->ops->pm_suspend != nullptr) {
+    bool down = mem->ops->pm_suspend(mem, pm) == 0;
+
+    fn(arg);
+    if (down) {
+      mem->ops->pm_resume(mem, pm);
+    }
+    return;
+  }
+
   if (pm != nullptr) {
     (void)pbl_spi_mem_exec_op(mem, &pm->enter);
     pbl_busy_wait_us(pm->enter_us);
@@ -152,6 +162,18 @@ void pbl_spi_mem_power_down(const struct pbl_spi_mem *mem, const struct pbl_spi_
     (void)pbl_spi_mem_exec_op(mem, &pm->exit);
     pbl_busy_wait_us(pm->exit_us);
   }
+}
+
+int pbl_spi_mem_pm_suspend(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm) {
+  if (mem->ops->pm_suspend == nullptr) {
+    return -ENOTSUP;
+  }
+
+  return mem->ops->pm_suspend(mem, pm);
+}
+
+void pbl_spi_mem_pm_resume(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm) {
+  mem->ops->pm_resume(mem, pm);
 }
 
 void pbl_spi_mem_set_polling(const struct pbl_spi_mem *mem, bool polling) {

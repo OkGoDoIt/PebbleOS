@@ -55,6 +55,13 @@ and the firmware boots. Each board offers a few bezels, in different
 colors; `--decoration` picks another, or `none`. The terminal that launched it is the QEMU monitor;
 quit with `quit` there or by closing the window.
 
+`--sunlight` shows the colors as a watch's panel does in sunlight, like
+the native simulator's `-l`:
+
+```shell
+pbl run --sunlight
+```
+
 The emulated watch keeps its data in two flash images in the build
 directory: the internal flash, holding the firmware, and the external
 flash, holding the resources, the file system and with it the installed
@@ -178,7 +185,7 @@ nrfutil dfu usb-serial -pkg hci_uart.zip -p /dev/cu.usbmodemXXXX
 Then build with the UART transport and pass the controller's port:
 
 ```shell
-pbl configure --board qemu_flint -DCONFIG_BT_HCI_UART=y
+pbl configure --board qemu_flint -DCONFIG_NIMBLE_HCI_UART=y
 pbl build
 pbl run --bt-hci /dev/cu.usbmodemXXXX
 ```
@@ -186,8 +193,17 @@ pbl run --bt-hci /dev/cu.usbmodemXXXX
 `--bt-hci` takes any QEMU `-serial` spec, e.g. `tcp:localhost:9000`. On
 macOS use the `cu.*` device: opening `tty.*` blocks until carrier detect.
 
-The watch generates its identity address on first boot and keeps it in
-flash, so pass `--keep-flash-image` to keep existing bondings across
-launches. A fresh flash image gets a new address.
+The watch uses its controller's address, or a random one that changes on
+every boot if the controller has none, as an nRF52840 dongle does. Give it
+one with `--bt-addr`, a random static address (its two top bits set), and
+pass `--keep-flash-image` to keep existing bondings across launches:
+
+```shell
+pbl run --bt-hci /dev/cu.usbmodemXXXX --bt-addr C0:00:00:00:00:01 --keep-flash-image
+```
+
+The address is a property of the machine's system controller
+(`-global pebble-sysctrl.bt-addr=ADDRESS`), read by the firmware with
+`CONFIG_NIMBLE_ID_ADDR_QEMU`.
 
 

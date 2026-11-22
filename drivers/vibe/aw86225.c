@@ -3,17 +3,20 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
+#include <pbl/drivers/regulator.h>
 #include <pbl/drivers/vibe.h>
 #include <pbl/drivers/vibe/aw86225.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/bits.h>
+#include <pbl/util/byteorder.h>
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
 
-PBL_LOG_MODULE_DEFINE(driver_vibe_aw86225, CONFIG_DRIVER_VIBE_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_vibe, CONFIG_DRIVER_VIBE_LOG_LEVEL);
 
 #define AW862XX_REG_SRST      (0x00)
 #define AW862XX_REG_PLAYCFG2  (0x07)
@@ -60,13 +63,10 @@ PBL_LOG_MODULE_DEFINE(driver_vibe_aw86225, CONFIG_DRIVER_VIBE_LOG_LEVEL);
 #define AW862XX_PLAYCFG4_STOP PBL_BIT(1)
 #define AW862XX_PLAYCFG4_GO   PBL_BIT(0)
 
-#define AW862XX_F0_CALI_LSB_PERMYRIAD   (24)
-#define AW862XX_CONTCFG1_EDGE_FREQ_NONE (0x00)
-#define AW862XX_CONTCFG1_SIN_MODE_COS   PBL_BIT(0)
-#define AW862XX_CONTCFG1_EN_F0_DET      PBL_BIT(3)
-#define AW862XX_CONTCFG2_CONF_F0        (24000U / CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ)
-#define AW862XX_CONTCFG3_F0_DET_DRV_WIDTH \
-  (24000U / CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ - 8U - 8U - 15U)
+#define AW862XX_F0_CALI_LSB_PERMYRIAD     (24)
+#define AW862XX_CONTCFG1_EDGE_FREQ_NONE   (0x00)
+#define AW862XX_CONTCFG1_SIN_MODE_COS     PBL_BIT(0)
+#define AW862XX_CONTCFG1_EN_F0_DET        PBL_BIT(3)
 #define AW862XX_CONTCFG7_FULL_SCALE       (0x7FL)
 #define AW862XX_CONTCFG8_F0_DET_DRV1_TIME (0x04U)
 #define AW862XX_CONTCFG9_F0_DET_DRV2_TIME (0x14U)
@@ -110,13 +110,6 @@ PBL_LOG_MODULE_DEFINE(driver_vibe_aw86225, CONFIG_DRIVER_VIBE_LOG_LEVEL);
 #define AW862XX_F0_DET_STANDBY_RETRIES (200)
 #define AW862XX_F0_DET_STANDBY_POLL_MS (10)
 
-#define AW862XX_OUTPUT_FULL_SCALE_MV \
-  (AW862XX_VBAT_REFER_MV * CONFIG_VIBE_AW86225_OUTPUT_GAIN_PERCENT / 100U)
-
-static_assert(CONFIG_VIBE_AW86225_RATED_VOLTAGE_MV * AW862XX_RMS_TO_PEAK_MILLI / 1000U <=
-                  AW862XX_OUTPUT_FULL_SCALE_MV,
-              "rated voltage exceeds the full-scale output");
-
 //! One full-scale LRA cycle at 12 kS/s.
 static const uint8_t s_sine_cycle[] = {
   0x00, 0x10, 0x20, 0x2f, 0x3d, 0x4b, 0x57, 0x62, 0x6b, 0x73, 0x79, 0x7d, 0x7f,
@@ -126,7 +119,7 @@ static const uint8_t s_sine_cycle[] = {
 };
 
 static const struct pbl_aw86225 *prv_get(const struct pbl_vibe *vibe) {
-  return container_of(vibe, const struct pbl_aw86225, vibe);
+  return PBL_CONTAINER_OF(vibe, const struct pbl_aw86225, vibe);
 }
 
 static int prv_read_register(const struct pbl_aw86225 *dev, uint8_t reg, uint8_t *val) {
@@ -335,9 +328,9 @@ static int prv_update_vbat(const struct pbl_aw86225 *dev) {
 
 //! With the gain compensated to AW862XX_VBAT_REFER_MV a full-scale sample
 //! nominally drives that voltage; the measured output gain corrects it.
-static void prv_scale_cycle(uint8_t *dst, uint32_t rms_mv) {
-  const int32_t peak_mv = rms_mv * AW862XX_RMS_TO_PEAK_MILLI / 1000U;
-  const int32_t full_scale_mv = AW862XX_OUTPUT_FULL_SCALE_MV;
+static void prv_scale_cycle(const struct pbl_aw86225 *dev, uint8_t *dst) {
+  const int32_t peak_mv = dev->rated_mv * AW862XX_RMS_TO_PEAK_MILLI / 1000U;
+  const int32_t full_scale_mv = PBL_AW86225_FULL_SCALE_MV(dev->gain_percent);
 
   for (size_t i = 0; i < sizeof(s_sine_cycle); ++i) {
     int32_t sample = (int8_t)s_sine_cycle[i] * peak_mv;
@@ -351,18 +344,21 @@ static int prv_write_ram_image(const struct pbl_aw86225 *dev) {
   const uint16_t base = AW862XX_RAM_BASE_ADDR;
   const uint16_t start = base + AW862XX_RAM_HEADER_LEN;
   const uint16_t end = start + sizeof(s_sine_cycle) - 1;
-  const uint8_t addr[] = {base >> 8, base & 0xFF};
   const uint8_t fifo[] = {
     (((base >> 1) >> 4) & 0xF0) | (((base - (base >> 2)) >> 8) & 0x0F),
     (base >> 1) & 0xFF,
     (base - (base >> 2)) & 0xFF,
   };
   uint8_t image[AW862XX_RAM_HEADER_LEN + sizeof(s_sine_cycle)] = {
-    AW862XX_RAM_HEADER_VERSION, start >> 8, start & 0xFF, end >> 8, end & 0xFF,
+    AW862XX_RAM_HEADER_VERSION,
   };
+  uint8_t addr[2];
   int ret;
 
-  prv_scale_cycle(&image[AW862XX_RAM_HEADER_LEN], CONFIG_VIBE_AW86225_RATED_VOLTAGE_MV);
+  pbl_put_be16(base, addr);
+  pbl_put_be16(start, &image[1]);
+  pbl_put_be16(end, &image[3]);
+  prv_scale_cycle(dev, &image[AW862XX_RAM_HEADER_LEN]);
 
   ret = prv_update_bits(dev, AW862XX_REG_RTPCFG1, AW862XX_RTPCFG1_ADDRH_MASK,
                         PBL_FIELD_PREP(AW862XX_RTPCFG1_ADDRH_MASK, base >> 8));
@@ -442,7 +438,7 @@ static int prv_config_ram_playback(const struct pbl_aw86225 *dev) {
     {AW862XX_REG_PLAYCFG2, prv_gain_for_strength(dev, dev->state->strength)},
   };
 
-  for (size_t i = 0; i < ARRAY_LENGTH(regs); i++) {
+  for (size_t i = 0; i < PBL_ARRAY_SIZE(regs); i++) {
     ret = prv_write_register(dev, regs[i][0], regs[i][1]);
     if (ret != 0) {
       return ret;
@@ -480,16 +476,16 @@ static int prv_start_f0_detection(const struct pbl_aw86225 *dev) {
     {AW862XX_REG_CONTCFG1,
      AW862XX_CONTCFG1_EDGE_FREQ_NONE | AW862XX_CONTCFG1_SIN_MODE_COS | AW862XX_CONTCFG1_EN_F0_DET},
     {AW862XX_REG_CONTCFG7, AW862XX_CONTCFG7_FULL_SCALE},
-    {AW862XX_REG_CONTCFG2, AW862XX_CONTCFG2_CONF_F0},
+    {AW862XX_REG_CONTCFG2, 24000U / dev->f0_hz},
     {AW862XX_REG_CONTCFG8, AW862XX_CONTCFG8_F0_DET_DRV1_TIME},
     {AW862XX_REG_CONTCFG9, AW862XX_CONTCFG9_F0_DET_DRV2_TIME},
     {AW862XX_REG_CONTCFG10, AW862XX_CONTCFG10_BRK_TIME},
     {AW862XX_REG_CONTCFG11, AW862XX_CONTCFG11_TRACK_MARGIN},
-    {AW862XX_REG_CONTCFG3, AW862XX_CONTCFG3_F0_DET_DRV_WIDTH},
+    {AW862XX_REG_CONTCFG3, 24000U / dev->f0_hz - 8U - 8U - 15U},
     {AW862XX_REG_PLAYCFG4, AW862XX_PLAYCFG4_GO},
   };
 
-  for (size_t i = 0; i < ARRAY_LENGTH(regs); i++) {
+  for (size_t i = 0; i < PBL_ARRAY_SIZE(regs); i++) {
     ret = prv_write_register(dev, regs[i][0], regs[i][1]);
     if (ret != 0) {
       return ret;
@@ -574,17 +570,14 @@ static int prv_detect_f0(const struct pbl_aw86225 *dev, int *f0) {
 //! TRIM_LRA is a 6-bit two's complement step count shifting the clock by
 //! AW862XX_F0_CALI_LSB_PERMYRIAD per step; reject stored values outside the
 //! LRA's F0 tolerance so a bad calibration cannot detune the drive.
-static bool prv_trim_in_range(uint8_t trim) {
+static bool prv_trim_in_range(const struct pbl_aw86225 *dev, uint8_t trim) {
   int steps = (trim < 32) ? (int)trim : (int)trim - 64;
-  int offset_hz =
-      (int)CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ * steps * AW862XX_F0_CALI_LSB_PERMYRIAD / 10000;
+  int offset_hz = (int)dev->f0_hz * steps * AW862XX_F0_CALI_LSB_PERMYRIAD / 10000;
 
-  return (offset_hz >= -(int)CONFIG_VIBE_AW86225_LRA_FREQUENCY_TOLERANCE_HZ) &&
-         (offset_hz <= (int)CONFIG_VIBE_AW86225_LRA_FREQUENCY_TOLERANCE_HZ);
+  return (offset_hz >= -(int)dev->f0_tolerance_hz) && (offset_hz <= (int)dev->f0_tolerance_hz);
 }
 
-static int prv_init(const struct pbl_vibe *vibe) {
-  const struct pbl_aw86225 *dev = prv_get(vibe);
+static int prv_probe(const struct pbl_aw86225 *dev) {
   uint8_t chip_id;
   int ret;
 
@@ -618,6 +611,30 @@ static int prv_init(const struct pbl_vibe *vibe) {
   }
 
   return 0;
+}
+
+static int prv_init(const struct pbl_vibe *vibe) {
+  const struct pbl_aw86225 *dev = prv_get(vibe);
+  int ret;
+
+  if (dev->supply != nullptr) {
+    ret = pbl_device_init(&dev->supply->dev);
+    if (ret != 0) {
+      return ret;
+    }
+
+    ret = pbl_regulator_enable(dev->supply);
+    if (ret != 0) {
+      return ret;
+    }
+  }
+
+  ret = prv_probe(dev);
+  if (ret != 0 && dev->supply != nullptr) {
+    (void)pbl_regulator_disable(dev->supply);
+  }
+
+  return ret;
 }
 
 static int prv_start(const struct pbl_vibe *vibe, int8_t strength) {
@@ -677,10 +694,8 @@ static int prv_stop(const struct pbl_vibe *vibe) {
 // Refer to DG_AW862XX_Software_Design_Guide_CN_V1.1
 static int prv_calibrate(const struct pbl_vibe *vibe, uint8_t *cali) {
   const struct pbl_aw86225 *dev = prv_get(vibe);
-  const int f0_min =
-      CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ - CONFIG_VIBE_AW86225_LRA_FREQUENCY_TOLERANCE_HZ;
-  const int f0_max =
-      CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ + CONFIG_VIBE_AW86225_LRA_FREQUENCY_TOLERANCE_HZ;
+  const int f0_min = (int)dev->f0_hz - (int)dev->f0_tolerance_hz;
+  const int f0_max = (int)dev->f0_hz + (int)dev->f0_tolerance_hz;
   int f0 = 0;
   int step;
   int ret;
@@ -698,16 +713,14 @@ static int prv_calibrate(const struct pbl_vibe *vibe, uint8_t *cali) {
   }
 
   if (f0 < f0_min || f0 > f0_max) {
-    PBL_LOG_ERR("F0 out of range (measured %d Hz, expected %d +/- %d Hz)", f0,
-                CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ,
-                CONFIG_VIBE_AW86225_LRA_FREQUENCY_TOLERANCE_HZ);
+    PBL_LOG_ERR("F0 out of range (measured %d Hz, expected %d +/- %d Hz)", f0, (int)dev->f0_hz,
+                (int)dev->f0_tolerance_hz);
     return -ERANGE;
   }
 
   // TRIM_LRA is a 6-bit two's complement step of AW862XX_F0_CALI_LSB_PERMYRIAD (0.24%),
   // nearly +/- 7%: pick the step that brings F0 closest to the nominal frequency.
-  step = 100000 * (f0 - (int)CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ) /
-         ((int)CONFIG_VIBE_AW86225_LRA_FREQUENCY_HZ * AW862XX_F0_CALI_LSB_PERMYRIAD);
+  step = 100000 * (f0 - (int)dev->f0_hz) / ((int)dev->f0_hz * AW862XX_F0_CALI_LSB_PERMYRIAD);
   if (step >= 0) {
     step = (step % 10 >= 5) ? (step / 10 + 1) : (step / 10);
   } else {
@@ -735,7 +748,7 @@ static int prv_set_calibration(const struct pbl_vibe *vibe, uint8_t cali) {
   const uint8_t trim = PBL_FIELD_GET(AW862XX_TRIMCFG3_TRIM_LRA_MASK, cali);
   int ret;
 
-  if (!prv_trim_in_range(trim)) {
+  if (!prv_trim_in_range(dev, trim)) {
     PBL_LOG_WRN("Ignoring calibration trim 0x%02x, out of the F0 tolerance", trim);
     return -EINVAL;
   }
@@ -760,3 +773,5 @@ const struct pbl_vibe_ops pbl_aw86225_ops = {
   .calibrate = prv_calibrate,
   .set_calibration = prv_set_calibration,
 };
+
+#include PBL_DT_INSTANCES(awinic_aw86225)

@@ -3,18 +3,31 @@
 
 menu "Input"
 
+config INPUT_ADC_KEYS
+    bool "ADC keys"
+    default y
+    depends on DT_HAS_ADC_KEYS_IRQ_ENABLED
+    depends on INPUT
+    select ADC
+    select GPIO
+    help
+      Keys on a resistor ladder read through an ADC channel on an
+      interrupt that a press or release raises.
+
 config INPUT_GPIO_KEYS
     bool "GPIO keys"
-    depends on GPIO
-    select INPUT
+    default y
+    depends on DT_HAS_GPIO_KEYS_ENABLED
+    depends on INPUT
+    select GPIO
     help
       Keys on GPIOs with interrupts, debounced in software.
 
 config INPUT_SDL
     bool "SDL keyboard"
     default y if SOC_POSIX
+    depends on INPUT
     select SDL
-    select INPUT
     help
       Watch buttons driven by the keyboard, through SDL, in a native build.
 

@@ -5,7 +5,7 @@ pbl_library()
 pbl_library_sources(
   console.c
   frame.c
-  imaging.c
-  pp.c
 )
+pbl_library_sources_ifdef(CONFIG_CONSOLE_IMAGING imaging.c)
+pbl_library_sources_ifdef(CONFIG_CONSOLE_STDOUT stdout.c)
 pbl_library_sources_ifdef(CONFIG_SHELL shell.c)

@@ -1,0 +1,377 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/mpu.h>
+#include <pbl/kernel/syscall.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/time.h>
+
+#include <applib/app_logging.h>
+#include <applib/app_time32.h>
+#include <applib/applib_malloc.auto.h>
+#include <applib/pbl_std/pbl_std.h>
+#include <process_management/process_manager.h>
+#include <process_management/process_regions.h>
+#include <process_state/app_state/app_state.h>
+#include <process_state/worker_state/worker_state.h>
+#include <syscall/syscall.h>
+
+// Time
+pbl_time32_t pbl_override_time(pbl_time32_t *tloc) {
+  const pbl_time32_t t = pbl_time_to_time32(sys_get_time());
+  if (tloc) {
+    *tloc = t;
+  }
+  return t;
+}
+
+// Manually construct double to avoid requiring soft-fp
+static double prv_time_to_double(int32_t time) {
+  if (time == 0) {
+    return 0;
+  }
+
+  // Construct the double in two uint32_t's then reinterpret as double
+  // Using a uint64_t would pull in helper functions for 64bit shifts
+  union {
+    double result;
+    uint32_t representation[2];
+  } conv;
+
+  conv.representation[1] = 0;
+  if (time < 0) {
+    // set the sign bit
+    conv.representation[1] |= (1 << 31);
+
+    // sign bit takes care of positive vs negative
+    time *= -1;
+  }
+
+  uint32_t significand = (uint32_t)time;
+
+  // In order to normalize the significand, we shift off all the leading 0s
+  // plus the msb which is implicitly included
+  int shift = PBL_CLZ(time) + 1;
+
+  significand <<= shift;
+
+  // top 20 bits fit into the upper 32 bits of the double
+  conv.representation[1] |= (significand >> 12);
+
+  // bottom 12 bits go into the lower 32 bits of the double
+  conv.representation[0] = (significand << 20);
+
+  // Exponent is biased by 1023, then adjusted for the amount the significand was
+  // shifted. Out of the 52 significand bits, the bottom 20 are never used.
+  uint32_t exp = 1023 + 52 - shift - 20;
+  // Set the exponent
+  conv.representation[1] |= (exp << 20);
+
+  return conv.result;
+}
+
+double pbl_override_difftime(pbl_time32_t end, pbl_time32_t beginning) {
+  // Wraps like the 32-bit subtraction apps were built with.
+  return prv_time_to_double((int32_t)((uint32_t)end - (uint32_t)beginning));
+}
+
+pbl_time32_t pbl_override_time_legacy(pbl_time32_t *tloc) {
+  const pbl_time32_t legacy_time = pbl_time_to_time32(sys_time_utc_to_local(sys_get_time()));
+
+  if (tloc) {
+    *tloc = legacy_time;
+  }
+  return legacy_time;
+}
+
+static bool prv_tm_matches_local_time(const struct pbl_tm *requested, const struct pbl_tm *actual) {
+  return (requested->tm_sec == actual->tm_sec) && (requested->tm_min == actual->tm_min) &&
+         (requested->tm_hour == actual->tm_hour) && (requested->tm_mday == actual->tm_mday) &&
+         (requested->tm_mon == actual->tm_mon) && (requested->tm_year == actual->tm_year);
+}
+
+static void prv_fill_localtime_result(time_t t, struct pbl_tm *tb) {
+  sys_localtime_r(&t, tb);
+  sys_copy_timezone_abbr(tb->tm_zone, t);
+}
+
+static time_t prv_mktime_with_normalized_gmtoff(const struct pbl_tm *tb, int isdst) {
+  struct pbl_tm normalized = *tb;
+  normalized.tm_gmtoff = time_get_gmtoffset() + (isdst ? time_get_dstoffset() : 0);
+  return pbl_mktime(&normalized);
+}
+
+PBL_SYSCALL(time_t, pbl_override_mktime, (INOUT, struct pbl_tm *, tb)) {
+  time_t t;
+  if (tb->tm_isdst >= 0) {
+    // Caller knows the DST state — trust their tm_gmtoff and pass through. Older apps hold the
+    // standard time offset there and expect mktime() to add DST itself.
+    if (tb->tm_isdst > 0 && process_manager_expects_legacy_tm_gmtoff()) {
+      tb->tm_gmtoff += time_get_dstoffset();
+    }
+    t = pbl_mktime(tb);
+  } else {
+    // tm_isdst < 0: caller doesn't know if DST is active. Try both
+    // interpretations and keep the one that matches the requested wall time.
+    struct pbl_tm actual;
+    t = prv_mktime_with_normalized_gmtoff(tb, 0);
+    time_t dst_t = prv_mktime_with_normalized_gmtoff(tb, 1);
+
+    prv_fill_localtime_result(t, &actual);
+    if (!prv_tm_matches_local_time(tb, &actual)) {
+      prv_fill_localtime_result(dst_t, &actual);
+      if (prv_tm_matches_local_time(tb, &actual)) {
+        t = dst_t;
+      }
+    }
+  }
+
+  prv_fill_localtime_result(t, tb);
+  return t;
+}
+
+pbl_time32_t pbl_override_mktime_time32(struct pbl_tm *tb) {
+  const time_t t = pbl_override_mktime(tb);
+  if (t == -1) {
+    return -1;
+  }
+  return app_time_to_time32_or_error(t);
+}
+
+uint16_t time_ms(time_t *tloc, uint16_t *out_ms) {
+  uint16_t t_ms;
+  time_t t_s;
+  sys_get_time_ms(&t_s, &t_ms);
+  if (out_ms) {
+    *out_ms = t_ms;
+  }
+  if (tloc) {
+    *tloc = t_s;
+  }
+  return (t_ms);
+}
+
+uint16_t time_ms_time32(pbl_time32_t *tloc, uint16_t *out_ms) {
+  time_t t_s;
+  const uint16_t t_ms = time_ms(&t_s, out_ms);
+  if (tloc) {
+    *tloc = pbl_time_to_time32(t_s);
+  }
+  return t_ms;
+}
+
+uint16_t pbl_override_time_ms_legacy(pbl_time32_t *tloc, uint16_t *out_ms) {
+  uint16_t t_ms;
+  time_t t_s;
+  sys_get_time_ms(&t_s, &t_ms);
+  const pbl_time32_t legacy_time = pbl_time_to_time32(sys_time_utc_to_local(t_s));
+
+  if (out_ms) {
+    *out_ms = t_ms;
+  }
+  if (tloc) {
+    *tloc = legacy_time;
+  }
+  return (t_ms);
+}
+
+extern size_t localized_strftime(char *s, size_t maxsize, const char *format,
+                                 const struct pbl_tm *tim_p, const char *locale);
+
+struct pbl_tm *pbl_override_gmtime(const time_t *timep) {
+  struct pbl_tm *gmtime_tm = nullptr;
+
+  if (pebble_task_get_current() == PebbleTask_App) {
+    gmtime_tm = app_state_get_gmtime_tm();
+  } else {
+    gmtime_tm = worker_state_get_gmtime_tm();
+  }
+
+  sys_gmtime_r(timep, gmtime_tm);
+  return gmtime_tm;
+}
+
+struct pbl_tm *pbl_override_localtime(const time_t *timep) {
+  struct pbl_tm *localtime_tm = nullptr;
+  char *localtime_zone = nullptr;
+
+  if (pebble_task_get_current() == PebbleTask_App) {
+    localtime_tm = app_state_get_localtime_tm();
+    localtime_zone = app_state_get_localtime_zone();
+  } else {
+    localtime_tm = worker_state_get_localtime_tm();
+    localtime_zone = worker_state_get_localtime_zone();
+  }
+
+  sys_localtime_r(timep, localtime_tm);
+  // We have to work around localtime_r resetting tm_zone below
+  sys_copy_timezone_abbr((char *)localtime_zone, *timep);
+  strncpy(localtime_tm->tm_zone, localtime_zone, PBL_TZ_LEN);
+
+  return localtime_tm;
+}
+
+struct pbl_tm *pbl_override_gmtime_time32(const pbl_time32_t *timep) {
+  const time_t t = app_time_from_time32(*timep);
+  return pbl_override_gmtime(&t);
+}
+
+struct pbl_tm *pbl_override_localtime_time32(const pbl_time32_t *timep) {
+  const time_t t = app_time_from_time32(*timep);
+  return pbl_override_localtime(&t);
+}
+
+size_t pbl_strftime(char *s, size_t maxsize, const char *format, const struct pbl_tm *tim_p) {
+  char *locale = app_state_get_locale_info()->app_locale_time;
+  return sys_strftime(s, maxsize, format, tim_p, locale);
+}
+
+// Cap on how far we'll scan for the format-string terminator before giving up
+// — well beyond any reasonable strftime format.
+#define SYS_STRFTIME_FORMAT_MAX 256
+
+PBL_SYSCALL(size_t, sys_strftime, (OUT_BUF, char *, s, maxsize), (VAL, size_t, maxsize),
+            (STRN, const char *, format, SYS_STRFTIME_FORMAT_MAX),
+            (IN, const struct pbl_tm *, tim_p), (VAL, char *, locale)) {
+  if (from_user) {
+    // Workers pass the app's locale buffer, which is not theirs to read
+    const struct pbl_mpu_region *region = (pebble_task_get_current() == PebbleTask_Worker)
+                                              ? process_region_worker()
+                                              : process_region_app();
+    if (locale && !pbl_mpu_region_contains_buffer(region, locale, PBL_I18N_LOCALE_LEN)) {
+      locale = nullptr;
+    }
+  }
+
+  return localized_strftime(s, maxsize, format, tim_p, locale);
+}
+
+void *pbl_memcpy(void *destination, const void *source, size_t num) {
+  // In releases prior to FW 2.5 we used GCC 4.7 and newlib as our libc implementation. However,
+  // in 2.5 we switched to GCC 4.8 and nano-newlib. We actually ran into bad apps that would pass
+  // negative numbers as their num parameter, which newlib handled by copying nothing, but
+  // newlib-nano didn't handle at all and would interpret size_t as a extremely large unsigned
+  // number. Guard against this happening so apps that used to work with the old libc will work
+  // with the new libc.
+  if (((ptrdiff_t)num) <= 0) {
+    return destination;
+  }
+
+  return memcpy(destination, source, num);
+}
+
+// Formatted printing. The ROM's libc library (newlib) is compiled without
+// floating point support in order to save space. Because of this, you can
+// get an exception and a OS reset if an app tries to use %f or any of the
+// other floating point format types in an snprintf call. This is because the
+// implementation does not advance the va_arg (pointer to arguments on the
+// stack) pointer when it sees one of these FP types and will thus end up using
+// that floating point argument as the argument for the *next* format type. If
+// the next format type is a string for example, you end up with a bus error
+// when it tries to use that argument as a pointer.
+//
+// To prevent an OS reset, we scan the format string here and bail with an
+// APP_LOG message if we detect an attempt to use floating point. We also
+// return a "floating point not supported" string in the passed in str
+// buffer.
+int pbl_snprintf(char *str, size_t n, const char *format, ...) {
+  int ret;
+  const char *fp_msg = "floating point not supported in snprintf";
+
+  // Scan string and see if it has any floating point specifiers in it
+  bool has_fp = false;
+  bool end_spec;
+  bool end_format = false;
+  const char *fmt = format;
+  char ch;
+
+  while (true) {
+    // Skip to next '%'
+    while (*fmt != 0 && *fmt != '%')
+      fmt++;
+    if (*fmt == 0)
+      break;
+    fmt++;
+
+    // Skip flags, width, and precision until we find the format
+    //  specifier. If it's a floating point specifier, immediately bail.
+    end_spec = false;
+    while (!end_spec) {
+      ch = *fmt++;
+      switch (ch) {
+        case 0:
+          end_format = true;
+          end_spec = true;
+          break;
+
+        // flags, precision, and width specifiers
+        case '+':
+        case ' ':
+        case '-':
+        case '#':
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+        case '.':
+          break;
+
+        // length specifiers
+        case 'h':
+        case 'l':
+        case 'L':
+        case 'j':
+        case 'z':
+        case 't':
+          break;
+
+        // floating point types
+        case 'e':
+        case 'E':
+        case 'f':
+        case 'F':
+        case 'g':
+        case 'G':
+        case 'a':
+        case 'A':
+          has_fp = true;
+          end_spec = true;
+          break;
+
+        default:
+          end_spec = true;
+          break;
+      } // end of switch statement
+
+    } // while (!end_spec);
+
+    if (end_format || has_fp)
+      break;
+  } // while (true)
+
+  // Return error message if we detected floating point
+  if (has_fp) {
+    APP_LOG(APP_LOG_LEVEL_DEBUG,
+            "Floating point is not supported by snprintf: "
+            "it was called with format string '%s'",
+            format);
+    strncpy(str, fp_msg, n - 1);
+    str[n - 1] = 0;
+    return strlen(str);
+  }
+
+  // Safe to process
+  va_list args;
+  va_start(args, format);
+  ret = vsnprintf(str, n, format, args);
+  va_end(args);
+
+  return ret;
+}

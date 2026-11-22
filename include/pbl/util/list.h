@@ -29,7 +29,7 @@
  * s_jobs = list_prepend(s_jobs, &job->node);
  *
  * for (ListNode *n = s_jobs; n != NULL; n = list_get_next(n)) {
- *   struct job *j = container_of(n, struct job, node);
+ *   struct job *j = PBL_CONTAINER_OF(n, struct job, node);
  *   ...
  * }
  *
@@ -299,7 +299,7 @@ ListNode *list_concatenate(ListNode *list_a, ListNode *list_b);
 void list_foreach(ListNode *head, ListForEachCallback each_cb, void *context);
 
 /**
- * @brief Log every node from a node to the tail with UTIL_LOG().
+ * @brief Log every node from a node to the tail with PBL_UTIL_LOG().
  *
  * @param head Starting node.
  */

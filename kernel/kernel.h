@@ -7,6 +7,7 @@
 
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/debug.h>
+#include <pbl/kernel/idle.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/sched.h>
 #include <pbl/kernel/thread.h>
@@ -30,9 +31,9 @@ void sched_yield_current(void);
 void sched_request_switch(void);
 
 //! Blocks the current thread on @p wq (NULL for a plain sleep) until woken or
-//! the timeout expires. Releases and re-takes the interrupt lock; the caller
-//! must hold it exactly once. @return the wake code, -EAGAIN on timeout.
-int sched_block(struct pbl_waitq *wq, pbl_timeout_t timeout);
+//! the timeout expires. Releases the interrupt lock, taken with @p key, to
+//! switch, and holds it again on return. @return the wake code, -EAGAIN on timeout.
+int sched_block(struct pbl_waitq *wq, pbl_timeout_t timeout, unsigned int key);
 
 //! Makes a blocked thread ready with @p rc as its wake code.
 void sched_wake(struct pbl_thread *t, int rc);
@@ -41,9 +42,8 @@ void waitq_insert(struct pbl_waitq *wq, struct pbl_thread *t);
 void waitq_remove(struct pbl_waitq *wq, struct pbl_thread *t);
 struct pbl_thread *waitq_pop(struct pbl_waitq *wq);
 
-//! Priority-inheritance helpers used by the mutex.
-void sched_inherit(struct pbl_thread *owner, pbl_prio_t prio);
-void sched_disinherit(struct pbl_thread *owner);
+//! Priority @p t runs at: its own, or that of the most urgent thread waiting for a mutex it holds.
+pbl_prio_t mutex_inherited_prio(const struct pbl_thread *t);
 
 //! C entry from the reset vector: sets up RAM, then kernel_init().
 [[noreturn]] void kernel_prep_c(void);
@@ -54,20 +54,26 @@ void sched_disinherit(struct pbl_thread *owner);
 //! Starts the scheduler: creates the idle thread and switches to the highest priority thread.
 [[noreturn]] void pbl_kernel_start(void);
 
-//! Resets the interrupt lock nesting when the first thread starts.
-void irq_reset(void);
+//! Forgets the pbl_irq_lock() nesting of threads a test left behind.
+void irq_reset_for_test(void);
 
-//! Creates the idle thread and picks the first thread to run.
+//! Creates the idle thread and picks the first thread to run. Returns with the interrupt lock
+//! held, which the arch drops as it starts that thread.
 void sched_start_prepare(void);
 
+//! The thread to run: the first of the most urgent ready ones. On a switch the arch makes it
+//! pbl_cur, with the interrupt lock held from reading it to setting pbl_cur.
+extern struct pbl_thread *sched_next;
+
 //! Arch entry points into the scheduler.
-struct pbl_thread *sched_switch_in(void); // picks and accounts the next thread
-//! Advances the tick count by @p ticks and expires the timeouts that fell due.
+//! Advances the tick count by @p ticks.
 void sched_announce(uint64_t ticks);
+//! Ends the time slice of the running thread; from the tick ISR, after timeout_expire().
+void sched_slice(void);
+//! The timeout of a blocked thread expired.
+void sched_timed_out(struct pbl_thread *t);
 bool sched_idle_confirm(void);
 struct pbl_thread *sched_idle_thread(void);
-//! Current tick count; call with the interrupt lock held.
-pbl_tick_t sched_ticks(void);
 //! Current tick count in 64 bits; call with the interrupt lock held.
 uint64_t sched_uptime_ticks(void);
 
@@ -75,14 +81,47 @@ uint64_t sched_uptime_ticks(void);
 void timekeeping_start(void);
 //! Catches the tick count up with the system clock source.
 void timekeeping_announce(void);
-//! Idles the CPU for up to @p ticks; call with every interrupt masked and idle confirmed.
-void timekeeping_idle(pbl_tick_t ticks);
+//! Programs the wake-up @p exit_ticks ahead of the timeout @p ticks away. Returns the time in us.
+uint64_t timekeeping_idle_begin(pbl_tick_t ticks, pbl_tick_t exit_ticks);
+//! Catches the tick count up after idling and goes back to a tick at a time. Returns the time in
+//! us.
+uint64_t timekeeping_idle_end(void);
 
-//! Runs the callbacks of the expired timers, from the tick ISR.
-void timer_expire(void);
-//! Ticks from @p now until the next timer expires, PBL_TICK_FOREVER if none.
-pbl_tick_t timer_ticks_until_next(pbl_tick_t now);
-void timer_reset_for_test(void);
+//! idle_init() checks the idle hooks, when the scheduler starts. idle_enter() idles the CPU for
+//! up to @p ticks; call with every interrupt masked and idle confirmed.
+#ifdef CONFIG_CPU_IDLE
+void idle_init(void);
+void idle_enter(pbl_tick_t ticks);
+#else
+static inline void idle_init(void) {
+}
+
+static inline void idle_enter(pbl_tick_t ticks) {
+  // The next tick is already programmed.
+  if (ticks != 0U) {
+    pbl_cpu_idle();
+  }
+}
+#endif
+//! The uptime tick at which the wall clock reaches @p realtime_ms, rounded up. Interrupt lock held.
+uint64_t timekeeping_realtime_to_ticks(uint64_t realtime_ms);
+//! Realigns the wall clock work after the clock moved. Interrupt lock held.
+void wallclock_clock_set(uint64_t old_ms, uint64_t new_ms);
+void wallclock_reset_for_test(void);
+
+//! The timeout queue, of blocked threads and timers alike. Interrupt lock held, but to expire.
+//! @p to expires @p ticks from now.
+void timeout_add(struct pbl_timeout *to, pbl_tick_t ticks);
+//! Does nothing if @p to is not queued.
+void timeout_remove(struct pbl_timeout *to);
+//! Wakes the threads and runs the timers that fell due, from the tick ISR.
+void timeout_expire(void);
+//! Ticks until the next timeout, 0 if it is due and PBL_TICK_FOREVER if there is none.
+pbl_tick_t timeout_ticks_until_next(void);
+void timeout_reset_for_test(void);
+//! Starts the threads of the system work queues.
+void sys_workq_init(void);
+void sys_workq_reset_for_test(void);
 extern struct pbl_thread *pbl_all_threads;
 
 //! What the MPU slots of a thread hold, after its PBL_THREAD_MAX_MEM_REGIONS.
@@ -93,3 +132,6 @@ static_assert(THREAD_REGION_SYSCALL_GUARD + 1 == ARCH_THREAD_MPU_REGIONS,
 
 //! Takes over the MPU, adds the static regions it knows about and enables it.
 void mpu_init(void);
+
+//! MPU slot of the user read-only kernel data, -1 until it is added.
+extern int mpu_user_ro_slot;

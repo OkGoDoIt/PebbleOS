@@ -147,10 +147,18 @@ def pytest_addoption(parser):
         "--bt-hci",
         metavar="CONTROLLER",
         help="H4 controller for emulator and native builds with "
-        "CONFIG_BT_HCI_UART: 'virtual' for Bumble's software controllers, "
+        "CONFIG_NIMBLE_HCI_UART: 'virtual' for Bumble's software controllers, "
         "which also give the phone one (the default), 'lab' for the lab's "
         "first dongle (the phone taking its second), or the serial port of an "
         "hci_uart dongle (for QEMU, any -serial spec)",
+    )
+    group.addoption(
+        "--bt-addr",
+        metavar="ADDRESS",
+        help="Random static Bluetooth address an emulator or native build "
+        "uses, e.g. C0:00:00:00:00:01, to keep its identity across runs with "
+        "a controller that has no address of its own (default: its "
+        "controller's)",
     )
     group.addoption(
         "--ble-controller",

@@ -3,39 +3,28 @@
 
 #include <errno.h>
 
-#include <pbl/drivers/clk/sf32lb.h>
+#include <pbl/devicetree.h>
 #include <pbl/drivers/uart/sf32lb.h>
+#include <pbl/kernel/cache.h>
+#include <pbl/kernel/idle.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mmio.h>
-#include <pbl/mcu/cache.h>
-#include <pbl/soc/sf32lb/sleep.h>
+#include <pbl/soc/sf32lb/idle.h>
 #include <pbl/util/bits.h>
 #include <pbl/util/misc.h>
-#include <pbl/util/size.h>
 
 #include <hardware/sf32lb52_usart.h>
 
 // The USART kernel clock is always 48 MHz on the SF32LB52
-#define USART_CLK_HZ 48000000U
 
 #define ICR_ERRORS (UART_ICR_PECF | UART_ICR_FECF | UART_ICR_NCF | UART_ICR_ORECF)
 
-static const struct {
-  uintptr_t base;
-  struct pbl_clk clk;
-  pbl_irq_t irqn;
-} s_instances[] = {
-  {SF32LB52_USART1_BASE, PBL_CLK(nullptr, 0), PBL_IRQN(USART1)},
-  {SF32LB52_USART2_BASE, PBL_CLK(SF32LB_HPSYS_RCC, SF32LB52_HPSYS_CLK_USART2), PBL_IRQN(USART2)},
-  {SF32LB52_USART3_BASE, PBL_CLK(SF32LB_HPSYS_RCC, SF32LB52_HPSYS_CLK_USART3), PBL_IRQN(USART3)},
-};
-
 static const struct pbl_uart_sf32lb *prv_sf32lb(const struct pbl_uart *uart) {
-  return container_of(uart, const struct pbl_uart_sf32lb, uart);
+  return PBL_CONTAINER_OF(uart, const struct pbl_uart_sf32lb, uart);
 }
 
 static inline uintptr_t prv_reg(const struct pbl_uart_sf32lb *usart, uint32_t offset) {
-  return s_instances[usart->index - 1U].base + offset;
+  return usart->base + offset;
 }
 
 static inline uint32_t prv_getreg(const struct pbl_uart_sf32lb *usart, uint32_t offset) {
@@ -62,25 +51,20 @@ static void prv_flush(const struct pbl_uart *uart) {
 
 static int prv_early_init(const struct pbl_uart *uart) {
   const struct pbl_uart_sf32lb *usart = prv_sf32lb(uart);
-  const struct pbl_clk *clk;
   int ret;
 
-  if (usart->index == 0U || usart->index > ARRAY_LENGTH(s_instances) ||
-      (usart->rx_dma != nullptr) != (usart->rx_buf != nullptr)) {
+  if ((usart->rx_dma != nullptr) != (usart->rx_buf != nullptr)) {
     return -EINVAL;
   }
 
-  clk = &s_instances[usart->index - 1U].clk;
-  if (clk->ctrl != nullptr) {
-    ret = pbl_device_init(&clk->ctrl->dev);
-    if (ret != 0) {
-      return ret;
-    }
+  ret = pbl_device_init(&usart->clk.ctrl->dev);
+  if (ret != 0) {
+    return ret;
+  }
 
-    ret = pbl_clk_enable(clk);
-    if (ret != 0) {
-      return ret;
-    }
+  ret = pbl_clk_enable(&usart->clk);
+  if (ret != 0) {
+    return ret;
   }
 
   ret = pbl_pinctrl_select_state(&usart->pinctrl, PBL_PINCTRL_STATE_DEFAULT);
@@ -93,7 +77,8 @@ static int prv_early_init(const struct pbl_uart *uart) {
   prv_putreg(usart, SF32LB52_USART_CR1_OFFSET, 0U);
   prv_putreg(usart, SF32LB52_USART_CR2_OFFSET, 0U);
   prv_putreg(usart, SF32LB52_USART_CR3_OFFSET, 0U);
-  prv_putreg(usart, SF32LB52_USART_CR1_OFFSET, UART_CR1_TE | UART_CR1_UE);
+  // The receiver stays on, the SoC serial debug port listens through it
+  prv_putreg(usart, SF32LB52_USART_CR1_OFFSET, UART_CR1_TE | UART_CR1_RE | UART_CR1_UE);
 
   return 0;
 }
@@ -124,7 +109,7 @@ static int prv_init(const struct pbl_uart *uart) {
     }
   }
 
-  pbl_irq_enable(s_instances[usart->index - 1U].irqn);
+  pbl_irq_enable(usart->irq);
 
   return 0;
 }
@@ -132,10 +117,21 @@ static int prv_init(const struct pbl_uart *uart) {
 // Frame settings need the USART disabled, the baud rate only takes once it is enabled
 static int prv_configure(const struct pbl_uart *uart, const struct pbl_uart_config *cfg) {
   const struct pbl_uart_sf32lb *usart = prv_sf32lb(uart);
-  uint32_t brr = USART_CLK_HZ / cfg->baudrate;
   uint32_t cr1 = PBL_FIELD_PREP(UART_CR1_M_MASK, UART_CR1_M_8BIT);
   uint32_t cr3 = 0U;
   uint32_t smplini = UART_MISCR_SMPLINI_16X;
+  uint64_t rate_mhz;
+  uint32_t clk_hz;
+  uint32_t brr;
+  int ret;
+
+  ret = pbl_clk_get_rate(&usart->clk, &rate_mhz);
+  if (ret != 0) {
+    return ret;
+  }
+
+  clk_hz = (uint32_t)(rate_mhz / 1000U);
+  brr = clk_hz / cfg->baudrate;
 
   switch (cfg->parity) {
     case PBL_UART_PARITY_NONE:
@@ -161,7 +157,7 @@ static int prv_configure(const struct pbl_uart *uart, const struct pbl_uart_conf
   }
 
   if (brr < USART_BRR_MIN) {
-    brr = (2U * USART_CLK_HZ) / cfg->baudrate;
+    brr = (2U * clk_hz) / cfg->baudrate;
     cr1 |= UART_CR1_OVER8;
     smplini = UART_MISCR_SMPLINI_8X;
   }
@@ -207,7 +203,7 @@ static void prv_dma_drain(const struct pbl_uart_sf32lb *usart) {
   }
 
   head = (PBL_UART_SF32LB_RX_BUF_SIZE - residue) % PBL_UART_SF32LB_RX_BUF_SIZE;
-  dcache_invalidate(usart->rx_buf, PBL_UART_SF32LB_RX_BUF_SIZE);
+  pbl_dcache_invalidate_range(usart->rx_buf, PBL_UART_SF32LB_RX_BUF_SIZE);
 
   while (state->rx_pos != head) {
     uint8_t c = usart->rx_buf[state->rx_pos];
@@ -227,7 +223,7 @@ static void prv_dma_callback(void *arg, int status) {
 
 static int prv_rx_enable(const struct pbl_uart *uart) {
   const struct pbl_uart_sf32lb *usart = prv_sf32lb(uart);
-  uint32_t cr1 = UART_CR1_RE | UART_CR1_RXNEIE;
+  uint32_t cr1 = UART_CR1_RXNEIE;
   int ret;
 
   (void)prv_getreg(usart, SF32LB52_USART_RDR_OFFSET);
@@ -235,7 +231,7 @@ static int prv_rx_enable(const struct pbl_uart *uart) {
 
   if (usart->rx_dma != nullptr) {
     // The buffer is invalidated whole, so it must not share cache lines with anything else
-    dcache_flush_invalidate(usart->rx_buf, PBL_UART_SF32LB_RX_BUF_SIZE);
+    pbl_dcache_flush_invalidate_range(usart->rx_buf, PBL_UART_SF32LB_RX_BUF_SIZE);
     usart->state->rx_pos = 0U;
 
     ret = pbl_dma_prep_dma_cyclic(usart->rx_dma, usart->rx_buf, PBL_UART_SF32LB_RX_BUF_SIZE,
@@ -246,13 +242,13 @@ static int prv_rx_enable(const struct pbl_uart *uart) {
     }
 
     pbl_modifyl(0U, UART_CR3_DMAR, prv_reg(usart, SF32LB52_USART_CR3_OFFSET));
-    cr1 = UART_CR1_RE | UART_CR1_IDLEIE;
+    cr1 = UART_CR1_IDLEIE;
   }
 
   pbl_modifyl(0U, cr1, prv_reg(usart, SF32LB52_USART_CR1_OFFSET));
 
   // The USART does not receive in deep sleep
-  soc_sf32lb_sleep_block(SOC_SF32LB_DEEPSLEEP);
+  pbl_idle_state_block(SOC_SF32LB_IDLE_DEEPSLEEP);
 
   return 0;
 }
@@ -260,15 +256,14 @@ static int prv_rx_enable(const struct pbl_uart *uart) {
 static void prv_rx_disable(const struct pbl_uart *uart) {
   const struct pbl_uart_sf32lb *usart = prv_sf32lb(uart);
 
-  pbl_modifyl(UART_CR1_RE | UART_CR1_RXNEIE | UART_CR1_IDLEIE, 0U,
-              prv_reg(usart, SF32LB52_USART_CR1_OFFSET));
+  pbl_modifyl(UART_CR1_RXNEIE | UART_CR1_IDLEIE, 0U, prv_reg(usart, SF32LB52_USART_CR1_OFFSET));
 
   if (usart->rx_dma != nullptr) {
     (void)pbl_dma_terminate(usart->rx_dma);
     pbl_modifyl(UART_CR3_DMAR, 0U, prv_reg(usart, SF32LB52_USART_CR3_OFFSET));
   }
 
-  soc_sf32lb_sleep_release(SOC_SF32LB_DEEPSLEEP);
+  pbl_idle_state_release(SOC_SF32LB_IDLE_DEEPSLEEP);
 }
 
 void pbl_uart_sf32lb_irq_handler(const struct pbl_uart_sf32lb *usart) {
@@ -299,3 +294,5 @@ const struct pbl_uart_ops pbl_uart_sf32lb_ops = {
   .rx_enable = prv_rx_enable,
   .rx_disable = prv_rx_disable,
 };
+
+#include PBL_DT_INSTANCES(sifli_sf32lb52_usart)

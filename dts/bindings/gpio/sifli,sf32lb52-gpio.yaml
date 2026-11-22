@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/gpio/sifli,sf32lb52-gpio.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: SiFli SF32LB52 GPIO controller (HPSYS GPIO1)
+
+maintainers:
+  - Gerard Marull-Paretas <gerard@teslabs.com>
+
+description:
+  GPIO controller of the PA pads. Each pad is also an interrupt source.
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          const: sifli,sf32lb52-gpio
+    then:
+      required:
+        - sifli,hpsys-aon
+      properties:
+        ngpios:
+          maximum: 45
+
+properties:
+  compatible:
+    enum:
+      - sifli,sf32lb52-gpio
+      - sifli,sf32lb57-gpio
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  gpio-controller: true
+
+  gpio-ranges:
+    maxItems: 1
+
+  '#gpio-cells':
+    const: 2
+
+  ngpios:
+    maximum: 58
+
+  gpio-reserved-ranges: true
+
+  sifli,hpsys-aon:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: HPSYS always-on block, where SF32LB52 wakeup pins latch.
+
+  sifli,pmuc:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: PMU, whose wake pins wake the system from hibernate.
+
+  interrupt-controller: true
+
+  '#interrupt-cells':
+    const: 2
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - gpio-controller
+  - '#gpio-cells'
+  - ngpios
+  - sifli,pmuc
+  - interrupt-controller
+  - '#interrupt-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    gpio@500a0000 {
+        compatible = "sifli,sf32lb52-gpio";
+        reg = <0x500a0000 0x1000>;
+        interrupts = <84>;
+        clocks = <&hpsys_rcc 25>;
+        gpio-controller;
+        #gpio-cells = <2>;
+        ngpios = <45>;
+        sifli,hpsys-aon = <&hpsys_aon>;
+        sifli,pmuc = <&pmuc>;
+        interrupt-controller;
+        #interrupt-cells = <2>;
+    };

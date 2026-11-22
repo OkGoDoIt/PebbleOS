@@ -3,6 +3,7 @@
 
 config CPU_CORTEX_M
 	bool
+	select ARCH_HAS_COREDUMP
 	select ARCH_HAS_DEBUGGER_DETECT
 	select ARCH_HAS_STACK_GUARD
 	select ARCH_HAS_USERSPACE
@@ -25,6 +26,12 @@ config CPU_STAR_MC1
 	select ARMV8_M_DSP
 	help
 	  Arm China STAR-MC1, compatible with the Cortex-M33.
+
+config ARCH_VECTOR_TABLE_RAM
+	bool
+	help
+	  Point VTOR at a copy of the vector table in RAM, for SoCs whose
+	  vector fetches from flash bypass the cache.
 
 config ARMV7_M
 	bool
@@ -52,3 +59,35 @@ config CPU_HAS_FPU
 	bool
 	help
 	  Single-precision FPU: FPv4-SP on ARMv7-M, FPv5-SP on ARMv8-M.
+
+config FP_SOFTFP_ABI
+	bool
+	depends on CPU_HAS_FPU
+	help
+	  Pass floating-point arguments in core registers (softfp) rather
+	  than in FPU registers (hard), for binary compatibility with
+	  soft-float code. Selected by what needs it.
+
+config CPU_HAS_ICACHE
+	bool
+	help
+	  L1 instruction cache maintained through the SCB.
+
+config CPU_HAS_DCACHE
+	bool
+	help
+	  L1 data cache maintained through the SCB.
+
+config ICACHE_LINE_SIZE
+	int
+	depends on CPU_HAS_ICACHE
+	default 32 if CPU_STAR_MC1
+	help
+	  Instruction cache line size in bytes.
+
+config DCACHE_LINE_SIZE
+	int
+	depends on CPU_HAS_DCACHE
+	default 32 if CPU_STAR_MC1
+	help
+	  Data cache line size in bytes.

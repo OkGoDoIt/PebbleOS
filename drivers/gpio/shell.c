@@ -20,7 +20,7 @@ static int prv_parse_pin(const struct pbl_shell *sh, char **argv, struct pbl_gpi
     return -ENODEV;
   }
 
-  port = container_of(dev, const struct pbl_gpio_port, dev);
+  port = PBL_CONTAINER_OF(dev, const struct pbl_gpio_port, dev);
 
   if (!pbl_device_is_ready(&port->dev)) {
     pbl_shell_error(sh, "port '%s' not ready", argv[1]);
@@ -37,15 +37,15 @@ static int prv_parse_pin(const struct pbl_shell *sh, char **argv, struct pbl_gpi
   return 0;
 }
 
-static int prv_cmd_ports(const struct pbl_shell *sh, size_t argc, char **argv) {
+static int prv_cmd_list(const struct pbl_shell *sh, size_t argc, char **argv) {
   const struct pbl_device *dev;
 
   PBL_DEVICE_CLASS_FOREACH(&pbl_gpio_port_class, dev) {
-    const struct pbl_gpio_port *port = container_of(dev, const struct pbl_gpio_port, dev);
+    const struct pbl_gpio_port *port = PBL_CONTAINER_OF(dev, const struct pbl_gpio_port, dev);
 
-    pbl_shell_print(sh, "%s: %u pins%s%s%s", port->dev.name, port->num_pins,
+    pbl_shell_print(sh, "%s: %u pins%s%s%s", pbl_device_name(&port->dev), port->num_pins,
                     (port->intc != nullptr) ? ", irq " : "",
-                    (port->intc != nullptr) ? port->intc->dev.name : "",
+                    (port->intc != nullptr) ? pbl_device_name(&port->intc->dev) : "",
                     pbl_device_is_ready(&port->dev) ? "" : " (not ready)");
   }
 
@@ -117,14 +117,14 @@ static int prv_cmd_conf(const struct pbl_shell *sh, size_t argc, char **argv) {
   for (size_t i = 3; i < argc; i++) {
     size_t j;
 
-    for (j = 0; j < ARRAY_LENGTH(s_conf_flags); j++) {
+    for (j = 0; j < PBL_ARRAY_SIZE(s_conf_flags); j++) {
       if (strcmp(argv[i], s_conf_flags[j].name) == 0) {
         flags |= s_conf_flags[j].flags;
         break;
       }
     }
 
-    if (j == ARRAY_LENGTH(s_conf_flags)) {
+    if (j == PBL_ARRAY_SIZE(s_conf_flags)) {
       pbl_shell_error(sh, "unknown flag '%s' (in out low high pu pd od)", argv[i]);
       return -EINVAL;
     }
@@ -173,8 +173,8 @@ static int prv_watch_stop(const struct pbl_shell *sh) {
     return ret;
   }
 
-  pbl_shell_print(sh, "%s %u: %" PRIu32 " interrupts", s_watch.intc->dev.name, s_watch.hwirq,
-                  s_watch_count);
+  pbl_shell_print(sh, "%s %u: %" PRIu32 " interrupts", pbl_device_name(&s_watch.intc->dev),
+                  s_watch.hwirq, s_watch_count);
   s_watch.intc = nullptr;
 
   return 0;
@@ -190,8 +190,8 @@ static int prv_cmd_irq(const struct pbl_shell *sh, size_t argc, char **argv) {
     if (s_watch.intc == nullptr) {
       pbl_shell_print(sh, "no pin watched");
     } else {
-      pbl_shell_print(sh, "%s %u: %" PRIu32 " interrupts", s_watch.intc->dev.name, s_watch.hwirq,
-                      s_watch_count);
+      pbl_shell_print(sh, "%s %u: %" PRIu32 " interrupts", pbl_device_name(&s_watch.intc->dev),
+                      s_watch.hwirq, s_watch_count);
     }
     return 0;
   }
@@ -210,13 +210,13 @@ static int prv_cmd_irq(const struct pbl_shell *sh, size_t argc, char **argv) {
     return ret;
   }
 
-  for (i = 0; i < ARRAY_LENGTH(s_irq_types); i++) {
+  for (i = 0; i < PBL_ARRAY_SIZE(s_irq_types); i++) {
     if (strcmp(argv[3], s_irq_types[i].name) == 0) {
       break;
     }
   }
 
-  if (i == ARRAY_LENGTH(s_irq_types)) {
+  if (i == PBL_ARRAY_SIZE(s_irq_types)) {
     pbl_shell_error(sh, "unknown type '%s' (rising falling both high low)", argv[3]);
     return -EINVAL;
   }
@@ -254,7 +254,7 @@ static int prv_cmd_irq(const struct pbl_shell *sh, size_t argc, char **argv) {
 #endif
 
 static const struct pbl_shell_cmd sub_gpio[] = {
-  PBL_SHELL_CMD(ports, nullptr, "List the ports", prv_cmd_ports),
+  PBL_SHELL_CMD(list, nullptr, "List the ports", prv_cmd_list),
   PBL_SHELL_CMD_ARG(get, nullptr, "Read a pin's physical level <port> <pin>", prv_cmd_get, 3, 0),
   PBL_SHELL_CMD_ARG(set, nullptr, "Drive a pin's physical level <port> <pin> <0|1>", prv_cmd_set, 4,
                     0),

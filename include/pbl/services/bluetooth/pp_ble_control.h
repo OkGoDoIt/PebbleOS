@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <pbl/services/comm_session/session.h>
+#include <pbl/pp/session.h>
 
 /**
  * @defgroup services_bluetooth_pp_ble_control BLE control endpoint
@@ -13,7 +13,7 @@
  */
 
 /**
- * @brief Handle a BLE control endpoint message, on KernelBG.
+ * @brief Handle a BLE control endpoint message, on SysWorkq.
  *
  * Only the "set discoverable and pairable" command is supported; it makes the watch pairable
  * for the requested duration.
@@ -22,7 +22,7 @@
  * @param data Message payload.
  * @param length Length of @p data in bytes.
  */
-void pp_ble_control_protocol_msg_callback(CommSession *session, const uint8_t *data,
-                                          unsigned int length);
+void pp_ble_control_protocol_msg_callback(struct pbl_pp_session *session, const uint8_t *data,
+                                          size_t length);
 
 /** @} */

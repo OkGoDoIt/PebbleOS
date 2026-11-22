@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Third-party code kept in the firmware tree, see docs/third_party/sbom.md.
+
+components:
+  - name: freebsd-timelocal
+    paths: [applib/pbl_std/timelocal.c, applib/pbl_std/timelocal.h]
+    supplier: The FreeBSD Project
+    description: locale time formatting tables from FreeBSD libc
+    license: BSD-2-Clause
+

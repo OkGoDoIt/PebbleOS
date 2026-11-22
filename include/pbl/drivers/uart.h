@@ -84,6 +84,15 @@ typedef void (*pbl_uart_rx_callback_t)(const struct pbl_uart *uart, uint8_t c, v
 /** @brief Class of the serial ports. */
 extern const struct pbl_device_class pbl_uart_class;
 
+/** @brief The board's console port. */
+extern const struct pbl_uart *const CONSOLE_UART;
+
+/** @brief The board's port to the host of the QEMU serial protocol. */
+extern const struct pbl_uart *const QEMU_UART;
+
+/** @brief The board's Bluetooth HCI port, with @c CONFIG_NIMBLE_HCI_UART. */
+extern const struct pbl_uart *const BT_HCI_UART;
+
 /** @cond INTERNAL_HIDDEN */
 struct pbl_uart_state {
   struct pbl_uart_config cfg;
@@ -148,16 +157,16 @@ struct pbl_uart {
  *
  * @param sym Symbol of the port instance, with its state defined by PBL_UART_STATE_DEFINE().
  * @param _name Name.
+ * @param _parent Parent device, or NULL.
  * @param _ops Driver operations.
  * @param _baudrate Initial baud rate, in bits per second.
- * @param _deps Dependencies from PBL_DEVICE_DEPS(), or NULL.
  */
-#define PBL_UART_INIT(sym, _name, _ops, _baudrate, _deps)                                     \
-  {                                                                                           \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_uart_init, nullptr, _deps, &pbl_uart_class), \
-    .ops = (_ops),                                                                            \
-    .state = &sym##_uart_state,                                                               \
-    .baudrate = (_baudrate),                                                                  \
+#define PBL_UART_INIT(sym, _name, _parent, _ops, _baudrate)                                \
+  {                                                                                        \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_uart_dev_init, _parent, &pbl_uart_class), \
+    .ops = (_ops),                                                                         \
+    .state = &sym##_uart_state,                                                            \
+    .baudrate = (_baudrate),                                                               \
   }
 
 /**
@@ -167,7 +176,7 @@ struct pbl_uart {
  * @param dev Port device.
  * @return 0 or a negative errno.
  */
-int pbl_uart_init(const struct pbl_device *dev);
+int pbl_uart_dev_init(const struct pbl_device *dev);
 
 /**
  * @brief Hand a received byte to the receive callback.

@@ -11,7 +11,7 @@
 #include <pbl/fs/fs.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/mutex.h>
-#include <pbl/services/comm_session/protocol.h>
+#include <pbl/pp/protocol.h>
 #include <pbl/services/time.h>
 #include <pbl/util/shared_cbuf.h>
 #include <pbl/util/units.h>
@@ -162,13 +162,13 @@ typedef struct {
   struct pbl_mutex mutex;
   /** Circular buffer of a buffered session. */
   struct pbl_shared_cbuf buffer;
-  /** Reader of @ref buffer, consumed by KernelBG. */
+  /** Reader of @ref buffer, consumed by SysWorkq. */
   struct pbl_shared_cbuf_client buffer_client;
   /** Storage of @ref buffer, NULL for unbuffered sessions. */
   uint8_t *buffer_storage;
   /** @ref buffer_storage is on the kernel heap, else on the heap of the dls_create() caller. */
   bool buffer_in_kernel_heap : 1;
-  /** A flash write has been requested from KernelBG and not run yet. */
+  /** A flash write has been requested from SysWorkq and not run yet. */
   bool write_request_pending : 1;
   /** Inactivate the session once its last lock is released, see dls_unlock_session(). */
   bool inactivate_pending : 1;
@@ -212,7 +212,7 @@ typedef struct DataLoggingSession {
 /**
  * @brief Send the next chunk of a session's stored data to the phone.
  *
- * Must be called from KernelBG. Removes inactive sessions with no data left. Active sessions are
+ * Must be called from SysWorkq. Removes inactive sessions with no data left. Active sessions are
  * only sent when they hold enough data, unless @p empty is set.
  *
  * @param logging_session Session.
@@ -224,7 +224,7 @@ bool dls_private_send_session(DataLoggingSession *logging_session, bool empty);
 /**
  * @brief Reset the endpoint state of all sessions after a disconnection.
  *
- * Must be called from KernelBG.
+ * Must be called from SysWorkq.
  *
  * @param data Unused.
  */
@@ -256,7 +256,7 @@ typedef struct PBL_PACKED {
 
 /** @brief Largest data message payload, and largest item size for unbuffered sessions. */
 static const uint32_t DLS_ENDPOINT_MAX_PAYLOAD =
-    (COMM_MAX_OUTBOUND_PAYLOAD_SIZE - sizeof(DataLoggingSendDataMessage));
+    (PBL_PP_MAX_OUTBOUND_PAYLOAD - sizeof(DataLoggingSendDataMessage));
 
 /**
  * @brief Read session data, for unit tests only.

@@ -1,0 +1,410 @@
+/* SPDX-FileCopyrightText: 2026 Core Devices LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <inttypes.h>
+#include <string.h>
+
+#include <pbl/kernel/mutex.h>
+#include <pbl/kernel/scratch.h>
+#include <pbl/kernel/time.h>
+#include <pbl/kernel/work.h>
+#include <pbl/logging/logging.h>
+#include <pbl/pp/endpoint.h>
+#include <pbl/pp/send.h>
+#include <pbl/pp/session.h>
+#include <pbl/services/imaging.h>
+#include <pbl/util/byteorder.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+
+#include <applib/graphics/gtypes.h>
+#include <kernel/event_loop.h>
+
+PBL_LOG_MODULE_DEFINE(service_imaging, DEFAULT_LOG_LEVEL);
+
+// Full-screen 4-bpp on the largest supported display (260x260) is ~34 KB. Cap generously and reject
+// anything larger to bound kernel-heap use against a malformed or hostile phone.
+#define IMAGING_MAX_BYTES       (40 * 1024)
+#define IMAGING_MAX_DIM         (300)
+#define IMAGING_PALETTE_ENTRIES (16)
+
+static ImagingReceivedHandler s_handlers[ImagingImageTypeCount];
+static ImagingWillReceiveHandler s_will_receive_handlers[ImagingImageTypeCount];
+static ImagingTransferFailedHandler s_transfer_failed_handlers[ImagingImageTypeCount];
+
+//! Guards the latch state below: requests come in on the requesting task (e.g. the Music app)
+//! while responses are handled on KernelMain. The reassembly state (s_rx) is deliberately not
+//! covered — it is only ever touched on KernelMain (endpoint receiver and comm-session events).
+static PBL_MUTEX_DEFINE(s_lock);
+
+// Image types the phone told us it can't serve (ImagingResponseFlagUnsupported), so we stop asking.
+// Latched per session: the connected phone doesn't change what it supports mid-connection, and a
+// reconnect (possibly to a different phone) clears it via prv_session_types.
+static uint32_t s_unsupported_types;
+static struct pbl_pp_session *s_latched_session;
+
+typedef struct {
+  bool active;
+  uint8_t token;
+  uint32_t total_bytes;
+  uint32_t received_bytes;
+  uint64_t last_chunk_ms;
+  GBitmap *bitmap;
+} Reassembly;
+
+// One per type, so that consumers can fetch at the same time
+static Reassembly s_rx[ImagingImageTypeCount];
+
+// A transfer the phone stops sending is dropped after this long, not to hold its memory until
+// the next one
+#define IMAGING_STALL_TIMEOUT_MS (5000)
+static void prv_stall_timer_expired(struct pbl_work *work);
+static PBL_DELAYED_WORK_DEFINE(s_stall_timer, prv_stall_timer_expired);
+
+// An image is one block: the bitmap, its palette, then its pixels
+#define PALETTE_OFFSET (sizeof(GBitmap))
+#define PIXELS_OFFSET  (PALETTE_OFFSET + IMAGING_PALETTE_ENTRIES * sizeof(GColor))
+
+void imaging_image_destroy(GBitmap *bitmap) {
+  pbl_scratch_free(bitmap);
+}
+
+static void prv_rx_reset(uint8_t type) {
+  if (type < PBL_ARRAY_SIZE(s_rx)) {
+    imaging_image_destroy(s_rx[type].bitmap);
+    s_rx[type] = (Reassembly){};
+  }
+}
+
+void imaging_register_handler(ImagingImageType image_type, ImagingReceivedHandler handler) {
+  if (image_type < PBL_ARRAY_SIZE(s_handlers)) {
+    s_handlers[image_type] = handler;
+  }
+}
+
+void imaging_register_transfer_handlers(ImagingImageType image_type,
+                                        ImagingWillReceiveHandler will_receive,
+                                        ImagingTransferFailedHandler transfer_failed) {
+  if (image_type < ImagingImageTypeCount) {
+    s_will_receive_handlers[image_type] = will_receive;
+    s_transfer_failed_handlers[image_type] = transfer_failed;
+  }
+}
+
+static void prv_drop(uint8_t type, uint8_t token, uint32_t size, const char *reason);
+static void prv_arm_stall_timer(void);
+
+static void prv_check_stalled(void *data) {
+  const uint64_t now = pbl_uptime_ms();
+  bool active = false;
+
+  for (uint8_t type = 0; type < PBL_ARRAY_SIZE(s_rx); type++) {
+    Reassembly *rx = &s_rx[type];
+    if (!rx->active) {
+      continue;
+    }
+    if (now - rx->last_chunk_ms >= IMAGING_STALL_TIMEOUT_MS) {
+      prv_drop(type, rx->token, rx->total_bytes, "stalled");
+    } else {
+      active = true;
+    }
+  }
+
+  if (active) {
+    prv_arm_stall_timer();
+  }
+}
+
+static void prv_stall_timer_expired(struct pbl_work *work) {
+  // The reassembly state is only touched on KernelMain
+  launcher_task_add_callback(prv_check_stalled, nullptr);
+}
+
+static void prv_arm_stall_timer(void) {
+  pbl_delayed_work_reschedule(&pbl_sys_workq_high, &s_stall_timer,
+                              PBL_MSEC(IMAGING_STALL_TIMEOUT_MS));
+}
+
+static void prv_drop(uint8_t type, uint8_t token, uint32_t size, const char *reason) {
+  struct pbl_scratch_stats stats;
+  pbl_scratch_get_stats(&stats);
+  PBL_LOG_WRN("Drop %s type=%u token=%u size=%" PRIu32 " largest=%u", reason, type, token, size,
+              (unsigned int)stats.max_free);
+
+  prv_rx_reset(type);
+  ImagingTransferFailedHandler handler = (type < PBL_ARRAY_SIZE(s_transfer_failed_handlers))
+                                             ? s_transfer_failed_handlers[type]
+                                             : nullptr;
+  if (handler) {
+    handler(token);
+  }
+}
+
+//! The type a response answers, from the top nibble of its flags byte. Zero — which is what a phone
+//! that doesn't set those bits sends — is album art. A value we don't know is left out of range so
+//! it routes nowhere rather than to the wrong consumer.
+static uint8_t prv_response_type(const ImagingResponseHeader *hdr) {
+  return (hdr->flags & IMAGING_RESPONSE_FLAG_TYPE_MASK) >> IMAGING_RESPONSE_FLAG_TYPE_SHIFT;
+}
+
+static void prv_deliver(uint8_t token, uint8_t type, GBitmap *bitmap) {
+  ImagingReceivedHandler handler = (type < PBL_ARRAY_SIZE(s_handlers)) ? s_handlers[type] : nullptr;
+  if (handler) {
+    handler(token, bitmap);
+  } else {
+    imaging_image_destroy(bitmap);
+  }
+}
+
+// Clear the unsupported-type latch when the system session changes (reconnect / different phone).
+// The latch is also cleared explicitly when the session closes (imaging_handle_comm_session_event)
+// so a recycled session pointer can't be mistaken for the old one. s_lock held by the caller.
+static bool prv_type_latched_unsupported(struct pbl_pp_session *session,
+                                         ImagingImageType image_type) {
+  if (session != s_latched_session) {
+    s_latched_session = session;
+    s_unsupported_types = 0;
+  }
+  return (s_unsupported_types & (1u << image_type)) != 0;
+}
+
+bool imaging_is_type_supported(ImagingImageType image_type) {
+  struct pbl_pp_session *session = pbl_pp_session_get_system();
+  if (!session || !pbl_pp_session_has_capability(session, PBL_PP_CAP_IMAGING)) {
+    return false;
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  const bool latched = prv_type_latched_unsupported(session, image_type);
+  pbl_mutex_unlock(&s_lock);
+  return !latched;
+}
+
+bool imaging_request_album_art(uint8_t token, ImagingFormat format, uint16_t width, uint16_t height,
+                               const char *title, const char *artist) {
+  if (!imaging_is_type_supported(ImagingImageTypeAlbumArt)) {
+    return false;
+  }
+  struct pbl_pp_session *session = pbl_pp_session_get_system();
+  const size_t title_len = title ? PBL_MIN(strlen(title), 255) : 0;
+  const size_t artist_len = artist ? PBL_MIN(strlen(artist), 255) : 0;
+  uint8_t payload[sizeof(ImagingRequestHeader) + 2 + 255 + 255];
+  ImagingRequestHeader *hdr = (ImagingRequestHeader *)payload;
+  hdr->cmd = ImagingCmdIDRequest;
+  hdr->token = token;
+  hdr->image_type = ImagingImageTypeAlbumArt;
+  hdr->format = format;
+  hdr->width = width;
+  hdr->height = height;
+  uint8_t *cursor = payload + sizeof(*hdr);
+  *cursor++ = (uint8_t)title_len;
+  memcpy(cursor, title, title_len);
+  cursor += title_len;
+  *cursor++ = (uint8_t)artist_len;
+  memcpy(cursor, artist, artist_len);
+  cursor += artist_len;
+
+  pbl_pp_send(session, PBL_PP_ENDPOINT_IMAGING, payload, cursor - payload,
+              PBL_PP_DEFAULT_TIMEOUT_MS);
+  return true;
+}
+
+bool imaging_request_notification_image(uint8_t token, ImagingFormat format, uint16_t width,
+                                        uint16_t height, const Uuid *item_id) {
+  if (!item_id || !imaging_is_type_supported(ImagingImageTypeNotification)) {
+    return false;
+  }
+  struct pbl_pp_session *session = pbl_pp_session_get_system();
+  uint8_t payload[sizeof(ImagingRequestHeader) + UUID_SIZE];
+  ImagingRequestHeader *hdr = (ImagingRequestHeader *)payload;
+  hdr->cmd = ImagingCmdIDRequest;
+  hdr->token = token;
+  hdr->image_type = ImagingImageTypeNotification;
+  hdr->format = format;
+  hdr->width = width;
+  hdr->height = height;
+  memcpy(payload + sizeof(*hdr), item_id, UUID_SIZE);
+
+  pbl_pp_send(session, PBL_PP_ENDPOINT_IMAGING, payload, sizeof(payload),
+              PBL_PP_DEFAULT_TIMEOUT_MS);
+  return true;
+}
+
+static uint16_t prv_gbitmap_format_for(ImagingFormat format, GBitmapFormat *out) {
+  switch (format) {
+    case ImagingFormat8BitColor:
+      *out = GBitmapFormat8Bit;
+      return 0; // no palette
+    case ImagingFormat4BitPalette:
+      *out = GBitmapFormat4BitPalette;
+      return IMAGING_PALETTE_ENTRIES;
+    case ImagingFormat1Bit:
+    default:
+      *out = GBitmapFormat1Bit;
+      return 0;
+  }
+}
+
+void imaging_protocol_msg_callback(struct pbl_pp_session *session, const uint8_t *msg,
+                                   size_t length) {
+  if (length < sizeof(ImagingResponseHeader)) {
+    return;
+  }
+  const ImagingResponseHeader *hdr = (const ImagingResponseHeader *)msg;
+  if (hdr->cmd != ImagingCmdIDResponse) {
+    return;
+  }
+  const uint8_t *cursor = msg + sizeof(*hdr);
+  const uint8_t *msg_end = msg + length;
+
+  const uint8_t type = prv_response_type(hdr);
+
+  if (hdr->flags & ImagingResponseFlagUnsupported) {
+    // Phone can't serve this type: latch it off so we don't ask again this connection, and deliver
+    // NULL so the current request resolves (the app treats it like "no image").
+    if (type < ImagingImageTypeCount) {
+      pbl_mutex_lock(&s_lock, PBL_FOREVER);
+      s_unsupported_types |= (1u << type);
+      pbl_mutex_unlock(&s_lock);
+    }
+    prv_rx_reset(type);
+    prv_deliver(hdr->token, type, nullptr);
+    return;
+  }
+
+  if (hdr->flags & ImagingResponseFlagNoImage) {
+    prv_rx_reset(type);
+    prv_deliver(hdr->token, type, nullptr);
+    return;
+  }
+
+  if (type >= PBL_ARRAY_SIZE(s_rx)) {
+    PBL_LOG_WRN("Drop chunk of unknown type=%u", type);
+    return;
+  }
+  Reassembly *rx = &s_rx[type];
+
+  if (hdr->flags & ImagingResponseFlagFirst) {
+    if (rx->active) {
+      prv_drop(type, rx->token, rx->total_bytes, "superseded");
+    }
+    if ((size_t)(msg_end - cursor) < 6) {
+      prv_drop(type, hdr->token, length, "short image header");
+      return;
+    }
+    const uint16_t width = pbl_get_le16(&cursor[0]);
+    const uint16_t height = pbl_get_le16(&cursor[2]);
+    const uint8_t format = cursor[4];
+    const uint8_t palette_count = cursor[5];
+    cursor += 6;
+    GBitmapFormat gformat;
+    const uint16_t max_palette = prv_gbitmap_format_for(format, &gformat);
+    if (width == 0 || height == 0 || width > IMAGING_MAX_DIM || height > IMAGING_MAX_DIM ||
+        palette_count > max_palette || (max_palette > 0 && palette_count == 0)) {
+      prv_drop(type, hdr->token, length, "invalid image metadata");
+      return;
+    }
+    if ((size_t)(msg_end - cursor) < palette_count) {
+      prv_drop(type, hdr->token, length, "short palette");
+      return;
+    }
+    const uint16_t row_size = gbitmap_format_get_row_size_bytes(width, gformat);
+    const uint32_t total = (uint32_t)row_size * height;
+    if (total == 0 || total > IMAGING_MAX_BYTES) {
+      prv_drop(type, hdr->token, total, "invalid image size");
+      return;
+    }
+
+    ImagingWillReceiveHandler will_receive =
+        (type < PBL_ARRAY_SIZE(s_will_receive_handlers)) ? s_will_receive_handlers[type] : nullptr;
+    if (will_receive) {
+      will_receive(hdr->token);
+    }
+
+    rx->bitmap = pbl_scratch_zalloc(PIXELS_OFFSET + total);
+    if (!rx->bitmap) {
+      prv_drop(type, hdr->token, total, "image allocation failed");
+      return;
+    }
+    *rx->bitmap = (GBitmap){
+      .addr = (uint8_t *)rx->bitmap + PIXELS_OFFSET,
+      .row_size_bytes = row_size,
+      .info.format = gformat,
+      .info.version = GBITMAP_VERSION_CURRENT,
+      .bounds = (GRect){{0, 0}, {width, height}},
+    };
+    if (max_palette > 0) {
+      rx->bitmap->palette = (GColor *)((uint8_t *)rx->bitmap + PALETTE_OFFSET);
+      for (uint8_t i = 0; i < palette_count; ++i) {
+        rx->bitmap->palette[i] = (GColor){.argb = cursor[i]};
+      }
+      cursor += palette_count;
+    }
+    rx->active = true;
+    rx->token = hdr->token;
+    rx->total_bytes = total;
+    rx->received_bytes = 0;
+  }
+
+  if (!rx->active || rx->token != hdr->token) {
+    if (rx->active) {
+      prv_drop(type, rx->token, rx->total_bytes, "transfer mismatch");
+    } else {
+      prv_drop(type, hdr->token, length, "no matching transfer");
+    }
+    return;
+  }
+
+  // Reliable, ordered transport: require contiguous in-order chunks with an exact declared length.
+  const size_t avail = (cursor <= msg_end) ? (size_t)(msg_end - cursor) : 0;
+  if (hdr->offset != rx->received_bytes || hdr->chunk_len != avail ||
+      (uint32_t)hdr->offset + hdr->chunk_len > rx->total_bytes) {
+    prv_drop(type, rx->token, rx->total_bytes, "invalid chunk");
+    return;
+  }
+  memcpy((uint8_t *)rx->bitmap->addr + hdr->offset, cursor, hdr->chunk_len);
+  rx->received_bytes += hdr->chunk_len;
+  rx->last_chunk_ms = pbl_uptime_ms();
+  if (!(hdr->flags & ImagingResponseFlagLast)) {
+    prv_arm_stall_timer();
+  }
+
+  if (hdr->flags & ImagingResponseFlagLast) {
+    if (rx->received_bytes != rx->total_bytes) {
+      prv_drop(type, rx->token, rx->total_bytes, "incomplete image");
+      return;
+    }
+    // Ownership of the image moves to the handler
+    GBitmap *bmp = rx->bitmap;
+    const uint8_t token = rx->token;
+    rx->bitmap = nullptr;
+    prv_rx_reset(type);
+    prv_deliver(token, type, bmp);
+  }
+}
+
+#ifndef CONFIG_RECOVERY_FW
+PBL_PP_ENDPOINT_DEFINE_MAIN(PBL_PP_ENDPOINT_IMAGING, PBL_PP_ACCESS_PRIVATE,
+                            imaging_protocol_msg_callback);
+#endif
+
+void imaging_handle_comm_session_event(const PebbleCommSessionEvent *event) {
+  if (!event->is_system || event->is_open) {
+    return;
+  }
+  // The system session closed: free any partially received image so an aborted transfer doesn't
+  // hold its pixel buffer until the next one starts. This runs on KernelMain, the same task as
+  // the endpoint receiver, so touching s_rx is safe. Also clear the unsupported-type latch here
+  // rather than relying solely on the pointer comparison in prv_type_latched_unsupported: a
+  // future session could be allocated at the address of the freed one.
+  for (uint8_t type = 0; type < PBL_ARRAY_SIZE(s_rx); type++) {
+    if (s_rx[type].active) {
+      prv_drop(type, s_rx[type].token, s_rx[type].total_bytes, "session closed");
+    } else {
+      prv_rx_reset(type);
+    }
+  }
+  pbl_mutex_lock(&s_lock, PBL_FOREVER);
+  s_latched_session = nullptr;
+  s_unsupported_types = 0;
+  pbl_mutex_unlock(&s_lock);
+}

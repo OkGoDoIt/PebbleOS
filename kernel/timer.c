@@ -4,22 +4,73 @@
 #include "kernel.h"
 
 #include <pbl/kernel/timer.h>
+#include <pbl/util/misc.h>
 
-static struct pbl_timer *s_timers;
+// Sorted by expiry, first in first out for the same tick.
+static struct pbl_timeout *s_timeouts;
 
-static inline bool prv_before(pbl_tick_t a, pbl_tick_t b) {
-  return (int32_t)(a - b) < 0;
+void timeout_add(struct pbl_timeout *to, pbl_tick_t ticks) {
+  struct pbl_timeout **link = &s_timeouts;
+
+  to->expires = sched_uptime_ticks() + ticks;
+  while (*link && (*link)->expires <= to->expires) {
+    link = &(*link)->next;
+  }
+  to->next = *link;
+  *link = to;
+  to->active = true;
 }
 
-static void prv_remove(struct pbl_timer *timer) {
-  struct pbl_timer **link = &s_timers;
-  while (*link && *link != timer) {
+void timeout_remove(struct pbl_timeout *to) {
+  struct pbl_timeout **link = &s_timeouts;
+
+  if (!to->active) {
+    return;
+  }
+  while (*link && *link != to) {
     link = &(*link)->next;
   }
   if (*link) {
-    *link = timer->next;
+    *link = to->next;
   }
-  timer->active = false;
+  to->active = false;
+}
+
+void timeout_expire(void) {
+  for (;;) {
+    unsigned int key = arch_irq_lock();
+    struct pbl_timeout *to = s_timeouts;
+    if (to == nullptr || sched_uptime_ticks() < to->expires) {
+      arch_irq_unlock(key);
+      return;
+    }
+    s_timeouts = to->next;
+    to->active = false;
+    if (to->thread != nullptr) {
+      sched_timed_out(to->thread);
+      arch_irq_unlock(key);
+    } else {
+      struct pbl_timer *timer = PBL_CONTAINER_OF(to, struct pbl_timer, timeout);
+      arch_irq_unlock(key);
+      timer->fn(timer);
+    }
+  }
+}
+
+pbl_tick_t timeout_ticks_until_next(void) {
+  if (s_timeouts == nullptr) {
+    return PBL_TICK_FOREVER;
+  }
+  uint64_t now = sched_uptime_ticks();
+  if (s_timeouts->expires <= now) {
+    return 0;
+  }
+  uint64_t delta = s_timeouts->expires - now;
+  return delta < PBL_TICK_FOREVER ? (pbl_tick_t)delta : PBL_TICK_FOREVER - 1;
+}
+
+void timeout_reset_for_test(void) {
+  s_timeouts = nullptr;
 }
 
 void pbl_timer_init(struct pbl_timer *timer, pbl_timer_fn_t fn) {
@@ -29,57 +80,30 @@ void pbl_timer_init(struct pbl_timer *timer, pbl_timer_fn_t fn) {
 void pbl_timer_start(struct pbl_timer *timer, pbl_timeout_t delay) {
   PBL_ASSERTN(!pbl_timeout_is_forever(delay));
 
-  pbl_irq_lock();
-  if (timer->active) {
-    prv_remove(timer);
-  }
-  timer->expires = sched_ticks() + (delay.ticks > 0 ? delay.ticks : 1);
-  struct pbl_timer **link = &s_timers;
-  while (*link && !prv_before(timer->expires, (*link)->expires)) {
-    link = &(*link)->next;
-  }
-  timer->next = *link;
-  *link = timer;
-  timer->active = true;
-  pbl_irq_unlock();
+  unsigned int key = arch_irq_lock();
+  timeout_remove(&timer->timeout);
+  timeout_add(&timer->timeout, delay.ticks > 0 ? delay.ticks : 1);
+  arch_irq_unlock(key);
 }
 
 void pbl_timer_stop(struct pbl_timer *timer) {
-  pbl_irq_lock();
-  if (timer->active) {
-    prv_remove(timer);
-  }
-  pbl_irq_unlock();
+  unsigned int key = arch_irq_lock();
+  timeout_remove(&timer->timeout);
+  arch_irq_unlock(key);
 }
 
 bool pbl_timer_is_active(const struct pbl_timer *timer) {
-  return timer->active;
+  return timer->timeout.active;
 }
 
-void timer_expire(void) {
-  for (;;) {
-    pbl_irq_lock();
-    struct pbl_timer *timer = s_timers;
-    if (timer == nullptr || prv_before(sched_ticks(), timer->expires)) {
-      pbl_irq_unlock();
-      return;
-    }
-    s_timers = timer->next;
-    timer->active = false;
-    pbl_irq_unlock();
+pbl_tick_t pbl_timer_remaining(const struct pbl_timer *timer) {
+  pbl_tick_t remaining = 0;
 
-    timer->fn(timer);
+  unsigned int key = arch_irq_lock();
+  uint64_t now = sched_uptime_ticks();
+  if (timer->timeout.active && timer->timeout.expires > now) {
+    remaining = (pbl_tick_t)(timer->timeout.expires - now);
   }
-}
-
-pbl_tick_t timer_ticks_until_next(pbl_tick_t now) {
-  if (s_timers == nullptr) {
-    return PBL_TICK_FOREVER;
-  }
-  int32_t delta = (int32_t)(s_timers->expires - now);
-  return delta > 0 ? (pbl_tick_t)delta : 0;
-}
-
-void timer_reset_for_test(void) {
-  s_timers = nullptr;
+  arch_irq_unlock(key);
+  return remaining;
 }

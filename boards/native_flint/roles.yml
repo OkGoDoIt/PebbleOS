@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+console_uart:
+  symbol: POSIX_CONSOLE_UART
+  include: pbl/drivers/uart/posix.h
+qemu_uart:
+  symbol: POSIX_QEMU_UART
+  include: pbl/drivers/uart/posix.h
+bt_hci_uart:
+  symbol: POSIX_BT_HCI_UART
+  include: pbl/drivers/uart/posix.h
+display:
+  symbol: SDL_DISPLAY
+  include: pbl/drivers/display/sdl.h
+backlight:
+  symbol: POSIX_BACKLIGHT
+  include: pbl/drivers/backlight/posix.h
+flash:
+  symbol: POSIX_FLASH
+  include: pbl/drivers/flash/posix.h
+accel:
+  symbol: SIM_ACCEL
+  include: pbl/drivers/imu/sim.h
+als:
+  symbol: SIM_ALS
+  include: pbl/drivers/als/sim.h
+vibe:
+  symbol: SIM_VIBE
+  include: pbl/drivers/vibe/sim.h
+mic:
+  symbol: SIM_MIC
+  include: pbl/drivers/audio/sim.h
+die_temp:
+  symbol: SIM_TEMP
+  include: pbl/drivers/temp/sim.h
+rtc:
+  symbol: POSIX_RTC
+  include: pbl/drivers/rtc/posix.h
+charger:
+  symbol: SIM_CHARGER
+  include: pbl/drivers/charger/sim.h

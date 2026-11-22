@@ -12,8 +12,9 @@ class Configure(PblCommand):
     def __init__(self):
         super().__init__(
             "configure",
-            "Configure the firmware build directory",
-            "Run CMake for a board. Anything this command does not recognize "
+            "Configure the build directory",
+            "Run CMake for a board, for the firmware or for the application "
+            "in the given directory. Anything this command does not recognize "
             "is passed straight to CMake, so Kconfig symbols can be overridden "
             "with -DCONFIG_FOO=y.",
             accepts_unknown_args=True,
@@ -27,6 +28,15 @@ class Configure(PblCommand):
 
             return boards.available_boards(self.workspace.topdir)
         except (AttributeError, ImportError, OSError, TypeError, ValueError):
+            return None
+
+    def _addons(self):
+        """The add-ons to offer, or None when they cannot be listed."""
+        try:
+            from tools.devicetree import dtmap
+
+            return dtmap.available_addons(self.workspace.topdir)
+        except (AttributeError, ImportError, OSError):
             return None
 
     def do_add_parser(self, parser_adder):
@@ -46,6 +56,23 @@ class Configure(PblCommand):
             choices=["normal", "prf"],
             help="Firmware variant (default: normal)",
         )
+        addons = self._addons()
+        parser.add_argument(
+            "--addon",
+            action="append",
+            default=[],
+            metavar="ADDON",
+            choices=addons,
+            help="Add-on plugged into the board, can be repeated"
+            + (f" ({', '.join(addons)})" if addons else ""),
+        )
+        parser.add_argument(
+            "app",
+            nargs="?",
+            metavar="APP",
+            help="Application to build, a directory such as "
+            "samples/hello_world (default: the firmware, pebble)",
+        )
         parser.add_argument(
             "-G",
             "--generator",
@@ -59,17 +86,12 @@ class Configure(PblCommand):
         if os.path.exists(build.join("menuconfig.conf")):
             self.wrn(f"applying the Kconfig changes from {build.join('menuconfig.conf')}")
 
-        return self.run_cmd(
-            [
-                "cmake",
-                "-B",
-                str(build),
-                "-S",
-                self.topdir,
-                "-G",
-                args.generator,
-                f"-DBOARD={args.board}",
-                f"-DVARIANT={args.variant}",
-            ]
-            + unknown
+        return self.cmake_configure(
+            build,
+            args.board,
+            app=args.app,
+            variant=args.variant,
+            generator=args.generator,
+            extra=unknown,
+            addons=args.addon,
         )

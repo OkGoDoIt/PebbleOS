@@ -1,0 +1,1200 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <stddef.h>
+
+#include <pbl/analytics/analytics.h>
+#include <pbl/drivers/hrm.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/kernel/malloc.h>
+#include <pbl/kernel/syscall.h>
+#include <pbl/kernel/time.h>
+#include <pbl/kernel/types.h>
+#include <pbl/kernel/work.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/activity/activity.h>
+#ifdef CONFIG_SERVICE_ACTIVITY
+#include <pbl/services/activity/health_permission.h>
+#endif
+#include <pbl/services/battery/battery_charger.h>
+#include <pbl/services/hrm/hrm_manager.h>
+#include <pbl/services/hrm/hrm_manager_private.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+#include <pbl/util/testing.h>
+#include <pbl/util/units.h>
+
+#include <applib/health_service.h>
+#include <kernel/events.h>
+#include <syscall/syscall.h>
+
+PBL_LOG_MODULE_DEFINE(service_hrm, CONFIG_SERVICE_HRM_LOG_LEVEL);
+
+#define HRM_DEBUG 0
+
+#if HRM_DEBUG
+#define HRM_LOG(fmt, ...)            \
+  do {                               \
+    PBL_LOG_DBG(fmt, ##__VA_ARGS__); \
+  } while (0)
+#define HRM_HEXDUMP(data, length)                 \
+  do {                                            \
+    PBL_LOG_HEXDUMP_DBG((uint8_t *)data, length); \
+  } while (0)
+#else
+#define HRM_LOG(fmt, ...)
+#define HRM_HEXDUMP(data, length)
+#endif
+
+static struct HRMManagerState s_manager_state;
+
+// Forward declarations
+static void prv_update_enable_timer_cb(struct pbl_work *work);
+
+static bool prv_match_session_ref(ListNode *found_node, void *data) {
+  const HRMSubscriberState *state = (HRMSubscriberState *)found_node;
+  return (state->session_ref == (HRMSessionRef)(uintptr_t)data);
+}
+
+PBL_T_STATIC HRMSubscriberState *prv_get_subscriber_state_from_ref(HRMSessionRef session) {
+  ListNode *node =
+      list_find(s_manager_state.subscribers, prv_match_session_ref, (void *)(uintptr_t)session);
+  return (HRMSubscriberState *)node;
+}
+
+typedef struct {
+  AppInstallId app_id;
+  PebbleTask task;
+} HRMAppIdAndTask;
+
+static bool prv_match_app_id(ListNode *found_node, void *data) {
+  HRMAppIdAndTask *context = (HRMAppIdAndTask *)data;
+  const HRMSubscriberState *state = (HRMSubscriberState *)found_node;
+  return ((state->app_id == context->app_id) && (state->task == context->task));
+}
+
+PBL_T_STATIC HRMSubscriberState *prv_get_subscriber_state_from_app_id(PebbleTask task,
+                                                                      AppInstallId app_id) {
+  HRMAppIdAndTask context = {
+    .app_id = app_id,
+    .task = task,
+  };
+
+  ListNode *node = list_find(s_manager_state.subscribers, prv_match_app_id, &context);
+  return (HRMSubscriberState *)node;
+}
+
+// Return true if this subscriber needs to be sent a HRMEvent_SubscriptionExpiring event
+static bool prv_needs_expiring_event(HRMSubscriberState *state, time_t utc_now) {
+  if (state->sent_expiration_event) {
+    return false;
+  }
+  return (state->expire_utc &&
+          (utc_now >= state->expire_utc - PBL_MAX(HRM_SUBSCRIPTION_EXPIRING_WARNING_SEC,
+                                                  (int)state->update_interval_s)));
+}
+
+PBL_T_STATIC void prv_read_event_from_buffer_and_consume(CircularBuffer *buffer,
+                                                         PebbleHRMEvent *event) {
+  const uint16_t total_size = sizeof(*event);
+  uint16_t remaining = total_size;
+  uint8_t *out_buf = (uint8_t *)event;
+  while (remaining > 0) {
+    const uint8_t *data_out;
+    uint16_t length_out;
+
+    const bool success = circular_buffer_read(buffer, remaining, &data_out, &length_out);
+    PBL_ASSERTN(success);
+    memcpy(out_buf, data_out, length_out);
+
+    out_buf += length_out;
+    remaining -= length_out;
+  }
+  PBL_ASSERTN(remaining == 0);
+
+  circular_buffer_consume(buffer, sizeof(*event));
+}
+
+static void prv_remove_and_free_subscription(HRMSubscriberState *state) {
+  list_remove((ListNode *)state, &s_manager_state.subscribers, nullptr);
+  pbl_free(state);
+}
+
+#if UNITTEST
+// Used by unit tests
+PBL_T_STATIC struct pbl_delayed_work *prv_get_timer(void) {
+  return &s_manager_state.update_enable_timer;
+}
+
+// Used by unit tests
+PBL_T_STATIC uint32_t prv_num_sys_work_events_queued(void) {
+  uint16_t avail_bytes =
+      circular_buffer_get_read_space_remaining(&s_manager_state.sys_work_event_buffer);
+  return avail_bytes / sizeof(PebbleHRMEvent);
+}
+
+// Used by unit tests
+PBL_T_STATIC uint32_t prv_get_dropped_events_count(void) {
+  return s_manager_state.dropped_events;
+}
+#endif
+
+static void prv_handle_accel_data(void *data) {
+  PBL_ASSERT_RUNNING_FROM_EXPECTED_TASK(PebbleTask_SysWorkqHigh);
+
+  // Held across the manager calls so a disable on SysWorkq can't free accel_state under them
+  pbl_mutex_lock(&s_manager_state.accel_data_lock, PBL_FOREVER);
+
+  // A stale event, from a subscription dropped or replaced on SysWorkq
+  if (!s_manager_state.accel_state || (uintptr_t)data != s_manager_state.accel_subscription) {
+    pbl_mutex_unlock(&s_manager_state.accel_data_lock);
+    return;
+  }
+
+  bool more;
+  do {
+    uint64_t timestamp_ms;
+    uint32_t generation;
+    uint32_t num_new_samples =
+        sys_accel_manager_get_num_samples(s_manager_state.accel_state, &timestamp_ms, &generation);
+
+    // Only read as many as we have space to store
+    const size_t MAX_BUFFERED_SAMPLES = PBL_ARRAY_SIZE(s_manager_state.accel_data.data);
+    uint32_t num_samples_to_copy = num_new_samples;
+    if ((s_manager_state.accel_data.num_samples + num_new_samples) > MAX_BUFFERED_SAMPLES) {
+      num_samples_to_copy = MAX_BUFFERED_SAMPLES - s_manager_state.accel_data.num_samples;
+    }
+
+    void *write_ptr = &s_manager_state.accel_data.data[s_manager_state.accel_data.num_samples];
+    memcpy(write_ptr, s_manager_state.accel_manager_buffer,
+           num_samples_to_copy * sizeof(AccelRawData));
+
+    s_manager_state.accel_data.num_samples += num_samples_to_copy;
+
+    // Always consume all samples that were prepared, even if we couldn't store them all
+    sys_accel_manager_consume_samples(s_manager_state.accel_state, num_new_samples, generation,
+                                      &more);
+  } while (more);
+
+  pbl_mutex_unlock(&s_manager_state.accel_data_lock);
+}
+
+// Retires the subscription under accel_data_lock, then drops it outside, since that reconfigures
+// the driver
+static void prv_accel_unsubscribe(void) {
+  pbl_mutex_lock(&s_manager_state.accel_data_lock, PBL_FOREVER);
+  AccelManagerState *accel_state = s_manager_state.accel_state;
+  s_manager_state.accel_state = nullptr;
+  pbl_mutex_unlock(&s_manager_state.accel_data_lock);
+  sys_accel_manager_data_unsubscribe(accel_state);
+}
+
+// Posts nothing until it has a buffer, so the subscription is published before the buffer is set
+static void prv_accel_subscribe(void) {
+  uint32_t subscription = s_manager_state.accel_subscription + 1;
+  AccelManagerState *accel_state =
+      sys_accel_manager_data_subscribe(ACCEL_SAMPLING_25HZ, prv_handle_accel_data,
+                                       (void *)(uintptr_t)subscription, PebbleTask_SysWorkqHigh);
+  pbl_mutex_lock(&s_manager_state.accel_data_lock, PBL_FOREVER);
+  s_manager_state.accel_state = accel_state;
+  s_manager_state.accel_subscription = subscription;
+  pbl_mutex_unlock(&s_manager_state.accel_data_lock);
+  sys_accel_manager_set_sample_buffer(accel_state, s_manager_state.accel_manager_buffer,
+                                      HRM_MANAGER_ACCEL_MANAGER_SAMPLES_PER_UPDATE);
+}
+
+PBL_T_STATIC bool prv_can_turn_sensor_on(void) {
+#ifdef CONFIG_RECOVERY_FW
+  return true;
+#endif
+
+  // Keep this in sync with prv_prefs_allowed_features(): a pref that can allow a feature there has
+  // to be able to turn the sensor on here, or that feature's reader silently never runs.
+  return s_manager_state.enabled_run_level && s_manager_state.enabled_charging_state &&
+         (activity_prefs_heart_rate_is_enabled() || activity_prefs_spo2_is_enabled());
+}
+
+// Features the user prefs currently allow. BPM (green) and SpO2 (red/IR) sampling are each gated on
+// their own pref, so a lingering subscriber for a disabled feature (e.g. the BLE relay or a dormant
+// background SpO2 session) can't light its LED or turn the sensor on.
+static HRMFeature prv_prefs_allowed_features(void) {
+  HRMFeature allowed = (HRMFeature)~0;
+#ifndef CONFIG_RECOVERY_FW
+  // The recovery firmware doesn't gate the sensor on user prefs (see prv_can_turn_sensor_on()).
+  if (!activity_prefs_spo2_is_enabled()) {
+    allowed &= ~HRMFeature_SpO2;
+  }
+  // HRV shares the green LED with BPM, so the heart rate pref gates both. Without this an HRV
+  // subscriber would light the green path with heart rate monitoring switched off.
+  if (!activity_prefs_heart_rate_is_enabled()) {
+    allowed &= (HRMFeature) ~(HRMFeature_BPM | HRMFeature_HRV);
+  }
+#endif
+  return allowed;
+}
+
+// Features this subscriber may sample right now. A foreground app asked for its features
+// explicitly (the user launched it), so it bypasses the pref mask; the mask exists to keep
+// background and lingering subscribers from lighting a disabled path.
+static HRMFeature prv_subscriber_allowed_features(const HRMSubscriberState *state,
+                                                  HRMFeature prefs_allowed) {
+  if (state->task == PebbleTask_App) {
+    return state->features;
+  }
+  return state->features & prefs_allowed;
+}
+
+#ifndef CONFIG_MFG
+// The GH3X2X lights one optical path at a time: SpO2 uses the red/IR LEDs, BPM/HRV use the green
+// LED. Returns true if this feature set maps to the red/IR (SpO2) path.
+static bool prv_features_use_ir_path(HRMFeature features) {
+  return (features & HRMFeature_SpO2) != 0;
+}
+#endif
+
+// Resolve the features wanted by all due subscribers down to the one optical path we can run now
+// (the paths are mutually exclusive in hardware). The red/IR (SpO2) path wins whenever it is due:
+// SpO2 subscribers are only due during the short, bounded measurement windows the activity service
+// opens, whereas green consumers (live workout HR, the BLE relay, foreground apps) are due
+// continuously and would otherwise starve SpO2, or, with time slicing, cut its window short before
+// the algorithm converges. A green consumer loses at most one SpO2 window; the activity service's
+// own background SpO2 reader defers its window while a continuous green consumer is running (see
+// hrm_manager_has_continuous_green_subscriber()).
+PBL_T_STATIC HRMFeature prv_select_active_path(HRMFeature wanted) {
+  const HRMFeature ir_features = wanted & HRMFeature_SpO2;
+  return ir_features ? ir_features : wanted;
+}
+
+// Whether the running sensor must be re-enabled to move from `active` to `wanted`: the optical path
+// flips (HR <-> SpO2), `wanted` needs a feature that isn't running, or a running feature has no
+// subscriber left (`live` is the union over all subscribers, due or not). A same-path superset
+// keeps running: restarting on every wanted != active would make a 1 s BPM consumer plus a
+// longer-interval BPM|HRV subscriber bounce the sensor between the two sets each time the latter
+// comes due and is served.
+static bool prv_should_reconfigure(HRMFeature wanted, HRMFeature active, HRMFeature live) {
+#ifdef CONFIG_MFG
+  // MFG always samples a fixed combined work mode; never reconfigure underneath it.
+  return false;
+#else
+  if (prv_features_use_ir_path(wanted) != prv_features_use_ir_path(active)) {
+    return true;
+  }
+  if (wanted & ~active) {
+    return true;
+  }
+  return (active & ~live) != 0;
+#endif
+}
+
+// Bring the sensor online sampling `features`, subscribing to accel data. `low_latency` requests
+// the prompt FIFO cadence for a live-display consumer; background logging passes false to save
+// MCU/I2C wakeups. Returns true on success. Must be called with s_manager_state.lock held.
+static bool prv_sensor_enable(HRMFeature features, bool low_latency) {
+  // Only subscribe if not already subscribed (prevents leak if hrm_is_enabled is out of sync)
+  if (s_manager_state.accel_state) {
+    PBL_LOG_WRN("HRM: accel already subscribed, unsubscribing first");
+    prv_accel_unsubscribe();
+  }
+
+  prv_accel_subscribe();
+
+  if (features == 0) {
+    // Shouldn't happen (we only get here when a subscriber is due), but default to BPM.
+    features = HRMFeature_BPM;
+  }
+
+  if (!hrm_enable(HRM, features, low_latency)) {
+    // HRM failed to enable, clean up the accel subscription
+    s_manager_state.enable_failure_count++;
+    if (s_manager_state.enable_failure_count >= HRM_MAX_ENABLE_FAILURES) {
+      PBL_LOG_ERR("HRM failed to enable %d times, giving up until reboot", HRM_MAX_ENABLE_FAILURES);
+    } else {
+      PBL_LOG_ERR("HRM failed to enable (attempt %d/%d)", s_manager_state.enable_failure_count,
+                  HRM_MAX_ENABLE_FAILURES);
+    }
+    prv_accel_unsubscribe();
+    return false;
+  }
+
+  // Success - reset failure counter and track what we're sampling
+  s_manager_state.enable_failure_count = 0;
+  s_manager_state.active_features = features;
+  s_manager_state.enabled_features = features;
+  s_manager_state.sensor_on_since_ticks = pbl_uptime_ticks();
+  s_manager_state.unserved_timeout_logged = false;
+  // Re-apply the current activity scene so a sensor power-cycle never drops back to the default
+  // (least motion-tolerant) HR model while an activity is in progress.
+  hrm_set_activity_scene(HRM, s_manager_state.activity_scene);
+  // Track HRM on-time
+  PBL_ANALYTICS_TIMER_START(hrm_on_time_ms);
+  return true;
+}
+
+// Take the sensor offline and release the accel subscription. Must hold s_manager_state.lock.
+static void prv_sensor_disable(void) {
+  hrm_disable(HRM);
+  // Stop tracking HRM on-time
+  PBL_ANALYTICS_TIMER_STOP(hrm_on_time_ms);
+  s_manager_state.active_features = 0;
+  s_manager_state.enabled_features = (HRMFeature)0;
+  s_manager_state.sensor_on_since_ticks = 0;
+
+  if (s_manager_state.accel_state) {
+    prv_accel_unsubscribe();
+  }
+}
+
+// Arm the timer to re-evaluate in `ticks`, or stop it for INT64_MAX. Must hold
+// s_manager_state.lock.
+static void prv_arm_update_timer(int64_t ticks) {
+  if (ticks == INT64_MAX) {
+    pbl_delayed_work_cancel(&s_manager_state.update_enable_timer);
+    return;
+  }
+  ticks = PBL_CLAMP(ticks, 1, INT32_MAX);
+  pbl_delayed_work_reschedule(&pbl_sys_workq_high, &s_manager_state.update_enable_timer,
+                              PBL_TICKS((pbl_tick_t)ticks));
+}
+
+// Figure out if we should enable the HR sensor or not based on all subscribers and their
+// desired sampling periods, and when to check again. Must be called from the background work queue.
+static void prv_update_hrm_enable_system_cb(void *unused) {
+  const time_t utc_now = pbl_realtime();
+  PBL_ASSERT_TASK(PebbleTask_SysWorkq);
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  {
+    const uint64_t cur_ticks = pbl_uptime_ticks();
+    const int64_t spin_up_ticks = pbl_ms_to_ticks(HRM_SENSOR_SPIN_UP_SEC * PBL_MSEC_PER_SEC);
+    const int64_t unserved_timeout_ticks =
+        pbl_ms_to_ticks(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+    bool turn_sensor_on = false;
+    // Ticks until this pass must run again, even if the driver sends no reports. INT64_MAX means
+    // no deadline.
+    int64_t next_check_ticks = INT64_MAX;
+    // Earliest time a periodic subscriber still waiting for a reading became due.
+    bool serve_pending = false;
+    uint64_t serve_due_since_ticks = cur_ticks;
+    // Union of the features requested by the subscribers that are due for a reading now. This
+    // tells the driver which PPG functions to sample (e.g. enable the SpO2/IR path only when a
+    // SpO2 subscriber is actually due, so HR-only sessions stay on the low-power green path).
+    HRMFeature wanted_features = 0;
+    // Union of the features of every live subscriber, due or not. A running feature is kept until
+    // its last subscriber goes away, so a served subscriber doesn't force a sensor restart.
+    HRMFeature live_features = 0;
+    // True if any due subscriber asked for the low-latency cadence, i.e. a consumer showing or
+    // streaming live data (foreground app, BLE HR relay). Background system readers (daily HR/SpO2
+    // logging) leave this false, letting the driver drain the FIFO less often to save wakeups.
+    bool low_latency_wanted = false;
+
+    if (prv_can_turn_sensor_on()) {
+      const bool sensor_on = hrm_is_enabled(HRM);
+      const HRMFeature prefs_allowed = prv_prefs_allowed_features();
+
+      // Loop through each of the subscribers and figure out when the next one needs an update
+      HRMSubscriberState *state = (HRMSubscriberState *)s_manager_state.subscribers;
+      for (; state != nullptr; state = (HRMSubscriberState *)state->list_node.next) {
+        if (state->expire_utc && (utc_now >= state->expire_utc)) {
+          // Ignore expired subscriptions; they are freed from the data path
+          continue;
+        }
+        if (state->expire_utc) {
+          // Stop sampling for this subscriber once its lease lapses
+          next_check_ticks =
+              PBL_MIN(next_check_ticks,
+                      (int64_t)pbl_ms_to_ticks((state->expire_utc - utc_now) * PBL_MSEC_PER_SEC));
+        }
+        const HRMFeature sub_features = prv_subscriber_allowed_features(state, prefs_allowed);
+        if (sub_features == 0) {
+          // All requested features are currently disabled; this subscriber needs nothing.
+          state->is_due = false;
+          continue;
+        }
+        live_features |= sub_features;
+        const int64_t interval_ticks =
+            (int64_t)pbl_ms_to_ticks(state->update_interval_s * PBL_MSEC_PER_SEC);
+        int64_t subscriber_age_ticks;
+        if (state->last_valid_bpm_ticks) {
+          subscriber_age_ticks = cur_ticks - state->last_valid_bpm_ticks;
+        } else {
+          // Never got an update yet
+          subscriber_age_ticks = interval_ticks;
+        }
+        // A subscriber's serve window starts once it is due and the sensor is on, so it never
+        // inherits on-time from another reader or from before a sensor restart.
+        if (state->is_due && sensor_on &&
+            ((int64_t)(cur_ticks -
+                       PBL_MAX(state->due_since_ticks, s_manager_state.sensor_on_since_ticks)) >=
+             unserved_timeout_ticks)) {
+          // The sensor ran a whole serve window without producing a Good-quality reading for
+          // this subscriber. Mark it served so it waits out its interval instead of pinning the
+          // sensor on; short-interval (live HR) subscribers become due again immediately.
+          if (!s_manager_state.unserved_timeout_logged) {
+            PBL_LOG_WRN("HRM on for %ds without a valid reading, deferring subscribers",
+                        HRM_MAX_UNSERVED_TIME_SEC);
+            s_manager_state.unserved_timeout_logged = true;
+          }
+          state->last_valid_bpm_ticks = cur_ticks;
+          state->is_due = false;
+          subscriber_age_ticks = 0;
+        }
+        const int64_t subscriber_remaining_ticks =
+            interval_ticks - subscriber_age_ticks - spin_up_ticks;
+        if (subscriber_remaining_ticks <= 0) {
+          // This subscriber is due now; the sensor must sample the features it asked for.
+          wanted_features |= sub_features;
+          if (state->low_latency) {
+            low_latency_wanted = true;
+          }
+          if (!state->is_due) {
+            state->is_due = true;
+            state->due_since_ticks = cur_ticks;
+          }
+          // Live readers remain due even after deferral, so only their lease needs a timer.
+          if (interval_ticks > spin_up_ticks &&
+              (!serve_pending || state->due_since_ticks < serve_due_since_ticks)) {
+            serve_pending = true;
+            serve_due_since_ticks = state->due_since_ticks;
+          }
+          turn_sensor_on = true;
+        } else {
+          state->is_due = false;
+          next_check_ticks = PBL_MIN(next_check_ticks, subscriber_remaining_ticks);
+        }
+      }
+    }
+
+    // Check if we've permanently failed to enable HRM
+    bool hrm_permanently_failed = (s_manager_state.enable_failure_count >= HRM_MAX_ENABLE_FAILURES);
+
+    const HRMFeature active_features = prv_select_active_path(wanted_features);
+
+    if (turn_sensor_on && active_features != 0 && !hrm_permanently_failed) {
+      if (!hrm_is_enabled(HRM)) {
+        // Sensor is off and a subscriber is due: bring it online.
+        PBL_LOG_DBG("Turning on HR sensor (features 0x%x)", active_features);
+        prv_sensor_enable(active_features, low_latency_wanted);
+      } else if (prv_should_reconfigure(active_features, s_manager_state.active_features,
+                                        live_features)) {
+        // Restart when the optical path changes (HR <-> SpO2) or the running feature set no longer
+        // fits the subscribers. Both need a fresh hrm_enable with the new set.
+        PBL_LOG_DBG("Restarting HR sensor (0x%x -> 0x%x)", s_manager_state.active_features,
+                    active_features);
+        prv_sensor_disable();
+        prv_sensor_enable(active_features, low_latency_wanted);
+      }
+    } else if (!turn_sensor_on && hrm_is_enabled(HRM)) {
+      // Turn off the sensor now
+      PBL_LOG_DBG("Turning off HR sensor");
+      prv_sensor_disable();
+    }
+
+    if (turn_sensor_on && active_features != 0 && !hrm_is_enabled(HRM) &&
+        s_manager_state.enable_failure_count < HRM_MAX_ENABLE_FAILURES) {
+      // The enable failed; retry after a backoff rather than busy-looping on SysWorkq
+      next_check_ticks = PBL_MIN(next_check_ticks, spin_up_ticks);
+    } else if (serve_pending && hrm_is_enabled(HRM)) {
+      // Defer the waiting subscriber even if the driver goes silent
+      const uint64_t window_start_ticks =
+          PBL_MAX(serve_due_since_ticks, s_manager_state.sensor_on_since_ticks);
+      next_check_ticks = PBL_MIN(
+          next_check_ticks, (int64_t)(window_start_ticks - cur_ticks) + unserved_timeout_ticks);
+    }
+    prv_arm_update_timer(next_check_ticks);
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+}
+
+// Re-evaluate current state so a callback queued before a gate or path change is harmless.
+static void prv_update_enable_timer_cb(struct pbl_work *work) {
+  pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+}
+
+// Background work queue subscribers today: activity HR, SpO2 and workout SpO2, the step algorithm.
+#define HRM_MAX_SYS_WORK_CALLS 8
+
+//! The background work queue needs its own handler for HRM data since we can't queue up generic
+//! events.
+static void prv_sys_work_hrm_handler(void *context) {
+  time_t utc_now = pbl_realtime();
+
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+
+  // Check if there's data available in the circular buffer before attempting to read
+  const uint16_t available_bytes =
+      circular_buffer_get_read_space_remaining(&s_manager_state.sys_work_event_buffer);
+  if (available_bytes < sizeof(PebbleHRMEvent)) {
+    // No event available to read - this can happen if background work queue callbacks are queued
+    // without corresponding events, or during concurrent access.
+    PBL_LOG_WRN(
+        "HRM: background work queue handler called with no event in buffer "
+        "(available=%u, needed=%zu)",
+        available_bytes, sizeof(PebbleHRMEvent));
+    pbl_mutex_unlock(&s_manager_state.lock);
+    return;
+  }
+
+  PebbleHRMEvent event;
+  prv_read_event_from_buffer_and_consume(&s_manager_state.sys_work_event_buffer, &event);
+
+  // Call subscribers with the lock released: their callbacks take their own service's lock,
+  // which KernelMain holds while unsubscribing (lock-order deadlock with activity).
+  struct {
+    HRMSubscriberCallback handler;
+    void *context;
+    HRMSessionRef session_ref;
+    bool send_expiring;
+    bool send_event;
+  } calls[HRM_MAX_SYS_WORK_CALLS];
+  size_t num_calls = 0;
+
+  HRMSubscriberState *state = (HRMSubscriberState *)s_manager_state.subscribers;
+  for (; state != nullptr; state = (HRMSubscriberState *)state->list_node.next) {
+    if (!state->callback_handler) {
+      // Not a SysWorkq subscriber
+      continue;
+    }
+
+    if (num_calls >= HRM_MAX_SYS_WORK_CALLS) {
+      PBL_LOG_WRN("HRM: more KernelBG subscribers than %d", HRM_MAX_SYS_WORK_CALLS);
+      break;
+    }
+    calls[num_calls] = (typeof(calls[0])){
+      .handler = state->callback_handler,
+      .context = state->callback_context,
+      .session_ref = state->session_ref,
+    };
+
+    // If this subscription is ready to expire, send an "expiring" event
+    if (prv_needs_expiring_event(state, utc_now)) {
+      calls[num_calls].send_expiring = true;
+      state->sent_expiration_event = true;
+    }
+
+    // See if this subscriber wants these types of events
+    switch (event.event_type) {
+      case HRMEvent_BPM:
+        if (!(state->features & HRMFeature_BPM)) {
+          goto next;
+        }
+        break;
+      case HRMEvent_HRV:
+        if (!(state->features & HRMFeature_HRV)) {
+          goto next;
+        }
+        break;
+      case HRMEvent_SpO2:
+        if (!(state->features & HRMFeature_SpO2)) {
+          goto next;
+        }
+        break;
+#ifdef CONFIG_MFG
+      case HRMEvent_CTR:
+        if (!(state->features & HRMFeature_CTR)) {
+          goto next;
+        }
+        break;
+      case HRMEvent_Leakage:
+        if (!(state->features & HRMFeature_Leakage)) {
+          goto next;
+        }
+        break;
+#endif
+      case HRMEvent_SubscriptionExpiring:
+        goto next;
+    }
+    calls[num_calls].send_event = true;
+  next:
+    if (calls[num_calls].send_expiring || calls[num_calls].send_event) {
+      num_calls++;
+    }
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+
+  for (size_t i = 0; i < num_calls; i++) {
+    if (calls[i].send_expiring) {
+      PebbleHRMEvent expiring_event = (PebbleHRMEvent){
+        .event_type = HRMEvent_SubscriptionExpiring,
+        .expiring.session_ref = calls[i].session_ref,
+      };
+      calls[i].handler(&expiring_event, calls[i].context);
+    }
+    if (calls[i].send_event) {
+      calls[i].handler(&event, calls[i].context);
+    }
+  }
+}
+
+// Assumes that s_manager_state.lock is held
+static void prv_queue_sys_work_event(const PebbleHRMEvent *event) {
+  const uint16_t free_space =
+      circular_buffer_get_read_space_remaining(&s_manager_state.sys_work_event_buffer);
+  if (free_space < sizeof(PebbleHRMEvent)) {
+    circular_buffer_consume(&s_manager_state.sys_work_event_buffer, sizeof(PebbleHRMEvent));
+    ++s_manager_state.dropped_events;
+  }
+  circular_buffer_write(&s_manager_state.sys_work_event_buffer, (const uint8_t *)event,
+                        sizeof(PebbleHRMEvent));
+}
+
+static void prv_populate_hrm_event(PebbleHRMEvent *event, HRMFeature feature, const HRMData *data) {
+  // Zero the whole union, events are copied to apps.
+  memset(event, 0, sizeof(*event));
+  switch (feature) {
+    case HRMFeature_BPM:
+      event->event_type = HRMEvent_BPM;
+      event->bpm.bpm = data->hrm_bpm;
+      event->bpm.off_wrist = data->off_wrist;
+      event->bpm.confidence = data->hrm_confidence;
+      break;
+    case HRMFeature_HRV:
+      event->event_type = HRMEvent_HRV;
+      event->hrv.ppi_ms = data->hrv_ppi_ms;
+      event->hrv.off_wrist = data->off_wrist;
+      event->hrv.confidence = data->hrv_confidence;
+      break;
+    case HRMFeature_SpO2:
+      event->event_type = HRMEvent_SpO2;
+      event->spo2.percent = data->spo2_percent;
+      event->spo2.off_wrist = data->off_wrist;
+      event->spo2.confidence = data->spo2_confidence;
+      event->spo2.valid_level = data->spo2_valid_level;
+      event->spo2.invalid = data->spo2_invalid;
+      break;
+#ifdef CONFIG_MFG
+    case HRMFeature_CTR: {
+      HRMCTRData *ctr_data = pbl_zalloc_check(sizeof(HRMCTRData));
+      memcpy(ctr_data->ctr, data->ctr, sizeof(HRMCTRData));
+      event->event_type = HRMEvent_CTR;
+      event->ctr = ctr_data;
+      break;
+    }
+    case HRMFeature_Leakage: {
+      HRMLeakageData *leakage_data = pbl_zalloc_check(sizeof(HRMLeakageData));
+      memcpy(leakage_data->leakage, data->leakage, sizeof(HRMLeakageData));
+      event->event_type = HRMEvent_Leakage;
+      event->leakage = leakage_data;
+      break;
+    }
+#endif
+    default:
+      pbl_panic();
+  }
+}
+
+static bool prv_event_put(HRMSubscriberState *state, PebbleHRMEvent *event) {
+#ifdef CONFIG_SERVICE_ACTIVITY
+  // A session started before a revoke keeps running, so its readings are dropped here
+  if ((state->task == PebbleTask_App || state->task == PebbleTask_Worker) &&
+      !health_permission_allowed(state->task)) {
+    return true;
+  }
+#endif
+  bool success;
+  if (state->queue) {
+    PebbleEvent e = {
+      .type = PEBBLE_HRM_EVENT,
+      .hrm = *event,
+    };
+    success = (pbl_msgq_put(state->queue, &e, PBL_NO_WAIT) == 0);
+  } else {
+    prv_queue_sys_work_event(event);
+    success = pbl_sys_work_call(prv_sys_work_hrm_handler, nullptr);
+  }
+  return success;
+}
+
+PBL_T_STATIC void prv_charger_event_cb(PebbleEvent *e, void *context) {
+  const PebbleBatteryStateChangeEvent *evt = &e->battery_state;
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  {
+    s_manager_state.enabled_charging_state = !evt->new_state.is_plugged;
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+
+  pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+}
+
+// Accept new data from the HR device driver.
+void hrm_manager_new_data_cb(const HRMData *data) {
+  bool update = false;
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  if (!prv_can_turn_sensor_on() || s_manager_state.subscribers == nullptr) {
+    // If the hrm manager should be disabled or we have no subscribers, this data is unwanted.
+    goto unlock;
+  }
+
+  HRM_LOG("HRM Data (off wrist: %d):", data->off_wrist);
+  if (data->features & HRMFeature_BPM) {
+    HRM_LOG("  BPM: %" PRIu8 ", Confidence: %" PRIu8, data->hrm_bpm, data->hrm_confidence);
+  }
+  if (data->features & HRMFeature_HRV) {
+    HRM_LOG("  HRV PPI: %" PRIu16 "ms, Confidence: %" PRIu8, data->hrv_ppi_ms,
+            data->hrv_confidence);
+  }
+  if (data->features & HRMFeature_SpO2) {
+    HRM_LOG("  SpO2: %" PRIu8 ", Confidence: %" PRIu8, data->spo2_percent, data->spo2_confidence);
+  }
+
+#ifdef CONFIG_HRM_HRV
+  if (data->features & HRMFeature_HRV) {
+    // Broadcast HRV updates as a health service event so apps subscribed through health_service
+    // receive them without needing to consume raw HRM events.
+    PebbleEvent health_event = {
+      .type = PEBBLE_HEALTH_SERVICE_EVENT,
+      .health_event = {
+        .type = HealthEventHRVUpdate,
+        .data.hrv_update = {
+          .ppi_ms = data->hrv_ppi_ms,
+          .confidence = data->hrv_confidence,
+        },
+      },
+    };
+    event_put(&health_event);
+  }
+#endif
+
+  time_t utc_now = pbl_realtime();
+  uint64_t cur_ticks = pbl_uptime_ticks();
+  HRMFeature kernel_bg_features_sent = 0;
+
+  HRMSubscriberState *state = (HRMSubscriberState *)s_manager_state.subscribers;
+  while (state) {
+    HRMSubscriberState *expired_state = nullptr;
+
+    // Mark a subscriber "served" once it gets usable data for a feature it requested, so the sensor
+    // can power-cycle off. BPM waits for a high-confidence reading; if one never comes, the
+    // unserved timeout defers the subscriber instead. SpO2 keys off the algorithm's own invalid
+    // flag: an algorithm-accepted reading is usable even at lower confidence, and requiring more
+    // kept the sensor on forever.
+    const bool bpm_served = (state->features & HRMFeature_BPM) &&
+                            (data->features & HRMFeature_BPM) &&
+                            (data->hrm_confidence >= HRM_CONFIDENCE_HIGH || data->off_wrist);
+    const bool spo2_served = (state->features & HRMFeature_SpO2) &&
+                             (data->features & HRMFeature_SpO2) &&
+                             (data->off_wrist || (!data->spo2_invalid && data->spo2_percent > 0));
+    if (bpm_served || spo2_served) {
+      state->last_valid_bpm_ticks = cur_ticks;
+      state->is_due = false;
+    }
+
+    PebbleHRMEvent hrm_event;
+    for (uint8_t i = 0; i < HRMFeatureShiftMax; ++i) {
+      HRMFeature feature = (1 << i);
+      if (!(state->features & feature) || !(data->features & feature)) {
+        continue;
+      }
+      if (state->callback_handler) {
+        // For kernel BG subscribers, we only queue one event of each type (which is then
+        // dispatched to all SysWorkq subscribers from the SysWorkq callback) so that we don't
+        // overfill our limited size circular buffer.
+        if (kernel_bg_features_sent & feature) {
+          continue;
+        }
+        kernel_bg_features_sent |= feature;
+      }
+      prv_populate_hrm_event(&hrm_event, feature, data);
+      if (!prv_event_put(state, &hrm_event)) {
+        // Consumer queue full (e.g. app not draining events); drop instead of panicking.
+        ++s_manager_state.dropped_events;
+      }
+    }
+
+    // If this is an app subscription, see if we need to send an "expiring" event. We check
+    // SysWorkq subscribers from the system callback function (prv_sys_work_hrm_handler).
+    if (!state->callback_handler && prv_needs_expiring_event(state, utc_now)) {
+      hrm_event = (PebbleHRMEvent){
+        .event_type = HRMEvent_SubscriptionExpiring,
+        .expiring.session_ref = state->session_ref,
+      };
+      if (prv_event_put(state, &hrm_event)) {
+        state->sent_expiration_event = true;
+      } else {
+        // Retry on the next sample rather than panicking.
+        ++s_manager_state.dropped_events;
+      }
+    }
+
+    if (state->expire_utc && (utc_now >= state->expire_utc)) {
+      // This subscription has expired
+      expired_state = state;
+    }
+    state = (HRMSubscriberState *)state->list_node.next;
+
+    // If the prior subscription expired, remove it now
+    if (expired_state) {
+      PBL_LOG_DBG("Subscription %" PRIu32 " expired", expired_state->session_ref);
+      prv_remove_and_free_subscription(expired_state);
+    }
+  }
+
+  // Update the HRM enable state. If no subscribers need an update for a while, we can turn off the
+  // HR sensor and set a timer to turn it on again later. To avoid this overhead on every callback,
+  // we only check it once every HRM_CHECK_SENSOR_DISABLE_COUNT times
+  if (++s_manager_state.check_disable_counter >= HRM_CHECK_SENSOR_DISABLE_COUNT) {
+    s_manager_state.check_disable_counter = 0;
+    update = true;
+  }
+unlock:
+  pbl_mutex_unlock(&s_manager_state.lock);
+  if (update) {
+    pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+  }
+}
+
+void hrm_manager_handle_prefs_changed(void) {
+  pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+}
+
+bool hrm_manager_has_continuous_green_subscriber(void) {
+  const time_t utc_now = pbl_realtime();
+  bool found = false;
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  {
+    const HRMFeature prefs_allowed = prv_prefs_allowed_features();
+    HRMSubscriberState *state = (HRMSubscriberState *)s_manager_state.subscribers;
+    for (; state != nullptr && !found; state = (HRMSubscriberState *)state->list_node.next) {
+      if (state->expire_utc && (utc_now >= state->expire_utc)) {
+        continue;
+      }
+      // An interval within the spin-up time is always due, so the sensor never turns off for it.
+      const HRMFeature features = prv_subscriber_allowed_features(state, prefs_allowed);
+      found = (features & ~HRMFeature_SpO2) && (state->update_interval_s <= HRM_SENSOR_SPIN_UP_SEC);
+    }
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+  return found;
+}
+
+void hrm_manager_set_activity_scene(HRMActivityScene scene) {
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  s_manager_state.activity_scene = scene;
+  // Apply immediately too: if the sensor is already on (e.g. a continuous workout HR session) the
+  // algorithm should switch scenes without waiting for the next power cycle.
+  hrm_set_activity_scene(HRM, scene);
+  pbl_mutex_unlock(&s_manager_state.lock);
+}
+
+void hrm_manager_init(void) {
+  s_manager_state = (struct HRMManagerState){
+    .update_enable_timer = PBL_DELAYED_WORK_INITIALIZER(prv_update_enable_timer_cb),
+    .enabled_charging_state = !battery_is_usb_connected(),
+    .charger_subscription = (EventServiceInfo){
+      .type = PEBBLE_BATTERY_STATE_CHANGE_EVENT,
+      .handler = prv_charger_event_cb,
+    },
+  };
+  pbl_mutex_init(&s_manager_state.lock);
+  pbl_mutex_init(&s_manager_state.accel_data_lock);
+  circular_buffer_init(&s_manager_state.sys_work_event_buffer,
+                       s_manager_state.sys_work_event_storage, EVENT_STORAGE_SIZE);
+  event_service_client_subscribe(&s_manager_state.charger_subscription);
+}
+
+HRMSessionRef hrm_manager_subscribe_with_callback(AppInstallId app_id, uint32_t update_interval_s,
+                                                  uint16_t expire_s, HRMFeature features,
+                                                  bool low_latency, HRMSubscriberCallback callback,
+                                                  void *context) {
+  const PebbleTask current_task = pebble_task_get_current();
+  bool is_app_subscription = false;
+  if (current_task == PebbleTask_SysWorkq) {
+    // SysWorkq must provide a callback
+    PBL_ASSERTN(callback != nullptr);
+  } else if (current_task == PebbleTask_KernelMain) {
+    // KernelMain clients can either set a callback, or use the event_service interface.
+  } else {
+    PBL_ASSERTN(current_task == PebbleTask_App || current_task == PebbleTask_Worker);
+    is_app_subscription = true;
+  }
+
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  HRMSessionRef session_ref = HRM_INVALID_SESSION_REF;
+
+  // If there is already an existing subscription for this app, remove the old one before we
+  // add another subscription for this app.
+  if (is_app_subscription) {
+    HRMSubscriberState *state = prv_get_subscriber_state_from_app_id(current_task, app_id);
+    if (state != nullptr) {
+      session_ref = state->session_ref;
+      PBL_LOG_DBG("Removing existing subscription for this app");
+      prv_remove_and_free_subscription(state);
+    }
+  }
+
+  // Get the session ref to use
+  if (session_ref == HRM_INVALID_SESSION_REF) {
+    session_ref = ++s_manager_state.next_session_ref;
+  }
+
+  HRMSubscriberState *state = pbl_malloc_check(sizeof(*state));
+  *state = (HRMSubscriberState){
+    .session_ref = session_ref,
+    .app_id = app_id,
+    .task = current_task,
+    .queue = pebble_task_get_to_queue(current_task),
+    .callback_handler = callback,
+    .callback_context = context,
+    .update_interval_s = update_interval_s,
+    .expire_utc = (expire_s != 0) ? (pbl_realtime() + expire_s) : 0,
+    .low_latency = low_latency,
+    .features = features,
+  };
+  s_manager_state.subscribers = list_insert_before(s_manager_state.subscribers, &state->list_node);
+
+  session_ref = state->session_ref;
+  pbl_mutex_unlock(&s_manager_state.lock);
+
+  // Update the HR enablement state
+  pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+  return session_ref;
+}
+
+// Only a foreground app showing live readings (a short update interval) is worth the extra
+// FIFO-drain wakeups of the low-latency cadence. Workers, the BLE relay (its notify cadence copes
+// with batched samples) and background logging take the default.
+static bool prv_wants_low_latency(PebbleTask task, uint32_t update_interval_s) {
+  return (task == PebbleTask_App) && (update_interval_s <= HRM_LOW_LATENCY_MAX_INTERVAL_S);
+}
+
+static HRMSubscriberState *prv_get_owned_subscriber_state(HRMSessionRef session,
+                                                          bool from_userspace) {
+  HRMSubscriberState *state = prv_get_subscriber_state_from_ref(session);
+  if (from_userspace && state && state->task != pebble_task_get_current()) {
+    return nullptr;
+  }
+  return state;
+}
+
+PBL_SYSCALL(HRMSessionRef, sys_hrm_manager_app_subscribe, (VAL, AppInstallId, app_id),
+            (VAL, uint32_t, update_interval_s), (VAL, uint16_t, expire_sec),
+            (VAL, HRMFeature, features)) {
+  if (from_user) {
+#ifdef CONFIG_SERVICE_ACTIVITY
+    if (!health_permission_allowed(pebble_task_get_current())) {
+      return HRM_INVALID_SESSION_REF;
+    }
+#endif
+    app_id = sys_process_manager_get_current_process_id();
+  }
+  const bool low_latency = prv_wants_low_latency(pebble_task_get_current(), update_interval_s);
+  return hrm_manager_subscribe_with_callback(app_id, update_interval_s, expire_sec, features,
+                                             low_latency, nullptr, nullptr);
+}
+
+PBL_SYSCALL(bool, sys_hrm_manager_unsubscribe, (VAL, HRMSessionRef, session)) {
+  HRM_LOG("Unsubscribing");
+  bool success = false;
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+
+  HRMSubscriberState *state = prv_get_owned_subscriber_state(session, from_user);
+  if (state) {
+    prv_remove_and_free_subscription(state);
+    success = true;
+  }
+
+  pbl_mutex_unlock(&s_manager_state.lock);
+  if (success) {
+    pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+  }
+  return success;
+}
+
+PBL_SYSCALL(HRMSessionRef, sys_hrm_manager_get_app_subscription, (VAL, AppInstallId, app_id)) {
+  if (from_user) {
+    app_id = sys_process_manager_get_current_process_id();
+  }
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  HRMSessionRef ref = HRM_INVALID_SESSION_REF;
+  HRMSubscriberState *state =
+      prv_get_subscriber_state_from_app_id(pebble_task_get_current(), app_id);
+  if (state) {
+    ref = state->session_ref;
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+  return ref;
+}
+
+PBL_SYSCALL(bool, sys_hrm_manager_get_subscription_info, (VAL, HRMSessionRef, session),
+            (OUT_OPT, AppInstallId *, app_id), (OUT_OPT, uint32_t *, update_interval_s),
+            (OUT_OPT, uint16_t *, expire_s), (OUT_OPT, HRMFeature *, features)) {
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  HRMSubscriberState *state = prv_get_owned_subscriber_state(session, from_user);
+  if (state) {
+    if (app_id) {
+      *app_id = state->app_id;
+    }
+    if (update_interval_s) {
+      *update_interval_s = state->update_interval_s;
+    }
+    if (expire_s) {
+      int16_t expire_in_s = 0;
+      if (state->expire_utc != 0) {
+        expire_in_s = PBL_MAX(0, state->expire_utc - pbl_realtime());
+      }
+      *expire_s = PBL_MAX(0, expire_in_s);
+    }
+    if (features) {
+      *features = state->features;
+    }
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+  return (state != nullptr);
+}
+
+PBL_SYSCALL(bool, sys_hrm_manager_set_features, (VAL, HRMSessionRef, session),
+            (VAL, HRMFeature, features)) {
+  bool success = false;
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  HRMSubscriberState *state = prv_get_owned_subscriber_state(session, from_user);
+  if (state) {
+    state->features = features;
+    success = true;
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+  // Re-evaluate right away: a feature change can turn the sensor on, off, or onto the other
+  // optical path, and must not wait for the next sample to trigger a pass.
+  if (success) {
+    pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+  }
+  return success;
+}
+
+PBL_SYSCALL(bool, sys_hrm_manager_set_update_interval, (VAL, HRMSessionRef, session),
+            (VAL, uint32_t, update_interval_s), (VAL, uint16_t, expire_s)) {
+  bool success = false;
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+
+  HRMSubscriberState *state = prv_get_owned_subscriber_state(session, from_user);
+  if (state) {
+    state->update_interval_s = update_interval_s;
+    state->expire_utc = (expire_s != 0) ? (pbl_realtime() + expire_s) : 0;
+    state->sent_expiration_event = false;
+    if (state->task == PebbleTask_App || state->task == PebbleTask_Worker) {
+      // Apps pick their cadence through the interval, so keep the two in step. Applied at the next
+      // sensor start; a running session keeps its cadence rather than pay an algorithm restart.
+      state->low_latency = prv_wants_low_latency(state->task, update_interval_s);
+    }
+    success = true;
+  }
+  pbl_mutex_unlock(&s_manager_state.lock);
+  if (success) {
+    pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+  }
+  return success;
+}
+
+void hrm_manager_enable(bool on) {
+  pbl_mutex_lock(&s_manager_state.lock, PBL_FOREVER);
+  s_manager_state.enabled_run_level = on;
+  pbl_mutex_unlock(&s_manager_state.lock);
+  pbl_sys_work_call(prv_update_hrm_enable_system_cb, nullptr);
+}
+
+HRMAccelData *hrm_manager_get_accel_data(void) {
+  pbl_mutex_lock(&s_manager_state.accel_data_lock, PBL_FOREVER);
+  return &s_manager_state.accel_data;
+}
+
+void hrm_manager_release_accel_data(void) {
+  s_manager_state.accel_data.num_samples = 0; // Reset buffer
+  pbl_mutex_unlock(&s_manager_state.accel_data_lock);
+}
+
+void hrm_manager_process_cleanup(PebbleTask task, AppInstallId app_id) {
+  if (task != PebbleTask_App && task != PebbleTask_Worker) {
+    return;
+  }
+
+  // For apps and workers, if they have a subscription still active, make sure it expires
+  HRMSubscriberState *state = prv_get_subscriber_state_from_app_id(task, app_id);
+  if (state == nullptr) {
+    return;
+  }
+
+  // Don't lengthen an expiration that's already shorter than ours — the app explicitly chose a
+  // shorter window (e.g. workout post-workout recovery), and overriding it would defeat that.
+  const time_t cleanup_expire_utc = pbl_realtime() + HRM_MANAGER_APP_EXIT_EXPIRATION_SEC;
+  if (state->expire_utc != 0 && state->expire_utc <= cleanup_expire_utc) {
+    return;
+  }
+
+  PBL_LOG_DBG("Setting expiration time on session for app_id %d", (int)app_id);
+  sys_hrm_manager_set_update_interval(state->session_ref, state->update_interval_s,
+                                      HRM_MANAGER_APP_EXIT_EXPIRATION_SEC);
+}
+
+#if defined(CONFIG_SHELL) && defined(CONFIG_HRM)
+#include <errno.h>
+
+#include <pbl/shell/shell.h>
+
+#include <kernel/pebble_tasks.h>
+
+static const struct pbl_shell *s_console_sh;
+static HRMSessionRef s_console_session = HRM_INVALID_SESSION_REF;
+static PebbleHRMEvent s_console_event;
+
+static void prv_console_finish_cb(void *data) {
+  const struct pbl_shell *sh = s_console_sh;
+
+  if (sh == nullptr) {
+    return;
+  }
+
+  s_console_sh = nullptr;
+  sys_hrm_manager_unsubscribe(s_console_session);
+  s_console_session = HRM_INVALID_SESSION_REF;
+
+  if (s_console_event.event_type == HRMEvent_BPM) {
+    pbl_shell_print(sh, "BPM: %" PRIu8 " confidence: %" PRIu8 "%s", s_console_event.bpm.bpm,
+                    s_console_event.bpm.confidence,
+                    s_console_event.bpm.off_wrist ? " (off wrist)" : "");
+  } else {
+    pbl_shell_print(sh, "SpO2: %" PRIu8 "%% confidence: %" PRIu8 "%s", s_console_event.spo2.percent,
+                    s_console_event.spo2.confidence,
+                    s_console_event.spo2.off_wrist ? " (off wrist)" : "");
+  }
+  pbl_shell_cmd_done(sh, 0);
+}
+
+static void prv_console_read_callback(PebbleHRMEvent *event, void *context) {
+  const HRMEventType type = (HRMEventType)(uintptr_t)context;
+
+  if (event->event_type == type) {
+    s_console_event = *event;
+    pbl_sys_work_call(prv_console_finish_cb, nullptr);
+  }
+}
+
+static int prv_console_subscribe(const struct pbl_shell *sh, HRMFeature feature,
+                                 HRMEventType type) {
+  sys_hrm_manager_unsubscribe(s_console_session);
+  s_console_sh = sh;
+  s_console_session = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, 1 /*update_interval_s*/, 0 /*expire_s*/, feature, false /*low_latency*/,
+      prv_console_read_callback, (void *)(uintptr_t)type);
+  return -EINPROGRESS;
+}
+
+static int prv_cmd_hrm_read(const struct pbl_shell *sh, size_t argc, char **argv) {
+  return prv_console_subscribe(sh, HRMFeature_BPM, HRMEvent_BPM);
+}
+
+static int prv_cmd_spo2_read(const struct pbl_shell *sh, size_t argc, char **argv) {
+  // Console subscribers are subject to the pref mask; a reading would never come.
+  if (!(prv_prefs_allowed_features() & HRMFeature_SpO2)) {
+    pbl_shell_error(sh, "SpO2 monitoring is disabled");
+    return -EPERM;
+  }
+  return prv_console_subscribe(sh, HRMFeature_SpO2, HRMEvent_SpO2);
+}
+
+static const struct pbl_shell_cmd sub_hrm[] = {
+  PBL_SHELL_CMD(read, nullptr, "Read the heart rate", prv_cmd_hrm_read),
+  PBL_SHELL_CMD(spo2, nullptr, "Read the SpO2 level", prv_cmd_spo2_read),
+  PBL_SHELL_SUBCMD_SET_END,
+};
+
+PBL_SHELL_CMD_REGISTER(hrm, sub_hrm, "Heart rate monitor", nullptr);
+#endif

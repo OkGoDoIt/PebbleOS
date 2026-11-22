@@ -1,0 +1,28 @@
+/* SPDX-FileCopyrightText: 2026 Core Devices LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#pragma once
+
+#include <pbl/util/bits.h>
+
+/* Register offsets */
+
+#define SF32LB52_LPSYS_RCC_RSTR1_OFFSET 0x0000
+#define SF32LB52_LPSYS_RCC_CSR_OFFSET   0x0010
+#define SF32LB52_LPSYS_RCC_CFGR_OFFSET  0x0014
+
+/* Register bit definitions */
+
+#define LPSYS_RCC_RSTR1_LCPU PBL_BIT(0)
+#define LPSYS_RCC_RSTR1_RFC  PBL_BIT(18)
+#define LPSYS_RCC_RSTR1_MAC  PBL_BIT(20)
+
+#define LPSYS_RCC_CSR_SEL_SYS_MASK  PBL_GENMASK(1, 0)
+#define LPSYS_RCC_CSR_SEL_SYS_HRC48 0U
+#define LPSYS_RCC_CSR_SEL_SYS_HXT48 1U
+#define LPSYS_RCC_CSR_SEL_SYS_LP    PBL_BIT(2)
+#define LPSYS_RCC_CSR_SEL_PERI      PBL_BIT(4)
+
+#define LPSYS_RCC_CFGR_HDIV1_MASK PBL_GENMASK(5, 0)
+#define LPSYS_RCC_CFGR_PDIV1_MASK PBL_GENMASK(10, 8)
+#define LPSYS_RCC_CFGR_PDIV2_MASK PBL_GENMASK(14, 12)

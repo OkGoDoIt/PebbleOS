@@ -21,7 +21,7 @@
  *
  * @code{.c}
  * static const struct pbl_dma_chan s_rx =
- *     PBL_DMA_CHAN(SF32LB52_DMAC1, 5, SF32LB52_DMA_REQ_I2C2, SF32LB52_DMA_PL_HIGH);
+ *     PBL_DMA_CHAN(&dt_dmac1, 5, SF32LB52_DMA_REQ_I2C2, SF32LB_DMA_PL_HIGH);
  *
  * const struct pbl_dma_slave_config cfg = {
  *   .src_addr = fifo_addr,
@@ -170,14 +170,15 @@ struct pbl_dma_controller {
  * PBL_DMA_CONTROLLER_STATE_DEFINE().
  * @param _name Name.
  * @param _init Device init function, or NULL.
+ * @param _parent Parent device, or NULL.
  * @param _ops Driver operations.
  */
-#define PBL_DMA_CONTROLLER_INIT(sym, _name, _init, _ops)                               \
-  {                                                                                    \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, nullptr, nullptr, &pbl_dma_class), \
-    .ops = (_ops),                                                                     \
-    .chans = sym##_dma_chans,                                                          \
-    .num_channels = sizeof(sym##_dma_chans) / sizeof(sym##_dma_chans[0]),              \
+#define PBL_DMA_CONTROLLER_INIT(sym, _name, _init, _parent, _ops)             \
+  {                                                                           \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, &pbl_dma_class), \
+    .ops = (_ops),                                                            \
+    .chans = sym##_dma_chans,                                                 \
+    .num_channels = sizeof(sym##_dma_chans) / sizeof(sym##_dma_chans[0]),     \
   }
 
 /**

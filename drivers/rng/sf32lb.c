@@ -4,8 +4,10 @@
 #include <errno.h>
 #include <stdint.h>
 
-#include <pbl/drivers/clk/sf32lb.h>
+#include <pbl/device.h>
+#include <pbl/devicetree.h>
 #include <pbl/drivers/rng.h>
+#include <pbl/drivers/rng/sf32lb.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/mmio.h>
@@ -13,19 +15,20 @@
 
 #include <hardware/sf32lb52_trng.h>
 
-PBL_LOG_MODULE_DEFINE(driver_rng_sf32lb, CONFIG_DRIVER_RNG_LOG_LEVEL);
+PBL_LOG_MODULE_DEFINE(driver_rng, CONFIG_DRIVER_RNG_LOG_LEVEL);
 
 #define TRNG_TIMEOUT_US 3000U
 
-static const struct pbl_clk s_clk = PBL_CLK(SF32LB_HPSYS_RCC, SF32LB52_HPSYS_CLK_TRNG);
-static bool s_inited;
+extern const struct pbl_rng_sf32lb pbl_rng_sf32lb_inst;
+
+static const struct pbl_rng_sf32lb *const s_rng = &pbl_rng_sf32lb_inst;
 
 static inline uint32_t prv_getreg(uint32_t offset) {
-  return pbl_readl(SF32LB52_TRNG_BASE + offset);
+  return pbl_readl(s_rng->base + offset);
 }
 
 static inline void prv_putreg(uint32_t offset, uint32_t value) {
-  pbl_writel(value, SF32LB52_TRNG_BASE + offset);
+  pbl_writel(value, s_rng->base + offset);
 }
 
 static int prv_generate(uint32_t cmd, uint32_t valid, uint32_t offset, uint32_t *out) {
@@ -42,28 +45,35 @@ static int prv_generate(uint32_t cmd, uint32_t valid, uint32_t offset, uint32_t 
   return 0;
 }
 
-bool rng_rand(uint32_t *rand_out) {
+int pbl_rng_sf32lb_init(const struct pbl_device *dev) {
+  uint32_t seed;
   int ret;
 
-  if (!s_inited) {
-    PBL_ASSERTN(pbl_device_init(&s_clk.ctrl->dev) == 0);
-  }
-
-  ret = pbl_clk_enable(&s_clk);
+  ret = pbl_clk_enable(&s_rng->clk);
   if (ret != 0) {
-    return false;
+    return ret;
   }
 
-  if (!s_inited) {
-    uint32_t val = prv_getreg(SF32LB52_TRNG_CTRL_OFFSET);
-    prv_putreg(SF32LB52_TRNG_CTRL_OFFSET,
-               val & ~(TRNG_CTRL_GEN_SEED_STOP | TRNG_CTRL_GEN_RAND_NUM_STOP));
+  prv_putreg(SF32LB52_TRNG_CTRL_OFFSET,
+             prv_getreg(SF32LB52_TRNG_CTRL_OFFSET) &
+                 ~(TRNG_CTRL_GEN_SEED_STOP | TRNG_CTRL_GEN_RAND_NUM_STOP));
 
-    ret = prv_generate(TRNG_CTRL_GEN_SEED_START, TRNG_STAT_SEED_VALID,
-                       SF32LB52_TRNG_RAND_SEED_OFFSET(0), rand_out);
-    PBL_ASSERTN(ret == 0);
+  ret = prv_generate(TRNG_CTRL_GEN_SEED_START, TRNG_STAT_SEED_VALID,
+                     SF32LB52_TRNG_RAND_SEED_OFFSET(0), &seed);
 
-    s_inited = true;
+  pbl_clk_disable(&s_rng->clk);
+
+  return ret;
+}
+
+int rng_rand(uint32_t *rand_out) {
+  int ret;
+
+  PBL_ASSERTN(pbl_device_is_ready(&s_rng->dev));
+
+  ret = pbl_clk_enable(&s_rng->clk);
+  if (ret != 0) {
+    return ret;
   }
 
   ret = prv_generate(TRNG_CTRL_GEN_RAND_NUM_START, TRNG_STAT_RAND_NUM_VALID,
@@ -72,7 +82,9 @@ bool rng_rand(uint32_t *rand_out) {
     PBL_LOG_ERR("Random number generation failed: %d", ret);
   }
 
-  pbl_clk_disable(&s_clk);
+  pbl_clk_disable(&s_rng->clk);
 
-  return ret == 0;
+  return ret;
 }
+
+#include PBL_DT_INSTANCES(sifli_sf32lb52_trng)

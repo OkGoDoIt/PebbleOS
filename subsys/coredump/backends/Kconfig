@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config COREDUMP_BACKEND_FLASH
+    bool "Flash backend"
+    default y
+    depends on FLASH && $(has_partition,safe-firmware)
+    depends on $(has_partition,cd) || $(has_partition,scratch)
+    help
+      Keep dumps in flash until they are read back, in the cd partition
+      or, without one, in the scratch partition.
+
+config COREDUMP_BACKEND_FLASH_IMAGES
+    int "Dumps to keep"
+    default 2 if SOC_NRF52
+    default 1
+    range 1 32
+    depends on COREDUMP_BACKEND_FLASH
+    help
+      The storage is divided evenly between this many dumps, the oldest
+      being replaced.

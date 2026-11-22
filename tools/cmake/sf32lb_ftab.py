@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+"""SF32LB flash table (FTAB), which tells the boot ROM what image to boot.
+
+The table goes in the ptable partition, at the start of the boot flash. Only
+the entries the ROM needs to boot from flash are filled: the table itself and
+the image it boots in place, in the secondary bootloader slot: the firmware,
+or the bootloader that boots it. The SF32LB52 and SF32LB57
+ROMs read the same layout; see the SiFli SDK documentation on the bootloader.
+"""
+
+import argparse
+import os
+import struct
+import sys
+
+from intelhex import IntelHex
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "devicetree"))
+
+import dtmap
+import fdt
+
+MAGIC = 0x53454346
+# The factory calibration data follows the table
+TABLE_SIZE = 0x8000
+
+# Flash table entries, then image headers for every entry but the first two
+ENTRIES = 16
+ENTRY = struct.Struct("<IIII")
+ENTRY_TABLE = 0
+ENTRY_BOOT = 3
+IMAGE_FIRST_ENTRY = 2
+IMAGES_OFFSET = 4096
+IMAGE_SIZE = 512
+IMAGE_HEADER = struct.Struct("<IHH")
+IMAGE_FLAG_AUTO = 2
+IMAGE_BLOCK_SIZE = 512
+RUNNING_IMAGES = 4
+SIZE = IMAGES_OFFSET + (ENTRIES - IMAGE_FIRST_ENTRY) * IMAGE_SIZE + RUNNING_IMAGES * 4
+
+
+def generate(table_base, image_base, image_size):
+    """The FTAB at ``table_base`` booting the image at ``image_base``."""
+    data = bytearray(SIZE)
+    struct.pack_into("<I", data, 0, MAGIC)
+    ENTRY.pack_into(data, 4 + ENTRY_TABLE * ENTRY.size, table_base, TABLE_SIZE, 0, 0)
+    ENTRY.pack_into(
+        data, 4 + ENTRY_BOOT * ENTRY.size, image_base, image_size, image_base, 0
+    )
+
+    for i in range(ENTRIES - IMAGE_FIRST_ENTRY):
+        offset = IMAGES_OFFSET + i * IMAGE_SIZE
+        if i + IMAGE_FIRST_ENTRY == ENTRY_BOOT:
+            header = (image_size, IMAGE_BLOCK_SIZE, IMAGE_FLAG_AUTO)
+        else:
+            header = (0xFFFFFFFF, 0, 0)
+        IMAGE_HEADER.pack_into(data, offset, *header)
+
+    running = [0xFFFFFFFF] * RUNNING_IMAGES
+    boot = ENTRY_BOOT - IMAGE_FIRST_ENTRY
+    running[boot] = table_base + IMAGES_OFFSET + boot * IMAGE_SIZE
+    struct.pack_into(f"<{RUNNING_IMAGES}I", data, SIZE - RUNNING_IMAGES * 4, *running)
+    return bytes(data)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dtb", required=True, help="the board's compiled devicetree")
+    parser.add_argument("--flash-base", type=lambda s: int(s, 0), required=True)
+    boot = parser.add_mutually_exclusive_group(required=True)
+    boot.add_argument(
+        "--image-offset",
+        type=lambda s: int(s, 0),
+        help="offset of the image the ROM boots, from the flash base",
+    )
+    boot.add_argument(
+        "--boot-partition", help="the partition the ROM boots, e.g. the bootloader's"
+    )
+    parser.add_argument("--image-size", type=lambda s: int(s, 0))
+    parser.add_argument("--output", required=True, help="the Intel HEX to write")
+    args = parser.parse_args()
+
+    try:
+        parts = dtmap.partitions(fdt.load(args.dtb))
+    except fdt.DtError as error:
+        sys.exit(f"ftab: {error}")
+    if "ptable" not in parts:
+        sys.exit("ftab: no 'ptable' flash partition")
+    offset, size = parts["ptable"]
+    if args.boot_partition:
+        if args.boot_partition not in parts:
+            sys.exit(f"ftab: no '{args.boot_partition}' flash partition")
+        image_offset, image_size = parts[args.boot_partition]
+    elif args.image_size is None:
+        sys.exit("ftab: --image-offset needs --image-size")
+    else:
+        image_offset, image_size = args.image_offset, args.image_size
+    if size < TABLE_SIZE:
+        sys.exit(f"ftab: the ptable partition is smaller than {TABLE_SIZE:#x} bytes")
+
+    table_base = args.flash_base + offset
+    data = generate(table_base, args.flash_base + image_offset, image_size)
+    image = IntelHex()
+    image.frombytes(data, offset=table_base)
+    image.write_hex_file(args.output)
+
+
+if __name__ == "__main__":
+    main()

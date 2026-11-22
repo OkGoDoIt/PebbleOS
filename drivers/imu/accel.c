@@ -4,10 +4,14 @@
 #include <errno.h>
 
 #include <pbl/drivers/accel.h>
+#include <pbl/logging/logging.h>
 #include <pbl/util/misc.h>
 
+PBL_LOG_MODULE_DEFINE(driver_accel, CONFIG_DRIVER_IMU_LOG_LEVEL);
+PBL_DEVICE_CLASS_DEFINE(pbl_accel_class, "accel");
+
 int pbl_accel_dev_init(const struct pbl_device *dev) {
-  const struct pbl_accel *accel = container_of(dev, const struct pbl_accel, dev);
+  const struct pbl_accel *accel = PBL_CONTAINER_OF(dev, const struct pbl_accel, dev);
   int ret;
 
   pbl_accel_lock(accel);
@@ -111,7 +115,7 @@ uint32_t pbl_accel_get_max_num_samples(const struct pbl_accel *accel) {
   return accel->ops->get_max_num_samples(accel);
 }
 
-int pbl_accel_peek(const struct pbl_accel *accel, AccelDriverSample *sample) {
+int pbl_accel_peek(const struct pbl_accel *accel, struct pbl_accel_sample *sample) {
   int ret;
 
   if (!pbl_device_is_ready(&accel->dev)) {
@@ -234,7 +238,7 @@ void pbl_accel_report_samples(const struct pbl_accel *accel, const AccelRawBatch
   listener->samples(accel, batch, listener->user_data);
 }
 
-void pbl_accel_report_sample(const struct pbl_accel *accel, const AccelDriverSample *sample) {
+void pbl_accel_report_sample(const struct pbl_accel *accel, const struct pbl_accel_sample *sample) {
   const AccelRawBatch batch = {
     .data = (const uint8_t *)&sample->x,
     .num_samples = 1,

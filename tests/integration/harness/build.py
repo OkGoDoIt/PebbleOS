@@ -8,7 +8,6 @@ import shutil
 
 from harness.errors import HarnessError
 
-_PLATFORMS = ("emery", "flint", "gabbro")
 _TOPDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 
@@ -68,10 +67,14 @@ class Build:
     def topdir(self):
         """The source tree, or the harness's own for a build configured on
         another host."""
-        topdir = self.cache.get("CMAKE_HOME_DIRECTORY") or self.cache.get(
-            "pebbleos_SOURCE_DIR"
-        )
-        return topdir if topdir and os.path.isdir(topdir) else _TOPDIR
+        # The application's directory, which is somewhere in the tree.
+        topdir = self.cache.get("CMAKE_HOME_DIRECTORY")
+        while topdir and os.path.isdir(topdir):
+            if os.path.isfile(os.path.join(topdir, "pbl.yml")):
+                return topdir
+            parent = os.path.dirname(topdir)
+            topdir = parent if parent != topdir else None
+        return _TOPDIR
 
     @property
     def board_target(self):
@@ -85,10 +88,7 @@ class Build:
 
     @property
     def platform(self):
-        for platform in _PLATFORMS:
-            if self.config.get(f"CONFIG_PLATFORM_{platform.upper()}"):
-                return platform
-        return None
+        return self.config.get("CONFIG_PLATFORM_NAME") or None
 
     @property
     def emulated(self):
@@ -102,18 +102,20 @@ class Build:
     def variant(self):
         return self.cache.get("VARIANT", "normal")
 
+    # Not CMAKE_PROJECT_NAME: an application's own project() overrides it.
+
     @property
     def elf(self):
-        return self.join(f"{self.cache.get('CMAKE_PROJECT_NAME', 'pebbleos')}.elf")
+        return self.join("pebbleos.elf")
 
     @property
     def executable(self):
         """The native build's program."""
-        return self.join(self.cache.get("CMAKE_PROJECT_NAME", "pebbleos"))
+        return self.join("pebbleos")
 
     @property
     def loghash_dict(self):
-        return self.join("fw", "loghash_dict.json")
+        return self.join("log.dict.json")
 
     def tool(self, name):
         """An SDK tool CMake located (PBL_<NAME>), else the one on PATH, or

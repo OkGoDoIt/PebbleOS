@@ -1,10 +1,12 @@
 # Build system
 
-The firmware is built by three cooperating pieces:
+The firmware is built by these cooperating pieces:
 
 - [Kconfig](kconfig.md) decides *what* is built: every option, driver and
   service is a symbol, and a board's defconfig plus the project and variant
   fragments resolve to one configuration per build directory.
+- [Devicetree](devicetree.md) describes the board's hardware, for boards
+  that have it: which drivers its devices enable, and their instances.
 - [CMake](cmake.md), with Ninja as the generator, decides *how*: each
   directory declares a library from the sources its symbols enable, and all
   of them are linked into a single firmware image.
@@ -16,9 +18,12 @@ The firmware is built by three cooperating pieces:
 CMake invocation cannot do:
 
 ```shell
-cmake -B build -GNinja -DBOARD=asterix
+cmake -B build -GNinja -S pebble -DBOARD=asterix
 cmake --build build
 ```
+
+The firmware is an application of PebbleOS, built from `pebble/` as any
+other is from its own directory; {doc}`applications` covers how.
 
 ## From configuration to image
 
@@ -27,7 +32,7 @@ flowchart TD
   in["BOARD, VARIANT, -DCONFIG_*"]
   kconfig["tools/cmake/kconfig.py"]
   cfg[".config, autoconf.h, config.cmake"]
-  cmake["CMakeLists.txt, cmake/modules/<br/>third_party, lib, kernel, soc, subsys, drivers, fw"]
+  cmake["pebble/CMakeLists.txt, cmake/modules/<br/>third_party, lib, kernel, soc, subsys, drivers, pebble"]
   libs["Object and static libraries<br/>one pbl_library() per directory"]
   gen["Resource pack, generated headers<br/>pbl_resources(), tools/cmake/ generators"]
   link["pbl_link_firmware()"]
@@ -45,7 +50,8 @@ flowchart TD
   class cfg,libs,gen base
 ```
 
-1. **Configure.** The root `CMakeLists.txt` takes the board and variant
+1. **Configure.** `find_package(PebbleOS)`, from the firmware's
+   `pebble/CMakeLists.txt`, takes the board and variant
    (`-DBOARD=`, `-DVARIANT=`), and hands them with any `-DCONFIG_*`
    overrides to `tools/cmake/kconfig.py`. It writes `.config`,
    `autoconf.h` and `config.cmake`, which CMake includes, so every Kconfig
@@ -53,7 +59,8 @@ flowchart TD
 2. **Toolchain.** The bare-metal ARM toolchain comes from the installed
    PebbleOS SDK; boards that do not run on ARM, such as `native_emery`,
    bring their own `toolchain.cmake`.
-3. **Libraries.** The top-level directories are added in turn. Each one
+3. **Libraries.** PebbleOS's directories, then the firmware's, are added
+   in turn. Each one
    contributes libraries, global include directories, linker script
    fragments and generated sources through the `pbl_*` helpers.
 4. **Generated sources.** Version and registry headers, the resource
@@ -78,7 +85,7 @@ changes, and CMake regenerates whenever a `CMakeLists.txt` does, so
 | `menuconfig.conf` | Changes made with {doc}`../../pbl/menuconfig`, kept across reconfigurations |
 | `pebbleos.elf`, `.hex`, `.bin` | The firmware image |
 | `system_resources.pbpack` | The system resource pack |
-| `fw/loghash_dict.json` | The dictionary that decodes hashed log messages |
+| `log.dict.json` | The dictionary that decodes hashed log messages, with `CONFIG_LOG_HASHED` |
 | `generated/` | Generated headers and sources |
 | `linker/` | The linker script fragments, collected per hook point |
 
@@ -98,12 +105,18 @@ result, so it is cached too and can be overridden with `-D`.
 ## Directory layout
 
 ```text
-CMakeLists.txt        the firmware image: what is built and linked
-Kconfig               the root of the configuration tree
+Kconfig.pebbleos      the configuration tree of PebbleOS, which the
+                      application's Kconfig sources
 boards/<board>/       defconfig, Kconfig, manifest and device definitions
                       (<board>.c, <board>.h) of each board
-fw/prj*.conf          project and variant configuration fragments
-cmake/modules/        the build model, split by concern
+pebble/               the firmware: CMakeLists.txt, Kconfig, prj*.conf and
+                      boards/, as any application
+cmake/modules/        the build model, split by concern; os.cmake adds
+                      PebbleOS itself
+cmake/PebbleOSConfig.cmake
+                      find_package(PebbleOS), for applications
+samples/              applications other than the firmware, each showing
+                      one part of PebbleOS
 cmake/toolchain/      the bare-metal ARM and host toolchains
 tools/cmake/          the generators the build shells out to
 ```
@@ -117,5 +130,8 @@ developers to build their own projects with; see {doc}`../../sdk/building`.
 :hidden:
 
 cmake.md
+devicetree.md
 kconfig.md
+applications.md
+rust.md
 ```

@@ -1,0 +1,252 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "Pebble Firmware Configuration"
+
+# Defaults for options of PebbleOS that the firmware wants wherever they are
+# available, which a prj.conf cannot express.
+
+choice FIRMWARE_AREA
+    default FIRMWARE_AREA_RECOVERY if RECOVERY_FW && !MFG
+endchoice
+
+# PBLBOOT runs the image in place from its slot. The recovery image has to fit
+# the partition it is stored in.
+config FLASH_OFFSET
+    default $(dt_partition_offset,safe-firmware) if PBLBOOT && FIRMWARE_AREA_RECOVERY
+    default $(dt_partition_offset,firmware-slot-1) if PBLBOOT && FIRMWARE_SLOT = 1
+    default $(dt_partition_offset,firmware-slot-0) if PBLBOOT
+
+config FW_FLASH_SIZE
+    default $(dt_partition_size,safe-firmware) if FIRMWARE_AREA_RECOVERY && $(dt_has_partition,safe-firmware)
+    default $(dt_partition_size,firmware-slot-1) if PBLBOOT && FIRMWARE_SLOT = 1
+    default $(dt_partition_size,firmware-slot-0) if PBLBOOT
+
+config BT_REPEAT_PAIRING_ALWAYS
+    default y if RECOVERY_FW
+    depends on BT
+
+config CONSOLE
+    default y if !RELEASE || MFG
+
+config CONSOLE_IMAGING
+    default y
+    depends on CONSOLE
+
+config COREDUMP
+    default y
+    depends on ARCH_HAS_COREDUMP
+
+config CPU_IDLE
+    default y
+
+config DEBUGGER_AWARE
+    default y if !RELEASE
+    depends on ARCH_HAS_DEBUGGER_DETECT
+
+config FLASH_SHELL
+    default y if MFG
+    depends on FLASH && SHELL
+
+config FLASH_SHELL_TEST
+    default y if RECOVERY_FW
+    depends on FLASH_SHELL
+
+# Apps are built soft-float and call into the firmware.
+config FP_SOFTFP_ABI
+    default y
+    depends on CPU_HAS_FPU
+
+config FS_PFS_SHELL_LITTER
+    default !RECOVERY_FW && !RELEASE
+    depends on FS_PFS && SHELL
+
+config GH3X2X_ALGO
+    default !RECOVERY_FW || MFG
+    depends on HRM_GH3X2X && BOARD_OBELIX
+
+config HRM_GH3X2X_FACTORY_TEST
+    default y if MFG
+    depends on HRM && GH3X2X_ALGO
+
+config KERNEL_STACK_GUARD
+    default y
+    depends on ARCH_HAS_STACK_GUARD
+
+config LOG_HASHED
+    default y
+    depends on LOG && !QEMU
+
+config PP_TRANSPORT_GATT_SYSTEM_ONLY
+    default y if RECOVERY_FW
+    depends on PP_TRANSPORT_GATT
+
+config SHELL
+    default y
+    depends on CONSOLE
+
+config TEMP_SHELL
+    default n if RECOVERY_FW
+    depends on TEMP && SHELL
+
+config USERSPACE
+    default y
+    depends on ARCH_HAS_USERSPACE
+
+config SAMSA
+    default y
+    depends on SOC_POSIX && !RECOVERY_FW
+
+# The SDK platform, and what follows from it.
+rsource "Kconfig.platform"
+
+# RAM of the apps of the legacy SDK execution environments. 2.x apps are
+# rectangular; 3.x apps are those of the frozen platform of the same shape
+# and colour depth. A platform states the RAM of its own, 4.x, apps.
+
+config APP_RAM_2X_SEGMENT_SIZE
+    default 0 if PLATFORM_ROUND
+    default 25952
+
+config APP_RAM_2X_RUNTIME_SIZE
+    default 0 if PLATFORM_ROUND
+    default 6820
+
+config APP_RAM_3X_SEGMENT_SIZE
+    default 67584 if PLATFORM_ROUND || PLATFORM_COLOR
+    default 25952
+
+config APP_RAM_3X_RUNTIME_SIZE
+    default 30720 if PLATFORM_ROUND || PLATFORM_COLOR
+    default 6820
+
+source "Kconfig.pebbleos"
+
+config SCREEN_COLOR_DEPTH_BITS
+    int
+    default 8 if PLATFORM_COLOR
+    default 1
+
+config RECOVERY_FW
+    bool "Recovery firmware (PRF)"
+    help
+      Build the recovery firmware variant. Set via prj_prf.conf when
+      configuring with --variant=prf; do not set manually.
+
+config MFG
+    bool "Manufacturing firmware"
+    depends on RECOVERY_FW
+    help
+      Enable manufacturing-only functionality in the PRF build, which
+      MFG firmwares are built on.
+
+rsource "apps/Kconfig"
+rsource "kernel/Kconfig"
+rsource "services/Kconfig"
+
+menu "Software Features"
+
+config SETTINGS_ICONS
+    bool "Settings menu icons"
+    help
+      Show icons next to entries in the system Settings menu.
+
+config BACKLIGHT_STANDARD_INTENSITY
+    int "Standard backlight preset intensity (%)"
+    range 1 100
+    default 50
+    help
+      Logical brightness used by the Standard backlight preset and fresh
+      shell preferences. The light service scales it to the board hardware
+      maximum. Saved brightness preferences take precedence.
+
+config DYNAMIC_BACKLIGHT
+    bool "Dynamic backlight"
+    help
+      Adjust backlight intensity based on ambient light readings.
+      Requires an ambient light sensor.
+
+config ACCEL_SENSITIVITY
+    bool "Accelerometer sensitivity setting"
+    help
+      Expose the accelerometer tap/shake sensitivity adjustment in
+      Settings.
+
+config APP_SCALING
+    bool "App scaling"
+    help
+      Scale legacy lower-resolution apps to the current display via
+      the compositor.
+
+config ORIENTATION_MANAGER
+    bool "Orientation manager UI"
+    help
+      Expose the device-orientation / rotation prefs in shell and
+      Settings. Independent of CONFIG_SERVICE_ORIENTATION_MANAGER,
+      which controls whether the underlying service is built.
+
+config MODDABLE_XS
+    bool "Moddable XS JavaScript engine"
+    depends on USERSPACE && !RECOVERY_FW
+    help
+      Build Moddable XS support for running JavaScript apps.
+
+config MMAP_RESOURCES
+    bool "Memory-mapped (zero-copy) resource reads"
+    default y if SOC_SF32LB52
+    help
+      Serve read-only system resources as direct pointers into
+      memory-mapped flash instead of copying them out.
+
+endmenu
+
+choice
+    prompt "Shell"
+    default SHELL_NORMAL
+
+config SHELL_NORMAL
+    bool "Normal shell"
+
+config SHELL_SDK
+    bool "SDK shell"
+    help
+      Use the SDK shell instead of the normal shell.
+
+endchoice
+
+menu "Debug & instrumentation"
+
+config QEMU_SERIAL
+    bool "QEMU serial protocol"
+    default y if QEMU || SOC_POSIX
+    help
+      The Pebble protocol and the emulator's controls (battery, taps,
+      time format, ...) over the board's QEMU_UART, framed as libpebble2's
+      QEMU transport expects.
+
+if QEMU_SERIAL
+
+module = QEMU_SERIAL
+module-str = QEMU serial protocol
+source "subsys/logging/Kconfig.template.log_level"
+
+endif # QEMU_SERIAL
+
+config NO_WATCH_TIMEOUT
+    bool "Disable watchface idle timeout"
+
+config UI_DEBUG
+    bool "UI debug commands"
+    help
+      Enable the window dump and layer nudge CLI commands.
+
+config MALLOC_INSTRUMENTATION
+    bool "Malloc instrumentation"
+    help
+      Track the caller PC of every heap allocation.
+
+config PERFORMANCE_TESTS
+    bool "Performance test instrumentation"
+    select PROFILER
+
+endmenu

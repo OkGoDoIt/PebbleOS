@@ -6,10 +6,9 @@
 #include <stdint.h>
 #include <time.h>
 
-#include <pbl/services/new_timer/new_timer.h>
 #include <pbl/util/uuid.h>
 
-#include <system/status_codes.h>
+struct pbl_delayed_work;
 
 /**
  * @defgroup services_wakeup Wakeup
@@ -17,7 +16,7 @@
  * @brief Scheduled app launches.
  *
  * Kernel side of the app wakeup API. Events are stored in the "wakeup" settings file and the
- * next one is scheduled with a new_timer. When an event fires, its app is launched with
+ * next one is scheduled with delayed work. When an event fires, its app is launched with
  * @c APP_LAUNCH_WAKEUP, or receives a @c PEBBLE_WAKEUP_EVENT if already running. Events missed
  * while the watch was off can be reported with a popup.
  * @{
@@ -68,9 +67,9 @@ void wakeup_enable(bool enabled);
 /**
  * @brief Get the timer used to schedule events, for tests.
  *
- * @return Timer identifier.
+ * @return Delayed work item.
  */
-TimerID wakeup_get_current(void);
+struct pbl_delayed_work *wakeup_get_current(void);
 
 /**
  * @brief Get the next scheduled event, for tests.
@@ -89,7 +88,7 @@ void wakeup_migrate_timezone(int utc_diff);
 /**
  * @brief Handle a significant time change (over 15 s, timezone or DST).
  *
- * Deletes past events, shows missed event popups and reschedules, on KernelBG.
+ * Deletes past events, shows missed event popups and reschedules, on SysWorkq.
  */
 void wakeup_handle_significant_clock_change(void);
 
@@ -101,7 +100,8 @@ void wakeup_handle_significant_clock_change(void);
 void wakeup_handle_clock_change(void);
 
 //! Kernel-owned integration for an installed app with one next deadline. Replaces only this
-//! app's wakeups atomically; timestamp 0 cancels them. Timestamp is UTC.
-status_t wakeup_replace_app_deadline(const Uuid *uuid, time_t timestamp);
+//! app's wakeups atomically; timestamp 0 cancels them. Timestamp is UTC. Returns 0 or a negative
+//! errno.
+int wakeup_replace_app_deadline(const Uuid *uuid, time_t timestamp);
 
 /** @} */

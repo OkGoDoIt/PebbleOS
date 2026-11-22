@@ -4,9 +4,11 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <pbl/device.h>
+#include <pbl/drivers/ram.h>
 
 /**
  * @defgroup drivers_display Display
@@ -18,6 +20,11 @@
  * caller and has the display's size and @ref pbl_display_format; an update sends a range of its
  * rows. As in Linux, a panel's mounting rotation is part of the display, and the image is turned
  * by a further 180 degrees on request, e.g. for left-hand wear.
+ *
+ * A board may also reserve memory for the display's framebuffer, as the devicetree memory-region
+ * of the controller, for frames too large for the heap: pbl_display_get_framebuffer() gives it.
+ * Memory in a @ref drivers_ram device, only powered while it has users, is kept powered by the
+ * display.
  *
  * @code{.c}
  * static void prv_done(int status, void *arg) {
@@ -43,6 +50,26 @@ enum pbl_display_format {
   PBL_DISPLAY_FORMAT_MONO,
   /** 8 bits per pixel, 2 bits per alpha, red, green and blue, from the most significant bit. */
   PBL_DISPLAY_FORMAT_ARGB2222,
+  /** 16 bits per pixel, little-endian, 5 bits of red, 6 of green and 5 of blue, from the most
+   *  significant bit. */
+  PBL_DISPLAY_FORMAT_RGB565,
+};
+
+/** @brief Properties of a display. */
+struct pbl_display_props {
+  /** Width, in pixels. */
+  uint16_t width;
+  /** Height, in pixels. */
+  uint16_t height;
+  /** Framebuffer format. */
+  enum pbl_display_format format;
+  /** Panel mounted upside down. */
+  bool rotated;
+  /**
+   * Pixels hidden at each end of the rows of the top half of a round panel, mirrored in the bottom
+   * half, or NULL.
+   */
+  const uint8_t *round_mask;
 };
 
 /** @brief Framebuffer handed to an update. */
@@ -111,40 +138,41 @@ struct pbl_display {
   const struct pbl_display_ops *ops;
   /** Runtime state. */
   struct pbl_display_state *state;
-  /** Width, in pixels. */
-  uint16_t width;
-  /** Height, in pixels. */
-  uint16_t height;
-  /** Framebuffer format. */
-  enum pbl_display_format format;
-  /** Panel mounted upside down. */
-  bool rotated;
-  /**
-   * Pixels hidden at each end of the first rows, mirrored in the last rows, e.g. by tinted
-   * rounded corners on the glass, or NULL.
-   */
-  const uint8_t *corners;
-  /** Number of @ref corners entries. */
-  uint8_t num_corners;
-  /**
-   * Pixels hidden at each end of the rows of the top half of a round panel, mirrored in the bottom
-   * half, or NULL.
-   */
-  const uint8_t *round_mask;
+  /** Properties. */
+  struct pbl_display_props props;
+  /** Memory the board reserves for the framebuffer, or NULL. */
+  uint8_t *framebuffer;
+  /** Its size, in bytes. */
+  size_t framebuffer_size;
+  /** RAM device the memory is in, or NULL when it is always powered. */
+  const struct pbl_ram *framebuffer_ram;
 };
 
 /** @brief The display, defined by the board. */
 extern const struct pbl_display *const DISPLAY;
 
 /**
+ * @brief Get the properties of a display.
+ *
+ * @param disp Display.
+ * @return Its properties.
+ */
+static inline const struct pbl_display_props *pbl_display_get_props(
+    const struct pbl_display *disp) {
+  return &disp->props;
+}
+
+/**
  * @brief Get the pixels hidden at each end of a row of a round panel.
  *
- * @param disp Display, with a @ref pbl_display.round_mask.
+ * @param disp Display, with a @ref pbl_display_props.round_mask.
  * @param y Row.
  * @return Pixels hidden at each end of the row.
  */
 static inline uint16_t pbl_display_round_inset(const struct pbl_display *disp, uint16_t y) {
-  return disp->round_mask[(y < disp->height / 2) ? y : (disp->height - 1 - y)];
+  const struct pbl_display_props *props = &disp->props;
+
+  return props->round_mask[(y < props->height / 2) ? y : (props->height - 1 - y)];
 }
 
 /**
@@ -157,28 +185,57 @@ static inline uint16_t pbl_display_round_inset(const struct pbl_display *disp, u
   static struct pbl_display_state sym##_display_state
 
 /**
+ * @brief Initializer for the struct pbl_display of display @p sym, with the memory the board
+ * reserves for its framebuffer.
+ *
+ * @param sym Symbol of the display instance, with its state defined by
+ *            PBL_DISPLAY_STATE_DEFINE().
+ * @param _name Name.
+ * @param _parent Parent device, or NULL.
+ * @param _ops Driver operations.
+ * @param _width Width, in pixels.
+ * @param _height Height, in pixels.
+ * @param _format Framebuffer format.
+ * @param _rotated Panel mounted upside down.
+ * @param _fb Memory reserved for the framebuffer, or 0.
+ * @param _fb_size Its size, in bytes, at least a frame.
+ * @param _fb_ram RAM device the memory is in, kept powered by the display, or NULL.
+ * @param ... Other properties, designated initializers of struct pbl_display_props.
+ */
+#define PBL_DISPLAY_INIT_FRAMEBUFFER(sym, _name, _parent, _ops, _width, _height, _format,        \
+                                     _rotated, _fb, _fb_size, _fb_ram, ...)                      \
+  {                                                                                              \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_display_dev_init, _parent, &pbl_display_class), \
+    .ops = (_ops),                                                                               \
+    .state = &sym##_display_state,                                                               \
+    .props =                                                                                     \
+        {.width = (_width),                                                                      \
+         .height = (_height),                                                                    \
+         .format = (_format),                                                                    \
+         .rotated = (_rotated),                                                                  \
+         __VA_ARGS__},                                                                           \
+    .framebuffer = (uint8_t *)(uintptr_t)(_fb),                                                  \
+    .framebuffer_size = (_fb_size),                                                              \
+    .framebuffer_ram = (_fb_ram),                                                                \
+  }
+
+/**
  * @brief Initializer for the struct pbl_display of display @p sym.
  *
  * @param sym Symbol of the display instance, with its state defined by
  *            PBL_DISPLAY_STATE_DEFINE().
  * @param _name Name.
+ * @param _parent Parent device, or NULL.
  * @param _ops Driver operations.
- * @param _deps Dependencies from PBL_DEVICE_DEPS(), or NULL.
  * @param _width Width, in pixels.
  * @param _height Height, in pixels.
  * @param _format Framebuffer format.
  * @param _rotated Panel mounted upside down.
- * @param ... Other mounting properties, designated initializers of struct pbl_display.
+ * @param ... Other properties, designated initializers of struct pbl_display_props.
  */
-#define PBL_DISPLAY_INIT(sym, _name, _ops, _deps, _width, _height, _format, _rotated, ...)         \
-  {.dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_display_init, nullptr, _deps, &pbl_display_class), \
-   .ops = (_ops),                                                                                  \
-   .state = &sym##_display_state,                                                                  \
-   .width = (_width),                                                                              \
-   .height = (_height),                                                                            \
-   .format = (_format),                                                                            \
-   .rotated = (_rotated),                                                                          \
-   __VA_ARGS__}
+#define PBL_DISPLAY_INIT(sym, _name, _parent, _ops, _width, _height, _format, _rotated, ...)      \
+  PBL_DISPLAY_INIT_FRAMEBUFFER(sym, _name, _parent, _ops, _width, _height, _format, _rotated, 0U, \
+                               0U, nullptr, __VA_ARGS__)
 
 /**
  * @brief Device init of every display: sets the class state up, then calls the driver's init.
@@ -186,7 +243,7 @@ static inline uint16_t pbl_display_round_inset(const struct pbl_display *disp, u
  * @param dev Display device.
  * @return 0 or a negative errno.
  */
-int pbl_display_init(const struct pbl_device *dev);
+int pbl_display_dev_init(const struct pbl_device *dev);
 
 /**
  * @brief Report the end of the update in flight.
@@ -244,6 +301,17 @@ int pbl_display_clear(const struct pbl_display *disp);
  */
 int pbl_display_update(const struct pbl_display *disp, const struct pbl_display_buffer *buf,
                        uint16_t y0, uint16_t y1, pbl_display_callback_t cb, void *arg);
+
+/**
+ * @brief Get the framebuffer the board reserves for a display.
+ *
+ * It has the display's size and format, and is cleared to 0 when the display comes up.
+ *
+ * @param disp Display.
+ * @param[out] buf Framebuffer.
+ * @return 0, @c -ENOENT if the board reserves none, or @c -ENODEV if the display is not ready.
+ */
+int pbl_display_get_framebuffer(const struct pbl_display *disp, struct pbl_display_buffer *buf);
 
 /**
  * @brief Send rows of a framebuffer to the panel and wait for the update to end.

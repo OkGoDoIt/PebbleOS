@@ -12,17 +12,17 @@
  * @brief Generic helpers shared by the firmware, the bootloader and host tools (@c lib/util).
  *
  * The library does not depend on the kernel. Logging and assertions go through util_log() and
- * util_assertion_failed(), weak functions the firmware overrides.
+ * util_assertion_failed(), weak functions PebbleOS overrides in @c lib/c.
  *
  * @code{.c}
  * static const uint16_t s_rates[] = {10, 25, 50, 100};
  *
- * for (size_t i = 0; i < ARRAY_LENGTH(s_rates); i++) {
- *   max_rate = MAX(max_rate, s_rates[i]);
+ * for (size_t i = 0; i < PBL_ARRAY_SIZE(s_rates); i++) {
+ *   max_rate = PBL_MAX(max_rate, s_rates[i]);
  * }
- * level = CLIP(level, 0, 100);
+ * level = PBL_CLAMP(level, 0, 100);
  *
- * struct item *item = container_of(node, struct item, list_node);
+ * struct item *item = PBL_CONTAINER_OF(node, struct item, list_node);
  * @endcode
  */
 
@@ -41,7 +41,18 @@
  * @param member Name of the member within @p type.
  * @return Pointer to the containing structure.
  */
-#define container_of(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
+#define PBL_CONTAINER_OF(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
+
+/** @cond INTERNAL_HIDDEN */
+#define PBL_STRINGIFY_NX(a) #a
+/** @endcond */
+
+/**
+ * @brief Turn the expansion of the argument into a string literal.
+ *
+ * @param a Argument.
+ */
+#define PBL_STRINGIFY(a) PBL_STRINGIFY_NX(a)
 
 /**
  * @brief Swap the values of two lvalues of the same type.

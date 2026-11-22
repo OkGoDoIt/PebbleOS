@@ -62,7 +62,7 @@ void pbl_shared_cbuf_init(struct pbl_shared_cbuf *buffer, uint8_t *storage, uint
 // -------------------------------------------------------------------------------------------------
 bool pbl_shared_cbuf_add_client(struct pbl_shared_cbuf *buffer,
                                 struct pbl_shared_cbuf_client *client) {
-  UTIL_ASSERT(!list_contains(buffer->clients, &client->list_node));
+  PBL_UTIL_ASSERT(!list_contains(buffer->clients, &client->list_node));
   buffer->clients = list_prepend(buffer->clients, &client->list_node);
   client->read_index = buffer->write_index;
   return true;
@@ -71,7 +71,7 @@ bool pbl_shared_cbuf_add_client(struct pbl_shared_cbuf *buffer,
 // -------------------------------------------------------------------------------------------------
 void pbl_shared_cbuf_remove_client(struct pbl_shared_cbuf *buffer,
                                    struct pbl_shared_cbuf_client *client) {
-  UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
+  PBL_UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
   list_remove(&client->list_node, &buffer->clients, nullptr);
 }
 
@@ -146,7 +146,7 @@ bool pbl_shared_cbuf_write(struct pbl_shared_cbuf *buffer, const uint8_t *data, 
 bool pbl_shared_cbuf_read(const struct pbl_shared_cbuf *buffer,
                           struct pbl_shared_cbuf_client *client, uint16_t length,
                           const uint8_t **data_out, uint16_t *length_out) {
-  UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
+  PBL_UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
 
   uint32_t data_length = prv_get_data_length(buffer, client);
   if (data_length < length) {
@@ -156,7 +156,7 @@ bool pbl_shared_cbuf_read(const struct pbl_shared_cbuf *buffer,
   *data_out = &buffer->buffer[client->read_index];
 
   const uint16_t bytes_read = buffer->buffer_size - client->read_index;
-  *length_out = MIN(bytes_read, length);
+  *length_out = PBL_MIN(bytes_read, length);
 
   return true;
 }
@@ -164,7 +164,7 @@ bool pbl_shared_cbuf_read(const struct pbl_shared_cbuf *buffer,
 // -------------------------------------------------------------------------------------------------
 bool pbl_shared_cbuf_consume(struct pbl_shared_cbuf *buffer, struct pbl_shared_cbuf_client *client,
                              uint16_t length) {
-  UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
+  PBL_UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
   uint32_t data_length = prv_get_data_length(buffer, client);
   if (data_length < length) {
     return false;
@@ -184,7 +184,7 @@ uint16_t pbl_shared_cbuf_get_write_space_remaining(const struct pbl_shared_cbuf 
 // -------------------------------------------------------------------------------------------------
 uint16_t pbl_shared_cbuf_get_read_space_remaining(const struct pbl_shared_cbuf *buffer,
                                                   struct pbl_shared_cbuf_client *client) {
-  UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
+  PBL_UTIL_ASSERT(list_contains(buffer->clients, &client->list_node));
   return prv_get_data_length(buffer, client);
 }
 
@@ -193,7 +193,7 @@ bool pbl_shared_cbuf_read_consume(struct pbl_shared_cbuf *buffer,
                                   struct pbl_shared_cbuf_client *client, uint16_t length,
                                   uint8_t *data, uint16_t *length_out) {
   uint16_t data_length = prv_get_data_length(buffer, client);
-  uint16_t bytes_left = MIN(length, data_length);
+  uint16_t bytes_left = PBL_MIN(length, data_length);
 
   *length_out = bytes_left;
   while (bytes_left) {
@@ -216,7 +216,7 @@ void pbl_shared_cbuf_add_subsampled_client(struct pbl_shared_cbuf *buffer,
                                            struct pbl_shared_cbuf_subsampled_client *client,
                                            uint32_t subsample_numerator,
                                            uint32_t subsample_denominator) {
-  UTIL_ASSERT(pbl_shared_cbuf_add_client(buffer, &client->buffer_client));
+  PBL_UTIL_ASSERT(pbl_shared_cbuf_add_client(buffer, &client->buffer_client));
   pbl_shared_cbuf_subsampled_client_set_ratio(client, subsample_numerator, subsample_denominator);
 }
 
@@ -229,7 +229,7 @@ void pbl_shared_cbuf_remove_subsampled_client(struct pbl_shared_cbuf *buffer,
 // -------------------------------------------------------------------------------------------------
 void pbl_shared_cbuf_subsampled_client_set_ratio(struct pbl_shared_cbuf_subsampled_client *client,
                                                  uint32_t numerator, uint32_t denominator) {
-  UTIL_ASSERT(numerator > 0 && denominator >= numerator);
+  PBL_UTIL_ASSERT(numerator > 0 && denominator >= numerator);
   if (client->numerator != numerator || client->denominator != denominator) {
     // The subsampling algorithm does not need the subsampling ratio to
     // be normalized to reduced form.
@@ -249,11 +249,11 @@ size_t pbl_shared_cbuf_read_subsampled(struct pbl_shared_cbuf *buffer,
 
   // Optimized case when no subsampling
   if (client->numerator == client->denominator) {
-    num_items = MIN(num_items, bytes_available / item_size);
+    num_items = PBL_MIN(num_items, bytes_available / item_size);
     uint16_t bytes_out;
     pbl_shared_cbuf_read_consume(buffer, &client->buffer_client, num_items * item_size,
                                  (uint8_t *)data, &bytes_out);
-    UTIL_ASSERT(bytes_out == num_items * item_size);
+    PBL_UTIL_ASSERT(bytes_out == num_items * item_size);
     return num_items;
   }
 
@@ -271,11 +271,11 @@ size_t pbl_shared_cbuf_read_subsampled(struct pbl_shared_cbuf *buffer,
       uint16_t bytes_out;
       pbl_shared_cbuf_read_consume(buffer, &client->buffer_client, item_size, (uint8_t *)out_buf,
                                    &bytes_out);
-      UTIL_ASSERT(bytes_out == item_size);
+      PBL_UTIL_ASSERT(bytes_out == item_size);
       out_buf += item_size;
       items_read++;
     } else {
-      UTIL_ASSERT(pbl_shared_cbuf_consume(buffer, &client->buffer_client, item_size));
+      PBL_UTIL_ASSERT(pbl_shared_cbuf_consume(buffer, &client->buffer_client, item_size));
     }
   }
   return items_read;

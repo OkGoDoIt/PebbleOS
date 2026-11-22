@@ -93,6 +93,10 @@ skipped. To make such an option configurable anyway, give it an `enum` in
 `config.yml`: that turns it into a Kconfig choice whose members map to C
 expressions, as `BLE_SM_IO_CAP` does.
 
+An option the port can only offer with something of PebbleOS takes a `depends`
+in `config.yml`, a Kconfig expression: `BLE_STORE_CONFIG_PERSIST` depends on
+the store having a backend that persists.
+
 ## Areas
 
 Each area in `config.yml` groups packages into one `Kconfig.<id>`. An area
@@ -100,7 +104,7 @@ whose packages a build can leave out carries an `enable`: the generator
 defines it as a bool, off unless something selects it, and the build compiles
 the packages' sources only when it is set. It is the Kconfig counterpart of a
 newt target depending on the package; PebbleOS selects it from the option
-that needs the package, e.g. `BT_HCI_NRF52` selects `NIMBLE_CONTROLLER`.
+that needs the package, e.g. `NIMBLE_HCI_NRF52` selects `NIMBLE_CONTROLLER`.
 
 Where it is off, the area's options take 0, the same value NimBLE sees for a
 package a newt target leaves out, and its fixed values are left undefined.

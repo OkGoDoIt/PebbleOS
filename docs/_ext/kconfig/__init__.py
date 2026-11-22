@@ -34,6 +34,7 @@ Options
 
 import json
 import os
+import sys
 from collections.abc import Iterable
 from itertools import chain
 from pathlib import Path
@@ -59,6 +60,9 @@ import kconfiglib
 RESOURCES_DIR = Path(__file__).parent / "static"
 PBL_BASE = Path(__file__).parents[3]
 
+# The preprocessor functions reading the devicetree, which the tree uses
+sys.path.insert(0, str(PBL_BASE / "tools" / "devicetree"))
+
 
 def kconfig_load(app: Sphinx) -> tuple[kconfiglib.Kconfig, dict[str, str]]:
     """Load the Kconfig tree with the options of every board."""
@@ -68,7 +72,8 @@ def kconfig_load(app: Sphinx) -> tuple[kconfiglib.Kconfig, dict[str, str]]:
     saved = {name: os.environ.get(name) for name in env}
     os.environ.update(env)
     try:
-        return kconfiglib.Kconfig(str(PBL_BASE / "Kconfig"), warn=False), {}
+        # The firmware's Kconfig is the root of its tree, and sources PebbleOS's.
+        return kconfiglib.Kconfig(str(PBL_BASE / "pebble" / "Kconfig"), warn=False), {}
     finally:
         for name, value in saved.items():
             if value is None:

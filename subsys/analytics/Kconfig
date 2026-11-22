@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config ANALYTICS
+    bool "Analytics"
+    depends on SERVICE_DATA_LOGGING
+    help
+      Firmware analytics and telemetry.
+
+if ANALYTICS
+
+module = ANALYTICS
+module-str = Analytics
+source "subsys/logging/Kconfig.template.log_level"
+
+endif

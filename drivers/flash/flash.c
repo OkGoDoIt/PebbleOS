@@ -7,15 +7,18 @@
 #include <inttypes.h>
 #include <stdint.h>
 
+#include <pbl/analytics/analytics.h>
 #include <pbl/drivers/flash.h>
 #include <pbl/drivers/watchdog.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/delay.h>
+#include <pbl/kernel/idle.h>
 #include <pbl/kernel/reboot.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/analytics/analytics.h>
+#ifdef CONFIG_TASK_WDT
 #include <pbl/task_wdt/task_wdt.h>
+#endif
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
 
@@ -55,7 +58,7 @@ static bool prv_is_blank(const struct pbl_flash *flash, uint32_t addr, size_t le
   uint8_t buf[BLANK_CHECK_CHUNK];
 
   while (len > 0U) {
-    size_t chunk = MIN(sizeof(buf), len);
+    size_t chunk = PBL_MIN(sizeof(buf), len);
     int ret;
 
     ret = flash->ops->read(flash, addr, buf, chunk);
@@ -85,7 +88,9 @@ static void prv_erase_pause(const struct pbl_flash *flash) {
 
   // Without a minimum slice back-to-back accesses would starve the erase
   pbl_sleep_ms(ERASE_MIN_SLICE_MS);
+#ifdef CONFIG_TASK_WDT
   pbl_task_wdt_feed_thread(st->erase.thread);
+#endif
 
   ret = flash->ops->erase_suspend(flash);
   PBL_ASSERT(ret >= 0, "Erase suspend failed: %d", ret);
@@ -109,17 +114,20 @@ static void prv_erase_resume(const struct pbl_flash *flash) {
   st->erase.suspended = false;
 }
 
-static void prv_resume_timer_cb(void *arg) {
-  const struct pbl_flash *flash = arg;
-
+static void prv_resume(const struct pbl_flash *flash) {
   pbl_mutex_lock(&flash->state->lock, PBL_FOREVER);
   prv_erase_resume(flash);
   pbl_mutex_unlock(&flash->state->lock);
 }
 
+static void prv_resume_timer_fn(struct pbl_work *work) {
+  prv_resume(PBL_CONTAINER_OF(work, struct pbl_flash_state, resume_timer.work)->flash);
+}
+
 static void prv_schedule_resume(const struct pbl_flash *flash, uint32_t delay_ms) {
   if (flash->state->erase.suspended) {
-    new_timer_start(flash->state->resume_timer, delay_ms, prv_resume_timer_cb, (void *)flash, 0U);
+    pbl_delayed_work_reschedule(&pbl_sys_workq_high, &flash->state->resume_timer,
+                                PBL_MSEC(delay_ms));
   }
 }
 
@@ -154,7 +162,7 @@ static int prv_erase_step_locked(const struct pbl_flash *flash, uint32_t *wait_m
   if (st->erase.in_progress) {
     ret = flash->ops->erase_status(flash);
     if (ret == -EBUSY || ret == -EAGAIN) {
-      *wait_ms = MAX(1U, st->erase.expected_ms / 8U);
+      *wait_ms = PBL_MAX(1U, st->erase.expected_ms / 8U);
       return -EINPROGRESS;
     }
 
@@ -206,7 +214,7 @@ static int prv_erase_step_locked(const struct pbl_flash *flash, uint32_t *wait_m
   st->erase.expected_ms = (unit == flash->geometry->sector_size)
                               ? flash->geometry->sector_erase_ms
                               : flash->geometry->subsector_erase_ms;
-  *wait_ms = MAX(1U, (st->erase.expected_ms * 7U) / 8U);
+  *wait_ms = PBL_MAX(1U, (st->erase.expected_ms * 7U) / 8U);
 
   return -EINPROGRESS;
 }
@@ -239,13 +247,16 @@ static bool prv_erase_step(const struct pbl_flash *flash, uint32_t *wait_ms) {
   return true;
 }
 
-static void prv_poll_timer_cb(void *arg) {
-  const struct pbl_flash *flash = arg;
+static void prv_poll(const struct pbl_flash *flash) {
   uint32_t wait_ms;
 
   if (!prv_erase_step(flash, &wait_ms)) {
-    new_timer_start(flash->state->poll_timer, wait_ms, prv_poll_timer_cb, arg, 0U);
+    pbl_delayed_work_reschedule(&pbl_sys_workq_high, &flash->state->poll_timer, PBL_MSEC(wait_ms));
   }
+}
+
+static void prv_poll_timer_fn(struct pbl_work *work) {
+  prv_poll(PBL_CONTAINER_OF(work, struct pbl_flash_state, poll_timer.work)->flash);
 }
 
 static int prv_erase_check(const struct pbl_flash *flash, uint32_t addr, size_t *len) {
@@ -335,13 +346,45 @@ static void prv_blocking_erase_cb(int status, void *arg) {
   *(int *)arg = status;
 }
 
+#ifdef CONFIG_FLASH_IDLE_PM
+static bool s_idle_suspended;
+
+static void prv_idle_enter(pbl_idle_state_id_t state, void *arg) {
+  s_idle_suspended = pbl_flash_pm_suspend(FLASH) == 0;
+}
+
+static void prv_idle_exit(pbl_idle_state_id_t state, void *arg) {
+  if (s_idle_suspended) {
+    pbl_flash_pm_resume(FLASH);
+  }
+}
+
+PBL_IDLE_HOOK_DEFINE(flash, prv_idle_enter, prv_idle_exit, nullptr);
+
+// Worth it for an idle at least as long as the part takes to power down and back up
+static void prv_idle_pm_init(const struct pbl_flash *flash) {
+  uint32_t enter_us;
+  uint32_t exit_us;
+
+  if (flash != FLASH || flash->ops->pm_times == nullptr) {
+    return;
+  }
+
+  flash->ops->pm_times(flash, &enter_us, &exit_us);
+  pbl_idle_hook_set_times(PBL_IDLE_HOOK(flash), enter_us + exit_us, exit_us);
+}
+#endif // CONFIG_FLASH_IDLE_PM
+
 int pbl_flash_dev_init(const struct pbl_device *dev) {
-  const struct pbl_flash *flash = container_of(dev, const struct pbl_flash, dev);
+  const struct pbl_flash *flash = PBL_CONTAINER_OF(dev, const struct pbl_flash, dev);
   struct pbl_flash_state *st = flash->state;
   int ret;
 
-  st->poll_timer = new_timer_create();
-  st->resume_timer = new_timer_create();
+  st->flash = flash;
+  pbl_mutex_init(&st->lock);
+  pbl_sem_init(&st->erase_sem, 1U, 1U);
+  pbl_delayed_work_init(&st->poll_timer, prv_poll_timer_fn);
+  pbl_delayed_work_init(&st->resume_timer, prv_resume_timer_fn);
 
   if (flash->ops->init == nullptr) {
     return 0;
@@ -350,6 +393,12 @@ int pbl_flash_dev_init(const struct pbl_device *dev) {
   pbl_mutex_lock(&st->lock, PBL_FOREVER);
   ret = flash->ops->init(flash);
   pbl_mutex_unlock(&st->lock);
+
+#ifdef CONFIG_FLASH_IDLE_PM
+  if (ret == 0) {
+    prv_idle_pm_init(flash);
+  }
+#endif
 
   return ret;
 }
@@ -373,7 +422,7 @@ void pbl_flash_stop(const struct pbl_flash *flash) {
 
   pbl_mutex_lock(&st->lock, PBL_FOREVER);
   if (st->erase.in_progress) {
-    new_timer_stop(st->resume_timer);
+    pbl_delayed_work_cancel(&st->resume_timer);
     prv_erase_resume(flash);
   }
   pbl_mutex_unlock(&st->lock);
@@ -394,7 +443,7 @@ static void prv_sys_off_prepare(enum pbl_sys_off_mode mode, void *user_data) {
   const struct pbl_device *dev;
 
   PBL_DEVICE_CLASS_FOREACH(&pbl_flash_class, dev) {
-    pbl_flash_stop(container_of(dev, const struct pbl_flash, dev));
+    pbl_flash_stop(PBL_CONTAINER_OF(dev, const struct pbl_flash, dev));
   }
 }
 
@@ -563,9 +612,10 @@ int pbl_flash_erase(const struct pbl_flash *flash, uint32_t addr, size_t len) {
   struct pbl_flash_state *st = flash->state;
   int status = 0;
   uint32_t wait_ms;
-  uint32_t resume_ms;
+#ifdef CONFIG_TASK_WDT
   uint32_t unit_waited_ms = 0U;
   uint32_t last_next = addr;
+#endif
   uint32_t steps = 0U;
   int ret;
 
@@ -595,10 +645,12 @@ int pbl_flash_erase(const struct pbl_flash *flash, uint32_t addr, size_t len) {
     }
 
     // The resume timer may be starved by this task
-    if (new_timer_scheduled(st->resume_timer, &resume_ms) && resume_ms == 0U) {
-      prv_resume_timer_cb((void *)flash);
+    if (pbl_delayed_work_is_pending(&st->resume_timer) &&
+        pbl_ticks_to_ms(pbl_delayed_work_remaining(&st->resume_timer)) == 0U) {
+      prv_resume(flash);
     }
 
+#ifdef CONFIG_TASK_WDT
     if (st->erase.next != last_next) {
       last_next = st->erase.next;
       unit_waited_ms = 0U;
@@ -610,6 +662,7 @@ int pbl_flash_erase(const struct pbl_flash *flash, uint32_t addr, size_t len) {
     if (unit_waited_ms < ERASE_UNIT_WDT_MAX_MS) {
       pbl_task_wdt_feed_self();
     }
+#endif
   }
 
   PBL_ASSERT(status == 0 || status == -EACCES || status == -ENODEV, "Flash erase failed: %d",
@@ -641,7 +694,7 @@ int pbl_flash_erase_async(const struct pbl_flash *flash, uint32_t addr, size_t l
     return ret;
   }
 
-  prv_poll_timer_cb((void *)flash);
+  prv_poll(flash);
 
   return 0;
 }
@@ -717,4 +770,20 @@ void pbl_flash_power_down(const struct pbl_flash *flash, pbl_flash_pm_fn_t fn, v
   }
 
   flash->ops->power_down(flash, fn, arg);
+}
+
+int pbl_flash_pm_suspend(const struct pbl_flash *flash) {
+  if (flash->ops->pm_suspend == nullptr) {
+    return -ENOTSUP;
+  }
+
+  if (!prv_can_power_down(flash)) {
+    return -EBUSY;
+  }
+
+  return flash->ops->pm_suspend(flash);
+}
+
+void pbl_flash_pm_resume(const struct pbl_flash *flash) {
+  flash->ops->pm_resume(flash);
 }

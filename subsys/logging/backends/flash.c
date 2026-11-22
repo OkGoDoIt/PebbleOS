@@ -9,10 +9,10 @@
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/kernel/sched.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/backend.h>
 #include <pbl/logging/logging.h>
 #include <pbl/mcu/interrupts.h>
-#include <pbl/services/system_task.h>
 #include <pbl/util/byteorder.h>
 #include <pbl/util/shared_cbuf.h>
 
@@ -27,7 +27,7 @@ static uint8_t s_buffer_storage[1200];
 static PBL_MUTEX_DEFINE(s_buffer_mutex);      //!< Protects s_buffer
 static PBL_MUTEX_DEFINE(s_flash_write_mutex); //!< Protects log line consistency
 static bool
-    s_is_flash_write_scheduled; //!< true if handle_buffer_sync KernelBG callback is scheduled
+    s_is_flash_write_scheduled; //!< true if handle_buffer_sync SysWorkq callback is scheduled
 
 static void write_message(void) {
   // Note that we should enter this function with the buffer mutex held.
@@ -89,7 +89,7 @@ static void handle_buffer_sync(void *data) {
   // write_message() releases the buffer mutex around the flash write so other
   // tasks (BT, KernelMain) can keep producing log lines; if we kept the outer
   // while running on the live "remaining" count, a chatty producer can keep
-  // this callback executing on KernelBackground forever.  That starves every
+  // this callback executing on SysWorkq forever.  That starves every
   // other system-task callback (PutBytes processing in particular) and the
   // emulator wedges with no progress and no watchdog reboot.  Drain the
   // initial backlog and leave any newly-arrived bytes for the next callback;
@@ -136,7 +136,7 @@ static bool write_buffer_locking(const LogBinaryMessage *header, const char *tex
     pbl_mutex_lock(&s_buffer_mutex, PBL_FOREVER);
     if (pbl_shared_cbuf_get_write_space_remaining(&s_buffer) >= length + 1) {
       // Ideally we could figure out a way to skip out on this copy but then you'd potentially need
-      // to sniprintf into a non-contiguous buffer... whatever, we have CPU to burn.
+      // to snprintf into a non-contiguous buffer... whatever, we have CPU to burn.
       uint8_t msg_length = length;
 
       // Do not advance slackers. Data loss and/or corruption will occur! See write_message()
@@ -165,7 +165,7 @@ static bool write_buffer_locking(const LogBinaryMessage *header, const char *tex
     pbl_mutex_lock(&s_buffer_mutex, PBL_FOREVER);
     if (!s_is_flash_write_scheduled) {
       s_is_flash_write_scheduled = true;
-      system_task_add_callback(handle_buffer_sync, (void *)(uintptr_t)true /* is_async */);
+      pbl_sys_work_call(handle_buffer_sync, (void *)(uintptr_t)true /* is_async */);
     }
     pbl_mutex_unlock(&s_buffer_mutex);
   }

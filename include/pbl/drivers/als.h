@@ -15,7 +15,7 @@
  * @brief Ambient light sensor (ALS) class.
  *
  * An ambient light sensor is a struct pbl_als device. Readings are raw counts between 0 and
- * #AMBIENT_LIGHT_LEVEL_MAX; a calibrated instance converts them to lux with pbl_als_to_lux().
+ * #PBL_ALS_LEVEL_MAX; a calibrated instance converts them to lux with pbl_als_to_lux().
  *
  * Sampling is controlled by two reference counts kept by the class: a consumer that will read the
  * sensor soon primes it, and code that would disturb the reading (e.g. backlight bleed-through)
@@ -38,14 +38,14 @@
  */
 
 /** @cond INTERNAL_HIDDEN */
-#ifndef CONFIG_AMBIENT_LIGHT_BITS
+#ifndef CONFIG_ALS_BITS
 // Fallback for builds without Kconfig, e.g. unit tests.
-#define CONFIG_AMBIENT_LIGHT_BITS 12
+#define CONFIG_ALS_BITS 12
 #endif
 /** @endcond */
 
-/** @brief Upper bound of the raw light level scale (@c CONFIG_AMBIENT_LIGHT_BITS bits). */
-static const uint32_t AMBIENT_LIGHT_LEVEL_MAX = (1U << CONFIG_AMBIENT_LIGHT_BITS);
+/** @brief Upper bound of the raw light level scale (@c CONFIG_ALS_BITS bits). */
+static const uint32_t PBL_ALS_LEVEL_MAX = (1U << CONFIG_ALS_BITS);
 
 struct pbl_als;
 
@@ -110,6 +110,10 @@ extern const struct pbl_als *const ALS;
   PBL_DEVICE_STATE_DEFINE(sym);   \
   static struct pbl_als_state sym##_als_state = {.lock = PBL_MUTEX_INITIALIZER}
 
+/** @cond INTERNAL_HIDDEN */
+extern const struct pbl_device_class pbl_als_class;
+/** @endcond */
+
 /**
  * @brief Initialize a struct pbl_als.
  *
@@ -119,12 +123,12 @@ extern const struct pbl_als *const ALS;
  * @param _ops Driver operations.
  * @param _scale Lux calibration, or NULL.
  */
-#define PBL_ALS_INIT(sym, _name, _parent, _ops, _scale)                     \
-  {                                                                         \
-    .dev = PBL_DEVICE_INIT(sym, _name, pbl_als_dev_init, _parent, nullptr), \
-    .ops = (_ops),                                                          \
-    .state = &sym##_als_state,                                              \
-    .scale = (_scale),                                                      \
+#define PBL_ALS_INIT(sym, _name, _parent, _ops, _scale)                                  \
+  {                                                                                      \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_als_dev_init, _parent, &pbl_als_class), \
+    .ops = (_ops),                                                                       \
+    .state = &sym##_als_state,                                                           \
+    .scale = (_scale),                                                                   \
   }
 
 /** @cond INTERNAL_HIDDEN */
@@ -135,7 +139,7 @@ int pbl_als_dev_init(const struct pbl_device *dev);
  * @brief Read the light level.
  *
  * @param als Ambient light sensor.
- * @param[out] level Raw light level between 0 and #AMBIENT_LIGHT_LEVEL_MAX.
+ * @param[out] level Raw light level between 0 and #PBL_ALS_LEVEL_MAX.
  * @return 0, -ENODEV if the sensor is not ready, or a negative errno.
  */
 int pbl_als_read(const struct pbl_als *als, uint32_t *level);

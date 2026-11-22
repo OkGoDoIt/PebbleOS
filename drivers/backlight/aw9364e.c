@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/backlight.h>
 #include <pbl/drivers/backlight/aw9364e.h>
 #include <pbl/drivers/gpio.h>
@@ -26,7 +27,7 @@
 #define AW9364E_OFF_TIME_US 2600U
 
 static const struct pbl_aw9364e *prv_get(const struct pbl_backlight *bl) {
-  return container_of(bl, const struct pbl_aw9364e, backlight);
+  return PBL_CONTAINER_OF(bl, const struct pbl_aw9364e, backlight);
 }
 
 //! Emit dimming pulses. A low period stretched past 500us puts the chip in
@@ -54,7 +55,7 @@ static uint8_t prv_get_level(const struct pbl_backlight *bl, uint8_t brightness)
   }
 
   return AW9364E_MAX_PULSES -
-         DIVIDE_CEIL(brightness * AW9364E_MAX_PULSES, PBL_BACKLIGHT_BRIGHTNESS_MAX) + 1U;
+         PBL_DIV_ROUND_UP(brightness * AW9364E_MAX_PULSES, PBL_BACKLIGHT_BRIGHTNESS_MAX) + 1U;
 }
 
 static int prv_set_brightness(const struct pbl_backlight *bl, uint8_t brightness) {
@@ -99,3 +100,5 @@ const struct pbl_backlight_ops pbl_aw9364e_ops = {
   .set_brightness = prv_set_brightness,
   .get_level = prv_get_level,
 };
+
+#include PBL_DT_INSTANCES(awinic_aw9364e)

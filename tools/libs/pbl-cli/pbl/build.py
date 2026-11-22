@@ -5,7 +5,7 @@
 
 Everything is read back from the build's own byproducts -- ``.config`` for
 the Kconfig symbols and ``CMakeCache.txt`` for the board, the variant and
-the project name -- so the CLI never has to be kept in sync with the build
+the application -- so the CLI never has to be kept in sync with the build
 by hand.
 """
 
@@ -16,8 +16,7 @@ from pbl.errors import CommandContextError
 CACHE_FILE = "CMakeCache.txt"
 DOTCONFIG_FILE = ".config"
 
-# CONFIG_PLATFORM_* -> the SDK platform name, mirroring cmake/modules/platform.cmake.
-_PLATFORMS = ("emery", "flint", "gabbro")
+IMAGES_FILE = "images.yaml"
 
 
 def _parse_dotconfig(path):
@@ -131,10 +130,8 @@ class BuildDir:
             if not os.path.isfile(path):
                 raise CommandContextError(f"no {DOTCONFIG_FILE} in {self.path}")
             data = _parse_dotconfig(path)
-            for platform in _PLATFORMS:
-                if data.get(f"CONFIG_PLATFORM_{platform.upper()}"):
-                    data["PLATFORM_NAME"] = platform
-                    break
+            if data.get("CONFIG_PLATFORM_NAME"):
+                data["PLATFORM_NAME"] = data["CONFIG_PLATFORM_NAME"]
             self._config = Config(data)
         return self._config
 
@@ -171,8 +168,15 @@ class BuildDir:
     # --- artifacts --------------------------------------------------------
 
     @property
+    def app_dir(self):
+        """The source directory of the application the build is for."""
+        return self.cache.get("PBL_APPLICATION_SOURCE_DIR") or os.path.join(self.topdir, "pebble")
+
+    @property
     def project(self):
-        return self.cache.get("CMAKE_PROJECT_NAME", "pebbleos")
+        """The name of the image, whatever the application calls its project."""
+        # Not CMAKE_PROJECT_NAME: an application's own project() overrides it.
+        return "pebbleos"
 
     @property
     def elf(self):
@@ -185,6 +189,17 @@ class BuildDir:
     @property
     def bin(self):
         return self.join(f"{self.project}.bin")
+
+    def images(self):
+        """``[(name, files)]`` the build flashes, in order, from its images.yaml."""
+        path = self.join(IMAGES_FILE)
+        if not os.path.exists(path):
+            return [("app", [self.hex])]
+        import yaml
+
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        return [(image["name"], list(image["files"])) for image in data.get("images", [])]
 
     @property
     def pbpack(self):

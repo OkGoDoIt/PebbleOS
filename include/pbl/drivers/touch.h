@@ -105,6 +105,16 @@ int pbl_touch_dev_init(const struct pbl_device *dev);
 extern const struct pbl_touch *const TOUCH;
 
 /**
+ * @brief Get the properties of a touchscreen.
+ *
+ * @param touch Touchscreen.
+ * @return Its properties.
+ */
+static inline const struct pbl_touch_props *pbl_touch_get_props(const struct pbl_touch *touch) {
+  return &touch->props;
+}
+
+/**
  * @brief Define the class state of a touchscreen.
  *
  * @param sym Symbol of the instance.
@@ -122,13 +132,12 @@ extern const struct pbl_touch *const TOUCH;
  * @param _ops Driver operations.
  * @param ... Properties, designated initializers of struct pbl_touch_props.
  */
-#define PBL_TOUCH_INIT(sym, _name, _parent, _ops, ...)                                             \
-  {                                                                                                \
-    .dev =                                                                                         \
-        PBL_DEVICE_INIT_CLASS(sym, _name, pbl_touch_dev_init, _parent, nullptr, &pbl_touch_class), \
-    .ops = (_ops),                                                                                 \
-    .state = &sym##_touch_state,                                                                   \
-    .props = {__VA_ARGS__},                                                                        \
+#define PBL_TOUCH_INIT(sym, _name, _parent, _ops, ...)                                       \
+  {                                                                                          \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_touch_dev_init, _parent, &pbl_touch_class), \
+    .ops = (_ops),                                                                           \
+    .state = &sym##_touch_state,                                                             \
+    .props = {__VA_ARGS__},                                                                  \
   }
 
 /**

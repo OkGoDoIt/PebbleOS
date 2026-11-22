@@ -7,7 +7,6 @@
 #include <stdlib.h>
 
 #include <pbl/drivers/timer.h>
-#include <pbl/kernel/idle.h>
 
 #include <kernel.h>
 #include <kernel_test.h>
@@ -54,10 +53,10 @@ static const struct pbl_clockevent_ops s_fake_ce_ops = {
 
 PBL_DEVICE_STATE_DEFINE(s_fake_cs);
 static const struct pbl_clocksource s_fake_cs =
-    PBL_CLOCKSOURCE_INIT(s_fake_cs, "fake", prv_fake_cs_init, &s_fake_cs_ops, 32);
+    PBL_CLOCKSOURCE_INIT(s_fake_cs, "fake", prv_fake_cs_init, nullptr, &s_fake_cs_ops, 32);
 PBL_DEVICE_STATE_DEFINE(s_fake_ce);
-static const struct pbl_clockevent s_fake_ce =
-    PBL_CLOCKEVENT_INIT(s_fake_ce, "fake", prv_fake_ce_init, &s_fake_ce_ops, 1, UINT32_MAX);
+static const struct pbl_clockevent s_fake_ce = PBL_CLOCKEVENT_INIT(
+    s_fake_ce, "fake", prv_fake_ce_init, nullptr, &s_fake_ce_ops, 1, UINT32_MAX);
 
 const struct pbl_clocksource *const pbl_system_clocksource = &s_fake_cs;
 const struct pbl_clockevent *const pbl_system_clockevent = &s_fake_ce;
@@ -70,13 +69,6 @@ static int prv_fake_cs_init(const struct pbl_device *dev) {
 static int prv_fake_ce_init(const struct pbl_device *dev) {
   pbl_clockevent_set_hz(&s_fake_ce, PBL_TICK_HZ);
   return 0;
-}
-
-const struct pbl_idle_state pbl_soc_idle_states[] = {};
-const size_t pbl_soc_num_idle_states = 0;
-
-int pbl_soc_idle_state_limit(void) {
-  return -1;
 }
 
 // Idle means nothing can run until the next timeout: jump the clock there.
@@ -118,7 +110,7 @@ static void prv_run_until_stopped(void) {
 }
 
 void arch_start(void) {
-  irq_reset();
+  posix_irq_reset();
   prv_run_until_stopped();
   // Only the test harness gets here; it re-enters through pbl_test_kernel_run().
   pthread_exit(nullptr);
@@ -130,7 +122,7 @@ void pbl_test_kernel_run(void) {
   posix_in_isr = false;
   sched_start_prepare();
   timekeeping_start();
-  irq_reset();
+  posix_irq_reset();
   prv_run_until_stopped();
   for (size_t i = 0; i < s_num_zombies; i++) {
     pthread_cancel(s_zombies[i]);

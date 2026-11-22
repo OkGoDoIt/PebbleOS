@@ -18,7 +18,7 @@
  * @brief Step counting, sleep tracking, activity sessions and health metrics.
  *
  * The activity service samples the accelerometer at 25 Hz and feeds the samples to the activity
- * algorithm (see @ref services_activity_kraepelin) on KernelBG. The algorithm counts steps over
+ * algorithm (see @ref kraepelin) on SysWorkq. The algorithm counts steps over
  * 5 second epochs and, once a minute, produces a minute record (steps, VMC, orientation, light,
  * heart rate, SpO2) that is stored in a minute file and sent to the phone through data logging.
  * From the minute data it detects sleep, restful sleep, walks and runs, reported as
@@ -38,7 +38,7 @@
  * @code{.c}
  * int32_t steps[7];
  *
- * if (activity_get_metric(ActivityMetricStepCount, ARRAY_LENGTH(steps), steps)) {
+ * if (activity_get_metric(ActivityMetricStepCount, PBL_ARRAY_SIZE(steps), steps)) {
  *   // steps[0] is today, steps[1] yesterday, ...; -1 where no data is available
  * }
  *
@@ -50,7 +50,7 @@
  *
  * @code{.c}
  * ActivitySession sessions[ACTIVITY_MAX_ACTIVITY_SESSIONS_COUNT];
- * uint32_t count = ARRAY_LENGTH(sessions);
+ * uint32_t count = PBL_ARRAY_SIZE(sessions);
  *
  * if (activity_get_sessions(&count, sessions)) {
  *   for (uint32_t i = 0; i < count; i++) {
@@ -140,6 +140,20 @@ typedef enum {
   /** Number of intervals. */
   HRMonitoringIntervalCount,
 } HRMonitoringInterval;
+
+/**
+ * @brief Algorithm telling sleep minutes from awake ones.
+ *
+ * Stored in prefs: values must not change.
+ */
+typedef enum {
+  /** Kraepelin: filtered VMC (movement) below a threshold. */
+  ActivitySleepAlgorithm_Kraepelin = 0,
+  /** van Hees: no change of the wrist angle for 5 minutes. */
+  ActivitySleepAlgorithm_VanHees,
+  /** Number of algorithms. */
+  ActivitySleepAlgorithmCount,
+} ActivitySleepAlgorithm;
 
 /** @brief Heart rate monitor preferences, as stored in prefs. */
 typedef struct PBL_PACKED ActivityHRMSettings {
@@ -525,7 +539,7 @@ bool activity_is_initialized(void);
 /**
  * @brief Start activity tracking, sampling the accelerometer.
  *
- * Tracking starts asynchronously on KernelBG.
+ * Tracking starts asynchronously on SysWorkq.
  *
  * @param test_mode If true, the accelerometer is not used and samples must be fed with
  * activity_test_feed_samples().
@@ -536,7 +550,7 @@ bool activity_start_tracking(bool test_mode);
 /**
  * @brief Stop activity tracking.
  *
- * Tracking stops asynchronously on KernelBG.
+ * Tracking stops asynchronously on SysWorkq.
  *
  * @return true if the stop request was queued.
  */
@@ -575,6 +589,22 @@ void activity_prefs_tracking_set_enabled(bool enable);
  * @return true if enabled.
  */
 bool activity_prefs_tracking_is_enabled(void);
+
+/**
+ * @brief Get the sleep algorithm.
+ *
+ * @return Algorithm; @ref ActivitySleepAlgorithm_VanHees if the stored value is invalid.
+ */
+ActivitySleepAlgorithm activity_prefs_get_sleep_algorithm(void);
+
+/**
+ * @brief Set the sleep algorithm.
+ *
+ * It applies from the next minute on; a sleep session in progress carries on.
+ *
+ * @param algorithm Algorithm.
+ */
+void activity_prefs_set_sleep_algorithm(ActivitySleepAlgorithm algorithm);
 
 /**
  * @brief Record the activation time, if not recorded yet.
@@ -885,7 +915,7 @@ bool activity_get_sessions(uint32_t *session_entries, ActivitySession *sessions)
 /**
  * @brief Get historical minute data.
  *
- * Blocks on KernelBG, so only callable from the app or worker task.
+ * Blocks on SysWorkq, so only callable from the app or worker task.
  *
  * @param[out] minute_data Array filled with one record per minute.
  * @param[in,out] num_records On entry, capacity of @p minute_data. On exit, number of records
@@ -905,7 +935,7 @@ bool activity_get_minute_history(HealthMinuteData *minute_data, uint32_t *num_re
  * @brief Get the heart rate of each minute in a time range.
  *
  * Unlike activity_get_minute_history(), this reads the minute data once for the whole range.
- * Blocks on KernelBG, so only callable from the app or worker task.
+ * Blocks on SysWorkq, so only callable from the app or worker task.
  *
  * @param[out] heart_rate_bpm Array of @p num_minutes heart rates, one per minute from
  * @p utc_start, 0 for minutes without a reading.
@@ -959,7 +989,7 @@ bool activity_raw_sample_collection(bool enable, bool disable, bool *enabled, ui
 /**
  * @brief Dump the minute data used for sleep base64-encoded with PBL_LOG.
  *
- * Used to extract it through a support request. Blocks on KernelBG, so only callable from the
+ * Used to extract it through a support request. Blocks on SysWorkq, so only callable from the
  * app or worker task.
  *
  * @return true on success, false on error.

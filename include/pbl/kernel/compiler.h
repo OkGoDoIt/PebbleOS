@@ -116,7 +116,8 @@
  * @brief Place the symbol in a linker section.
  *
  * A no-op in unit tests and in builds linked without the firmware linker script
- * (@c PBL_NO_LINKER_SCRIPT), where nothing would gather the sections.
+ * (@c PBL_NO_LINKER_SCRIPT), where nothing would gather the sections; tables gathered from
+ * many files use @ref PBL_ITERABLE_SECTION instead.
  *
  * @param name Section name, as a string.
  */
@@ -171,6 +172,13 @@
 #define PBL_CLZ(x) PBL_CLZ_IMPL(x)
 
 /**
+ * @brief Count trailing zero bits.
+ *
+ * @param x Unsigned int; undefined for 0.
+ */
+#define PBL_CTZ(x) PBL_CTZ_IMPL(x)
+
+/**
  * @brief Count set bits.
  *
  * @param x Unsigned int.
@@ -195,5 +203,11 @@
  * @param x Value.
  */
 #define PBL_BSWAP32(x) PBL_BSWAP32_IMPL(x)
+/**
+ * @brief Reverse the bytes of a 64-bit value.
+ *
+ * @param x Value.
+ */
+#define PBL_BSWAP64(x) PBL_BSWAP64_IMPL(x)
 
 /** @} */

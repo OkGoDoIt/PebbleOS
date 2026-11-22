@@ -6,10 +6,14 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <pbl/console/console.h>
+#include <pbl/device.h>
 #include <pbl/kernel/init.h>
 #include <pbl/kernel/malloc.h>
+#include <pbl/kernel/print.h>
 #include <pbl/logging/backend.h>
 #include <pbl/logging/logging.h>
+#include <pbl/task_wdt/task_wdt.h>
 #include <pbl/version.h>
 
 static struct pbl_thread s_main_thread;
@@ -17,18 +21,30 @@ PBL_THREAD_STACK_DEFINE(s_main_stack, CONFIG_KERNEL_MAIN_STACK_SIZE);
 
 static void prv_main_entry(void *arg) {
   int (*entry)(void) = arg;
+
+#ifdef CONFIG_LOG
+  pbl_log_init();
+#endif
+#ifdef CONFIG_TASK_WDT
+  pbl_task_wdt_init();
+#endif
+  (void)pbl_device_init_all();
+
   entry();
 }
 
 void kernel_init(int (*entry)(void)) {
   mpu_init();
+  arch_early_init();
   pbl_soc_early_init();
   pbl_irq_init();
   arch_init();
   pbl_malloc_init();
-  pbl_log_early_init();
+#ifdef CONFIG_CONSOLE
+  pbl_console_early_init();
+#endif
 
-  PBL_LOG_ALWAYS("*** Booting PebbleOS %s ***", PBL_VERSION_TAG);
+  pbl_print("*** Booting PebbleOS %s ***\n", PBL_VERSION_TAG);
 
   const struct pbl_thread_attr attr = {
     .name = "KernelMain",
@@ -40,6 +56,7 @@ void kernel_init(int (*entry)(void)) {
     .stack_size = sizeof(s_main_stack),
   };
   PBL_ASSERTN(pbl_thread_create(&s_main_thread, &attr) == 0);
+  sys_workq_init();
 
   pbl_kernel_start();
 }

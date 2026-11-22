@@ -1,0 +1,174 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <pbl/bluetooth/responsiveness.h>
+#include <pbl/board/partitions.h>
+#include <pbl/drivers/flash.h>
+#include <pbl/kernel/malloc.h>
+#include <pbl/pp/session.h>
+#include <pbl/services/put_bytes/put_bytes_storage_raw.h>
+#include <pbl/util/math.h>
+
+#include <resource/resource_storage_flash.h>
+#include <system/firmware_storage.h>
+
+typedef struct MemoryLayout {
+  //! The start address of the object's section in flash (inclusive)
+  uint32_t start_address;
+
+  //! The end address of the object's section in flash (exclusive)
+  uint32_t end_address;
+
+  //! An optional offset from the beginning of the object's section in flash. This is useful if
+  //! you need to insert some derived metadata after the object has been written to flash.
+  uint32_t start_offset;
+} MemoryLayout;
+
+static const MemoryLayout *prv_get_layout_for_type(PutBytesObjectType object_type) {
+  static const MemoryLayout layouts[] = {
+#ifndef CONFIG_PBLBOOT
+    {PART_FIRMWARE_DEST_OFFSET, PART_FIRMWARE_DEST_OFFSET + PART_FIRMWARE_DEST_SIZE,
+     sizeof(FirmwareDescription)},
+    {PART_FIRMWARE_DEST_OFFSET, PART_FIRMWARE_DEST_OFFSET + PART_FIRMWARE_DEST_SIZE,
+     sizeof(FirmwareDescription)},
+#else
+    {PART_FIRMWARE_DEST_OFFSET, PART_FIRMWARE_DEST_OFFSET + PART_FIRMWARE_DEST_SIZE, 0U},
+    {PART_FIRMWARE_DEST_OFFSET, PART_FIRMWARE_DEST_OFFSET + PART_FIRMWARE_DEST_SIZE, 0U},
+#endif
+  };
+  static MemoryLayout resource_layout;
+
+  // Our PutBytesObjectType values are 1 indexed instead of zero indexed and the first three
+  // are the only raw ones, so we can get away with just subtracting 1.
+  if (object_type == ObjectSysResources) {
+    resource_layout = (MemoryLayout){
+      resource_storage_flash_get_unused_bank()->begin,
+      resource_storage_flash_get_unused_bank()->end,
+      0,
+    };
+    return &resource_layout;
+  } else {
+    return &layouts[object_type - 1];
+  }
+}
+
+bool pb_storage_raw_get_status(PutBytesObjectType obj_type, PbInstallStatus *status) {
+  const MemoryLayout *layout = prv_get_layout_for_type(obj_type);
+
+  const size_t read_buffer_size = 2048;
+  uint8_t *read_buffer = pbl_zalloc(read_buffer_size);
+
+  bool success = false;
+
+  if (!read_buffer) {
+    // If we can't alloc 2kB put bytes is likely going to fail anyway so just fallback to default
+    // impl
+    return success;
+  }
+
+  uint32_t curr_read_address = layout->end_address;
+  uint32_t stop_read_address = layout->start_address + layout->start_offset;
+
+  // Walk through the bank backwards. We rely on the NOR flash property that an "erased" byte will
+  // read 0xff. When we encounter a byte which is not 0xff, we have found data which has been
+  // written.
+  while (curr_read_address > stop_read_address) {
+    size_t bytes_left = curr_read_address - stop_read_address;
+    size_t bytes_to_read = PBL_MIN(bytes_left, read_buffer_size);
+    curr_read_address -= bytes_to_read;
+
+    pbl_flash_read(FLASH, curr_read_address, read_buffer, bytes_to_read);
+    for (int i = (bytes_to_read - 1); i >= 0; i--) {
+      if (read_buffer[i] != 0xff) {
+        uint32_t data_at = curr_read_address + i;
+
+        // FIXME: To get bytes_written we should really be adding + 1. However, for FW installs,
+        // PBs expects that a resource pack and firmware has been transmitted. To guarantee this
+        // happens, never tell the mobile app that all bytes have been transferred. I don't see a
+        // great way of resolving this that doesn't result in messing around with the PB state
+        // machine which I'd like to avoid if this gets pulled into silk PRF
+        uint32_t bytes_written = data_at - stop_read_address;
+        if (bytes_written == 0) {
+          goto cleanup;
+        }
+
+        // TODO: We are perpetuating the defective crc here. Maybe this is as good an excuse as any
+        // for the mobile apps to implement flash_crc32
+        uint32_t crc = pbl_flash_crc32_legacy(FLASH, stop_read_address, bytes_written);
+
+        *status = (PbInstallStatus){.num_bytes_written = bytes_written, .crc_of_bytes = crc};
+
+        success = true;
+        goto cleanup;
+      }
+    }
+  }
+
+cleanup:
+  pbl_free(read_buffer);
+  return success;
+}
+
+bool pb_storage_raw_init(PutBytesStorage *storage, PutBytesObjectType object_type,
+                         uint32_t total_size, PutBytesStorageInfo *info, uint32_t append_offset) {
+  const MemoryLayout *layout = prv_get_layout_for_type(object_type);
+  storage->impl_data = (void *)layout;
+
+  storage->current_offset = layout->start_offset;
+
+  if (append_offset == 0) {
+    // Reduce BLE activity while the blocking erase runs, to lower stack pressure on the
+    // NimbleHost task. Scoped to the erase only: this shares PBL_BT_CONSUMER_PP_PUT_BYTES with the
+    // PBL_BT_RESPONSE_TIME_MIN request held during chunk streaming, so leaving it in place would
+    // cancel the fast connection interval.
+    pbl_pp_session_set_responsiveness(pbl_pp_session_get_system(), PBL_BT_CONSUMER_PP_PUT_BYTES,
+                                      PBL_BT_RESPONSE_TIME_MIDDLE,
+                                      PBL_BT_MIN_LATENCY_MODE_TIMEOUT_PUT_BYTES_SECS, nullptr);
+
+    // By erasing the entire region we make it more likely for 'pb_storage_raw_get_status' to
+    // recover the correct location.
+    pbl_flash_erase(FLASH, layout->start_address, layout->end_address - layout->start_address);
+
+    // Restore the fast interval so the init ACK isn't delayed by the slow connection parameters.
+    pbl_pp_session_set_responsiveness(pbl_pp_session_get_system(), PBL_BT_CONSUMER_PP_PUT_BYTES,
+                                      PBL_BT_RESPONSE_TIME_MIN,
+                                      PBL_BT_MIN_LATENCY_MODE_TIMEOUT_PUT_BYTES_SECS, nullptr);
+  } else {
+    // Some data we want has already been written, just continue from last valid location!
+    storage->current_offset += append_offset;
+  }
+
+  return true;
+}
+
+uint32_t pb_storage_raw_get_max_size(PutBytesObjectType object_type) {
+  const MemoryLayout *layout = prv_get_layout_for_type(object_type);
+  return layout->end_address - layout->start_address;
+}
+
+void pb_storage_raw_write(PutBytesStorage *storage, uint32_t offset, const uint8_t *buffer,
+                          uint32_t length) {
+  const MemoryLayout *layout = storage->impl_data;
+
+  const uint32_t flash_address = layout->start_address + offset;
+  pbl_flash_write(FLASH, flash_address, buffer, length);
+}
+
+uint32_t pb_storage_raw_calculate_crc(PutBytesStorage *storage, PutBytesCrcType crc_type) {
+  const MemoryLayout *layout = storage->impl_data;
+
+  const unsigned int start_address = layout->start_address + layout->start_offset;
+  const unsigned int length = storage->current_offset - layout->start_offset;
+  if (crc_type == PutBytesCrcType_Legacy) {
+    return pbl_flash_crc32_legacy(FLASH, start_address, length);
+  }
+
+  return pbl_flash_crc32(FLASH, start_address, length);
+}
+
+void pb_storage_raw_deinit(PutBytesStorage *storage, bool is_success) {
+  // Restore normal BLE responsiveness that was reduced in pb_storage_raw_init
+  pbl_pp_session_set_responsiveness(pbl_pp_session_get_system(), PBL_BT_CONSUMER_PP_PUT_BYTES,
+                                    PBL_BT_RESPONSE_TIME_MIN,
+                                    PBL_BT_MIN_LATENCY_MODE_TIMEOUT_PUT_BYTES_SECS, nullptr);
+}

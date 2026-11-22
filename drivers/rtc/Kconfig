@@ -26,13 +26,15 @@ config RTC_RETAINED
 
 config RTC_SF32LB
     bool "SiFli SF32LB"
-    default y if SOC_SF32LB52
+    default y
+    depends on DT_HAS_SIFLI_SF32LB52_RTC_ENABLED
+    select CLK
     help
-      SiFli SF32LB calendar RTC, clocked by the calibrated RC10K.
+      SiFli SF32LB calendar RTC, counting clk_rtc at its calibrated rate.
 
 config RTC_QEMU
     bool "QEMU RTC"
-    default y if SOC_QEMU
+    default y if SOC_QEMU_PEBBLE
     help
       QEMU RTC, following the host clock.
 

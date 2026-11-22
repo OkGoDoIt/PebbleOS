@@ -4,20 +4,22 @@
 #include <errno.h>
 #include <string.h>
 
+#include <pbl/analytics/analytics.h>
+#include <pbl/devicetree.h>
 #include <pbl/drivers/touch/cst816.h>
 #include <pbl/input/input.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/time.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/analytics/analytics.h>
-#include <pbl/services/system_task.h>
 #include <pbl/util/bits.h>
+#include <pbl/util/byteorder.h>
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
 
 #include <cst816_fw.h>
 
-PBL_LOG_MODULE_DEFINE(driver_touch_cst816, CONFIG_DRIVER_TOUCH_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_touch, CONFIG_DRIVER_TOUCH_LOG_LEVEL);
 
 #define CST816_RESET_CYCLE_TIME_MS     10
 #define CST816_POR_DELAY_TIME_MS       110
@@ -63,7 +65,7 @@ PBL_LOG_MODULE_DEFINE(driver_touch_cst816, CONFIG_DRIVER_TOUCH_LOG_LEVEL);
 #define CST816_WAKE_SPACING_MS 2000
 
 static inline const struct pbl_cst816 *prv_from_touch(const struct pbl_touch *touch) {
-  return container_of(touch, const struct pbl_cst816, touch);
+  return PBL_CONTAINER_OF(touch, const struct pbl_cst816, touch);
 }
 
 static int prv_read(const struct pbl_cst816 *cst, uint8_t reg, uint8_t *buf, uint32_t len) {
@@ -84,9 +86,10 @@ static int prv_write(const struct pbl_cst816 *cst, uint8_t reg, uint8_t val) {
 }
 
 static int prv_boot_read(const struct pbl_cst816 *cst, uint16_t reg, uint8_t *buf, uint32_t len) {
-  const uint8_t addr[] = {reg >> 8, reg & 0xFF};
+  uint8_t addr[2];
   int ret;
 
+  pbl_put_be16(reg, addr);
   ret = pbl_i2c_write(&cst->i2c_boot, addr, sizeof(addr));
   if (ret != 0) {
     return ret;
@@ -103,8 +106,7 @@ static int prv_boot_write(const struct pbl_cst816 *cst, uint16_t reg, const uint
     return -EINVAL;
   }
 
-  buf[0] = reg >> 8;
-  buf[1] = reg & 0xFF;
+  pbl_put_be16(reg, buf);
   memcpy(&buf[sizeof(reg)], data, len);
 
   return pbl_i2c_write(&cst->i2c_boot, buf, sizeof(reg) + len);
@@ -176,7 +178,7 @@ static int prv_read_checksum(const struct pbl_cst816 *cst, uint16_t *checksum) {
     return ret;
   }
 
-  *checksum = ((uint16_t)data[1] << 8) | data[0];
+  *checksum = pbl_get_le16(data);
 
   return 0;
 }
@@ -199,18 +201,19 @@ static int prv_wait_page_ready(const struct pbl_cst816 *cst) {
 }
 
 static int prv_fw_update(const struct pbl_cst816 *cst) {
-  uint16_t start_addr = ((uint16_t)app_bin[1] << 8) | app_bin[0];
-  uint16_t length = ((uint16_t)app_bin[3] << 8) | app_bin[2];
-  const uint16_t checksum = ((uint16_t)app_bin[5] << 8) | app_bin[4];
+  uint16_t start_addr = pbl_get_le16(&app_bin[0]);
+  uint16_t length = pbl_get_le16(&app_bin[2]);
+  const uint16_t checksum = pbl_get_le16(&app_bin[4]);
   const uint8_t *page = &app_bin[CST816_FW_HEADER_SIZE];
   uint16_t checksum_read;
   uint16_t page_len;
   int ret;
 
   while (length > 0U) {
-    const uint8_t addr[] = {start_addr & 0xFF, start_addr >> 8};
+    uint8_t addr[2];
 
-    page_len = MIN(length, CST816_FW_PAGE_SIZE);
+    pbl_put_le16(start_addr, addr);
+    page_len = PBL_MIN(length, CST816_FW_PAGE_SIZE);
     PBL_LOG_DBG("Writing 0x%04x, %u bytes", start_addr, page_len);
 
     ret = prv_boot_write(cst, CST816_FW_START_ADDR_REG, addr, sizeof(addr));
@@ -300,7 +303,7 @@ static void prv_count_irq(struct pbl_cst816_state *state) {
 
   // Each interrupt keeps the chip in active scan for the wake window.
   if (state->last_irq_ticks != 0U) {
-    PBL_ANALYTICS_ADD(touch_driver_awake_time_ms, pbl_ticks_to_ms(MIN(gap, wake_spacing)));
+    PBL_ANALYTICS_ADD(touch_driver_awake_time_ms, pbl_ticks_to_ms(PBL_MIN(gap, wake_spacing)));
   }
 
   state->last_irq_ticks = now;
@@ -317,12 +320,12 @@ static int prv_wake(const struct pbl_cst816 *cst) {
 
   state->palm_down = false;
   state->palm_click_pending = false;
-  return pbl_intc_enable(&state->irq);
+  return pbl_intc_enable(&cst->irq);
 }
 
-static void prv_work(void *arg) {
-  const struct pbl_cst816 *cst = arg;
-  struct pbl_cst816_state *state = cst->state;
+static void prv_work(struct pbl_work *work) {
+  struct pbl_cst816_state *state = PBL_CONTAINER_OF(work, struct pbl_cst816_state, work);
+  const struct pbl_cst816 *cst = state->cst;
   uint8_t data[CST816_TOUCH_DATA_SIZE];
   uint16_t gesture_code = 0U;
   bool report_gesture = false;
@@ -335,7 +338,6 @@ static void prv_work(void *arg) {
 
   pbl_touch_lock(&cst->touch);
 
-  state->work_pending = false;
   if (!state->enabled) {
     pbl_touch_unlock(&cst->touch);
     return;
@@ -351,7 +353,7 @@ static void prv_work(void *arg) {
   if (ret != 0) {
     // ESD and other transients can leave the chip deaf to I2C until it is reset.
     PBL_LOG_ERR("Read failed (%d), resetting", ret);
-    (void)pbl_intc_disable(&state->irq);
+    (void)pbl_intc_disable(&cst->irq);
     ret = prv_wake(cst);
     if (ret != 0) {
       PBL_LOG_ERR("Reset failed (%d)", ret);
@@ -414,14 +416,7 @@ static void prv_irq_handler(void *arg) {
   const struct pbl_cst816 *cst = arg;
   struct pbl_cst816_state *state = cst->state;
 
-  if (state->work_pending) {
-    return;
-  }
-
-  state->work_pending = true;
-  if (!system_task_add_callback_from_isr_droppable_raised(prv_work, arg)) {
-    state->work_pending = false;
-  }
+  pbl_work_submit_boosted(&pbl_sys_workq, &state->work);
 }
 
 static int prv_sleep(const struct pbl_cst816 *cst, bool awake) {
@@ -430,7 +425,7 @@ static int prv_sleep(const struct pbl_cst816 *cst, bool awake) {
 
   state->enabled = false;
 
-  ret = pbl_intc_disable(&state->irq);
+  ret = pbl_intc_disable(&cst->irq);
   if (ret != 0) {
     return ret;
   }
@@ -449,6 +444,9 @@ static int prv_sleep(const struct pbl_cst816 *cst, bool awake) {
 static int prv_init(const struct pbl_touch *touch) {
   const struct pbl_cst816 *cst = prv_from_touch(touch);
   struct pbl_cst816_state *state = cst->state;
+
+  state->cst = cst;
+  pbl_work_init(&state->work, prv_work);
   int ret;
 
   ret = pbl_device_init(&cst->reset.port->dev);
@@ -461,22 +459,12 @@ static int prv_init(const struct pbl_touch *touch) {
     return ret;
   }
 
-  ret = pbl_device_init(&cst->int_gpio.port->dev);
-  if (ret != 0) {
+  ret = pbl_pinctrl_select_state(&cst->pinctrl, PBL_PINCTRL_STATE_DEFAULT);
+  if (ret != 0 && ret != -ENOENT) {
     return ret;
   }
 
-  ret = pbl_gpio_configure(&cst->int_gpio, PBL_GPIO_INPUT);
-  if (ret != 0) {
-    return ret;
-  }
-
-  ret = pbl_gpio_to_irq(&cst->int_gpio, PBL_IRQ_TYPE_EDGE_FALLING, &state->irq);
-  if (ret != 0) {
-    return ret;
-  }
-
-  ret = pbl_device_init(&state->irq.intc->dev);
+  ret = pbl_device_init(&cst->irq.intc->dev);
   if (ret != 0) {
     return ret;
   }
@@ -491,7 +479,7 @@ static int prv_init(const struct pbl_touch *touch) {
     return ret;
   }
 
-  ret = pbl_intc_request(&state->irq, prv_irq_handler, (void *)cst);
+  ret = pbl_intc_request(&cst->irq, prv_irq_handler, (void *)cst);
   if (ret != 0) {
     return ret;
   }
@@ -523,3 +511,5 @@ const struct pbl_touch_ops pbl_cst816_ops = {
   .enable = prv_enable,
   .disable = prv_disable,
 };
+
+#include PBL_DT_INSTANCES(hynitron_cst816s)

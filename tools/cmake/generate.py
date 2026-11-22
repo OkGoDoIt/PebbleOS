@@ -63,7 +63,7 @@ def cmd_version(args):
     write_if_changed(args.output, content)
 
 
-# --- System app registry (fw/shell) ------------------------------------
+# --- System app registry (pebble/shell) ------------------------------------
 
 
 def uuid_to_byte_hex_str(uuid):
@@ -167,66 +167,6 @@ def cmd_app_registry(args):
         if enum not in built
     )
     write_if_changed(args.enum, "".join(out))
-
-
-# --- Pebble protocol endpoint table (fw/services/comm_session) ---------
-
-
-def cmd_endpoints_table(args):
-    with open(args.input) as f:
-        definition = json.load(f)
-
-    endpoints = list(definition["prf_and_normal_fw"])
-    if not args.recovery:
-        endpoints.extend(definition["normal_fw_only"])
-    endpoints.sort()
-
-    def get_access_enum(access_str):
-        if access_str == "private":
-            return "PebbleProtocolAccessPrivate"
-        if access_str == "any":
-            return "PebbleProtocolAccessAny"
-        raise ValueError(f"Unknown value: {access_str}")
-
-    DEFAULT_RECV_IMPL = "g_default_kernel_receiver_implementation"
-    DEFAULT_RECV_OPT = "g_default_kernel_receiver_opt_bg"
-    recv_imp_set = {DEFAULT_RECV_IMPL}
-    recv_opt_set = {DEFAULT_RECV_OPT}
-
-    out = ["// GENERATED -- DO NOT EDIT\n\n", '#include "kernel/pebble_tasks.h"\n\n']
-    for _eid, _eid_str, _access, cb_str, recv_imp, recv_opt in endpoints:
-        if recv_imp:
-            recv_imp_set.add(recv_imp)
-        if recv_opt:
-            recv_opt_set.add(recv_opt)
-        if cb_str:
-            out.append(
-                f"extern void {cb_str}(CommSession *session, "
-                "const uint8_t* data, size_t length);\n"
-            )
-
-    out.append("\n\n")
-    out.extend(f"extern ReceiverImplementation {r};\n" for r in recv_imp_set)
-    out.append("\n\n")
-    out.extend(f"extern const PebbleTask {r};\n" for r in recv_opt_set)
-    out.append("\n\nstatic const PebbleProtocolEndpoint s_protocol_endpoints[] = {\n")
-
-    for eid, eid_str, access_str, cb_str, recv_imp, recv_opt in endpoints:
-        if int(eid_str, base=16) != eid:
-            raise ValueError(f"Endpoint IDs need to match: {eid} vs {eid_str}")
-        if not cb_str:
-            cb_str = "NULL"
-        if not recv_imp:
-            recv_imp = DEFAULT_RECV_IMPL
-            if not recv_opt:
-                recv_opt = DEFAULT_RECV_OPT
-        recv_opt = "&" + recv_opt if recv_opt else "NULL"
-        out.append(
-            f"  {{ {eid}, {cb_str}, {get_access_enum(access_str)}, "
-            f"&{recv_imp}, {recv_opt} }},\n"
-        )
-    out.append("};\n\n")
-    write_if_changed(args.output, "".join(out))
 
 
 # --- applib_malloc ---------------------------------------------------------
@@ -334,12 +274,6 @@ def cmd_pblboot_header(args):
         pblboot.insert_header_hex(args.input, args.output, args.offset, priority)
 
 
-def cmd_loghash_merge(args):
-    from log_hashing.newlogging import merge_loghash_dict_json_files
-
-    merge_loghash_dict_json_files(args.output, args.inputs)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -361,12 +295,6 @@ def main():
         help="leave out the apps stored as resources (the stored apps are not built)",
     )
     p.set_defaults(func=cmd_app_registry)
-
-    p = sub.add_parser("endpoints-table")
-    p.add_argument("--input", required=True)
-    p.add_argument("--output", required=True)
-    p.add_argument("--recovery", action="store_true")
-    p.set_defaults(func=cmd_endpoints_table)
 
     p = sub.add_parser("applib-malloc")
     p.add_argument("--input", required=True)
@@ -413,11 +341,6 @@ def main():
     p.add_argument("--output", required=True)
     p.add_argument("--offset", type=int, required=True)
     p.set_defaults(func=cmd_pblboot_header)
-
-    p = sub.add_parser("loghash-merge")
-    p.add_argument("--output", required=True)
-    p.add_argument("inputs", nargs="+")
-    p.set_defaults(func=cmd_loghash_merge)
 
     args = parser.parse_args()
     args.func(args)

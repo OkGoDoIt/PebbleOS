@@ -6,30 +6,23 @@
 #include <stdint.h>
 
 #include <pbl/drivers/audio.h>
+#include <pbl/drivers/clk.h>
 #include <pbl/drivers/dma.h>
 #include <pbl/drivers/pinctrl.h>
-#include <pbl/drivers/regulator.h>
+#include <pbl/drivers/reset.h>
 #include <pbl/kernel/irq.h>
 
 /**
  * @defgroup drivers_audio_sf32lb52 SF32LB52 audio
  * @ingroup drivers_audio
- * @brief @ref drivers_audio devices of the SF32LB52: the audio codec DAC and the PDM interface.
+ * @brief @ref drivers_audio DAIs of the SF32LB52: the audio codec DAC and the PDM interface.
  *
  * The audio codec (AUDCODEC) plays mono through its DAC, with its analog bias, PLL and output
  * stage, at 8 to 48 kHz; its digital gain runs from -36 to 0 dB. The PDM interface records one
  * or two digital microphones at 8 to 48 kHz, mono taking the left channel; its gain runs from
- * -15 to +45 dB. Both stream through a cyclic DMA channel of @ref SF32LB52_DMAC1, so rings have
- * two periods, of a multiple of 4 bytes; the board connects and gives the channel interrupt.
+ * -15 to +45 dB. Both stream through a cyclic channel of the SF32LB52 DMA controller, so rings have
+ * two periods, of a multiple of 4 bytes.
  * The CPU does not enter deep sleep while they stream.
- *
- * @code{.c}
- * static const struct pbl_dma_chan s_dac_dma =
- *     PBL_DMA_CHAN(SF32LB52_DMAC1, 3, SF32LB52_DMA_REQ_AUDAC_CH0, SF32LB52_DMA_PL_HIGH);
- * PBL_AUDIO_SF32LB52_AUDCODEC_DEFINE(s_speaker, "speaker", &s_dac_dma, PBL_IRQN(DMAC1_CH4),
- *                                    &s_speaker_link);
- * PBL_IRQ_CONNECT(DMAC1_CH4, 5, pbl_dma_sf32lb52_irq_handler, &s_dac_dma, 0);
- * @endcode
  * @{
  */
 
@@ -43,41 +36,42 @@ struct pbl_audio_sf32lb52_audcodec_state {
 
 /** @brief Audio codec DAC. */
 struct pbl_audio_sf32lb52_audcodec {
-  /** Audio device. */
-  struct pbl_audio audio;
+  /** DAI. */
+  struct pbl_audio_dai dai;
+  /** Register base address. */
+  uintptr_t base;
+  /** Clock. */
+  struct pbl_clk clk;
   /** DAC DMA channel. */
   const struct pbl_dma_chan *dma;
-  /** Interrupt of the DMA channel. */
-  pbl_irq_t dma_irq;
+  /** PMUC registers, holding the HXT48 buffer to the codec. */
+  uintptr_t pmuc;
   /** Driver runtime state. */
   struct pbl_audio_sf32lb52_audcodec_state *state;
 };
 
 /** @cond INTERNAL_HIDDEN */
-extern const struct pbl_audio_ops pbl_audio_sf32lb52_audcodec_ops;
+extern const struct pbl_audio_dai_ops pbl_audio_sf32lb52_audcodec_ops;
 /** @endcond */
 
 /**
- * @brief Define the audio codec DAC, a playback device.
+ * @brief Define the audio codec DAC, a playback DAI.
  *
- * @param sym Symbol of the device.
+ * @param sym Symbol of the DAI.
  * @param _name Device name.
- * @param _dma DAC DMA channel, on @ref SF32LB52_DMAC1 with request
- * @c SF32LB52_DMA_REQ_AUDAC_CH0.
- * @param _dma_irq Interrupt of the DMA channel.
- * @param _link What the DAC is wired to, or NULL.
+ * @param _base Register base address.
+ * @param _clk Clock, from PBL_CLK().
+ * @param _dma DAC DMA channel.
+ * @param _pmuc PMUC registers.
  */
-#define PBL_AUDIO_SF32LB52_AUDCODEC_DEFINE(sym, _name, _dma, _dma_irq, _link)                 \
-  PBL_AUDIO_STATE_DEFINE(sym);                                                                \
-  static struct pbl_audio_sf32lb52_audcodec_state sym##_audcodec_state;                       \
-  static const struct pbl_audio_sf32lb52_audcodec sym = {                                     \
-    .audio = PBL_AUDIO_INIT(sym, _name, PBL_AUDIO_PLAYBACK, &pbl_audio_sf32lb52_audcodec_ops, \
-                            _link, PBL_DEVICE_DEPS(&(_dma)->ctrl->dev)),                      \
-    .dma = (_dma),                                                                            \
-    .dma_irq = (_dma_irq),                                                                    \
-    .state = &sym##_audcodec_state,                                                           \
-  };                                                                                          \
-  PBL_DEVICE_REGISTER(sym, &sym.audio.dev)
+#define PBL_AUDIO_SF32LB52_AUDCODEC_DEFINE(sym, _name, _base, _clk, _dma, _pmuc)                  \
+  PBL_AUDIO_DAI_STATE_DEFINE(sym);                                                                \
+  static struct pbl_audio_sf32lb52_audcodec_state sym##_audcodec_state;                           \
+  PBL_DEVICE_INSTANCE(sym, struct pbl_audio_sf32lb52_audcodec, struct pbl_audio_dai, dai) {       \
+    .dai = PBL_AUDIO_DAI_INIT(sym, _name, nullptr, &pbl_audio_sf32lb52_audcodec_ops,              \
+                              PBL_AUDIO_PLAYBACK),                                                \
+    .base = (_base), .clk = _clk, .dma = (_dma), .pmuc = (_pmuc), .state = &sym##_audcodec_state, \
+  }
 
 /** @cond INTERNAL_HIDDEN */
 struct pbl_audio_sf32lb52_pdm_state {
@@ -85,57 +79,62 @@ struct pbl_audio_sf32lb52_pdm_state {
 };
 /** @endcond */
 
-/** @brief PDM microphone interface. */
+/** @brief PDM interface. */
 struct pbl_audio_sf32lb52_pdm {
-  /** Audio device. */
-  struct pbl_audio audio;
-  /** Clock and data pins. */
-  const struct pbl_pinctrl *pinctrl;
+  /** DAI. */
+  struct pbl_audio_dai dai;
+  /** Register base address. */
+  uintptr_t base;
   /** PDM interrupt, reporting FIFO overflows. */
   pbl_irq_t irq;
+  /** Clock. */
+  struct pbl_clk clk;
+  /** Reset. */
+  struct pbl_reset rst;
   /** DMA channel. */
   const struct pbl_dma_chan *dma;
-  /** Interrupt of the DMA channel. */
-  pbl_irq_t dma_irq;
-  /** Microphone supply, on while recording, or NULL. */
-  const struct pbl_regulator *vdd;
+  /** Clock and data pins. */
+  const struct pbl_pinctrl *pinctrl;
   /** Driver runtime state. */
   struct pbl_audio_sf32lb52_pdm_state *state;
 };
 
 /** @cond INTERNAL_HIDDEN */
-extern const struct pbl_audio_ops pbl_audio_sf32lb52_pdm_ops;
+extern const struct pbl_audio_dai_ops pbl_audio_sf32lb52_pdm_ops;
 /** @endcond */
 
 /**
- * @brief Define the PDM interface, a capture device.
+ * @brief Define a PDM interface, a capture DAI.
  *
- * @param sym Symbol of the device.
+ * @param sym Symbol of the DAI.
  * @param _name Device name.
- * @param _pinctrl Clock and data pins, from PBL_PINCTRL().
- * @param _irq PDM interrupt; the board connects pbl_audio_sf32lb52_pdm_irq_handler() to it.
- * @param _dma DMA channel, on @ref SF32LB52_DMAC1 with request @c SF32LB52_DMA_REQ_PDM1_L.
- * @param _dma_irq Interrupt of the DMA channel.
- * @param _vdd Microphone supply, or NULL.
+ * @param _base Register base address.
+ * @param _irq Interrupt line.
+ * @param _clk Clock, from PBL_CLK().
+ * @param _rst Reset, from PBL_RESET().
+ * @param _dma DMA channel.
+ * @param _pinctrl Default state of the clock and data pins.
  */
-#define PBL_AUDIO_SF32LB52_PDM_DEFINE(sym, _name, _pinctrl, _irq, _dma, _dma_irq, _vdd)          \
-  PBL_AUDIO_STATE_DEFINE(sym);                                                                   \
+#define PBL_AUDIO_SF32LB52_PDM_DEFINE(sym, _name, _base, _irq, _clk, _rst, _dma, _pinctrl)       \
+  PBL_AUDIO_DAI_STATE_DEFINE(sym);                                                               \
   static struct pbl_audio_sf32lb52_pdm_state sym##_pdm_state;                                    \
-  static const struct pbl_pinctrl sym##_pdm_pins = _pinctrl;                                     \
-  static const struct pbl_audio_sf32lb52_pdm sym = {                                             \
-    .audio = PBL_AUDIO_INIT(sym, _name, PBL_AUDIO_CAPTURE, &pbl_audio_sf32lb52_pdm_ops, nullptr, \
-                            PBL_DEVICE_DEPS(&(_dma)->ctrl->dev)),                                \
-    .pinctrl = &sym##_pdm_pins,                                                                  \
+  static const struct pbl_pinctrl sym##_pdm_pins = PBL_PINCTRL(_pinctrl, nullptr, 0);            \
+  PBL_DEVICE_INSTANCE(sym, struct pbl_audio_sf32lb52_pdm, struct pbl_audio_dai, dai){            \
+    .dai =                                                                                       \
+        PBL_AUDIO_DAI_INIT(sym, _name, nullptr, &pbl_audio_sf32lb52_pdm_ops, PBL_AUDIO_CAPTURE), \
+    .base = (_base),                                                                             \
     .irq = (_irq),                                                                               \
+    .clk = _clk,                                                                                 \
+    .rst = _rst,                                                                                 \
     .dma = (_dma),                                                                               \
-    .dma_irq = (_dma_irq),                                                                       \
-    .vdd = (_vdd),                                                                               \
+    .pinctrl = &sym##_pdm_pins,                                                                  \
     .state = &sym##_pdm_state,                                                                   \
   };                                                                                             \
-  PBL_DEVICE_REGISTER(sym, &sym.audio.dev)
+  PBL_IRQ_CONNECT_NUM(_irq, CONFIG_AUDIO_SF32LB52_PDM_IRQ_PRIO,                                  \
+                      pbl_audio_sf32lb52_pdm_irq_handler, &sym##_inst, 0)
 
 /**
- * @brief PDM interrupt handler, to connect with PBL_IRQ_CONNECT().
+ * @brief PDM interrupt handler, connected by PBL_AUDIO_SF32LB52_PDM_DEFINE().
  *
  * @param pdm PDM interface.
  */

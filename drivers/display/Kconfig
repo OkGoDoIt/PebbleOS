@@ -10,23 +10,76 @@ if DISPLAY
 
 config DISPLAY_SF32LB_LCDC
     bool "SiFli SF32LB LCD controller"
-    default y if SOC_SF32LB52
-    depends on CLK_SF32LB && PINCTRL && RESET_SF32LB
+    default y
+    depends on DT_HAS_SIFLI_SF32LB52_LCDC_ENABLED
+    select CLK
     select PANEL
+    select PINCTRL
+    select RESET
     help
       Support for the SiFli SF32LB LCD controller, driving a JDI
       memory-in-pixel panel.
 
+config DISPLAY_SF32LB_LCDC_IRQ_PRIO
+    int "Interrupt priority"
+    default 5
+    depends on DISPLAY_SF32LB_LCDC
+    help
+      Priority of the controller interrupt.
+
+config DISPLAY_SF32LB57_LCDC
+    bool "SiFli SF32LB57 LCD controller"
+    default y
+    depends on DT_HAS_SIFLI_SF32LB57_LCDC_ENABLED
+    select CLK
+    select MIPI_DBI
+    select PANEL
+    select PINCTRL
+    select RESET
+    help
+      Support for the SiFli SF32LB57 LCD controller, driving a panel with
+      frame memory over quad SPI.
+
+config DISPLAY_SF32LB57_LCDC_IRQ_PRIO
+    int "Interrupt priority"
+    default 5
+    depends on DISPLAY_SF32LB57_LCDC
+    help
+      Priority of the controller interrupt.
+
+choice DISPLAY_SF32LB57_LCDC_FORMAT
+    prompt "Framebuffer format"
+    default DISPLAY_SF32LB57_LCDC_FORMAT_ARGB2222
+    depends on DISPLAY_SF32LB57_LCDC
+    help
+      Format of the framebuffers the display takes, whatever the one its
+      panel is written in.
+
+config DISPLAY_SF32LB57_LCDC_FORMAT_ARGB2222
+    bool "ARGB2222"
+    help
+      8 bits per pixel, the Pebble color format.
+
+config DISPLAY_SF32LB57_LCDC_FORMAT_RGB565
+    bool "RGB565"
+    help
+      16 bits per pixel.
+
+endchoice
+
 config DISPLAY_SHARP_LS013B7DH01
     bool "Sharp LS013B7DH01"
-    default y if SOC_NRF52
-    depends on PWM && SPI
+    default y
+    depends on DT_HAS_SHARP_LS013B7DH01_ENABLED
+    select PWM
+    select SPI
     help
       Support for the Sharp LS013B7DH01 memory LCD.
 
 config DISPLAY_QEMU
     bool "QEMU Framebuffer Display"
-    default y if SOC_QEMU
+    default y
+    depends on DT_HAS_QEMU_PEBBLE_DISPLAY_ENABLED
     help
       Support for the QEMU framebuffer display peripheral.
 
@@ -53,6 +106,12 @@ config DISPLAY_SDL_MONO
     bool "SDL display is monochrome"
     help
       The SDL display takes a 1-bit framebuffer, 8-bit color otherwise.
+
+config DISPLAY_SDL_ROUND
+    bool "SDL display is round"
+    help
+      The SDL display hides the pixels outside the circle of the
+      LS013B7DD02 panel.
 
 endif # DISPLAY_SDL
 

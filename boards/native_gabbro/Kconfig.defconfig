@@ -4,6 +4,14 @@
 config RESOURCES_BOARD
     default "qemu_gabbro"
 
-# In a browser, the page is the other end of the emulator's serial port.
-config QEMU_SERIAL
+config DISPLAY_SDL_WIDTH
+    default 260
+
+config DISPLAY_SDL_HEIGHT
+    default 260
+
+config DISPLAY_SDL_ROUND
     default y
+
+config POSIX_EMSCRIPTEN_FRAME
+    default "gabbro"

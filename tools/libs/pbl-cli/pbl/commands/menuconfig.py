@@ -68,14 +68,29 @@ class Menuconfig(PblCommand):
             BOARD=spec.name,
             BOARD_REVISION=spec.revision or boards.NO_REVISION,
             KCONFIG_CONFIG=dotconfig,
+            DT_BUILD_DIR=build.join("devicetree"),
+            PYTHONPATH=os.pathsep.join(
+                filter(
+                    None,
+                    [
+                        os.path.join(self.topdir, "tools", "devicetree"),
+                        os.environ.get("PYTHONPATH"),
+                    ],
+                )
+            ),
         )
         if self.dry_run:
             self.inf("[dry-run] menuconfig", dotconfig, color="yellow")
             return 0
 
+        # The application's Kconfig, when it has one, is the root of the tree.
+        root = os.path.join(build.app_dir, "Kconfig")
+        if not os.path.isfile(root):
+            root = os.path.join(self.topdir, "Kconfig")
+
         before = read_entries(dotconfig)
         subprocess.run(
-            [sys.executable, "-m", "menuconfig", os.path.join(self.topdir, "Kconfig")],
+            [sys.executable, "-m", "menuconfig", root],
             env=env,
             check=False,
         )

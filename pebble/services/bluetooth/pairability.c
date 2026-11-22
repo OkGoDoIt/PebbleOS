@@ -1,0 +1,108 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <pbl/bluetooth/bond.h>
+#include <pbl/bluetooth/pairability.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/work.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/bluetooth/advertising.h>
+#include <pbl/services/bluetooth/bluetooth_ctl.h>
+#include <pbl/services/bluetooth/pairability.h>
+
+#include <kernel/pebble_tasks.h>
+
+PBL_LOG_MODULE_DECLARE(service_bluetooth, CONFIG_SERVICE_BLUETOOTH_LOG_LEVEL);
+
+static int s_allow_ble_pairing_refcount = 0;
+static bool s_last_ble_discoverable_state = false;
+
+static struct pbl_wallclock_work s_pairability_work;
+
+static void evaluate_pairing_refcount(void *data) {
+  PBL_ASSERT_TASK(PebbleTask_SysWorkq);
+
+  if (!bt_ctl_is_bluetooth_running()) {
+    return;
+  }
+
+  PBL_LOG_DBG("Pairabilty state: LE=%u", s_allow_ble_pairing_refcount);
+
+  bool is_ble_pairable_and_discoverable = (s_allow_ble_pairing_refcount > 0);
+
+  pbl_bt_le_pairability_set_enabled(is_ble_pairable_and_discoverable);
+  if (s_last_ble_discoverable_state != is_ble_pairable_and_discoverable) {
+    bt_advertising_set_discoverable(is_ble_pairable_and_discoverable);
+    s_last_ble_discoverable_state = is_ble_pairable_and_discoverable;
+  }
+}
+
+static void prv_schedule_evaluation(void) {
+  // Always evaluate, even if the state might not have changed: this pretty much only happens in
+  // response to user input, and skipping evaluations has caused bugs before.
+  pbl_sys_work_call(evaluate_pairing_refcount, nullptr);
+}
+
+void bt_pairability_use(void) {
+  ++s_allow_ble_pairing_refcount;
+  prv_schedule_evaluation();
+}
+
+void bt_pairability_use_ble(void) {
+  ++s_allow_ble_pairing_refcount;
+  prv_schedule_evaluation();
+}
+
+static void prv_pairability_fn(struct pbl_work *work) {
+  pbl_wallclock_work_stop(&s_pairability_work);
+  bt_pairability_release_ble();
+}
+
+void bt_pairability_use_ble_for_period(uint16_t duration_secs) {
+  if (!pbl_wallclock_work_is_running(&s_pairability_work)) {
+    pbl_wallclock_work_init(&s_pairability_work, prv_pairability_fn);
+    // If this function is called multiple times before the timer is unscheduled, limit to calling
+    // "use" only once:
+    bt_pairability_use_ble();
+  }
+  // Always reschedule, even if the duration is shorter than the one that might already be
+  // scheduled:
+  pbl_wallclock_work_start(&pbl_sys_workq_high, &s_pairability_work, 1, duration_secs);
+}
+
+void bt_pairability_release(void) {
+  PBL_ASSERT(s_allow_ble_pairing_refcount != 0, "");
+  --s_allow_ble_pairing_refcount;
+  prv_schedule_evaluation();
+}
+
+void bt_pairability_release_ble(void) {
+  PBL_ASSERT(s_allow_ble_pairing_refcount != 0, "");
+  --s_allow_ble_pairing_refcount;
+  prv_schedule_evaluation();
+}
+
+//! Call this whenever we modify the number of saved bondings we have.
+void bt_pairability_update_due_to_bonding_change(void) {
+  static bool s_pairable_due_to_no_gateway_bondings = false;
+
+  if (pbl_bt_bond_count() == 0) {
+    if (!s_pairable_due_to_no_gateway_bondings) {
+      bt_pairability_use();
+      s_pairable_due_to_no_gateway_bondings = true;
+    }
+  } else {
+    if (s_pairable_due_to_no_gateway_bondings) {
+      bt_pairability_release();
+      s_pairable_due_to_no_gateway_bondings = false;
+    }
+  }
+}
+
+void bt_pairability_init(void) {
+  // Reset cached discoverable state: the advertising infrastructure was torn down
+  // before this init, so we must re-drive bt_advertising_set_discoverable() if needed.
+  s_last_ble_discoverable_state = false;
+  bt_pairability_update_due_to_bonding_change();
+  prv_schedule_evaluation();
+}

@@ -1,0 +1,108 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "remote.h"
+
+#include "bluetooth.h"
+
+#include <pbl/bluetooth/bond.h>
+#include <pbl/i18n/i18n.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/logging/logging.h>
+
+#include <applib/app_malloc.h>
+#include <applib/ui/action_menu_window_private.h>
+#include <applib/ui/dialogs/dialog.h>
+#include <applib/ui/dialogs/expandable_dialog.h>
+#include <applib/ui/dialogs/simple_dialog.h>
+#include <applib/ui/text_layer.h>
+#include <applib/ui/ui.h>
+#include <kernel/ui/system_icons.h>
+#include <resource/resource_ids.auto.h>
+
+enum {
+  RemoteMenuForget = 0,
+  RemoteMenu_Count
+};
+
+typedef struct {
+  StoredRemote remote;
+
+  ActionMenuConfig action_menu;
+  struct SettingsBluetoothData *bt_data;
+} SettingsRemoteData;
+
+static void prv_dialog_unload(void *context) {
+  PBL_ASSERTN(context);
+  pbl_i18n_free_all(context);
+}
+
+static void prv_show_dialog(void *i18n_owner) {
+  DialogCallbacks callback = {.unload = prv_dialog_unload};
+  const char *text = BT_FORGET_PAIRING_STR;
+  ExpandableDialog *e_dialog = expandable_dialog_create_with_params(
+      "Forget Remote", RESOURCE_ID_GENERIC_CONFIRMATION_TINY, pbl_i18n_get(text, i18n_owner),
+      GColorWhite, GColorCobaltBlue, &callback, RESOURCE_ID_ACTION_BAR_ICON_CHECK,
+      expandable_dialog_close_cb);
+  pbl_i18n_free(text, i18n_owner);
+
+  expandable_dialog_show_action_bar(e_dialog, true);
+  expandable_dialog_set_header(e_dialog, pbl_i18n_get("You're all set", e_dialog));
+
+  app_expandable_dialog_push(e_dialog);
+}
+
+static void prv_forget_ble_remote(const struct pbl_bt_device_internal *identity) {
+  (void)pbl_bt_unpair(identity);
+}
+
+static void prv_remote_menu_cleanup(ActionMenu *action_menu, const ActionMenuItem *item,
+                                    void *context) {
+  ActionMenuLevel *root_level = action_menu_get_root_level(action_menu);
+  SettingsRemoteData *data = (SettingsRemoteData *)context;
+  pbl_i18n_free_all(data);
+  app_free((void *)root_level);
+  app_free(data);
+}
+
+static void prv_forget_item(ActionMenu *action_menu, const ActionMenuItem *item, void *context) {
+  SettingsRemoteData *remote_data = (SettingsRemoteData *)context;
+  StoredRemote *remote = &remote_data->remote;
+  prv_forget_ble_remote(&remote->ble.identity);
+  PBL_LOG_INFO("User Forgot BT Pairing");
+  PBL_LOG_DBG("Name: %s", remote->name);
+  settings_bluetooth_update_remotes(remote_data->bt_data);
+  prv_show_dialog(context);
+}
+
+void settings_remote_menu_push(struct SettingsBluetoothData *bt_data, StoredRemote *stored_remote) {
+  SettingsRemoteData *data = app_malloc_check(sizeof(SettingsRemoteData));
+
+  PBL_LOG_DBG("NAME: %s", stored_remote->name);
+  *data = (SettingsRemoteData){};
+  data->remote = *stored_remote;
+  data->bt_data = bt_data;
+
+  data->action_menu = (ActionMenuConfig){
+    .context = data,
+    .colors.background = shell_prefs_get_theme_highlight_color(),
+    .did_close = prv_remote_menu_cleanup,
+  };
+
+  const size_t num_items = RemoteMenu_Count;
+  ActionMenuLevel *level =
+      app_zalloc_check(sizeof(ActionMenuLevel) + num_items * sizeof(ActionMenuItem));
+  *level = (ActionMenuLevel){
+    .num_items = num_items,
+    .display_mode = ActionMenuLevelDisplayModeWide,
+  };
+
+  level->items[RemoteMenuForget] = (ActionMenuItem){
+    .label = pbl_i18n_get("Forget", data),
+    .perform_action = prv_forget_item,
+    .action_data = data,
+  };
+
+  data->action_menu.root_level = level;
+  app_action_menu_open(&data->action_menu);
+}

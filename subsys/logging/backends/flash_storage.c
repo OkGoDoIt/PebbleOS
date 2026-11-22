@@ -7,8 +7,8 @@
 #include <pbl/drivers/flash.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/malloc.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/system_task.h>
 #include <pbl/util/build_id.h>
 #include <pbl/util/size.h>
 #include <pbl/util/string.h>
@@ -91,7 +91,7 @@ static CurrentLoggingState s_curr_state;
 #define MAX_MSG_LEN ((0x1UL << sizeof(((LogRecordHeader *)0)->length) * 8) - 2)
 
 // This is the state used while performing flash_log_file(). Each log message gets handled
-// by a separate system task callback
+// by a separate background work queue callback
 typedef struct {
   uint8_t page_index;                        // which page we are currently dumping
   uint8_t num_pages;                         // number of pages to dump
@@ -400,7 +400,7 @@ bool pbl_log__flash_storage_write(const uint8_t *data_to_write, uint32_t flash_a
 }
 
 // Extract the next log message out of flash and send it using the pbl_log_flash_dump_line_cb_t.
-// This system task callback is used by pbl_log_flash_dump()
+// This background work queue callback is used by pbl_log_flash_dump()
 static void prv_dump_log_system_cb(void *context) {
   DumpStatus status = DumpStatus_DoneFailure;
   DumpLogState *state = (DumpLogState *)context;
@@ -413,9 +413,9 @@ static void prv_dump_log_system_cb(void *context) {
 
     // use the read buffer to also hold build id str. Each byte of the build ID requires 2
     // characters.
-    const int off =
-        MEMBER_SIZE(DumpLogState, msg_buf) - 2 * MEMBER_SIZE(FlashLoggingHeader, build_id) - 1;
-    uint8_t build_id[MEMBER_SIZE(FlashLoggingHeader, build_id)];
+    const int off = PBL_SIZEOF_FIELD(DumpLogState, msg_buf) -
+                    2 * PBL_SIZEOF_FIELD(FlashLoggingHeader, build_id) - 1;
+    uint8_t build_id[PBL_SIZEOF_FIELD(FlashLoggingHeader, build_id)];
     uint32_t build_id_addr = flash_addr + offsetof(FlashLoggingHeader, build_id);
 
     pbl_flash_read(FLASH, build_id_addr, (uint8_t *)build_id, sizeof(build_id));
@@ -484,7 +484,7 @@ exit:
     pbl_free(state);
   } else {
     // Keep going
-    system_task_add_callback(prv_dump_log_system_cb, state);
+    pbl_sys_work_call(prv_dump_log_system_cb, state);
   }
 }
 
@@ -514,7 +514,7 @@ bool pbl_log_flash_dump(int generation, pbl_log_flash_dump_line_cb_t line_cb,
   };
 
   // Kick it off
-  system_task_add_callback(prv_dump_log_system_cb, state);
+  pbl_sys_work_call(prv_dump_log_system_cb, state);
   return (true);
 }
 

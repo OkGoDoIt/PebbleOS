@@ -5,6 +5,7 @@
 #include <inttypes.h>
 
 #include <pbl/drivers/rng.h>
+#include <pbl/kernel/compiler.h>
 #include <pbl/kernel/time.h>
 #include <pbl/kernel/types.h>
 #include <pbl/shell/shell.h>
@@ -38,7 +39,7 @@ static int prv_cmd_get(const struct pbl_shell *sh, size_t argc, char **argv) {
   }
 
   for (unsigned long i = 0UL; i < count; i++) {
-    if (!rng_rand(&val)) {
+    if (rng_rand(&val) != 0) {
       pbl_shell_error(sh, "generation failed");
       return -EIO;
     }
@@ -63,7 +64,7 @@ static int prv_cmd_stats(const struct pbl_shell *sh, size_t argc, char **argv) {
 
   start = pbl_uptime_ticks();
   for (unsigned long i = 0UL; i < count; i++) {
-    if (!rng_rand(&val)) {
+    if (rng_rand(&val) != 0) {
       fails++;
       continue;
     }
@@ -71,7 +72,7 @@ static int prv_cmd_stats(const struct pbl_shell *sh, size_t argc, char **argv) {
     if (i > 0UL && val == prev) {
       repeats++;
     }
-    ones += (uint64_t)__builtin_popcount(val);
+    ones += (uint64_t)PBL_POPCOUNT(val);
     prev = val;
   }
 

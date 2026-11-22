@@ -23,8 +23,8 @@ function(pbl_init)
   set_property(GLOBAL PROPERTY PBL_STATIC_LIBS "")
 endfunction()
 
-# Name a library after its directory, e.g. fw/services/timeline ->
-# fw__services__timeline. Mirrors the waf model this replaces.
+# Name a library after its directory, e.g. pebble/services/timeline ->
+# pebble__services__timeline. Mirrors the waf model this replaces.
 function(pbl_library_default_name out)
   file(RELATIVE_PATH rel ${PBL_BASE} ${CMAKE_CURRENT_SOURCE_DIR})
   string(REPLACE "/" "__" name ${rel})
@@ -109,7 +109,7 @@ endfunction()
 # Drop sources matching one of the given patterns, the way the waf
 # ant_glob() excl= lists did. A pattern is either a glob relative to the
 # current directory ("prompt.c", "voice/*.c", "**/system_nrf*.c") or a
-# directory whose whole subtree goes away ("vendor", "ble_hrm/**").
+# directory whose whole subtree goes away ("vendor", "legacy/**").
 function(pbl_filter_sources var)
   cmake_parse_arguments(ARG "" "" "EXCLUDE" ${ARGN})
   set(sources ${${var}})

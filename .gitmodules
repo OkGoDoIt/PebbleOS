@@ -13,9 +13,6 @@
 [submodule "third_party/tinymt/TinyMT"]
 	path = third_party/tinymt/TinyMT
 	url = https://github.com/MersenneTwister-Lab/TinyMT
-[submodule "third_party/hal_sifli/SiFli-SDK"]
-	path = third_party/hal_sifli/SiFli-SDK
-	url = https://github.com/coredevices/SiFli-SDK.git
 [submodule "third_party/qr_code_generator/QR-Code-generator"]
 	path = third_party/qr_code_generator/QR-Code-generator
 	url = https://github.com/nayuki/QR-Code-generator
@@ -49,3 +46,14 @@
 [submodule "third_party/samsa/samsa"]
 	path = third_party/samsa/samsa
 	url = https://github.com/coredevices/samsa.git
+[submodule "third_party/devicetree/devicetree-rebasing"]
+	path = third_party/devicetree/devicetree-rebasing
+	url = https://github.com/coredevices/devicetree-rebasing.git
+	shallow = true
+[submodule "third_party/bootloaders/pebbleos-bootloaders"]
+	path = third_party/bootloaders/pebbleos-bootloaders
+	url = https://github.com/coredevices/PebbleOS-bootloaders.git
+[submodule "third_party/lvgl/lvgl"]
+	path = third_party/lvgl/lvgl
+	url = https://github.com/lvgl/lvgl
+	shallow = true

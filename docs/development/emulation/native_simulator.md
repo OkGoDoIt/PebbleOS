@@ -106,10 +106,13 @@ always listening, with log lines printing above its prompt. `Ctrl-\` quits.
 - `-p PORT`: serve the QEMU serial protocol on a TCP port, where a phone
   connects with libpebble2's QEMU transport (`pebble --qemu`).
   {doc}`../../pbl/run` serves it on 12344.
-- `-b PORT|DEVICE`: with `CONFIG_BT_HCI_UART`, connect the Bluetooth HCI
+- `-b PORT|DEVICE`: with `CONFIG_NIMBLE_HCI_UART`, connect the Bluetooth HCI
   UART to an H4 controller: a TCP port on the local host (e.g. Bumble's
   `tcp-server` transport) or a serial device, such as an nRF52840 dongle
   running `hci_uart`, as described for the {doc}`emulator <emulator>`.
+- `-a ADDRESS`: with `CONFIG_NIMBLE_ID_ADDR_POSIX`, the random static Bluetooth
+  address the watch uses (`XX:XX:XX:XX:XX:XX`, its two top bits set) instead
+  of its controller's.
 - `-S FILE`: save the last frame to a BMP file on quitting.
 - `-l`: start with the colors as in sunlight.
 - `-i FILE`: install a `.pbw` app and launch it; repeat for more.
@@ -235,10 +238,11 @@ touchscreen (`TOUCH_SDL`, the mouse). It runs on the main thread, as macOS
 requires.
 
 A native build is linked without the firmware linker script
-(`PBL_NO_LINKER_SCRIPT`, decided in `cmake/modules/linker.cmake`). Code that
-gathers objects from many files, like the shell commands, then uses
-`PBL_UNSORTED_SECTION()`: the host linker collects the section on its own but
-cannot sort it, so the shell picks commands by name when looking them up.
+(`PBL_NO_LINKER_SCRIPT`, decided in `cmake/modules/linker.cmake`). Tables
+gathered from many files, like the shell commands, are iterable sections
+(`PBL_ITERABLE_SECTION()`): the host linker collects them on its own but
+cannot sort them, so code that lists their entries in order sorts them
+itself.
 
 In a browser there is a single thread. The kernel's posix architecture then
 runs kernel threads as Emscripten fibers (`ARCH_POSIX_FIBERS`, with Asyncify)

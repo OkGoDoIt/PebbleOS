@@ -3,32 +3,16 @@
 
 #include <pbl/drivers/intc.h>
 #include <pbl/shell/shell.h>
+#include <pbl/util/bits.h>
 #include <pbl/util/misc.h>
-
-static const char *prv_type_name(uint8_t type) {
-  switch (type) {
-    case PBL_IRQ_TYPE_EDGE_RISING:
-      return "rising";
-    case PBL_IRQ_TYPE_EDGE_FALLING:
-      return "falling";
-    case PBL_IRQ_TYPE_EDGE_BOTH:
-      return "both";
-    case PBL_IRQ_TYPE_LEVEL_HIGH:
-      return "high";
-    case PBL_IRQ_TYPE_LEVEL_LOW:
-      return "low";
-    default:
-      return "?";
-  }
-}
 
 static int prv_cmd_list(const struct pbl_shell *sh, size_t argc, char **argv) {
   const struct pbl_device *dev;
 
   PBL_DEVICE_CLASS_FOREACH(&pbl_intc_class, dev) {
-    const struct pbl_intc *intc = container_of(dev, const struct pbl_intc, dev);
+    const struct pbl_intc *intc = PBL_CONTAINER_OF(dev, const struct pbl_intc, dev);
 
-    pbl_shell_print(sh, "%s: %u lines%s", intc->dev.name, intc->num_irqs,
+    pbl_shell_print(sh, "%s: %u lines%s", pbl_device_name(&intc->dev), intc->num_irqs,
                     pbl_device_is_ready(&intc->dev) ? "" : " (not ready)");
 
     for (uint16_t hwirq = 0U; hwirq < intc->num_irqs; hwirq++) {
@@ -38,9 +22,9 @@ static int prv_cmd_list(const struct pbl_shell *sh, size_t argc, char **argv) {
         continue;
       }
 
-      pbl_shell_print(sh, "  %3u %-7s %-8s %p(%p)", hwirq, prv_type_name(line->type),
-                      line->enabled ? "enabled" : "disabled", (void *)(uintptr_t)line->handler,
-                      line->arg);
+      pbl_shell_print(sh, "  %3u %-8s %p(%p)", hwirq,
+                      (intc->enabled[hwirq / 32U] & PBL_BIT(hwirq % 32U)) ? "enabled" : "disabled",
+                      (void *)(uintptr_t)line->handler, line->arg);
     }
   }
 

@@ -18,7 +18,7 @@
  * @ingroup services
  * @brief Plays notes, tones, polyphonic tracks and PCM streams on the speaker.
  *
- * One source plays at a time, mixed to 16 kHz mono and fed to the audio driver from KernelBG.
+ * One source plays at a time, mixed to 16 kHz mono and fed to the audio driver from SysWorkq.
  * Starting playback preempts the current source when the new priority is higher, or when the
  * current source has finished and only its tail is draining; otherwise the request is rejected.
  * Volumes are 0-100 and are scaled by the user's speaker volume preference; output is silent
@@ -34,7 +34,7 @@
  *   {.midi_note = 79, .waveform = SpeakerWaveformSine, .duration_ms = 300},
  * };
  *
- * speaker_service_play_note_seq(s_chime, ARRAY_LENGTH(s_chime), SpeakerPriorityNotification, 80);
+ * speaker_service_play_note_seq(s_chime, PBL_ARRAY_SIZE(s_chime), SpeakerPriorityNotification, 80);
  * @endcode
  *
  * Streaming PCM:

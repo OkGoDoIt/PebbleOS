@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig CHARGER
+    bool "Charger"
+    help
+      Battery charger class (pbl/drivers/charger.h).
+
+if CHARGER
+
+config CHARGER_SHELL
+    bool "Shell commands"
+    default DRIVER_SHELL
+    depends on SHELL
+    help
+      The charger shell command, to show whether external power is
+      present, the charge status and the battery measurements.
+
+config CHARGER_HIGH_LOAD
+    bool
+    help
+      The charger driver limits the discharge current, and lifts the
+      limit on pbl_charger_high_load_request().
+
+config CHARGER_NPM1300
+    bool "Nordic nPM1300"
+    default y
+    depends on DT_HAS_NORDIC_NPM1300_ENABLED
+    select CHARGER_HIGH_LOAD
+    select MFD
+    select MFD_NPM1300
+    help
+      Support for the charger of the Nordic nPM1300 PMIC.
+
+config CHARGER_SIM
+    bool "Simulator"
+    default y if SOC_QEMU_PEBBLE || SOC_POSIX
+    help
+      Simulated charger, set through its simulator API
+      (pbl/drivers/charger/sim.h).
+
+module = DRIVER_CHARGER
+module-str = Charger
+source "subsys/logging/Kconfig.template.log_level"
+
+endif # CHARGER

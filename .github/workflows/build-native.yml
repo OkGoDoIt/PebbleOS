@@ -26,7 +26,7 @@ jobs:
               - 'boards/**'
               - 'cmake/**'
               - 'drivers/**'
-              - 'fw/**'
+              - 'pebble/**'
               - 'include/**'
               - 'kernel/**'
               - 'lib/**'
@@ -36,7 +36,7 @@ jobs:
               - 'third_party/**'
               - 'tools/**'
               - 'CMakeLists.txt'
-              - 'Kconfig'
+              - 'Kconfig*'
               - 'SDK_VERSION'
               - 'pbl.yml'
               - 'requirements.txt'
@@ -55,7 +55,7 @@ jobs:
         include:
           - host: linux
             os: ubuntu-24.04
-            container: ghcr.io/coredevices/pebbleos-docker:v10
+            container: ghcr.io/coredevices/pebbleos-docker:v16
           - host: macos
             os: macos-15
 
@@ -68,12 +68,17 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          submodules: true
 
       - name: Rebase onto target branch
         uses: ./.github/actions/rebase
         with:
           submodules: true
+
+      - name: Restore the compiler cache
+        if: matrix.host == 'linux'
+        uses: ./.github/actions/ccache
+        with:
+          key: native-${{ matrix.board }}
 
       - name: Install host dependencies (macOS)
         if: matrix.host == 'macos'
@@ -102,6 +107,12 @@ jobs:
       - name: Build
         run: pbl build
 
+      - name: Save the compiler cache
+        if: matrix.host == 'linux'
+        uses: ./.github/actions/ccache-save
+        with:
+          key: native-${{ matrix.board }}
+
       # Boot without a display and check the firmware gets to the launcher.
       - name: Smoke test
         shell: bash
@@ -122,12 +133,75 @@ jobs:
             build/smoke.log
             build/smoke.bmp
 
+  # The documentation playground runs the builds of main: Read the Docs
+  # downloads them (docs/_scripts/pbl_playground_fetch_rtd.py)
+  build-wasm:
+    needs: changes-native
+    if: needs.changes-native.outputs.should-build == 'true'
+    runs-on: ubuntu-24.04
+    container: ghcr.io/coredevices/pebbleos-docker:v16
+
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [native_flint, native_emery, native_gabbro]
+
+    steps:
+      - name: Mark Github workspace as safe
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Rebase onto target branch
+        uses: ./.github/actions/rebase
+        with:
+          submodules: true
+
+      - name: Restore the compiler cache
+        uses: ./.github/actions/ccache
+        with:
+          key: wasm-${{ matrix.board }}
+
+      - name: Install Python dependencies
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt
+
+      # The page downloads the module: no DWARF, a fraction of the size
+      - name: Configure
+        run: pbl configure --board ${{ matrix.board }}/wasm -DCONFIG_DEBUG_INFO=n
+
+      - name: Build
+        run: pbl build
+
+      - name: Save the compiler cache
+        uses: ./.github/actions/ccache-save
+        with:
+          key: wasm-${{ matrix.board }}
+
+      - name: Store the build
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-${{ matrix.board }}
+          path: |
+            build/pebbleos.html
+            build/pebbleos.js
+            build/pebbleos.wasm
+            build/pebbleos.data
+            build/*.png
+          if-no-files-found: error
+
   build-native-status:
-    needs: [changes-native, build-native]
+    needs: [changes-native, build-native, build-wasm]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - if: >-
           needs.build-native.result == 'failure' ||
-          needs.build-native.result == 'cancelled'
+          needs.build-native.result == 'cancelled' ||
+          needs.build-wasm.result == 'failure' ||
+          needs.build-wasm.result == 'cancelled'
         run: exit 1

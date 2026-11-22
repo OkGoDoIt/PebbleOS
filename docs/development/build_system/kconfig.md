@@ -8,7 +8,9 @@ sources and the CMake build.
 
 ## Configuration tree
 
-The root `Kconfig` sources the rest of the tree:
+The root of the tree is the application's `Kconfig`, `pebble/Kconfig` for the
+firmware, or the top-level `Kconfig` for an application without one. Both
+source `Kconfig.pebbleos`, which sources the rest of the tree:
 
 - `soc/*/Kconfig.defconfig` and `subsys/bluetooth/Kconfig.defconfig`
   first, so their defaults win over the ones given with the definitions;
@@ -16,7 +18,7 @@ The root `Kconfig` sources the rest of the tree:
 - the board's files, only for the selected board and revision:
   `boards/<board>/Kconfig`, `Kconfig.<revision>`, `Kconfig.defconfig` and
   `Kconfig.defconfig.<revision>`;
-- `lib/c`, `kernel`, `subsys`, `drivers`, `fw` and `third_party`, each with
+- `lib/c`, `kernel`, `subsys`, `drivers` and `third_party`, each with
   a `Kconfig` that sources its own subdirectories.
 
 A symbol is defined next to the code it enables: a driver class's
@@ -30,13 +32,18 @@ A build's configuration is resolved from these fragments, in this order:
 
 | Fragment | Purpose |
 | --- | --- |
-| `boards/<board>/defconfig` | What the board has: SoC, platform, drivers and their parameters |
+| `boards/<board>/defconfig` | What the board is: SoC, boot chain and console |
 | `boards/<board>/defconfig.<revision>` | What a revision changes |
 | `boards/<board>/defconfig.<board variant>` | What a board variant (`native_emery/wasm`) changes |
-| `fw/prj.conf` | Services and features every firmware enables |
-| `fw/prj_<variant>.conf` | What the `normal` or `prf` variant adds or removes |
+| `pebble/prj.conf` | Driver classes, subsystems, services and features every firmware enables |
+| `pebble/prj_<variant>.conf` | What the `normal` or `prf` variant adds or removes |
+| `pebble/boards/<board>.conf` | What the firmware enables or tunes on one board, and the SDK platform it offers there |
+| `pebble/boards/<board>_<variant>.conf` | The same, for one variant only |
 | `<build>/menuconfig.conf` | Changes made with {doc}`../../pbl/menuconfig` |
 | `-DCONFIG_<SYMBOL>=<value>` | Overrides given when configuring |
+
+The `pebble/` fragments are the firmware's. Another application brings the same
+files from its own directory instead, see {doc}`applications`.
 
 Overrides are passed to {doc}`../../pbl/configure` or to CMake:
 
@@ -78,9 +85,22 @@ Every symbol reaches all three consumers:
 
 Driver classes
 : A class is a `menuconfig` symbol, with one symbol per driver inside its
-  `if` block. A driver that only exists on one SoC defaults to `y` there
-  (`default y if SOC_QEMU`); a part on the board is enabled by the board's
-  defconfig.
+  `if` block. No class is on by default: the application enables the
+  classes it uses, drivers select the classes they use, and a SoC selects
+  the ones its own code calls, such as its system timer. The board's
+  defconfig enables none. Inside an enabled class, a driver whose devices
+  come from the board's {doc}`devicetree` defaults to the tree having one
+  (`default DT_HAS_NORDIC_NRF52832_TWIM_ENABLED`). Otherwise, a driver that
+  only exists on one SoC defaults to `y` there (`default y if SOC_QEMU_PEBBLE`).
+
+What drivers use
+: A driver `select`s the classes it uses, such as the bus it sits on
+  (`select I2C`) or the supplies it takes (`select REGULATOR`), so an
+  application asks for an accelerometer without knowing how the board
+  wires it. This is safe because only drivers inside an enabled class
+  select, and the selected classes have no dependencies of their own. A driver that is not inside such a class,
+  such as a regulator or a GPIO key, does not select: it sits inside the
+  class its users select, or the one the application enables.
 
 Capabilities
 : What hardware or drivers provide is a hidden symbol (no prompt) that the
@@ -97,8 +117,8 @@ Board and SoC defaults
   `Kconfig.defconfig`, which is read before the definitions:
 
   ```kconfig
-  config FW_FLASH_SIZE
-      default 0xf8000
+  config FLASH_SIZE
+      default 0x100000
   ```
 
 Log levels

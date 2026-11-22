@@ -16,16 +16,14 @@
 #include "pbl/kernel/sem.h"
 #include "pbl/kernel/thread.h"
 #include "pbl/kernel/time.h"
-#include "pbl/services/new_timer/new_timer.h"
+#include "pbl/kernel/work.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
 
 #if NRF52_SERIES
-#include "pbl/soc/nrf/sleep.h"
-
-#include <pbl/drivers/clocksource.h>
+#include <pbl/drivers/clk/nrf52.h>
 #endif
 
 // Pool blocks hold pointers.
@@ -50,7 +48,7 @@ struct ble_npl_eventq {
 };
 
 struct ble_npl_callout {
-  TimerID handle;
+  struct pbl_delayed_work work;
 
   //! whether we have made changes to this timer from ISR state and need
   //! someone to go sync them back up on the main thread for us
@@ -58,7 +56,7 @@ struct ble_npl_callout {
 
   //! if we are pending_update, there might have been some ticks between
   //! when we asked to do work, and when it happens; set an actual target
-  //! time in ticks for newtimer, rather than deferring the number of ticks
+  //! time in ticks for the timer, rather than deferring the number of ticks
   //! to start counting when we actually schedule
   uint64_t update_target_time_ticks;
 
@@ -245,20 +243,14 @@ static inline bool ble_npl_hw_is_in_critical(void) {
 }
 #if NRF52_SERIES
 
+static const struct pbl_clk ble_npl_hfclk = PBL_CLK(NRF52_CLOCK, NRF52_CLK_HFCLK);
+
 static inline void nrf52_clock_hfxo_request(void) {
-  /* Any time NimBLE wants to turn on the HFXO, we are also going to have
-   * pretty stringent wake latency requirements, so we must not do expensive
-   * and slow things like waking the NOR flash up from DPD on interrupts.
-   * So, we disable full sleep at the same time as actually enabling the
-   * HFXO.
-   */
-  soc_nrf_sleep_full_block();
-  clocksource_hfxo_request();
+  (void)pbl_clk_enable(&ble_npl_hfclk);
 }
 
 static inline void nrf52_clock_hfxo_release(void) {
-  clocksource_hfxo_release();
-  soc_nrf_sleep_full_release();
+  (void)pbl_clk_disable(&ble_npl_hfclk);
 }
 
 #endif

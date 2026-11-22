@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2025 Google LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "nimble_gattc_op_queue.h"
+#include "clients/op_queue.h"
 #include "nimble_type_conversions.h"
 
 #include <pbl/bluetooth/gap_le_device_name.h>
 #include <pbl/kernel/malloc.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/system_task.h>
 
 #include <comm/bt_lock.h>
 #include <host/ble_gatt.h>
@@ -77,7 +77,7 @@ static int prv_device_name_read_event_cb(uint16_t conn_handle, const struct ble_
 
   struct pbl_bt_addr *addr = pbl_zalloc_check(sizeof(struct pbl_bt_addr));
   *addr = addr_copy;
-  system_task_add_callback(pbl_bt_store_device_name_kernelbg_cb, addr);
+  pbl_sys_work_call(pbl_bt_store_device_name_kernelbg_cb, addr);
 
   return 0;
 }

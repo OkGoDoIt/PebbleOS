@@ -6,6 +6,7 @@
 #include <pbl/drivers/watchdog.h>
 #include <pbl/kernel/mmio.h>
 
+#include <hardware/nrf52_memorymap.h>
 #include <hardware/nrf52_power.h>
 #include <hardware/nrf52_wdt.h>
 
@@ -43,13 +44,13 @@ bool watchdog_check_reset_flag(void) {
   return (prv_power_getreg(NRF52_POWER_RESETREAS_OFFSET) & POWER_RESETREAS_DOG) != 0U;
 }
 
-static McuRebootReason s_cached_reset_flag;
+static struct pbl_mcu_reboot_reason s_cached_reset_flag;
 
-McuRebootReason watchdog_clear_reset_flag(void) {
+struct pbl_mcu_reboot_reason watchdog_clear_reset_flag(void) {
   uint32_t reason = prv_power_getreg(NRF52_POWER_RESETREAS_OFFSET);
   prv_power_putreg(NRF52_POWER_RESETREAS_OFFSET, 0xffffffffU);
 
-  s_cached_reset_flag = (McuRebootReason){
+  s_cached_reset_flag = (struct pbl_mcu_reboot_reason){
     .brown_out_reset = 0,
     .pin_reset = (reason & POWER_RESETREAS_RESETPIN) != 0U,
     .power_on_reset = (reason & POWER_RESETREAS_VBUS) != 0U,
@@ -62,6 +63,6 @@ McuRebootReason watchdog_clear_reset_flag(void) {
   return s_cached_reset_flag;
 }
 
-McuRebootReason watchdog_get_reset_flag(void) {
+struct pbl_mcu_reboot_reason watchdog_get_reset_flag(void) {
   return s_cached_reset_flag;
 }

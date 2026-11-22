@@ -7,7 +7,9 @@ while both existed.
 ## Layout
 
 ```
-sched.c        ready lists, timeouts, tick, block/wake, idle thread, start
+sched.c        ready lists, tick, block/wake, idle thread, start
+timer.c        timeout queue and timers
+idle.c         idle states, with CONFIG_CPU_IDLE
 thread.c       thread lifecycle and priorities
 mutex.c        recursive mutex with priority inheritance
 sem.c          counting semaphore
@@ -26,7 +28,8 @@ kernel_test.h  harness entry points used by tests/kernel
 
 **Scheduling.** Fixed priorities, `CONFIG_KERNEL_NUM_PRIORITIES` of them,
 one FIFO ready list per priority and a bitmap picked with `clz`, so
-choosing the next thread is O(1). Threads of equal priority round-robin on
+choosing the next thread is O(1). The choice is kept in `sched_next`, updated
+whenever a ready list changes, so a context switch only has to load it. Threads of equal priority round-robin on
 every tick (as FreeRTOS does with time slicing) and on `pbl_thread_yield()`.
 The running thread stays on its ready list; blocking removes it.
 
@@ -38,27 +41,32 @@ the wake code. Semaphores and mutexes hand their token straight to the woken
 thread, so a wake is never spurious and a lower-priority giver cannot steal
 it back. Queues and poll groups wake one waiter and let it re-check.
 
-**Timeouts.** One list sorted by absolute wake tick, wrap-safe compare. The
-tick expires the head, sleeps use the same list, and the idle thread asks it
-how long it may sleep. Insertion is O(n) in the number of pending timeouts,
-which on this firmware is a handful.
+**Timeouts.** One queue for blocked threads, sleeps and timers alike, sorted
+by absolute expiry in 64-bit ticks, so nothing wraps. The tick ISR expires
+its head, waking the thread or running the timer callback, and the idle
+thread asks it how long it may sleep. Insertion is O(n) in the number of
+pending timeouts, which on this firmware is a handful.
 
-**Priority inheritance.** Single level, the same as the FreeRTOS fork's
-light mutex: a waiter raises the owner to its own priority; the owner drops
-back to its base priority when it holds no mutex any more. A boosted thread
-is re-sorted in its ready list or wait queue.
+**Priority inheritance.** Single level: a waiter raises the owner to its own
+priority. Each thread keeps the list of the mutexes it holds, and runs at
+the higher of its base priority and the most urgent waiter of any of them,
+worked out again when it unlocks one and when a waiter gives up. A boosted
+thread is re-sorted in its ready list or wait queue.
 
-**Interrupts.** `pbl_irq_lock()` raises BASEPRI to
-`CONFIG_KERNEL_IRQ_PRIO_MAX_SYSCALL` with a nesting counter, exactly the
-FreeRTOS critical section. ISRs above that priority may not call the kernel.
-Object operations run under that lock; there is no separate scheduler lock
-inside the kernel. `pbl_sched_lock()` defers switches until unlocked.
+**Interrupts.** The kernel's own critical sections raise BASEPRI to
+`CONFIG_KERNEL_IRQ_PRIO_MAX_SYSCALL` with `arch_irq_lock()`, which returns
+the previous level for `arch_irq_unlock()` to restore: a few inline
+instructions, and nothing to keep count of. `pbl_irq_lock()` is that plus a
+nesting counter, for callers with nowhere to keep the key. ISRs above that
+priority may not call the kernel. Object operations run under that lock;
+there is no separate scheduler lock inside the kernel. `pbl_sched_lock()` defers switches until unlocked.
 
 **Idle.** The idle thread yields to other threads at its priority, then
 calls the arch idle hook with the ticks until the next timeout. The arch
-masks interrupts and hands over to the kernel's tickless idle, which picks
-one of the SoC's idle states and reprograms the clock event device around
-it (see {doc}`idle`).
+masks interrupts and hands over to the kernel's idle, which either waits
+for the next tick or, with `CONFIG_CPU_IDLE`, picks one of the SoC's idle
+states (`idle.c`) and reprograms the clock event device around it (see
+{doc}`idle`).
 
 **Threads.** `struct pbl_thread` is caller-owned; the backend state lives in
 its `backend` member, first in the struct so the arch code can find the
@@ -76,8 +84,8 @@ initialisers are complete and `pbl_kernel_init()` returns at once.
 The saved context keeps the layout of the FreeRTOS port: CONTROL, r4-r11,
 PSPLIM on ARMv8-M, EXC_RETURN, then the hardware frame, with s16-s31 in
 between when the FP context is active. Core dumps and the fault handler
-read that layout unchanged. PendSV saves the context, picks the next thread
-under BASEPRI, rewrites the four per-thread MPU regions through the RBAR
+read that layout unchanged. PendSV saves the context, makes `sched_next` the
+current thread under BASEPRI, rewrites the four per-thread MPU regions through the RBAR
 alias registers and restores. Supervisor calls keep the port's numbers: 0
 starts the scheduler, 1 yields, 2 raises privilege. SVC 2 is honoured only
 from a syscall stub in `.syscall_text` or from the return of an
@@ -92,17 +100,24 @@ The vector table (`kernel/arch/arm/vector_table.c`) is a constant array in
 `pbl_isr_<n>`, each a weak alias of `arch_irq_spurious()` that
 `PBL_IRQ_CONNECT()` or `PBL_IRQ_DIRECT()` overrides with a strong
 definition, `n` being the line's `PBL_SOC_IRQN_<line>`. Each binding also
-drops a `{irq, prio}` record into the `.pbl_irq_prio` section, which
+drops a `{irq, prio}` record into the `irq_prio` iterable section, which
 `pbl_irq_init()` walks to program the NVIC after pointing VTOR at the table.
+With `CONFIG_ARCH_VECTOR_TABLE_RAM`, selected by SoCs whose vector fetches
+from flash bypass the cache, VTOR points at a copy of the table in RAM
+instead.
 A weak default never pulls an object out of a static library, so a binding
 inside a `stlib` library only takes effect when something else in the same
 object is referenced.
 
-The port defines `pbl_cur` in `.kernel_unpriv_ro_bss`, the firmware's
-unprivileged-readable kernel data, because `pbl_thread_current()` and
-`pebble_task_get_current()` run unprivileged inside apps. Privileged code
-writes that section through `pbl_mpu_user_ro_write()`, so `arch_cur_set()`
-sets `pbl_cur`.
+`pbl_cur` is privileged kernel data, which PendSV sets with a plain store.
+`pbl_thread_current()` and `pebble_task_get_current()` also run
+unprivileged inside apps, so the port keeps `arch_cur_user` in
+`.kernel_unpriv_ro_bss`, the firmware's unprivileged-readable kernel data:
+the last thread that ran unprivileged, which is what `pbl_thread_current()`
+returns to unprivileged code. Writing that section goes through the MPU on
+ARMv8-M, as `pbl_mpu_user_ro_write()` does, so PendSV only does it when
+switching to an unprivileged thread other than the last one, and a thread
+sets it when it first drops privilege.
 
 ## POSIX arch and tests
 

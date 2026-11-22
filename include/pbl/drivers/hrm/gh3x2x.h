@@ -61,7 +61,7 @@ typedef const struct HRMDevice {
 } HRMDevice;
 
 /**
- * @brief Queue tuning protocol data received over BLE for processing on the system task.
+ * @brief Queue tuning protocol data received over BLE for processing on the background work queue.
  *
  * Only with @c CONFIG_BT_SERVICE_GH3X2X_TUNING.
  *
@@ -80,7 +80,7 @@ void gh3x2x_wear_evt_notify(bool is_wear);
 /**
  * @brief Feed raw PPG data to the factory tests.
  *
- * Does nothing unless a factory test is running (MFG builds only).
+ * Does nothing unless a factory test is running (@c CONFIG_HRM_GH3X2X_FACTORY_TEST only).
  *
  * @param p_rawdata Raw samples, interleaved over #HRM_PPG_CH_NUM channels.
  * @param data_count Number of values in @p p_rawdata.
@@ -102,26 +102,32 @@ typedef enum {
 } GH3x2xFTType;
 
 /**
- * @brief Start the CTR factory test on the system task.
+ * @brief Start the CTR factory test on the background work queue.
  *
- * Results are reported through the HRM manager as @c HRMFeature_CTR data. MFG builds only.
+ * Results are reported through the HRM manager as @c HRMFeature_CTR data. Requires
+ * @c CONFIG_HRM_GH3X2X_FACTORY_TEST.
  */
 void gh3x2x_start_ft_ctr(void);
 
 /**
- * @brief Start the light leakage factory test on the system task.
+ * @brief Start the light leakage factory test on the background work queue.
  *
- * Results are reported through the HRM manager as @c HRMFeature_Leakage data. MFG builds only.
+ * Results are reported through the HRM manager as @c HRMFeature_Leakage data. Requires
+ * @c CONFIG_HRM_GH3X2X_FACTORY_TEST.
  */
 void gh3x2x_start_ft_leakage(void);
 
-/** @brief Stop the running factory test on the system task. MFG builds only. */
+/**
+ * @brief Stop the running factory test on the background work queue.
+ *
+ * Requires @c CONFIG_HRM_GH3X2X_FACTORY_TEST.
+ */
 void gh3x2x_factory_test_disable();
 
 /**
  * @brief Set the sampling functions used when the sensor is next enabled.
  *
- * Soft wear detection is always added. MFG builds only.
+ * Soft wear detection is always added. Requires @c CONFIG_HRM_GH3X2X_FACTORY_TEST.
  *
  * @param mode Bitmask of @c GH3X2X_FUNCTION_* values.
  */

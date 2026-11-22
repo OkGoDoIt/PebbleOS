@@ -26,8 +26,8 @@ GDB stops the firmware wherever it was, most of the time idling:
 
 ```
 Remote debugging using :1233
-__ISB () at ./third_party/cmsis_core/CMSIS/CMSIS/Core/Include/cmsis_gcc.h:266
-266	  __ASM volatile ("isb 0xF":::"memory");
+arch_cpu_idle () at ./kernel/arch/arm/include/pbl_arch_idle.h:16
+16	  __asm volatile("isb 0xf" ::: "memory");
 (gdb)
 ```
 
@@ -43,12 +43,12 @@ Each kernel thread is a GDB thread, with its name and state:
   Id   Target Id                                               Frame
 * 1    Thread 1.1 (IDLE 0x2001E8B0: Running)                   pbl_soc_idle (max_ticks=max_ticks@entry=33)
     at ./soc/qemu/idle.c:19
-  4    Thread 1.536989952 (NewTimer 0x2001D100: Blocked)       0x00143666 in arch_irq_enable ()
-    at ./kernel/arch/arm/arch.c:213
-  5    Thread 1.536989376 (NimbleHost 0x2001CEC0: Blocked)     0x00143666 in arch_irq_enable ()
-    at ./kernel/arch/arm/arch.c:213
-  6    Thread 1.536989184 (App <Launcher> 0x2001CE00: Blocked) 0x00143666 in arch_irq_enable ()
-    at ./kernel/arch/arm/arch.c:213
+  4    Thread 1.536989952 (SysWorkqHigh 0x2001D100: Blocked)   0x00143666 in arch_irq_unlock ()
+    at ./kernel/arch/arm/include/pbl_arch_irq.h:76
+  5    Thread 1.536989376 (NimbleHost 0x2001CEC0: Blocked)     0x00143666 in arch_irq_unlock ()
+    at ./kernel/arch/arm/include/pbl_arch_irq.h:76
+  6    Thread 1.536989184 (App <Launcher> 0x2001CE00: Blocked) 0x00143666 in arch_irq_unlock ()
+    at ./kernel/arch/arm/include/pbl_arch_irq.h:76
 ...
 ```
 
@@ -58,11 +58,11 @@ its backtrace:
 ```
 (gdb) thread 5
 [Switching to thread 5 (Thread 1.536989376)]
-#0  0x00143666 in arch_irq_enable () at ./kernel/arch/arm/arch.c:213
-213	}
+#0  0x00143666 in arch_irq_unlock () at ./kernel/arch/arm/include/pbl_arch_irq.h:76
+76	  __asm volatile("msr basepri, %0" ::"r"(0U) : "memory");
 (gdb) bt
-#0  0x00143666 in arch_irq_enable () at ./kernel/arch/arm/arch.c:213
-#1  0x000ecad0 in pbl_irq_unlock () at ./kernel/irq.c:16
+#0  0x00143666 in arch_irq_unlock () at ./kernel/arch/arm/include/pbl_arch_irq.h:76
+#1  pbl_irq_unlock () at ./kernel/irq.c:16
 #2  0x000eceee in sched_block (wq=wq@entry=0x2000cb38 <g_eventq_dflt+20>, timeout=timeout@entry=...)
     at ./kernel/sched.c:192
 #3  0x0014333a in pbl_msgq_get (q=0x2000cb24 <g_eventq_dflt>, msg=msg@entry=0x2000336c <s_host_task_stack+4972>,
@@ -94,8 +94,8 @@ and its arguments, and the line about to run, e.g. on
 `event_put`:
 
 ```
-Breakpoint 1, event_put (event=event@entry=0x2000960c <s_new_timer_stack+1292>)
-    at ./fw/kernel/events.c:222
+Breakpoint 1, event_put (event=event@entry=0x2000960c <s_sys_high_stack+1292>)
+    at ./pebble/kernel/events.c:222
 222	  uintptr_t saved_lr = (uintptr_t)PBL_RETURN_ADDRESS(0);
 ```
 
@@ -106,10 +106,10 @@ frames:
 
 ```
 (gdb) bt 4
-#0  event_put (event=event@entry=0x2000960c <s_new_timer_stack+1292>) at ./fw/kernel/events.c:222
-#1  0x12154dce in launcher_task_add_callback (callback=<optimized out>, data=<optimized out>) at ./fw/kernel/event_loop.c:95
-#2  0x120982b0 in task_timer_manager_execute_expired_timers (manager=manager@entry=0x2002bc60 <s_task_timer_manager>) at ./fw/kernel/task_timer.c:350
-#3  0x1206cb86 in new_timer_service_loop (data=<optimized out>) at ./fw/services/new_timer/new_timer.c:87
+#0  event_put (event=event@entry=0x2000960c <s_sys_high_stack+1292>) at ./pebble/kernel/events.c:222
+#1  0x12154dce in launcher_task_add_callback (callback=<optimized out>, data=<optimized out>) at ./pebble/kernel/event_loop.c:95
+#2  0x120982b0 in prv_work (work=work@entry=0x2002bc60) at ./pebble/services/evented_timer/service.c:152
+#3  0x1206cb86 in pbl_workq_thread (arg=<optimized out>) at ./kernel/work.c:121
 (More stack frames follow...)
 ```
 
@@ -121,7 +121,7 @@ following pointers and calling firmware functions:
 (gdb) print event->type
 $1 = PEBBLE_CALLBACK_EVENT
 (gdb) print pbl_cur->name
-$2 = "NewTimer\000\000\000\000\000\000\000"
+$2 = "SysWorkqHigh\000\000\000"
 ```
 
 `x/8x ADDRESS` dumps memory, and `display EXPR` prints an expression at
@@ -233,7 +233,7 @@ Process 84855 stopped
 (lldb) thread list
 ...
 * thread #10: tid = 0x3c26550, ... app_manager_launch_new_app(config=0x00000001702e6d70) at app_manager.c:713:43, name = 'KernelMain'
-  thread #11: tid = 0x3c26551, ... libsystem_kernel.dylib`__psynch_cvwait + 8, name = 'NewTimer'
+  thread #11: tid = 0x3c26551, ... libsystem_kernel.dylib`__psynch_cvwait + 8, name = 'SysWorkqHigh'
   thread #15: tid = 0x3c2655a, ... libsystem_kernel.dylib`__psynch_cvwait + 8, name = 'IDLE'
   thread #17: tid = 0x3c2657a, ... libsystem_kernel.dylib`__psynch_cvwait + 8, name = 'NimbleHost'
   thread #21: tid = 0x3c2657e, ... libsystem_kernel.dylib`__psynch_cvwait + 8, name = 'App <Launcher>'

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config I18N
+    bool "Internationalization"
+    help
+      Translates strings with a gettext message catalog. Without a
+      catalog, the English source strings are used.
+
+if I18N
+
+module = I18N
+module-str = Internationalization
+source "subsys/logging/Kconfig.template.log_level"
+
+endif

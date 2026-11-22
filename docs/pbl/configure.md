@@ -16,10 +16,31 @@ after `/`: `native_emery/wasm` builds the native watch as WebAssembly. It
 applies `boards/<board>/defconfig.<variant>` and can bring its own
 toolchain (`toolchain.<variant>.cmake`).
 
+## Add-ons
+
+`--addon` plugs an add-on, such as a display module, into a connector of
+the board, and can be repeated. They are listed in
+{doc}`../boards/addons/index`:
+
+```shell
+pbl configure --board sf32lb57_dpi_hdk --addon <addon> samples/demos/logo
+```
+
+## Applications
+
+Without more arguments, the build is for the watch firmware, the
+application in `pebble/`. To build another application, such as a sample,
+give its directory (see
+{doc}`../development/build_system/applications`):
+
+```shell
+pbl configure --board qemu_emery samples/hello_world
+```
+
 ## Variants
 
 `--variant` picks the image to build: `normal`, the main firmware, or
-`prf`, the recovery firmware, which applies `fw/prj_prf.conf` on top of
+`prf`, the recovery firmware, which applies `pebble/prj_prf.conf` on top of
 the board defconfig.
 
 ```shell
@@ -42,7 +63,7 @@ A release image: strips debug aids, enables shipping defaults and reduces
 battery usage compared to a debug build.
 
 :`-DCONFIG_MFG=y`:
-Manufacturing-only functionality in the PRF build.
+Manufacturing-only functionality in the PRF build, so with `--variant=prf`.
 
 Options for debugging and logging are listed with
 {doc}`../development/debugging/index` and {doc}`../subsystems/logging`. To browse

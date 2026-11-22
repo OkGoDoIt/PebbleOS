@@ -7,6 +7,8 @@
 
 #define STACK_FILL 0xa5a5a5a5u
 
+extern const uint8_t __isr_stack_start__[];
+
 void pbl_thread_foreach(pbl_thread_info_fn fn, void *ctx) {
   for (struct pbl_thread *t = pbl_all_threads; t != nullptr; t = t->backend.all_next) {
     struct pbl_thread_info info = {
@@ -26,6 +28,18 @@ void pbl_thread_saved_regs(const struct pbl_thread *t, struct pbl_thread_saved_r
   arch_thread_saved_regs(t, regs);
 }
 
+size_t pbl_stack_free(void) {
+  // The current SP, give or take a few bytes
+  uint8_t marker;
+  uintptr_t start = (uintptr_t)__isr_stack_start__ + CONFIG_KERNEL_STACK_GUARD_SIZE;
+
+  if (!arch_in_isr() && pbl_cur != nullptr) {
+    start = (uintptr_t)pbl_cur->stack;
+  }
+
+  return (uintptr_t)&marker - start;
+}
+
 void pbl_thread_stack_info(const struct pbl_thread *t, struct pbl_thread_stack_info *info) {
   const uint32_t *words = t->stack;
   size_t untouched = 0;
@@ -42,7 +56,7 @@ void pbl_thread_stack_info(const struct pbl_thread *t, struct pbl_thread_stack_i
 size_t pbl_thread_stats_snapshot(struct pbl_thread_stats *out, size_t max,
                                  uint32_t *total_run_time) {
   size_t n = 0;
-  pbl_irq_lock();
+  unsigned int key = arch_irq_lock();
   if (total_run_time) {
     *total_run_time = pbl_uptime_ticks();
   }
@@ -55,10 +69,10 @@ size_t pbl_thread_stats_snapshot(struct pbl_thread_stats *out, size_t max,
       .number = t->backend.number,
       .run_time = t->backend.run_time,
       .stack_high_water = stack.high_water,
-      .state = (enum pbl_thread_state)t->backend.state,
+      .state = pbl_thread_state(t),
     };
   }
-  pbl_irq_unlock();
+  arch_irq_unlock(key);
   return n;
 }
 

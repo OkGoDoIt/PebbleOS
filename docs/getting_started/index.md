@@ -21,6 +21,7 @@ sudo apt install \
     bison \
     clang \
     cmake \
+    device-tree-compiler \
     flex \
     gcc \
     gcc-multilib \
@@ -55,6 +56,7 @@ sudo dnf install \
     clang \
     cmake \
     dash \
+    dtc \
     flex \
     freetype-devel \
     gcc \
@@ -205,3 +207,5 @@ pbl run -r phone --via adb|cloud|ip [--address $IP]
 - {doc}`../development/tests/index` covers the unit and integration test
   suites.
 - {doc}`../architecture/index` explains how the firmware is put together.
+- {doc}`../development/build_system/rust` covers applications in Rust, and
+  what they need installed.

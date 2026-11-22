@@ -6,7 +6,8 @@
 #include "api.h"
 #include "endpoint.h"
 
-#include <pbl/services/regular_timer.h>
+#include <pbl/kernel/work.h>
+#include <pbl/util/list.h>
 
 /**
  * @defgroup services_blob_db_sync Sync
@@ -53,9 +54,9 @@ typedef struct {
   /** Records left to sync; the head is the one in flight. */
   BlobDBDirtyItem *dirty_list;
   /** Retries the current write when the phone does not answer in time. */
-  RegularTimerInfo timeout_timer;
+  struct pbl_wallclock_work timeout_timer;
   /** Cancels the session after repeated timeouts. */
-  RegularTimerInfo abandon_timer;
+  struct pbl_wallclock_work abandon_timer;
   /** Token of the write in flight. */
   BlobDBToken current_token;
   /** Session scope. */
@@ -68,12 +69,11 @@ typedef struct {
  * Sends SYNC_DONE immediately when there is nothing to sync.
  *
  * @param db_id Database to sync.
- * @retval S_SUCCESS Sync started.
- * @retval S_NO_ACTION_REQUIRED No dirty records.
- * @retval E_BUSY A sync of this database is already in progress.
- * @retval E_INVALID_ARGUMENT Invalid database.
+ * @retval 0 Sync started, or no dirty records.
+ * @retval -EBUSY A sync of this database is already in progress.
+ * @retval -EINVAL Invalid database.
  */
-status_t blob_db_sync_db(BlobDBId db_id);
+int blob_db_sync_db(BlobDBId db_id);
 
 /**
  * @brief Start writing a single record to the phone.
@@ -84,10 +84,10 @@ status_t blob_db_sync_db(BlobDBId db_id);
  * @param key Key data.
  * @param key_len Length of @p key in bytes.
  * @param last_updated Modification time of the record.
- * @retval S_SUCCESS Sync started or deferred to the running session.
- * @retval E_INVALID_ARGUMENT Invalid database.
+ * @retval 0 Sync started or deferred to the running session.
+ * @retval -EINVAL Invalid database.
  */
-status_t blob_db_sync_record(BlobDBId db_id, const void *key, int key_len, time_t last_updated);
+int blob_db_sync_record(BlobDBId db_id, const void *key, int key_len, time_t last_updated);
 
 /**
  * @brief Get the whole-database sync session of a database.

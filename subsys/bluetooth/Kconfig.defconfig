@@ -1,17 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 #
-# PebbleOS-wide values for the NimBLE options generated under
+# The Bluetooth subsystem's values for the NimBLE options generated under
 # third_party/nimble. Sourced before them so these defaults win.
 
 if BT
-
-# NimBLE's transport choice says where the link layer lives. PebbleOS supplies
-# its own transport for every controller other than the in-image NimBLE one.
-choice NIMBLE_BLE_TRANSPORT_LL_CHOICE
-    default NIMBLE_BLE_TRANSPORT_LL_NATIVE if BT_HCI_NRF52
-    default NIMBLE_BLE_TRANSPORT_LL_CUSTOM
-endchoice
 
 # The largest MTU that fits one 251-byte LL PDU, with its 4-byte L2CAP header.
 config NIMBLE_BLE_ATT_PREFERRED_MTU
@@ -59,8 +52,28 @@ config NIMBLE_BLE_SVC_DIS_DEFAULT_READ_PERM
 config NIMBLE_BLE_GATT_MAX_PROCS
     default 8
 
+# The firmware keeps one bonding: room for a second lets a new phone pair
+# before the old bonding goes. Each bonding has a few subscriptions.
+config NIMBLE_BLE_STORE_MAX_BONDS
+    default 2
+
+config NIMBLE_BLE_STORE_MAX_CCCDS
+    default 16
+
 # The Muse setup window's private link is a second connection from the same phone.
 config NIMBLE_BLE_MAX_CONNECTIONS
     default 2 if BT_SERVICE_MUSE_SETUP
+
+# The companion streams notifications out of the same msys pool every other
+# outbound packet on the link is built from (PPoGATT, ATT responses, the
+# watch's GATT-client traffic to the phone). The port's 12 blocks are sized
+# for a stack with no steady producer; the drain takes up to 6 per slice and
+# 12 while catching up, and its notify path refuses to allocate below a floor
+# (subsys/bluetooth/services/audio_companion/) so the rest of the stack always has blocks.
+# Doubling the pool keeps the drain its full catch-up burst above that floor:
+# 12 x 292 B = 3.5 KB of RAM. This file is sourced before
+# third_party/nimble/Kconfig.port, so this default wins over its 12.
+config NIMBLE_MSYS_1_BLOCK_COUNT
+    default 24 if SERVICE_AUDIO_COMPANION
 
 endif # BT

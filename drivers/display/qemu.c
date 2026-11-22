@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/display/qemu.h>
 #include <pbl/kernel/mmio.h>
 #include <pbl/util/math.h>
@@ -17,15 +18,15 @@
 #define INT_UPDATE_DONE_PENDING (1 << 0)
 
 static const struct pbl_display_qemu *prv_qemu(const struct pbl_display *disp) {
-  return container_of(disp, const struct pbl_display_qemu, disp);
+  return PBL_CONTAINER_OF(disp, const struct pbl_display_qemu, disp);
 }
 
 static uint32_t prv_row_bytes(const struct pbl_display *disp) {
-  if (disp->format == PBL_DISPLAY_FORMAT_MONO) {
-    return ROUND_TO_MOD_CEIL(disp->width, 32U) / 8U;
+  if (disp->props.format == PBL_DISPLAY_FORMAT_MONO) {
+    return PBL_ROUNDUP(disp->props.width, 32U) / 8U;
   }
 
-  return disp->width;
+  return disp->props.width;
 }
 
 static void prv_refresh(const struct pbl_display_qemu *qemu) {
@@ -79,7 +80,7 @@ static int prv_update(const struct pbl_display *disp, const struct pbl_display_b
 static int prv_clear(const struct pbl_display *disp) {
   const struct pbl_display_qemu *qemu = prv_qemu(disp);
 
-  memset((void *)qemu->fb, 0, prv_row_bytes(disp) * disp->height);
+  memset((void *)qemu->fb, 0, prv_row_bytes(disp) * disp->props.height);
   prv_refresh(qemu);
 
   return 0;
@@ -93,3 +94,5 @@ const struct pbl_display_ops pbl_display_qemu_ops = {
   .update = prv_update,
   .clear = prv_clear,
 };
+
+#include PBL_DT_INSTANCES(qemu_pebble_display_display)

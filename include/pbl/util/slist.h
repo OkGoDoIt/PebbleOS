@@ -25,7 +25,7 @@
  * s_waiters = slist_prepend(s_waiters, &w->node);
  *
  * for (SingleListNode *n = s_waiters; n != NULL; n = slist_get_next(n)) {
- *   struct waiter *it = container_of(n, struct waiter, node);
+ *   struct waiter *it = PBL_CONTAINER_OF(n, struct waiter, node);
  *   ...
  * }
  *
@@ -200,7 +200,7 @@ SingleListNode *slist_concatenate(SingleListNode *list_a, SingleListNode *list_b
 void slist_foreach(SingleListNode *head, SingleListForEachCallback each_cb, void *context);
 
 /**
- * @brief Log every node of a list with UTIL_LOG().
+ * @brief Log every node of a list with PBL_UTIL_LOG().
  *
  * @param head Head of the list.
  */

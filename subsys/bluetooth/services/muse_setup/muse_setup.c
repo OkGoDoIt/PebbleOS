@@ -10,7 +10,6 @@
 #include <pbl/logging/logging.h>
 #include <pbl/util/math.h>
 
-#include <comm/ble/gap_le_advert.h>
 #include <comm/bt_lock.h>
 #include <host/ble_att.h>
 #include <host/ble_gap.h>
@@ -345,7 +344,6 @@ static void prv_end_window_locked(PblBtMuseSetupCloseReason reason) {
     s_state.advertising = false;
   }
   prv_restore_peer_locked();
-  gap_le_advert_return();
   prv_emit_locked(PblBtMuseSetupEventClosed, (uint16_t)reason);
 }
 
@@ -365,7 +363,9 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
     goto unlock;
   }
 
-  if (!gap_le_advert_lend()) {
+  // The phone advertiser never airs while a phone is connected, which this window requires; any
+  // advertising now is someone else's.
+  if (ble_gap_adv_active()) {
     s_state.last_error = BLE_HS_EBUSY;
     PBL_LOG_ERR("Muse setup: advertiser not available");
     goto unlock;
@@ -374,7 +374,6 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
   int rc = prv_hide_peer_locked();
   if (rc != 0) {
     s_state.last_error = rc;
-    gap_le_advert_return();
     goto unlock;
   }
 
@@ -387,7 +386,6 @@ bool pbl_bt_muse_setup_open(const char suffix[PBL_BT_MUSE_SETUP_SUFFIX_LEN], uin
     s_state.last_error = rc;
     PBL_LOG_ERR("Muse setup: random address failed (0x%04x)", (uint16_t)rc);
     prv_restore_peer_locked();
-    gap_le_advert_return();
     goto unlock;
   }
 

@@ -24,7 +24,7 @@ jobs:
               - '.github/workflows/test.yml'
               - 'cmake/**'
               - 'drivers/**'
-              - 'fw/**'
+              - 'pebble/**'
               - 'include/**'
               - 'kernel/**'
               - 'lib/**'
@@ -35,7 +35,6 @@ jobs:
               - 'tests/**'
               - 'third_party/**'
               - 'tools/**'
-              - 'Kconfig.platform'
               - 'SDK_VERSION'
               - 'requirements.txt'
 
@@ -44,7 +43,7 @@ jobs:
     if: needs.changes-test.outputs.should-test == 'true'
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/coredevices/pebbleos-docker:v10
+      image: ghcr.io/coredevices/pebbleos-docker:v16
     steps:
       - name: Mark Github workspace as safe
         run: git config --system --add safe.directory "${GITHUB_WORKSPACE}" 
@@ -53,22 +52,47 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          submodules: true
 
       - name: Rebase onto target branch
         uses: ./.github/actions/rebase
         with:
           submodules: true
 
+      - name: Restore the compiler cache
+        uses: ./.github/actions/ccache
+        with:
+          key: test
+
       - name: Install Python dependencies
         run: |
           pip install -U pip
           pip install -r requirements.txt
 
+      # How long each test took last time, so that ctest starts the slowest
+      # ones first instead of finishing on one of them.
+      - name: Restore the test timings
+        uses: actions/cache/restore@v6
+        with:
+          path: build-test/Testing/Temporary/CTestCostData.txt
+          key: ctest-cost-${{ github.sha }}
+          restore-keys: ctest-cost-
+
       - name: Run tests
         # ctest runs the whole suite before reporting, so one failure does
         # not hide the rest. The job still fails if anything failed.
         run: pbl test
+
+      - name: Save the compiler cache
+        uses: ./.github/actions/ccache-save
+        with:
+          key: test
+
+      - name: Save the test timings
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: build-test/Testing/Temporary/CTestCostData.txt
+          key: ctest-cost-${{ github.sha }}
 
       - name: Run console host tests
         run: python -m pytest tools/libs/pbl-console/tests

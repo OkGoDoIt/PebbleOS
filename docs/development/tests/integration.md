@@ -89,7 +89,7 @@ what plays the phone. The same tests run on any of:
 
 | Watch | Phone | How |
 |---|---|---|
-| Emulator or native | Bumble, software controllers | a `CONFIG_BT_HCI_UART` build, by default |
+| Emulator or native | Bumble, software controllers | a `CONFIG_NIMBLE_HCI_UART` build, by default |
 | Emulator or native | Bumble, on a dongle | `--bt-hci lab`: the lab's first dongle for the watch, its second for the phone |
 | Watch, serial console | Bumble, on a dongle | the lab's watch, and its first dongle for the phone |
 | Watch, serial console | CoreApp | `--phone coreapp` (not supported yet) |
@@ -167,20 +167,26 @@ opens the link with and declines the watch's requests to change them:
 those updates stall the watch's sending for seconds, and some fail and
 drop the link.
 
-An emulator or a native build with `CONFIG_BT_HCI_UART` needs a controller
+An emulator or a native build with `CONFIG_NIMBLE_HCI_UART` needs a controller
 of its own (QEMU's fourth serial port, the native program's `-b`).
 By default it gets Bumble's software controllers (`virtual`), two linked
 in memory, one for the watch and one for the harness: they cover the host
 stacks and the protocols above them, not a radio, and are what CI uses: it
 runs the normal tests on a normal build and the PRF tests on a PRF build,
-both with `CONFIG_BT_HCI_UART`, so that tests needing a phone run too.
+both with `CONFIG_NIMBLE_HCI_UART`, so that tests needing a phone run too.
 With real ones it takes two dongles, one for the watch and one for the
 harness: the lab's (`--bt-hci lab`), or given on the command line:
 
 ```shell
-pbl configure --board qemu_emery -DCONFIG_BT_HCI_UART=y
+pbl configure --board qemu_emery -DCONFIG_NIMBLE_HCI_UART=y
 pbl itest --bt-hci /dev/cu.usbmodem1101 --ble-controller /dev/cu.usbmodem1201
 ```
+
+The watch's software controller has a fixed public address, so the watch
+keeps its identity across resets. A dongle may have none, and the watch then
+takes a random address on every boot: `--bt-addr ADDRESS` gives it a random
+static one (its two top bits set) for the whole run, e.g.
+`--bt-addr C0:00:00:00:00:01`.
 
 Tests that need a phone take the `phones` fixture: `phones()` makes the
 setup's phone, and `connect()` pairs and opens the Pebble protocol session
@@ -279,8 +285,11 @@ for tests that do not depend on the board, or that take too long for every
 pull request.
 
 The lab's watches run the suite nightly, normal and recovery firmware. A
-maintainer can run it on a pull request by adding the `ci:hw-itest` label;
-each time the label is added, the pull request runs once more. The run
+maintainer can also run it on a branch, tag or commit of the repository with
+`gh workflow run hw-itest.yml -f ref=<ref>`, or on a pull request by adding
+the `ci:hw-itest` label. Always dispatch from `main` (the default): the lab
+runners only accept the workflow from `main`. Each time the
+label is added, the pull request runs once more. The run
 executes the pull request's own code on the lab machine, so review all of
 it first, including tooling and Python requirements. On someone else's
 pull request, approve the head commit before adding the label: a label
@@ -399,13 +408,14 @@ averages); record them with `record_property` to have them in the JUnit
 report. A measurement that lost samples fails rather than report a wrong
 figure.
 
-The power tests measure TicToc idling while advertising fast and slow for
-discovery, and in airplane mode. They wipe the watch first (`dut.wipe()`),
-so run them on a test watch, with no phone bonded to it nearby. Each passes
-within 10% of the board's nominal figure in `power/test_idle.py`, measured
-at 3.8 V, and one out of range is rerun once; update the nominals when a
-change moves them on purpose. Boards
-without nominals record their figures with a warning.
+The power tests measure TicToc idling in airplane mode. They wipe the watch
+first (`dut.wipe()`), so run them on a test watch. Each passes within 10% of
+the board's nominal figure in `power/test_idle.py`, measured at 3.8 V (15% on
+asterix, whose units differ more), and
+one out of range is rerun once; update the nominals when a change moves them
+on purpose. Boards without nominals record their figures with a warning.
+Advertising current is not measured: scans from phones and computers nearby
+add scan responses to it, so it depends on where the watch is.
 
 ## Recovery firmware
 
@@ -418,7 +428,7 @@ over the single bond,
 installing the normal firmware from the phone and "Reset to PRF" from it,
 the backlight timeout, turning off after 10 minutes unplugged and
 unconnected (not while a phone or a charger is connected), the low battery
-screen, and the current advertising, connected and off. On the emulator
+screen, and the current connected and off. On the emulator
 the screens are compared with golden images, the backlight is timed on the
 display, and `dut.set_battery()` sets the emulated battery's charge and
 charger; on a watch the current is measured with a PPK2, the backlight
@@ -429,7 +439,7 @@ Installing the firmware takes a normal build of the same board, bundled:
 ```shell
 pbl -b build-main configure --board qemu_emery
 pbl -b build-main build bundle
-pbl -b build-prf configure --board qemu_emery --variant prf -DCONFIG_BT_HCI_UART=y
+pbl -b build-prf configure --board qemu_emery --variant prf -DCONFIG_NIMBLE_HCI_UART=y
 pbl -b build-prf build qemu_image_micro qemu_image_spi
 pbl -b build-prf itest --no-build --bt-hci virtual --main-build "$PWD/build-main"
 ```
@@ -437,8 +447,11 @@ pbl -b build-prf itest --no-build --bt-hci virtual --main-build "$PWD/build-main
 The emulator has no bootloader, so it only checks the transfer. A watch
 installs it, boots it, and goes back to PRF when the phone asks; it has to
 be running PRF to start with, as set up for a release check (the
-bootloader and PRF alone on the flash). The idle shutdown tests take about
-12 minutes each, so CI does not run them.
+bootloader and PRF alone on the flash). `--flash-before` sets that up: on a
+watch whose bootloader boots firmware slots, it erases their headers, so
+PRF runs as the fallback; on asterix, `pbl run --provision` writes PRF to
+its partition and erases the firmware, so the bootloader copies PRF in. The idle shutdown
+tests take about 12 minutes each, so CI does not run them.
 
 Left for a person: the Back+Up+Select hold that reboots into PRF,
 charging a watch, the MFG menu's tests (checked in the factory), and the

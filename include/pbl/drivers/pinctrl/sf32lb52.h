@@ -95,6 +95,8 @@
 #define PBL_PINCTRL_SF32LB52_DRIVE_12MA PBL_PINCTRL_SF32LB52_DS_IDX(3)
 /** 20 mA drive, PA39-PA42 only. */
 #define PBL_PINCTRL_SF32LB52_DRIVE_20MA PBL_PINCTRL_SF32LB52_DS_IDX(4)
+/** Driven low by GPIO1, for a PA pad with the GPIO function. */
+#define PBL_PINCTRL_SF32LB52_OUTPUT_LOW (1U << 7)
 /** @} */
 
 /** @brief SF32LB52 pin controller. */
@@ -107,16 +109,21 @@ struct pbl_pinctrl_sf32lb52 {
   uintptr_t pad_pa;
   /** HPSYS_CFG registers, holding the PINR crossbar. */
   uintptr_t cfg;
+  /** RTC registers, holding the always-on pad pulls and backup outputs. */
+  uintptr_t rtc;
+  /** HPSYS always-on registers, selecting the backup timer outputs. */
+  uintptr_t aon;
 };
 
 /** @cond INTERNAL_HIDDEN */
-extern const struct pbl_pinctrl_sf32lb52 pbl_pinctrl_sf32lb52_hpsys;
+extern const struct pbl_pinctrl_controller pbl_pinctrl_sf32lb52_hpsys;
+extern const struct pbl_pinctrl_sf32lb52 pbl_pinctrl_sf32lb52_hpsys_inst;
 
 /* Set the @p mask bits of the pad of @p pin to its value, for the GPIO driver */
 int pbl_pinctrl_sf32lb52_modify(uint32_t pin, uint32_t mask);
 /** @endcond */
 
 /** HPSYS pin controller. */
-#define SF32LB52_PINCTRL (&pbl_pinctrl_sf32lb52_hpsys.ctrl)
+#define SF32LB52_PINCTRL (&pbl_pinctrl_sf32lb52_hpsys)
 
 /** @} */

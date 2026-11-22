@@ -3,6 +3,7 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/uart/qemu.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mmio.h>
@@ -26,7 +27,7 @@
 #define DATA_MASK PBL_GENMASK(7, 0)
 
 static const struct pbl_uart_qemu *prv_qemu(const struct pbl_uart *uart) {
-  return container_of(uart, const struct pbl_uart_qemu, uart);
+  return PBL_CONTAINER_OF(uart, const struct pbl_uart_qemu, uart);
 }
 
 static inline uint32_t prv_getreg(const struct pbl_uart_qemu *qemu, uint32_t offset) {
@@ -111,3 +112,5 @@ const struct pbl_uart_ops pbl_uart_qemu_ops = {
   .rx_enable = prv_rx_enable,
   .rx_disable = prv_rx_disable,
 };
+
+#include PBL_DT_INSTANCES(qemu_pebble_simple_uart)

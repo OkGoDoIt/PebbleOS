@@ -1,0 +1,1495 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <errno.h>
+#include <stdio.h>
+
+#include <pbl/drivers/hrm.h>
+#include <pbl/kernel/time.h>
+#include <pbl/kernel/types.h>
+#include <pbl/services/hrm/hrm_manager.h>
+#include <pbl/services/hrm/hrm_manager_private.h>
+#include <pbl/util/size.h>
+#include <pbl/util/testing.h>
+#include <pbl/util/units.h>
+
+#include <clar.h>
+#include <fake_app_manager.h>
+#include <fake_events.h>
+#include <fake_mutex.h>
+#include <fake_pbl_malloc.h>
+#include <fake_rtc.h>
+#include <fake_sys_work.h>
+#include <fake_work.h>
+#include <services/hrm/hrm_manager.h>
+
+// -----------------------------------------------------------------------------
+// PBL_T_STATIC functions
+// -----------------------------------------------------------------------------
+extern HRMSubscriberState *prv_get_subscriber_state_from_ref(HRMSessionRef session);
+extern HRMSubscriberState *prv_get_subscriber_state_from_app_id(PebbleTask task,
+                                                                AppInstallId app_id);
+extern void prv_read_event_from_buffer_and_consume(CircularBuffer *buffer, PebbleHRMEvent *event);
+extern uint32_t prv_num_sys_work_events_queued(void);
+extern struct pbl_delayed_work *prv_get_timer(void);
+extern bool prv_can_turn_sensor_on(void);
+extern void prv_charger_event_cb(PebbleEvent *e);
+extern uint32_t prv_get_dropped_events_count(void);
+extern HRMFeature prv_select_active_path(HRMFeature wanted);
+
+// -----------------------------------------------------------------------------
+// HRM Driver fakes
+// -----------------------------------------------------------------------------
+
+static struct {
+  bool enabled;
+  HRMFeature features;
+  bool low_latency;
+  int enable_count;
+  int enable_failures;
+} s_hrm_state;
+
+bool hrm_enable(HRMDevice *dev, HRMFeature features, bool low_latency) {
+  if (s_hrm_state.enable_failures > 0) {
+    s_hrm_state.enable_failures--;
+    return false;
+  }
+  s_hrm_state.low_latency = low_latency;
+  s_hrm_state.enabled = true;
+  s_hrm_state.features = features;
+  s_hrm_state.enable_count++;
+  return true;
+}
+void hrm_disable(HRMDevice *dev) {
+  s_hrm_state.enabled = false;
+}
+bool hrm_is_enabled(HRMDevice *dev) {
+  return s_hrm_state.enabled;
+}
+void hrm_set_activity_scene(HRMDevice *dev, HRMActivityScene scene) {
+  (void)dev;
+  (void)scene;
+}
+
+// -----------------------------------------------------------------------------
+// Accel manager fake
+// -----------------------------------------------------------------------------
+
+// Every subscription gets the same address, the way the heap can hand back a block just freed
+struct AccelManagerState {
+  int unused;
+};
+static AccelManagerState s_accel_state;
+static AccelDataReadyCallback s_accel_data_cb;
+static void *s_accel_data_cb_context;
+static int s_accel_consume_calls;
+static int s_accel_waiting_batches;
+
+AccelManagerState *sys_accel_manager_data_subscribe(AccelSamplingRate rate,
+                                                    AccelDataReadyCallback data_cb, void *context,
+                                                    PebbleTask handler_task) {
+  s_accel_data_cb = data_cb;
+  s_accel_data_cb_context = context;
+  return &s_accel_state;
+}
+
+bool sys_accel_manager_data_unsubscribe(AccelManagerState *state) {
+  return false;
+}
+
+uint32_t accel_manager_set_jitterfree_sampling_rate(AccelManagerState *state,
+                                                    uint32_t min_rate_mhz) {
+  return 0;
+}
+
+int sys_accel_manager_set_sample_buffer(AccelManagerState *state, AccelRawData *buffer,
+                                        uint32_t samples_per_update) {
+  return 0;
+}
+
+uint32_t sys_accel_manager_get_num_samples(AccelManagerState *state, uint64_t *timestamp_ms,
+                                           uint32_t *generation) {
+  *timestamp_ms = 0;
+  *generation = 0;
+  return HRM_MANAGER_ACCEL_MANAGER_SAMPLES_PER_UPDATE;
+}
+
+bool sys_accel_manager_consume_samples(AccelManagerState *state, uint32_t samples,
+                                       uint32_t generation, bool *more) {
+  s_accel_consume_calls++;
+  *more = s_accel_waiting_batches > 0;
+  if (*more) {
+    s_accel_waiting_batches--;
+  }
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// Queue Fakes
+// -----------------------------------------------------------------------------
+
+static struct pbl_msgq s_fake_app_queue;
+#define FAKE_APP_QUEUE (&s_fake_app_queue)
+static uint32_t s_event_count;
+static bool s_queue_full;
+static PebbleEvent s_events_received[16];
+int pbl_msgq_put(struct pbl_msgq *q, const void *msg, pbl_timeout_t timeout) {
+  cl_assert_equal_p(q, FAKE_APP_QUEUE);
+  if (s_queue_full) {
+    return -EBUSY;
+  }
+  if (s_event_count < PBL_ARRAY_SIZE(s_events_received)) {
+    s_events_received[s_event_count] = *((const PebbleEvent *)msg);
+  }
+  ++s_event_count;
+  return 0;
+}
+
+struct pbl_msgq *pebble_task_get_to_queue(PebbleTask task) {
+  switch (task) {
+    case PebbleTask_App:
+      return FAKE_APP_QUEUE;
+    case PebbleTask_SysWorkq:
+      return nullptr;
+    default:
+      pbl_panic();
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Fakes
+// -----------------------------------------------------------------------------
+
+static bool s_activity_prefs_heart_rate_is_enabled = true;
+bool activity_prefs_heart_rate_is_enabled(void) {
+  return s_activity_prefs_heart_rate_is_enabled;
+}
+
+static bool s_activity_prefs_spo2_is_enabled = false;
+bool activity_prefs_spo2_is_enabled(void) {
+  return s_activity_prefs_spo2_is_enabled;
+}
+
+bool battery_is_usb_connected(void) {
+  return false;
+}
+
+// -----------------------------------------------------------------------------
+// Test Helpers
+// -----------------------------------------------------------------------------
+#define TO_SESSION_REF(x) ((HRMSessionRef)(long)(x))
+
+static const HRMData s_hrm_event_data = {
+  .features = HRMFeature_BPM,
+  .hrm_bpm = 82,
+  .hrm_confidence = 95,
+};
+
+static void prv_fake_send_new_data(void) {
+  hrm_manager_new_data_cb(&s_hrm_event_data);
+}
+
+static PebbleHRMEvent s_cb_events_1[16];
+static int s_num_cb_events_1 = 0;
+static void prv_fake_hrm_1_cb(PebbleHRMEvent *event, void *context) {
+  if (s_num_cb_events_1 >= PBL_ARRAY_SIZE(s_cb_events_1)) {
+    return;
+  }
+  s_cb_events_1[s_num_cb_events_1++] = *event;
+}
+
+static PebbleHRMEvent s_cb_events_2[16];
+static int s_num_cb_events_2 = 0;
+static void prv_fake_hrm_2_cb(PebbleHRMEvent *event, void *context) {
+  if (s_num_cb_events_2 >= PBL_ARRAY_SIZE(s_cb_events_2)) {
+    return;
+  }
+  s_cb_events_2[s_num_cb_events_2++] = *event;
+}
+
+static void prv_put_battery_state_change_event(bool is_plugged_in) {
+  PebbleEvent e = {
+    .type = PEBBLE_BATTERY_STATE_CHANGE_EVENT,
+    .battery_state.new_state.is_plugged = is_plugged_in,
+  };
+  event_put(&e);
+}
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+
+void test_hrm_manager__initialize(void) {
+  // Init time
+  fake_rtc_init(100 /*initial_ticks*/, 1465243370);
+
+  stub_pebble_tasks_set_current(PebbleTask_App);
+  app_manager_get_task_context()->to_process_event_queue = (void *)0x1;
+  fake_sys_work_callbacks_cleanup();
+
+  s_activity_prefs_heart_rate_is_enabled = true;
+  s_event_count = 0;
+  s_queue_full = false;
+  s_num_cb_events_1 = 0;
+  s_num_cb_events_2 = 0;
+  memset(&s_hrm_state, 0, sizeof(s_hrm_state));
+  s_accel_data_cb = nullptr;
+  s_accel_data_cb_context = nullptr;
+  s_accel_consume_calls = 0;
+  s_accel_waiting_batches = 0;
+  s_activity_prefs_spo2_is_enabled = false;
+  hrm_manager_init();
+  hrm_manager_enable(true);
+
+  fake_event_init();
+}
+
+void test_hrm_manager__subscription(void) {
+  AppInstallId app_id = 1;
+  const uint32_t update_interval_s = 1;
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMFeature features = HRMFeature_BPM;
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, update_interval_s, expire_s, features);
+  fake_sys_work_callbacks_invoke_pending();
+
+  HRMSubscriberState *subscriber = prv_get_subscriber_state_from_ref(session_ref);
+  cl_assert(subscriber);
+  cl_assert(subscriber->session_ref == session_ref);
+  cl_assert(subscriber->expire_utc == pbl_realtime() + expire_s);
+  cl_assert(subscriber->update_interval_s == update_interval_s);
+  cl_assert(subscriber->features == HRMFeature_BPM);
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  // We should be able to find it by app ad as well
+  cl_assert(sys_hrm_manager_get_app_subscription(app_id) == session_ref);
+
+  // We should be able to get info on it
+  AppInstallId ret_app_id;
+  uint32_t ret_update_interval_s;
+  uint16_t ret_expire_s;
+  HRMFeature ret_features;
+  cl_assert(sys_hrm_manager_get_subscription_info(session_ref, &ret_app_id, &ret_update_interval_s,
+                                                  &ret_expire_s, &ret_features));
+  cl_assert(ret_app_id == app_id);
+  cl_assert(ret_update_interval_s == update_interval_s);
+  cl_assert(ret_expire_s == expire_s);
+  cl_assert(ret_features == features);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(prv_get_subscriber_state_from_ref(session_ref) == nullptr);
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+}
+
+// An accel data event queued before the sensor turned off, or before it turned on again with a new
+// subscription at the same address, is skipped rather than reading a dropped subscription or
+// consuming the new one's samples
+void test_hrm_manager__stale_accel_event_is_skipped(void) {
+  AppInstallId app_id = 1;
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, 1, PBL_SEC_PER_MIN, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  void *stale_context = s_accel_data_cb_context;
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  s_accel_data_cb(stale_context);
+  cl_assert_equal_i(s_accel_consume_calls, 0);
+  session_ref = sys_hrm_manager_app_subscribe(app_id, 1, PBL_SEC_PER_MIN, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+
+  s_accel_data_cb(stale_context);
+  cl_assert_equal_i(s_accel_consume_calls, 0);
+  s_accel_data_cb(s_accel_data_cb_context);
+
+  cl_assert_equal_i(s_accel_consume_calls, 1);
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+}
+
+// Batches already waiting behind the first are handled in the same event, rather than sitting until
+// the next driver batch
+void test_hrm_manager__accel_event_drains_waiting_batches(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 1, PBL_SEC_PER_MIN, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  s_accel_waiting_batches = 2;
+
+  s_accel_data_cb(s_accel_data_cb_context);
+
+  cl_assert_equal_i(s_accel_consume_calls, 3);
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+}
+
+// When the union of subscriber features changes while the sensor is on, the manager must restart
+// the sensor with the new feature set
+void test_hrm_manager__feature_change_restarts_sensor(void) {
+  AppInstallId app_id = 1;
+
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, 1, 0 /*expire_s*/, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+  cl_assert_equal_i(s_hrm_state.enable_count, 1);
+
+  // Re-subscribing with HRV added replaces the app's subscription and restarts the sensor
+  // with the new feature union
+  HRMSessionRef new_ref =
+      sys_hrm_manager_app_subscribe(app_id, 1, 0 /*expire_s*/, HRMFeature_BPM | HRMFeature_HRV);
+  cl_assert(new_ref == session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM | HRMFeature_HRV);
+  cl_assert_equal_i(s_hrm_state.enable_count, 2);
+
+  // Dropping HRV again restarts back to BPM only
+  sys_hrm_manager_app_subscribe(app_id, 1, 0 /*expire_s*/, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+  cl_assert_equal_i(s_hrm_state.enable_count, 3);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+}
+
+// A same-path superset keeps running: a served longer-interval BPM|HRV subscriber must not make the
+// sensor restart to BPM-only (and back again once it's due) while a 1 s BPM consumer keeps it on.
+void test_hrm_manager__same_path_superset_keeps_running(void) {
+  stub_pebble_tasks_set_current(PebbleTask_App);
+  HRMSessionRef live_ref = sys_hrm_manager_app_subscribe(1 /*app_id*/, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+  cl_assert_equal_i(s_hrm_state.enable_count, 1);
+
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  HRMSessionRef hrv_ref = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, PBL_SEC_PER_MIN, 0, HRMFeature_BPM | HRMFeature_HRV,
+      false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM | HRMFeature_HRV);
+  cl_assert_equal_i(s_hrm_state.enable_count, 2);
+
+  // A Good BPM sample serves both; the HRV subscriber is no longer due but still live, so the
+  // running BPM|HRV set is kept.
+  prv_fake_send_new_data();
+  hrm_manager_handle_prefs_changed();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM | HRMFeature_HRV);
+  cl_assert_equal_i(s_hrm_state.enable_count, 2);
+
+  // Once the HRV subscriber is gone, drop back to BPM only.
+  sys_hrm_manager_unsubscribe(hrv_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+  cl_assert_equal_i(s_hrm_state.enable_count, 3);
+
+  sys_hrm_manager_unsubscribe(live_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+}
+
+// Only a foreground app polling at a live-display interval gets the low-latency FIFO cadence;
+// slower app polling and background subscribers take the default.
+void test_hrm_manager__low_latency_only_for_live_foreground_app(void) {
+  stub_pebble_tasks_set_current(PebbleTask_App);
+  HRMSessionRef app_ref = sys_hrm_manager_app_subscribe(1 /*app_id*/, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(s_hrm_state.low_latency, true);
+
+  // Slowing the poll drops the subscription back to the default cadence (and vice versa). It is
+  // applied at the next sensor start: a running session keeps its cadence rather than pay an
+  // algorithm restart for it.
+  sys_hrm_manager_set_update_interval(app_ref, PBL_SEC_PER_MIN, 0);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(prv_get_subscriber_state_from_ref(app_ref)->low_latency, false);
+  cl_assert_equal_b(s_hrm_state.low_latency, true);
+  sys_hrm_manager_set_update_interval(app_ref, 1, 0);
+  cl_assert_equal_b(prv_get_subscriber_state_from_ref(app_ref)->low_latency, true);
+  sys_hrm_manager_unsubscribe(app_ref);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // A slow-polling app starts the sensor on the default cadence.
+  app_ref = sys_hrm_manager_app_subscribe(1 /*app_id*/, PBL_SEC_PER_MIN, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_b(s_hrm_state.low_latency, false);
+  sys_hrm_manager_unsubscribe(app_ref);
+  fake_sys_work_callbacks_invoke_pending();
+}
+
+// The pref mask keeps background subscribers off a disabled path, but a foreground app that asked
+// for the feature bypasses it.
+void test_hrm_manager__pref_mask_exempts_foreground_app(void) {
+  s_activity_prefs_spo2_is_enabled = false;
+
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  HRMSessionRef bg_ref = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, 1, 0, HRMFeature_SpO2, false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+
+  stub_pebble_tasks_set_current(PebbleTask_App);
+  HRMSessionRef app_ref = sys_hrm_manager_app_subscribe(1 /*app_id*/, 1, 0, HRMFeature_SpO2);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_SpO2);
+
+  sys_hrm_manager_unsubscribe(app_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+  sys_hrm_manager_unsubscribe(bg_ref);
+}
+
+// The green (BPM/HRV) and red/IR (SpO2) optical paths are mutually exclusive in hardware. SpO2 is
+// only due during short bounded windows while green consumers are due continuously, so when both
+// are due the SpO2 path wins.
+void test_hrm_manager__select_active_path(void) {
+  // Only one path due -> sample it, untouched.
+  cl_assert_equal_i(prv_select_active_path(HRMFeature_BPM), HRMFeature_BPM);
+  cl_assert_equal_i(prv_select_active_path(HRMFeature_BPM | HRMFeature_HRV),
+                    HRMFeature_BPM | HRMFeature_HRV);
+  cl_assert_equal_i(prv_select_active_path(HRMFeature_SpO2), HRMFeature_SpO2);
+  cl_assert_equal_i(prv_select_active_path(0), 0);
+
+  // Both due -> SpO2 takes the path.
+  cl_assert_equal_i(prv_select_active_path(HRMFeature_BPM | HRMFeature_SpO2), HRMFeature_SpO2);
+  cl_assert_equal_i(prv_select_active_path(HRMFeature_BPM | HRMFeature_HRV | HRMFeature_SpO2),
+                    HRMFeature_SpO2);
+}
+
+// A due SpO2 subscriber pre-empts a running green consumer, and the green path resumes as soon as
+// the SpO2 subscriber is served and backs off.
+void test_hrm_manager__spo2_preempts_green(void) {
+  s_activity_prefs_spo2_is_enabled = true;
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  HRMSessionRef green_ref = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, 1, 0, HRMFeature_BPM, false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+
+  HRMSessionRef spo2_ref =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, PBL_SEC_PER_HOUR, 0, HRMFeature_SpO2,
+                                          false /*low_latency*/, prv_fake_hrm_2_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_SpO2);
+
+  // A valid SpO2 reading serves the hourly subscriber; the green consumer gets the path back.
+  const HRMData spo2_data = {
+    .features = HRMFeature_SpO2,
+    .spo2_percent = 97,
+  };
+  hrm_manager_new_data_cb(&spo2_data);
+  hrm_manager_handle_prefs_changed();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+
+  sys_hrm_manager_unsubscribe(spo2_ref);
+  sys_hrm_manager_unsubscribe(green_ref);
+  fake_sys_work_callbacks_invoke_pending();
+}
+
+// A subscriber whose interval is within the spin-up time is always due and so keeps the green path
+// on continuously; pref-masked and SpO2 subscribers don't count.
+void test_hrm_manager__has_continuous_green_subscriber(void) {
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  cl_assert(!hrm_manager_has_continuous_green_subscriber());
+
+  HRMSessionRef slow_ref =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, PBL_SEC_PER_MIN, 0, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  cl_assert(!hrm_manager_has_continuous_green_subscriber());
+
+  HRMSessionRef spo2_ref = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, 1, 0, HRMFeature_SpO2, false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  cl_assert(!hrm_manager_has_continuous_green_subscriber());
+
+  HRMSessionRef live_ref = hrm_manager_subscribe_with_callback(
+      INSTALL_ID_INVALID, 1, 0, HRMFeature_BPM, false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  cl_assert(hrm_manager_has_continuous_green_subscriber());
+
+  // Heart rate monitoring off masks the background BPM subscriber out.
+  s_activity_prefs_heart_rate_is_enabled = false;
+  cl_assert(!hrm_manager_has_continuous_green_subscriber());
+  s_activity_prefs_heart_rate_is_enabled = true;
+
+  sys_hrm_manager_unsubscribe(live_ref);
+  cl_assert(!hrm_manager_has_continuous_green_subscriber());
+  sys_hrm_manager_unsubscribe(spo2_ref);
+  sys_hrm_manager_unsubscribe(slow_ref);
+  fake_sys_work_callbacks_invoke_pending();
+}
+
+// When we cleanup after an app process, its subscription, if any, should get an expiration time
+// placed on it
+void test_hrm_manager__app_cleanup(void) {
+  stub_pebble_tasks_set_current(PebbleTask_App);
+
+  AppInstallId app_id = 1;
+  const uint32_t update_interval_s = 1;
+  uint16_t expire_s = 0;
+  HRMFeature features = HRMFeature_BPM;
+
+  // If we subscribe with no expiration, we should get 0 back
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, update_interval_s, expire_s, features);
+  cl_assert(sys_hrm_manager_get_app_subscription(app_id) == session_ref);
+  uint16_t ret_expire_s;
+  sys_hrm_manager_get_subscription_info(session_ref, nullptr, nullptr, &ret_expire_s, nullptr);
+  cl_assert_equal_i(ret_expire_s, 0);
+
+  // Now, call the process cleanup. This should place an expiration time on the subscription
+  hrm_manager_process_cleanup(PebbleTask_App, app_id);
+  cl_assert(sys_hrm_manager_get_app_subscription(app_id) == session_ref);
+
+  sys_hrm_manager_get_subscription_info(session_ref, nullptr, nullptr, &ret_expire_s, nullptr);
+  cl_assert_equal_i(ret_expire_s, HRM_MANAGER_APP_EXIT_EXPIRATION_SEC);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// If the app set its own expiration shorter than HRM_MANAGER_APP_EXIT_EXPIRATION_SEC (e.g. the
+// workout app's post-workout recovery window), process cleanup must not lengthen it back to the
+// default — that would defeat the app's explicit choice and leave the HR sensor on too long.
+void test_hrm_manager__app_cleanup_preserves_shorter_expiration(void) {
+  stub_pebble_tasks_set_current(PebbleTask_App);
+
+  AppInstallId app_id = 1;
+  const uint32_t update_interval_s = 1;
+  const uint16_t shorter_expire_s = 10 * PBL_SEC_PER_MIN;
+  HRMFeature features = HRMFeature_BPM;
+
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, update_interval_s, shorter_expire_s, features);
+  uint16_t ret_expire_s;
+  sys_hrm_manager_get_subscription_info(session_ref, nullptr, nullptr, &ret_expire_s, nullptr);
+  cl_assert_equal_i(ret_expire_s, shorter_expire_s);
+
+  hrm_manager_process_cleanup(PebbleTask_App, app_id);
+
+  sys_hrm_manager_get_subscription_info(session_ref, nullptr, nullptr, &ret_expire_s, nullptr);
+  cl_assert_equal_i(ret_expire_s, shorter_expire_s);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// Test that app subscriptions expire correctly
+void test_hrm_manager__app_expiration(void) {
+  AppInstallId app_id = 1;
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+  cl_assert(sys_hrm_manager_get_app_subscription(app_id) == session_ref);
+
+  prv_fake_send_new_data();
+
+  // We should get the BPM event
+  cl_assert_equal_i(s_event_count, 1);
+  cl_assert_equal_i(s_events_received[0].type, PEBBLE_HRM_EVENT);
+  cl_assert_equal_i(s_events_received[0].hrm.event_type, HRMEvent_BPM);
+
+  // Subscribe again before we expire, should get the same session ref back
+  HRMSessionRef new_session_ref =
+      sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+  cl_assert(new_session_ref == session_ref);
+
+  // Now advance time past the expiration time
+  pbl_realtime_set(pbl_realtime() + expire_s + 1);
+
+  // Send more data, the subscription should get expired now
+  prv_fake_send_new_data();
+  cl_assert_equal_i(s_event_count, 3);
+  cl_assert_equal_i(s_events_received[1].type, PEBBLE_HRM_EVENT);
+  cl_assert_equal_i(s_events_received[1].hrm.event_type, HRMEvent_BPM);
+  cl_assert_equal_i(s_events_received[2].type, PEBBLE_HRM_EVENT);
+  cl_assert_equal_i(s_events_received[2].hrm.event_type, HRMEvent_SubscriptionExpiring);
+
+  // Subscription should be gone
+  cl_assert(prv_get_subscriber_state_from_ref(session_ref) == nullptr);
+  cl_assert(sys_hrm_manager_get_app_subscription(app_id) == HRM_INVALID_SESSION_REF);
+}
+
+// Test that system subscriptions expire correctly
+void test_hrm_manager__kernel_expiration(void) {
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 1, expire_s, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Make sure we got the expected data
+  cl_assert_equal_i(s_num_cb_events_1, 1);
+  cl_assert_equal_i(s_cb_events_1[0].event_type, HRMEvent_BPM);
+  cl_assert_equal_i(s_cb_events_1[0].bpm.bpm, s_hrm_event_data.hrm_bpm);
+  cl_assert(!s_cb_events_1[0].bpm.off_wrist);
+
+  // Now advance time to just before the expiration time
+  pbl_realtime_set(pbl_realtime() + expire_s - 1);
+
+  // Send more data, the callback should get the expiring event
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+
+  cl_assert_equal_i(s_num_cb_events_1, 3);
+  cl_assert_equal_i(s_cb_events_1[1].event_type, HRMEvent_SubscriptionExpiring);
+  cl_assert_equal_i(s_cb_events_1[2].event_type, HRMEvent_BPM);
+
+  // Now advance time to past expiration time
+  pbl_realtime_set(pbl_realtime() + expire_s + 1);
+
+  // Send more data, the subscription should go away now
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(prv_get_subscriber_state_from_ref(session_ref) == nullptr);
+}
+
+void test_hrm_manager__subscribe_multiple(void) {
+  const int num_refs = 3;
+  HRMSessionRef session_refs[num_refs];
+  AppInstallId app_ids[num_refs];
+
+  stub_pebble_tasks_set_current(PebbleTask_App);
+  AppInstallId app_id = 1;
+  for (int i = 0; i < num_refs; ++i, app_id++) {
+    const uint16_t expire_s = PBL_SEC_PER_MIN;
+    session_refs[i] = sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+    app_ids[i] = app_id;
+  }
+
+  // Ensure sure all can be found
+  for (int i = 0; i < num_refs; ++i) {
+    cl_assert(prv_get_subscriber_state_from_ref(session_refs[i]));
+    cl_assert(prv_get_subscriber_state_from_app_id(PebbleTask_App, app_ids[i]));
+  }
+
+  cl_assert(prv_get_subscriber_state_from_ref(HRM_INVALID_SESSION_REF) == nullptr);
+  cl_assert(prv_get_subscriber_state_from_app_id(PebbleTask_App, INSTALL_ID_INVALID) == nullptr);
+
+  // Unsubscribe, HRM should be disabled after
+  for (int i = 0; i < num_refs; ++i) {
+    sys_hrm_manager_unsubscribe(session_refs[i]);
+    cl_assert(prv_get_subscriber_state_from_ref(session_refs[i]) == nullptr);
+    cl_assert(prv_get_subscriber_state_from_app_id(PebbleTask_App, app_ids[i]) == nullptr);
+  }
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+}
+
+void test_hrm_manager__feature_callbacks(void) {
+  const int num_refs = 2;
+  HRMSessionRef session_refs[num_refs];
+
+  AppInstallId app_id = 1;
+  for (int i = 0; i < num_refs; ++i, app_id++) {
+    const uint16_t expire_s = PBL_SEC_PER_MIN;
+    session_refs[i] = sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+  }
+
+  prv_fake_send_new_data();
+
+  // One event for each app subscriber
+  cl_assert_equal_i(s_event_count, num_refs);
+
+  for (int i = 0; i < num_refs; ++i) {
+    sys_hrm_manager_unsubscribe(session_refs[i]);
+  }
+}
+
+void test_hrm_manager__no_feature_callbacks(void) {
+  // Subscribe and fake data being sent
+  AppInstallId app_id = 1;
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, 1, expire_s, 0 /* No feature */);
+
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+
+  // A subscriber with no requested features is ignored entirely: it must not power the sensor on,
+  // but the subscription still exists and receives no callbacks.
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+  cl_assert(prv_get_subscriber_state_from_ref(session_ref));
+
+  cl_assert_equal_i(s_event_count, 0);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__different_feature_callbacks(void) {
+  AppInstallId app_id = 1;
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef bpm_session = sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+  HRMSessionRef no_session =
+      sys_hrm_manager_app_subscribe(app_id + 3, 1, expire_s, 0 /* no features */);
+
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Expect 1 event: 1 for BPM, none for no feature.
+  cl_assert_equal_i(s_event_count, 1);
+
+  sys_hrm_manager_unsubscribe(bpm_session);
+  sys_hrm_manager_unsubscribe(no_session);
+}
+
+void test_hrm_manager__multiple_feature_callbacks(void) {
+  const int num_refs = 2;
+  HRMSessionRef session_refs[num_refs];
+
+  AppInstallId app_id = 1;
+  for (int i = 0; i < num_refs; ++i, app_id++) {
+    session_refs[i] = TO_SESSION_REF(i + 1);
+    const uint16_t expire_s = PBL_SEC_PER_MIN;
+    sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+  }
+
+  prv_fake_send_new_data();
+
+  // One BPM event for each app subscriber
+  cl_assert_equal_i(s_event_count, num_refs);
+
+  for (int i = 0; i < num_refs; ++i) {
+    sys_hrm_manager_unsubscribe(session_refs[i]);
+  }
+}
+
+void test_hrm_manager__sys_work_data_callback(void) {
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  s_num_cb_events_1 = 0;
+
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 1, expire_s, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+
+  fake_sys_work_callbacks_invoke_pending();
+  prv_fake_send_new_data();
+
+  // Make sure event is queued up
+  cl_assert_equal_i(prv_num_sys_work_events_queued(), 1);
+
+  // Make sure we successfully consume the event
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Make sure we got the expected data
+  cl_assert_equal_i(s_num_cb_events_1, 1);
+  cl_assert_equal_i(s_cb_events_1[0].event_type, HRMEvent_BPM);
+  cl_assert_equal_i(s_cb_events_1[0].bpm.bpm, s_hrm_event_data.hrm_bpm);
+  cl_assert(!s_cb_events_1[0].bpm.off_wrist);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+#include <fake_mutex.h>
+// circular buffer once, but both clients should get it
+void test_hrm_manager__multiple_sys_work_data_callbacks(void) {
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  s_num_cb_events_1 = 0;
+  s_num_cb_events_2 = 0;
+
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref_1 =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 1, expire_s, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+  HRMSessionRef session_ref_2 =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 1, expire_s, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_fake_hrm_2_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+  prv_fake_send_new_data();
+
+  // Make sure only 1 callback (and hence one circular buffer entry) got queued up
+  cl_assert_equal_i(prv_num_sys_work_events_queued(), 1);
+
+  // Make sure we successfully get the event sent to both subscribers
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Make sure we got the expected data to both clients
+  cl_assert_equal_i(s_num_cb_events_1, 1);
+  cl_assert_equal_i(s_cb_events_1[0].event_type, HRMEvent_BPM);
+  cl_assert_equal_i(s_cb_events_1[0].bpm.bpm, s_hrm_event_data.hrm_bpm);
+  cl_assert(!s_cb_events_1[0].bpm.off_wrist);
+
+  cl_assert_equal_i(s_num_cb_events_1, 1);
+  cl_assert_equal_i(s_cb_events_1[0].event_type, HRMEvent_BPM);
+  cl_assert_equal_i(s_cb_events_1[0].bpm.bpm, s_hrm_event_data.hrm_bpm);
+  cl_assert(!s_cb_events_1[0].bpm.off_wrist);
+
+  sys_hrm_manager_unsubscribe(session_ref_1);
+  sys_hrm_manager_unsubscribe(session_ref_2);
+}
+
+void test_hrm_manager__set_features(void) {
+  AppInstallId app_id = 1;
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  const HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+  HRMSubscriberState *state = prv_get_subscriber_state_from_ref(session_ref);
+
+  // Starts off with BPM enabled
+  cl_assert_equal_i(state->features, HRMFeature_BPM);
+
+  // Change to none
+  sys_hrm_manager_set_features(session_ref, 0);
+  cl_assert_equal_i(state->features, 0);
+
+  // Change to BPM
+  sys_hrm_manager_set_features(session_ref, HRMFeature_BPM);
+  cl_assert_equal_i(state->features, HRMFeature_BPM);
+}
+
+void test_hrm_manager__set_update_internal(void) {
+  AppInstallId app_id = 1;
+  const uint16_t expire_a_s = PBL_SEC_PER_MIN;
+  uint32_t update_interval_a_s = 1;
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, update_interval_a_s, expire_a_s, HRMFeature_BPM);
+  HRMSubscriberState *state = prv_get_subscriber_state_from_ref(session_ref);
+  cl_assert(state->update_interval_s == update_interval_a_s);
+  cl_assert(state->expire_utc == pbl_realtime() + expire_a_s);
+
+  // Change update interval and expiration
+  const uint16_t expire_b_s = 2 * PBL_SEC_PER_MIN;
+  uint32_t update_interval_b_s = 5;
+  sys_hrm_manager_set_update_interval(session_ref, update_interval_b_s, expire_b_s);
+  cl_assert(prv_get_subscriber_state_from_ref(session_ref) == state);
+  cl_assert(state->update_interval_s == update_interval_b_s);
+  cl_assert(state->expire_utc == pbl_realtime() + expire_b_s);
+}
+
+#define NUM_TEST_EVENTS 1
+void test_hrm_manager__circular_buffer_event_copy(void) {
+  // Make sure there will be unaligned data
+  const uint16_t buf_size = sizeof(PebbleHRMEvent) * 2 + sizeof(PebbleHRMEvent) / 2;
+  uint8_t buffer[buf_size];
+
+  CircularBuffer cb;
+  circular_buffer_init(&cb, buffer, buf_size);
+
+  PebbleHRMEvent event[NUM_TEST_EVENTS] = {
+    {.event_type = HRMEvent_BPM, .bpm = {.bpm = 65, .confidence = 95}},
+  };
+  { // These events will insert properly aligned in the buffer
+    for (int i = 0; i < NUM_TEST_EVENTS; ++i) {
+      circular_buffer_write(&cb, (const uint8_t *)&event[i], sizeof(PebbleHRMEvent));
+    }
+    PebbleHRMEvent out_event[NUM_TEST_EVENTS];
+    for (int i = 0; i < NUM_TEST_EVENTS; ++i) {
+      prv_read_event_from_buffer_and_consume(&cb, &out_event[i]);
+      cl_assert_equal_b(memcmp(&event[i], &out_event[i], sizeof(PebbleHRMEvent)), false);
+    }
+  }
+  { // Test reading back unaligned
+    for (int i = 0; i < NUM_TEST_EVENTS; ++i) {
+      circular_buffer_write(&cb, (const uint8_t *)&event[i], sizeof(PebbleHRMEvent));
+    }
+    PebbleHRMEvent out_event[NUM_TEST_EVENTS];
+    for (int i = 0; i < NUM_TEST_EVENTS; ++i) {
+      prv_read_event_from_buffer_and_consume(&cb, &out_event[i]);
+      cl_assert_equal_b(memcmp(&event[i], &out_event[i], sizeof(PebbleHRMEvent)), false);
+    }
+  }
+}
+#undef NUM_TEST_EVENTS
+
+// Test the enable and disable functionality across subscriptions
+void test_hrm_manager__enable_disable(void) {
+  // 1. Disabling and then enabling with no subscriber should leave the HRM off
+  hrm_manager_enable(false);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+  hrm_manager_enable(true);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+
+  // 2. Subscribing while disabled should not enable the hrm
+  hrm_manager_enable(false);
+  fake_sys_work_callbacks_invoke_pending();
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 1, PBL_SEC_PER_MIN, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+
+  // 3. Enabling with a subscriber should turn HRM on
+  hrm_manager_enable(true);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  // 4. Disabling with a Subscriber should disable the HRM
+  hrm_manager_enable(false);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// Advance time the given number of milliseconds
+static void prv_advance_time_ms(uint32_t ms) {
+  uint64_t delta_ticks = pbl_ms_to_ticks(ms);
+  fake_rtc_set_ticks(pbl_uptime_ticks() + delta_ticks);
+  pbl_realtime_set(pbl_realtime() + ms / PBL_MSEC_PER_SEC);
+}
+
+// Test that we handle different update intervals correctly
+void test_hrm_manager__update_interval(void) {
+  AppInstallId app_id = 1;
+  uint32_t update_interval_s = 600;
+  const uint16_t expire_s = 30 * PBL_SEC_PER_MIN;
+  HRMFeature features = HRMFeature_BPM;
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(app_id, update_interval_s, expire_s, features);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Should start out enabled before we get the first good reading
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  // Send some data while enabled
+  int num_updates;
+  for (num_updates = 0; num_updates < 1000 && hrm_is_enabled(HRM); num_updates++) {
+    prv_fake_send_new_data();
+    fake_sys_work_callbacks_invoke_pending();
+  }
+
+  // Should be disabled relatively quickly since we don't need another reading for another 600
+  // seconds
+  cl_assert(num_updates <= HRM_CHECK_SENSOR_DISABLE_COUNT);
+
+  // The timer should be set to fire just before we need another update
+  uint32_t timeout_ms = fake_work_timeout_ms(prv_get_timer());
+  cl_assert_equal_i(timeout_ms, (update_interval_s - HRM_SENSOR_SPIN_UP_SEC) * PBL_MSEC_PER_SEC);
+
+  // Fire the timer after the elapsed time, make sure we are re-enabled after that
+  prv_advance_time_ms(timeout_ms);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  // Send the next data, should be disabled again after that
+  for (num_updates = 0; num_updates < 1000 && hrm_is_enabled(HRM); num_updates++) {
+    prv_fake_send_new_data();
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  cl_assert(num_updates <= HRM_CHECK_SENSOR_DISABLE_COUNT);
+  prv_advance_time_ms(1000);
+
+  // Now, change the update interval to 10 seconds. That should re-enable the sensor immediately
+  update_interval_s = 10;
+  cl_assert(sys_hrm_manager_set_update_interval(session_ref, update_interval_s, expire_s));
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  prv_advance_time_ms(1000);
+
+  // Send the next data, should still be enabled since the interval is less that the spin-up
+  // time
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  prv_advance_time_ms(1000);
+
+  // Now add a 10 minute subscription back in.
+  AppInstallId app_id_2 = 2;
+  sys_hrm_manager_app_subscribe(app_id_2, 600, expire_s, features);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // We should stay enabled after each update because we still have the 10 second subscription
+  // too
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  prv_advance_time_ms(1000);
+
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  prv_advance_time_ms(1000);
+
+  // Remove the 10 second subscription - We should get disabled after the next update now
+  sys_hrm_manager_unsubscribe(session_ref);
+  prv_fake_send_new_data();
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+}
+
+void test_hrm_manager__can_turn_sensor_on(void) {
+  fake_event_set_callback(prv_charger_event_cb);
+
+  cl_assert(prv_can_turn_sensor_on());
+
+  // Add a subscription so we have a reason to turn the sensor on (if the conditions are right)
+  sys_hrm_manager_app_subscribe(1, 1, 60, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Test run level changes
+  hrm_manager_enable(false);
+  cl_assert(!prv_can_turn_sensor_on());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+
+  hrm_manager_enable(true);
+  cl_assert(prv_can_turn_sensor_on());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+
+  // Test the pref changes
+  s_activity_prefs_heart_rate_is_enabled = false;
+  hrm_manager_handle_prefs_changed();
+  cl_assert(!prv_can_turn_sensor_on());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+
+  s_activity_prefs_heart_rate_is_enabled = true;
+  hrm_manager_handle_prefs_changed();
+  cl_assert(prv_can_turn_sensor_on());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+
+  // Test charging state changes
+  prv_put_battery_state_change_event(true /* is plugged in */);
+  cl_assert(!prv_can_turn_sensor_on());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+
+  prv_put_battery_state_change_event(false /* is plugged in */);
+  cl_assert(prv_can_turn_sensor_on());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+}
+
+// A full app event queue (app not draining events fast enough) must not panic the firmware.
+// The HRM sample is dropped and counted, and delivery resumes once the queue drains.
+void test_hrm_manager__app_queue_full_drops_without_panic(void) {
+  stub_pebble_tasks_set_current(PebbleTask_App);
+
+  AppInstallId app_id = 1;
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(app_id, 1, expire_s, HRMFeature_BPM);
+
+  // App is not draining its event queue.
+  s_queue_full = true;
+
+  // Must not panic; the event is dropped (not delivered) and counted.
+  prv_fake_send_new_data();
+  cl_assert_equal_i(s_event_count, 0);
+  cl_assert_equal_i(prv_get_dropped_events_count(), 1);
+
+  // Subscription survives and delivery resumes once the queue drains.
+  s_queue_full = false;
+  prv_fake_send_new_data();
+  cl_assert_equal_i(s_event_count, 1);
+  cl_assert_equal_i(s_events_received[0].type, PEBBLE_HRM_EVENT);
+  cl_assert_equal_i(s_events_received[0].hrm.event_type, HRMEvent_BPM);
+  cl_assert_equal_i(prv_get_dropped_events_count(), 1);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// A subscriber the sensor cannot serve (confidence never gets high) must not pin the sensor on
+// indefinitely: after HRM_MAX_UNSERVED_TIME_SEC it is deferred to its next interval.
+void test_hrm_manager__unserved_subscriber_timeout(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1 /*app_id*/, 600 /*interval_s*/,
+                                                            0 /*expire_s*/, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Never served, so the sensor turns on right away
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  // Low-confidence readings don't serve the subscriber; the sensor stays on before the timeout
+  const HRMData poor_data = {
+    .features = HRMFeature_BPM,
+    .hrm_bpm = 70,
+    .hrm_confidence = HRM_CONFIDENCE_HIGH - 1,
+  };
+  for (int i = 0; i < 2 * HRM_CHECK_SENSOR_DISABLE_COUNT; ++i) {
+    hrm_manager_new_data_cb(&poor_data);
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  // Once the serve window expires, the subscriber is deferred and the sensor powers off
+  prv_advance_time_ms((HRM_MAX_UNSERVED_TIME_SEC + 1) * PBL_MSEC_PER_SEC);
+  for (int i = 0; i <= HRM_CHECK_SENSOR_DISABLE_COUNT; ++i) {
+    hrm_manager_new_data_cb(&poor_data);
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+
+  // The re-enable timer waits out the subscriber's interval, not another immediate attempt
+  uint32_t timeout_ms = fake_work_timeout_ms(prv_get_timer());
+  cl_assert_equal_i(timeout_ms, (600 - HRM_SENSOR_SPIN_UP_SEC) * PBL_MSEC_PER_SEC);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// The unserved-subscriber timeout must not shut the sensor off under a short-interval (live HR)
+// subscriber: deferring it makes it due again immediately, so the sensor stays on.
+void test_hrm_manager__unserved_timeout_keeps_live_hr_on(void) {
+  HRMSessionRef session_ref =
+      sys_hrm_manager_app_subscribe(1 /*app_id*/, 1 /*interval_s*/, 0 /*expire_s*/, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  const HRMData poor_data = {
+    .features = HRMFeature_BPM,
+    .hrm_bpm = 70,
+    .hrm_confidence = HRM_CONFIDENCE_HIGH - 1,
+  };
+  prv_advance_time_ms((HRM_MAX_UNSERVED_TIME_SEC + 1) * PBL_MSEC_PER_SEC);
+  for (int i = 0; i <= HRM_CHECK_SENSOR_DISABLE_COUNT; ++i) {
+    hrm_manager_new_data_cb(&poor_data);
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// Test that off-wrist readings are delivered immediately without delay
+void test_hrm_manager__immediate_off_wrist(void) {
+  stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
+  s_num_cb_events_1 = 0;
+
+  const uint16_t expire_s = PBL_SEC_PER_MIN;
+  HRMSessionRef session_ref =
+      hrm_manager_subscribe_with_callback(INSTALL_ID_INVALID, 1, expire_s, HRMFeature_BPM,
+                                          false /*low_latency*/, prv_fake_hrm_1_cb, nullptr);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // Send OffWrist data immediately (no prior good readings)
+  HRMData off_wrist_data = {
+    .features = HRMFeature_BPM,
+    .hrm_bpm = 0,
+    .off_wrist = true,
+  };
+  hrm_manager_new_data_cb(&off_wrist_data);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // OffWrist should be delivered immediately
+  cl_assert_equal_i(s_num_cb_events_1, 1);
+  cl_assert_equal_i(s_cb_events_1[0].event_type, HRMEvent_BPM);
+  cl_assert(s_cb_events_1[0].bpm.off_wrist);
+
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// A silent driver must not prevent the unserved periodic subscriber from being deferred.
+void test_hrm_manager__silent_driver_serve_timeout(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+
+  prv_advance_time_ms(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), false);
+  const uint32_t backoff_ms = (600 - HRM_SENSOR_SPIN_UP_SEC) * PBL_MSEC_PER_SEC;
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), backoff_ms);
+
+  prv_advance_time_ms(backoff_ms);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!fake_work_is_scheduled(prv_get_timer()));
+}
+
+// A live subscriber keeps sampling even when the driver correctly reports off-wrist.
+void test_hrm_manager__live_off_wrist_subscription_keeps_sensor_on(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  const HRMData off_wrist_data = {
+    .features = HRMFeature_BPM,
+    .hrm_bpm = 0,
+    .off_wrist = true,
+  };
+  prv_advance_time_ms(20 * PBL_SEC_PER_MIN * PBL_MSEC_PER_SEC);
+  for (int i = 0; i <= HRM_CHECK_SENSOR_DISABLE_COUNT; ++i) {
+    hrm_manager_new_data_cb(&off_wrist_data);
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  cl_assert_equal_b(hrm_is_enabled(HRM), true);
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__poor_reports_do_not_extend_serve_deadline(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  const HRMData poor_data = {
+    .features = HRMFeature_BPM,
+    .hrm_bpm = 70,
+    .hrm_confidence = HRM_CONFIDENCE_HIGH - 1,
+  };
+  for (int elapsed_s = 30; elapsed_s < HRM_MAX_UNSERVED_TIME_SEC; elapsed_s += 30) {
+    prv_advance_time_ms(30 * PBL_MSEC_PER_SEC);
+    for (int i = 0; i < HRM_CHECK_SENSOR_DISABLE_COUNT; ++i) {
+      hrm_manager_new_data_cb(&poor_data);
+    }
+    hrm_manager_handle_prefs_changed();
+    fake_sys_work_callbacks_invoke_pending();
+    cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                      (HRM_MAX_UNSERVED_TIME_SEC - elapsed_s) * PBL_MSEC_PER_SEC);
+  }
+  prv_advance_time_ms(30 * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__silent_activity_interval_change_preserves_on_time(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!fake_work_is_scheduled(prv_get_timer()));
+  prv_advance_time_ms(60 * PBL_MSEC_PER_SEC);
+  cl_assert(sys_hrm_manager_set_update_interval(session_ref, 86400, 0));
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), 60 * PBL_MSEC_PER_SEC);
+  prv_advance_time_ms(60 * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    (86400 - HRM_SENSOR_SPIN_UP_SEC) * PBL_MSEC_PER_SEC);
+  sys_hrm_manager_unsubscribe(session_ref);
+  fake_sys_work_callbacks_invoke_pending();
+
+  session_ref = sys_hrm_manager_app_subscribe(1, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  prv_advance_time_ms((HRM_MAX_UNSERVED_TIME_SEC + 1) * PBL_MSEC_PER_SEC);
+  cl_assert(sys_hrm_manager_set_update_interval(session_ref, 86400, 0));
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__serve_timeout_from_tick_zero(void) {
+  fake_rtc_set_ticks(0);
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  prv_advance_time_ms(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__stale_timeout_obeys_gates_and_restart_gets_full_window(void) {
+  fake_event_set_callback(prv_charger_event_cb);
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  for (int gate = 0; gate < 3; ++gate) {
+    // Queue the old timer callback, then close a gate before SysWorkq evaluates it.
+    prv_advance_time_ms(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+    fake_work_fire(prv_get_timer());
+    if (gate == 0) {
+      hrm_manager_enable(false);
+    } else if (gate == 1) {
+      s_activity_prefs_heart_rate_is_enabled = false;
+      hrm_manager_handle_prefs_changed();
+    } else {
+      prv_put_battery_state_change_event(true);
+    }
+    fake_sys_work_callbacks_invoke_pending();
+    cl_assert(!hrm_is_enabled(HRM));
+    cl_assert(!fake_work_is_scheduled(prv_get_timer()));
+    prv_advance_time_ms(300 * PBL_MSEC_PER_SEC);
+    if (gate == 0) {
+      hrm_manager_enable(true);
+    } else if (gate == 1) {
+      s_activity_prefs_heart_rate_is_enabled = true;
+      hrm_manager_handle_prefs_changed();
+    } else {
+      prv_put_battery_state_change_event(false);
+    }
+    fake_sys_work_callbacks_invoke_pending();
+    cl_assert(hrm_is_enabled(HRM));
+    cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                      HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  }
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__path_restart_and_old_callback_keep_new_serve_window(void) {
+  s_activity_prefs_spo2_is_enabled = true;
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  const pbl_work_fn_t old_cb = prv_get_timer()->work.fn;
+  prv_advance_time_ms(90 * PBL_MSEC_PER_SEC);
+  cl_assert(sys_hrm_manager_set_features(session_ref, HRMFeature_SpO2));
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.enable_count, 2);
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_SpO2);
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+
+  prv_advance_time_ms(30 * PBL_MSEC_PER_SEC);
+  old_cb(&prv_get_timer()->work);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(s_hrm_state.enable_count, 2);
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), 90 * PBL_MSEC_PER_SEC);
+  prv_advance_time_ms(90 * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__silent_live_subscription_expires_and_renewal_is_respected(void) {
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 1, 30, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), 30 * PBL_MSEC_PER_SEC);
+  const pbl_work_fn_t old_cb = prv_get_timer()->work.fn;
+  prv_advance_time_ms(10 * PBL_MSEC_PER_SEC);
+  cl_assert(sys_hrm_manager_set_update_interval(session_ref, 1, 60));
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), 60 * PBL_MSEC_PER_SEC);
+  prv_advance_time_ms(20 * PBL_MSEC_PER_SEC);
+  old_cb(&prv_get_timer()->work);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), 40 * PBL_MSEC_PER_SEC);
+  prv_advance_time_ms(40 * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  cl_assert(!fake_work_is_scheduled(prv_get_timer()));
+
+  // Silent expiry keeps the session, so a holder that renews it late still revives it
+  cl_assert(prv_get_subscriber_state_from_ref(session_ref) != nullptr);
+  cl_assert(sys_hrm_manager_set_update_interval(session_ref, 1, 60));
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+void test_hrm_manager__periodic_timeout_does_not_stop_another_live_reader(void) {
+  HRMSessionRef periodic_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  HRMSessionRef live_ref = sys_hrm_manager_app_subscribe(2, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  prv_advance_time_ms(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(prv_get_subscriber_state_from_ref(periodic_ref)->last_valid_bpm_ticks,
+                    pbl_uptime_ticks());
+  sys_hrm_manager_unsubscribe(live_ref);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    (600 - HRM_SENSOR_SPIN_UP_SEC) * PBL_MSEC_PER_SEC);
+  sys_hrm_manager_unsubscribe(periodic_ref);
+}
+
+void test_hrm_manager__queued_timeout_after_unsubscribe_cannot_stop_new_live_reader(void) {
+  HRMSessionRef periodic_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  prv_advance_time_ms(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  sys_hrm_manager_unsubscribe(periodic_ref);
+  HRMSessionRef live_ref = sys_hrm_manager_app_subscribe(2, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert(!fake_work_is_scheduled(prv_get_timer()));
+  sys_hrm_manager_unsubscribe(live_ref);
+}
+
+void test_hrm_manager__silent_live_reader_does_not_delay_next_periodic_optical_path(void) {
+  s_activity_prefs_spo2_is_enabled = true;
+  HRMSessionRef live_ref = sys_hrm_manager_app_subscribe(1, 1, 0, HRMFeature_BPM);
+  HRMSessionRef periodic_ref = sys_hrm_manager_app_subscribe(2, 600, 0, HRMFeature_SpO2);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_SpO2);
+  const HRMData spo2_data = {
+    .features = HRMFeature_SpO2,
+    .spo2_percent = 97,
+  };
+  for (int i = 0; i < HRM_CHECK_SENSOR_DISABLE_COUNT; ++i) {
+    hrm_manager_new_data_cb(&spo2_data);
+  }
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_BPM);
+  const uint32_t next_due_ms = (600 - HRM_SENSOR_SPIN_UP_SEC) * PBL_MSEC_PER_SEC;
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()), next_due_ms);
+
+  prv_advance_time_ms(next_due_ms);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(s_hrm_state.features, HRMFeature_SpO2);
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  sys_hrm_manager_unsubscribe(periodic_ref);
+  sys_hrm_manager_unsubscribe(live_ref);
+}
+
+// A periodic subscriber that becomes due while another reader has kept the sensor on gets its own
+// full serve window.
+void test_hrm_manager__serve_window_starts_when_subscriber_is_due(void) {
+  HRMSessionRef live_ref = sys_hrm_manager_app_subscribe(1, 1, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  prv_advance_time_ms(10 * PBL_SEC_PER_MIN * PBL_MSEC_PER_SEC);
+
+  HRMSessionRef periodic_ref = sys_hrm_manager_app_subscribe(2, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert_equal_i(prv_get_subscriber_state_from_ref(periodic_ref)->last_valid_bpm_ticks, 0);
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+
+  prv_advance_time_ms(HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(prv_get_subscriber_state_from_ref(periodic_ref)->last_valid_bpm_ticks,
+                    pbl_uptime_ticks());
+  sys_hrm_manager_unsubscribe(periodic_ref);
+  sys_hrm_manager_unsubscribe(live_ref);
+}
+
+// A failed sensor enable is retried after a backoff instead of waiting for an unrelated event.
+void test_hrm_manager__enable_failure_retries_after_backoff(void) {
+  hrm_manager_enable(false);
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  s_hrm_state.enable_failures = 1;
+  hrm_manager_enable(true);
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(!hrm_is_enabled(HRM));
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_SENSOR_SPIN_UP_SEC * PBL_MSEC_PER_SEC);
+
+  prv_advance_time_ms(HRM_SENSOR_SPIN_UP_SEC * PBL_MSEC_PER_SEC);
+  fake_work_fire(prv_get_timer());
+  fake_sys_work_callbacks_invoke_pending();
+  cl_assert(hrm_is_enabled(HRM));
+  cl_assert_equal_i(fake_work_timeout_ms(prv_get_timer()),
+                    HRM_MAX_UNSERVED_TIME_SEC * PBL_MSEC_PER_SEC);
+  sys_hrm_manager_unsubscribe(session_ref);
+}
+
+// Retries stop once the failure limit is reached.
+void test_hrm_manager__enable_failure_limit_stops_retries(void) {
+  hrm_manager_enable(false);
+  HRMSessionRef session_ref = sys_hrm_manager_app_subscribe(1, 600, 0, HRMFeature_BPM);
+  fake_sys_work_callbacks_invoke_pending();
+  s_hrm_state.enable_failures = HRM_MAX_ENABLE_FAILURES;
+  hrm_manager_enable(true);
+  fake_sys_work_callbacks_invoke_pending();
+  for (int i = 1; i < HRM_MAX_ENABLE_FAILURES; ++i) {
+    prv_advance_time_ms(HRM_SENSOR_SPIN_UP_SEC * PBL_MSEC_PER_SEC);
+    fake_work_fire(prv_get_timer());
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  cl_assert(!hrm_is_enabled(HRM));
+  cl_assert_equal_i(s_hrm_state.enable_failures, 0);
+  cl_assert(!fake_work_is_scheduled(prv_get_timer()));
+  sys_hrm_manager_unsubscribe(session_ref);
+}

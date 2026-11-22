@@ -44,6 +44,7 @@ class DeviceConfig:
     flash_command: str = None
     qemu_rtc: str = None
     bt_hci: str = None
+    bt_addr: str = None
     ble_controller: str = None
     power_supply: object = None
     main_build: object = None
@@ -162,29 +163,45 @@ class DeviceAdapter(ABC):
             self.wait_ready()
 
     def _start_bluetooth(self):
-        """Get the H4 controller the build's CONFIG_BT_HCI_UART needs: the
+        """Get the H4 controller the build's CONFIG_NIMBLE_HCI_UART needs: the
         given one (a serial port, or what the device takes for one), or
         Bumble's software controllers ('virtual'), whose other end is the
         harness's. Returns the given one, the TCP port of the virtual one,
-        or None without CONFIG_BT_HCI_UART."""
-        hci_uart = bool(self.build.config.get("CONFIG_BT_HCI_UART"))
+        or None without CONFIG_NIMBLE_HCI_UART."""
+        hci_uart = bool(self.build.config.get("CONFIG_NIMBLE_HCI_UART"))
         controller = self.config.bt_hci
         if hci_uart and not controller:
             raise HarnessError(
-                "the build uses CONFIG_BT_HCI_UART: its Bluetooth needs a controller"
+                "the build uses CONFIG_NIMBLE_HCI_UART: its Bluetooth needs a controller"
             )
         if controller and not hci_uart:
-            raise HarnessError("--bt-hci needs a build with CONFIG_BT_HCI_UART=y")
+            raise HarnessError("--bt-hci needs a build with CONFIG_NIMBLE_HCI_UART=y")
         if controller != VIRTUAL:
             return controller
-        from harness.ble.virtual import VirtualLink
+        from harness.ble.virtual import WATCH_ADDRESS, VirtualLink
 
+        # A given address is the watch's identity: no public one to prefer.
         self._virtual_link = VirtualLink(
-            os.path.join(self.config.results_dir, "bt-link.log")
+            os.path.join(self.config.results_dir, "bt-link.log"),
+            watch_address=None if self.config.bt_addr else WATCH_ADDRESS,
         )
         self._virtual_link.start()
         self.ble_controller = self._virtual_link.host_controller
         return self._virtual_link.watch_port
+
+    def _bt_addr(self, option):
+        """The random static address the watch is launched with, checked, or
+        None. ``option`` is the build's option that reads it."""
+        if not self.config.bt_addr:
+            return None
+        if not self.build.config.get(option):
+            raise HarnessError(f"--bt-addr needs a build with {option}=y")
+        from pbl.emulator import bt_static_address
+
+        try:
+            return bt_static_address(self.config.bt_addr)
+        except ValueError as e:
+            raise HarnessError(f"--bt-addr: {e}") from None
 
     def _power_cycle_bluetooth(self):
         """Reset the virtual controller with the watch, as a watch's own

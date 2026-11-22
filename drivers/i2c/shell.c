@@ -25,7 +25,7 @@ static int prv_parse_dev(const struct pbl_shell *sh, char **argv, struct pbl_i2c
     return -EINVAL;
   }
 
-  *dev = (struct pbl_i2c_dev)PBL_I2C_DEV(container_of(bus_dev, const struct pbl_i2c_bus, dev),
+  *dev = (struct pbl_i2c_dev)PBL_I2C_DEV(PBL_CONTAINER_OF(bus_dev, const struct pbl_i2c_bus, dev),
                                          (uint16_t)addr);
 
   return 0;
@@ -44,11 +44,12 @@ static int prv_parse_byte(const struct pbl_shell *sh, const char *arg, uint8_t *
   return 0;
 }
 
-static int prv_cmd_buses(const struct pbl_shell *sh, size_t argc, char **argv) {
+static int prv_cmd_list(const struct pbl_shell *sh, size_t argc, char **argv) {
   const struct pbl_device *dev;
 
   PBL_DEVICE_CLASS_FOREACH(&pbl_i2c_bus_class, dev) {
-    pbl_shell_print(sh, "%s%s", dev->name, pbl_device_is_ready(dev) ? "" : " (not ready)");
+    pbl_shell_print(sh, "%s%s", pbl_device_name(dev),
+                    pbl_device_is_ready(dev) ? "" : " (not ready)");
   }
 
   return 0;
@@ -65,7 +66,7 @@ static int prv_cmd_scan(const struct pbl_shell *sh, size_t argc, char **argv) {
 
   for (uint16_t addr = ADDR_FIRST; addr <= ADDR_LAST; addr++) {
     struct pbl_i2c_dev dev =
-        PBL_I2C_DEV(container_of(bus_dev, const struct pbl_i2c_bus, dev), addr);
+        PBL_I2C_DEV(PBL_CONTAINER_OF(bus_dev, const struct pbl_i2c_bus, dev), addr);
 
     if (pbl_i2c_write(&dev, nullptr, 0U) == 0) {
       pbl_shell_print(sh, "0x%02x", addr);
@@ -143,7 +144,7 @@ static int prv_cmd_write(const struct pbl_shell *sh, size_t argc, char **argv) {
 }
 
 static const struct pbl_shell_cmd sub_i2c[] = {
-  PBL_SHELL_CMD(buses, nullptr, "List the buses", prv_cmd_buses),
+  PBL_SHELL_CMD(list, nullptr, "List the buses", prv_cmd_list),
   PBL_SHELL_CMD_ARG(scan, nullptr, "Probe every address with an empty write <bus>", prv_cmd_scan, 2,
                     0),
   PBL_SHELL_CMD_ARG(read, nullptr, "Read registers <bus> <addr> <reg> [len]", prv_cmd_read, 4, 1),

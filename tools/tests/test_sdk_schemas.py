@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -24,11 +25,12 @@ class TestSdkSchemas(unittest.TestCase):
         with open(path, encoding="utf-8") as json_file:
             return json.load(json_file)
 
-    def test_schema_platforms_match_sdk_platforms(self):
+    def test_schema_accepts_every_sdk_platform(self):
         attributes = self.load_json(os.path.join(self.schemas_dir, "attributes.json"))
-        schema_platforms = attributes["targetPlatforms"]["items"]["enum"]
+        pattern = re.compile(attributes["targetPlatforms"]["items"]["pattern"])
 
-        self.assertEqual(set(schema_platforms), set(pebble_platforms))
+        for platform in pebble_platforms:
+            self.assertRegex(platform, pattern)
 
     def test_package_schema_accepts_every_project_type(self):
         file_types = self.load_json(os.path.join(self.schemas_dir, "file_types.json"))
@@ -56,14 +58,17 @@ class TestSdkSchemas(unittest.TestCase):
 
         self.assertIn("moddable", project_types)
 
-    def test_default_templates_include_every_sdk_platform(self):
+    def test_default_templates_target_known_platforms(self):
+        # The templates are flexible: they name display shapes, which cover every SDK platform,
+        # and a few platforms by name.
         for template in ("app", "lib"):
             package_json = os.path.join(
                 self.repo_dir, "sdk", "defaults", template, "package.json"
             )
             project = self.load_json(package_json)
-            template_platforms = project["pebble"]["targetPlatforms"]
-            self.assertEqual(set(template_platforms), set(pebble_platforms))
+            self.assertTrue(project["pebble"]["flexible"])
+            for target in project["pebble"]["targetPlatforms"]:
+                self.assertIn(target, set(pebble_platforms) | {"rect", "round"})
 
 
 if __name__ == "__main__":

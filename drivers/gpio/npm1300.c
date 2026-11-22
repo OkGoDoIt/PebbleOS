@@ -3,6 +3,7 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/gpio/npm1300.h>
 #include <pbl/util/misc.h>
 
@@ -18,7 +19,7 @@
 #define NPM1300_GPIO_MODE_OUTPUT_LOW  9U
 
 static const struct pbl_npm1300_gpio *prv_gpio(const struct pbl_gpio_port *port) {
-  return container_of(port, const struct pbl_npm1300_gpio, port);
+  return PBL_CONTAINER_OF(port, const struct pbl_npm1300_gpio, port);
 }
 
 static const struct pbl_npm1300 *prv_pmic(const struct pbl_gpio_port *port) {
@@ -175,3 +176,5 @@ const struct pbl_gpio_port_ops pbl_npm1300_gpio_ops = {
   .get = prv_get,
   .set = prv_set,
 };
+
+#include PBL_DT_INSTANCES(nordic_npm1300_gpio)

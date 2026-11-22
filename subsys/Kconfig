@@ -1,14 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
+rsource "analytics/Kconfig"
 rsource "bluetooth/Kconfig"
 rsource "console/Kconfig"
+rsource "coredump/Kconfig"
 rsource "crc/Kconfig"
 rsource "cron/Kconfig"
+rsource "crypto/Kconfig"
 rsource "fs/Kconfig"
+rsource "i18n/Kconfig"
 rsource "input/Kconfig"
 rsource "loader/Kconfig"
 rsource "logging/Kconfig"
+rsource "pp/Kconfig"
 rsource "profiler/Kconfig"
 rsource "samsa/Kconfig"
 rsource "settings/Kconfig"

@@ -1,0 +1,99 @@
+// SPDX-FileCopyrightText: 2026 Core Devices LLC
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+
+/dts-v1/;
+
+#include "qemu/pebble-cortex-m4.dtsi"
+
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "QEMU Pebble Flint";
+
+	compatible = "qemu,pebble-flint";
+
+	buttons: gpio-keys {
+		compatible = "gpio-keys";
+
+		button-back {
+			label = "Back";
+			gpios = <&gpio 0 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_BACK>;
+			debounce-interval = <0>;
+		};
+
+		button-up {
+			label = "Up";
+			gpios = <&gpio 1 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_UP>;
+			debounce-interval = <0>;
+		};
+
+		button-select {
+			label = "Select";
+			gpios = <&gpio 2 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_SELECT>;
+			debounce-interval = <0>;
+		};
+
+		button-down {
+			label = "Down";
+			gpios = <&gpio 3 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_DOWN>;
+			debounce-interval = <0>;
+		};
+	};
+
+	speaker: sound-speaker {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "speaker";
+
+		simple-audio-card,cpu {
+			sound-dai = <&audio>;
+		};
+	};
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&uart2 {
+	status = "okay";
+};
+
+&uart3 {
+	status = "okay";
+};
+
+&gpio {
+	status = "okay";
+};
+
+&display {
+	width = <144>;
+	height = <168>;
+	bits-per-pixel = <1>;
+	status = "okay";
+};
+
+&audio {
+	status = "okay";
+};
+
+&internal_flash {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 {
+			label = "code";
+			reg = <0x0 0x400000>;
+		};
+	};
+};
+
+&flash0 {
+	status = "okay";
+};

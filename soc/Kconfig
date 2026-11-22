@@ -4,37 +4,30 @@
 choice
     prompt "SoC"
     help
-      SoC family. Real boards pick a vendor SoC; QEMU boards pick
-      SOC_QEMU and then choose the emulated core.
+      SoC. Real boards pick their SoC line; QEMU boards pick the core of
+      the Pebble QEMU machine.
 
-config SOC_NRF52
-    bool "Nordic nRF52"
-    select HAL_NORDIC
-    select CPU_CORTEX_M4
-    select CPU_HAS_FPU
-
-config SOC_SF32LB52
-    bool "SiFli SF32LB52"
-    select HAL_SIFLI
-    select CPU_STAR_MC1
-    select CPU_HAS_FPU
-    select KERNEL_MPU_IN_FAULTS
-    select RAMFUNC
-    select SOC_HAS_MPU_REGIONS
-    select SOC_HAS_RESET
-
-config SOC_QEMU
-    bool "QEMU emulated"
+rsource "nrf/Kconfig.soc"
+rsource "sf32lb/Kconfig.soc"
+rsource "qemu/Kconfig.soc"
 
 config SOC_POSIX
     bool "POSIX host"
     select ARCH_POSIX
     select SOC_HAS_RESET
+    select TIMER_POSIX
     help
       Run the firmware as a native application on a POSIX host
       (Linux, macOS), with emulated peripherals.
 
 endchoice
+
+config SOC_HAS_IDLE_STATES
+    bool
+    help
+      The SoC defines its idle states in pbl_soc_idle_states. Without
+      it, the kernel provides a single state that waits for an
+      interrupt.
 
 config SOC_HAS_MPU_REGIONS
     bool
@@ -47,10 +40,17 @@ config SOC_HAS_RESET
       The SoC implements pbl_soc_reset(), which the kernel uses instead
       of the architecture's reset.
 
+config SOC_HAS_POWER_OFF
+    bool
+    help
+      The SoC implements pbl_soc_power_off(), which the kernel uses to
+      power off when no power-off handler does.
+
 config SOC
     string
     default "NRF52" if SOC_NRF52
     default "SF32LB52" if SOC_SF32LB52
+    default "SF32LB57" if SOC_SF32LB57
     help
       Stringified SoC name, for places that need the name as a token
       (e.g. sftool -c). Empty on QEMU and POSIX boards.
@@ -64,6 +64,13 @@ config POSIX_EMSCRIPTEN
       with Emscripten. Kernel threads are fibers on the browser's single
       thread, and the browser's event loop drives the host side.
 
+config POSIX_EMSCRIPTEN_FRAME
+    string
+    help
+      The watch the Emscripten page draws around the display: a directory of
+      soc/posix/emscripten/frames and an entry of the page's table of
+      frames. Set per board in boards/<board>/Kconfig.defconfig.
+
 config SDL
     bool
     depends on SOC_POSIX
@@ -73,21 +80,10 @@ config SDL
 
 config QEMU
     bool
-    default y if SOC_QEMU
     help
-      Derived alias for SOC_QEMU. Gates features that don't make
+      Derived alias for SOC_QEMU_PEBBLE. Gates features that don't make
       sense under emulation.
 
-choice
-    prompt "Emulated core"
-    depends on SOC_QEMU
-
-config SOC_QEMU_CORTEX_M4
-    bool "Cortex-M4"
-    select CPU_CORTEX_M4
-
-config SOC_QEMU_CORTEX_M33
-    bool "Cortex-M33"
-    select CPU_CORTEX_M33
-
-endchoice
+rsource "nrf/Kconfig"
+rsource "qemu/Kconfig"
+rsource "sf32lb/Kconfig"

@@ -12,12 +12,15 @@
 
 //! What the portable kernel needs from an architecture.
 
-//! The running thread. The arch defines it so it can live where unprivileged
-//! threads may read it: pbl_thread_current() runs without privilege.
+//! The running thread, for privileged code. The arch defines it, along with arch_cur_get() in
+//! <pbl_arch_thread.h>, which unprivileged code can call too.
 extern struct pbl_thread *pbl_cur;
 
-//! Sets pbl_cur, which may live in memory unprivileged threads cannot write.
+//! Sets pbl_cur outside of a context switch.
 void arch_cur_set(struct pbl_thread *t);
+
+//! First arch setup, before the SoC's: FPU access and caches.
+void arch_early_init(void);
 
 //! Early arch setup, before main(): fault exceptions.
 void arch_init(void);
@@ -64,9 +67,6 @@ bool arch_in_isr(void);
 
 //! Rate of arch_cycle_get_32() from <pbl_arch_cycle.h>.
 uint32_t arch_cycles_per_sec(void);
-
-void arch_irq_disable(void);
-void arch_irq_enable(void);
 
 //! Lock of the kernel heap, usable before the kernel runs. Not nestable.
 void arch_heap_lock(void);

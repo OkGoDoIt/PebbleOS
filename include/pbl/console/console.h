@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * @defgroup console Console
@@ -11,6 +12,10 @@
  * @brief Plain text console on the board's console port: logs, the shell and framed binary data.
  * @{
  */
+
+//! Set the port up for polled output, before the device model is initialized, and make it the
+//! output of pbl_print(). Called by the kernel.
+void pbl_console_early_init(void);
 
 //! Start taking input, once the system can handle commands.
 void pbl_console_enable_prompt(void);
@@ -40,5 +45,29 @@ void pbl_console_log_begin(void);
 void pbl_console_log_end(void);
 
 void pbl_console_set_rx_enabled(bool enabled);
+
+/**
+ * @brief Largest frame payload, in bytes.
+ *
+ * Binary data travels in frames between text lines, as @c ESC @c _, a channel character, the
+ * base64 of the sequence number, payload and CRC-32, then @c ESC and a backslash. The CRC-32
+ * covers the channel, sequence number and payload. A sender repeats a frame until it is
+ * acknowledged, one at a time, with a sequence number that changes per frame. Sequence number 0
+ * is for frames nobody acknowledges or waits for.
+ */
+#define PBL_CONSOLE_FRAME_MTU 512
+
+/** @brief Frame channel of the Pebble protocol. */
+#define PBL_CONSOLE_CHANNEL_PP 'P'
+
+/**
+ * @brief Send a frame. Not for interrupt context.
+ *
+ * @param channel Channel character.
+ * @param seq Sequence number, 0 for a frame nobody acknowledges.
+ * @param data Payload.
+ * @param len Length of @p data in bytes, at most @ref PBL_CONSOLE_FRAME_MTU.
+ */
+void pbl_console_frame_send(char channel, uint8_t seq, const void *data, size_t len);
 
 /** @} */

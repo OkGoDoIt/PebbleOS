@@ -38,10 +38,10 @@ static const struct pbl_clockevent_ops s_ce_ops = {
 
 PBL_DEVICE_STATE_DEFINE(s_cs);
 static const struct pbl_clocksource s_cs =
-    PBL_CLOCKSOURCE_INIT(s_cs, "cs", prv_cs_init, &s_cs_ops, 32);
+    PBL_CLOCKSOURCE_INIT(s_cs, "cs", prv_cs_init, nullptr, &s_cs_ops, 32);
 PBL_DEVICE_STATE_DEFINE(s_ce);
 static const struct pbl_clockevent s_ce =
-    PBL_CLOCKEVENT_INIT(s_ce, "ce", prv_ce_init, &s_ce_ops, 1, UINT32_MAX);
+    PBL_CLOCKEVENT_INIT(s_ce, "ce", prv_ce_init, nullptr, &s_ce_ops, 1, UINT32_MAX);
 
 const struct pbl_clocksource *const pbl_system_clocksource = &s_cs;
 const struct pbl_clockevent *const pbl_system_clockevent = &s_ce;
@@ -67,10 +67,6 @@ const struct pbl_idle_state pbl_soc_idle_states[] = {
 };
 const size_t pbl_soc_num_idle_states = 1;
 
-int pbl_soc_idle_state_limit(void) {
-  return 0;
-}
-
 uint64_t sched_uptime_ticks(void) {
   return s_ticks;
 }
@@ -79,11 +75,17 @@ void sched_announce(uint64_t ticks) {
   s_ticks += ticks;
 }
 
-pbl_tick_t timer_ticks_until_next(pbl_tick_t now) {
+void wallclock_clock_set(uint64_t old_ms, uint64_t new_ms) {
+}
+
+pbl_tick_t timeout_ticks_until_next(void) {
   return s_until_next_timer;
 }
 
-void timer_expire(void) {
+void timeout_expire(void) {
+}
+
+void sched_slice(void) {
 }
 
 void pbl_irq_lock(void) {
@@ -100,14 +102,14 @@ void test_timekeeping__initialize(void) {
 
 void test_timekeeping__waking_up_with_a_timer_due_raises_the_event_at_once(void) {
   s_timer_due_on_wake = true;
-  timekeeping_idle(1U);
+  idle_enter(1U);
   cl_assert_equal_i(s_ticks, 1);
   cl_assert_equal_i(s_last_delta, 1);
 }
 
 void test_timekeeping__waking_up_with_no_timer_due_raises_the_next_tick(void) {
   s_timer_due_on_wake = false;
-  timekeeping_idle(1U);
+  idle_enter(1U);
   cl_assert_equal_i(s_ticks, 1);
   cl_assert_equal_i(s_last_delta, CYCLES_PER_TICK);
 }

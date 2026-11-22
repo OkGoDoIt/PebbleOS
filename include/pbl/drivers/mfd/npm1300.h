@@ -18,16 +18,8 @@
  * The core is a struct pbl_npm1300 device on its I2C bus. It owns the register access, under a
  * lock so its cells cannot interleave read-modify-write sequences, and brings its cells up from
  * its init. Each cell is a child device in its own subsystem: the charger
- * (@ref drivers_pmic_npm1300), the GPIO port (@ref drivers_gpio_npm1300) and one regulator per
+ * (@ref drivers_charger), the GPIO port (@ref drivers_gpio_npm1300) and one regulator per
  * rail (@ref drivers_regulator_npm1300).
- *
- * @code{.c}
- * PBL_NPM1300_DEFINE(s_npm1300, &s_i2c1.bus, 0x6B);
- * PBL_NPM1300_CHARGER_DEFINE(s_npm1300_charger, &s_npm1300, &NPM1300_CONFIG,
- *                            {.peripheral = hwp_gpio1, .gpio_pin = 26});
- * PBL_NPM1300_GPIO_DEFINE(s_npm1300_gpio, &s_npm1300);
- * PBL_NPM1300_REGULATOR_DEFINE(s_ldo2, "ldo2", &s_npm1300, PBL_NPM1300_LDSW2, 3300, true, false);
- * @endcode
  * @{
  */
 
@@ -58,14 +50,14 @@ int pbl_npm1300_init(const struct pbl_device *dev);
  * @param _bus I2C bus.
  * @param _addr 7-bit I2C address.
  */
-#define PBL_NPM1300_DEFINE(sym, _bus, _addr)                                         \
-  PBL_DEVICE_STATE_DEFINE(sym);                                                      \
-  static struct pbl_npm1300_state sym##_npm1300_state;                               \
-  const struct pbl_npm1300 sym = {                                                   \
-    .dev = PBL_DEVICE_INIT(sym, "npm1300", pbl_npm1300_init, &(_bus)->dev, nullptr), \
-    .i2c = PBL_I2C_DEV(_bus, _addr),                                                 \
-    .state = &sym##_npm1300_state,                                                   \
-  };                                                                                 \
+#define PBL_NPM1300_DEFINE(sym, _bus, _addr)                                \
+  PBL_DEVICE_STATE_DEFINE(sym);                                             \
+  static struct pbl_npm1300_state sym##_npm1300_state;                      \
+  const struct pbl_npm1300 sym = {                                          \
+    .dev = PBL_DEVICE_INIT(sym, "npm1300", pbl_npm1300_init, &(_bus)->dev), \
+    .i2c = PBL_I2C_DEV(_bus, _addr),                                        \
+    .state = &sym##_npm1300_state,                                          \
+  };                                                                        \
   PBL_DEVICE_REGISTER(sym, &sym.dev)
 
 /**
@@ -75,7 +67,7 @@ int pbl_npm1300_init(const struct pbl_device *dev);
  * @return Core.
  */
 static inline const struct pbl_npm1300 *pbl_npm1300_from_cell(const struct pbl_device *cell) {
-  return container_of(cell->parent, const struct pbl_npm1300, dev);
+  return PBL_CONTAINER_OF(cell->parent, const struct pbl_npm1300, dev);
 }
 
 /**

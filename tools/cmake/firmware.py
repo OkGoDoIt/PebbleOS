@@ -139,7 +139,7 @@ def cmd_bundle(args):
 
     config = read_config(args.config)
     version_string, version_ts, version_commit = version_info()
-    fw_type = "recovery" if enabled(config, "CONFIG_RECOVERY_FW") else "normal"
+    fw_type = "recovery" if enabled(config, "CONFIG_FIRMWARE_AREA_RECOVERY") else "normal"
     slot = args.slot if fw_type == "normal" and args.slot != -1 else None
 
     bundle = mkbundle.PebbleBundle()
@@ -180,26 +180,28 @@ def cmd_qemu_image_micro(args):
     img.tobinfile(args.output, start=0x00000000, end=flash_end - 1)
 
 
-def qemu_resources_offset():
-    header = os.path.join(
-        REPO_ROOT, "include", "pbl", "board", "partitions_dual_slot.h"
-    )
-    with open(header) as f:
-        match = re.search(
-            r"PART_SYSTEM_RESOURCES_BANK_0_OFFSET\s+(0x[0-9A-Fa-f]+)", f.read()
-        )
-    return int(match.group(1), 16)
+def qemu_resources_offset(config_path):
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools", "libs", "pbl-cli"))
+    from pbl import flash_layout
+    from pbl.build import BuildDir
+
+    build = BuildDir(os.path.dirname(os.path.abspath(config_path)), REPO_ROOT)
+    regions = flash_layout.regions(build)
+    if "SYSTEM_RESOURCES_BANK_0" not in regions:
+        sys.exit("qemu-image-spi: the board has no system-resources-bank-0 partition")
+    return regions["SYSTEM_RESOURCES_BANK_0"][0]
 
 
 def cmd_qemu_image_spi(args):
-    resources_begin = qemu_resources_offset()
     image_size = 32 * 1024 * 1024
-
-    pprint(f"Writing SPI flash image to {args.output}")
     resources = b""
+    resources_begin = 0
     if args.pbpack:
         with open(args.pbpack, "rb") as f:
             resources = f.read()
+        resources_begin = qemu_resources_offset(args.config)
+
+    pprint(f"Writing SPI flash image to {args.output}")
     with open(args.output, "wb") as f:
         # Pad the region ahead of the system resources with 0xff
         f.write(b"\xff" * resources_begin)

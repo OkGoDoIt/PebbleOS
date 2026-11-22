@@ -11,13 +11,18 @@
 
 PBL_LOG_MODULE_DEFINE(device, CONFIG_DEVICE_LOG_LEVEL);
 
-#ifdef PBL_NO_LINKER_SCRIPT
-extern const struct pbl_device *const __pbl_devices_start[] PBL_UNSORTED_SECTION_START(pbl_devices);
-extern const struct pbl_device *const __pbl_devices_end[] PBL_UNSORTED_SECTION_END(pbl_devices);
-#else
-extern const struct pbl_device *const __pbl_devices_start[];
-extern const struct pbl_device *const __pbl_devices_end[];
-#endif
+PBL_ITERABLE_SECTION_DECLARE(const struct pbl_device_depends, dev_deps);
+
+static int prv_init_list(const struct pbl_device *dev, const struct pbl_device *const *deps) {
+  for (const struct pbl_device *const *dep = deps; *dep != nullptr; dep++) {
+    if (pbl_device_init(*dep) != 0) {
+      PBL_LOG_DBG("%s: dependency %s unavailable", pbl_device_name(dev), pbl_device_name(*dep));
+      return -ENODEV;
+    }
+  }
+
+  return 0;
+}
 
 static int prv_init_deps(const struct pbl_device *dev) {
   const struct pbl_device *parent = dev->parent;
@@ -25,17 +30,12 @@ static int prv_init_deps(const struct pbl_device *dev) {
   // A parent bringing its children up from its own init is not waited for
   if (parent != nullptr && parent->state->status != PBL_DEVICE_INITIALIZING &&
       pbl_device_init(parent) != 0) {
-    PBL_LOG_DBG("%s: parent %s unavailable", dev->name, parent->name);
+    PBL_LOG_DBG("%s: parent %s unavailable", pbl_device_name(dev), pbl_device_name(parent));
     return -ENODEV;
   }
 
-  if (dev->deps == nullptr) {
-    return 0;
-  }
-
-  for (const struct pbl_device *const *dep = dev->deps; *dep != nullptr; dep++) {
-    if (pbl_device_init(*dep) != 0) {
-      PBL_LOG_DBG("%s: dependency %s unavailable", dev->name, (*dep)->name);
+  PBL_ITERABLE_SECTION_FOREACH(const struct pbl_device_depends, dev_deps, d) {
+    if (d->dev == dev && prv_init_list(dev, d->deps) != 0) {
       return -ENODEV;
     }
   }
@@ -65,13 +65,13 @@ int pbl_device_init(const struct pbl_device *dev) {
   if (res == 0 && dev->init != nullptr) {
     res = dev->init(dev);
     if (res == -ENODEV) {
-      PBL_LOG_DBG("%s not present", dev->name);
+      PBL_LOG_DBG("%s not present", pbl_device_name(dev));
     } else if (res != 0) {
-      PBL_LOG_ERR("%s init failed (%d)", dev->name, res);
+      PBL_LOG_ERR("%s init failed (%d)", pbl_device_name(dev), res);
     }
   }
 
-  state->res = res;
+  state->res = (int16_t)res;
   state->status = (res == 0) ? PBL_DEVICE_READY : PBL_DEVICE_FAILED;
 
   return res;
@@ -84,7 +84,12 @@ bool pbl_device_is_ready(const struct pbl_device *dev) {
 int pbl_device_init_all(void) {
   int failures = 0;
 
-  for (const struct pbl_device *const *dev = __pbl_devices_start; dev < __pbl_devices_end; dev++) {
+#ifdef CONFIG_DEVICE_INIT_REVERSE
+  for (const struct pbl_device *const *dev = PBL_ITERABLE_SECTION_END(devices);
+       dev-- > PBL_ITERABLE_SECTION_START(devices);) {
+#else
+  PBL_ITERABLE_SECTION_FOREACH(const struct pbl_device *const, devices, dev) {
+#endif
     if (pbl_device_init(*dev) != 0) {
       failures++;
     }
@@ -96,7 +101,7 @@ int pbl_device_init_all(void) {
 int pbl_device_init_children(const struct pbl_device *parent) {
   int failures = 0;
 
-  for (const struct pbl_device *const *dev = __pbl_devices_start; dev < __pbl_devices_end; dev++) {
+  PBL_ITERABLE_SECTION_FOREACH(const struct pbl_device *const, devices, dev) {
     if ((*dev)->parent == parent && pbl_device_init(*dev) != 0) {
       failures++;
     }
@@ -105,26 +110,7 @@ int pbl_device_init_children(const struct pbl_device *parent) {
   return failures;
 }
 
-const struct pbl_device *pbl_device_class_next(const struct pbl_device_class *cls,
-                                               const struct pbl_device *prev) {
-  const struct pbl_device *const *dev = __pbl_devices_start;
-
-  if (prev != nullptr) {
-    while (dev < __pbl_devices_end && *dev != prev) {
-      dev++;
-    }
-    dev++;
-  }
-
-  for (; dev < __pbl_devices_end; dev++) {
-    if ((*dev)->cls == cls) {
-      return *dev;
-    }
-  }
-
-  return nullptr;
-}
-
+#ifdef CONFIG_DEVICE_NAMES
 const struct pbl_device *pbl_device_find(const struct pbl_device_class *cls, const char *name) {
   const struct pbl_device *dev;
 
@@ -136,3 +122,4 @@ const struct pbl_device *pbl_device_find(const struct pbl_device_class *cls, con
 
   return nullptr;
 }
+#endif

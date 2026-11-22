@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig GPU
+    bool "GPU"
+    help
+      2D graphics accelerators: fills and blits into pixel buffers, with
+      blending, rotation and scaling where the hardware can.
+
+if GPU
+
+config GPU_SF32LB57_EPIC
+    bool "SiFli SF32LB57 ePIC"
+    default y
+    depends on DT_HAS_SIFLI_SF32LB57_EPIC_ENABLED
+    select CLK
+    select RESET
+    help
+      Support for the ePIC graphics accelerator of the SiFli SF32LB57.
+
+config GPU_SF32LB57_EPIC_IRQ_PRIO
+    int "Interrupt priority"
+    default 5
+    depends on GPU_SF32LB57_EPIC
+    help
+      Priority of the accelerator interrupt.
+
+endif # GPU

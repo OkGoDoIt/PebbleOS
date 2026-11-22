@@ -1,7 +1,7 @@
 # Activity
 
 The activity service counts steps and tracks sleep from the
-accelerometer. It lives in `fw/services/activity/`, and apps reach it
+accelerometer. It lives in `pebble/services/activity/`, and apps reach it
 through the Health API. This page describes the algorithms, called
 Kraepelin, and how they are integrated into the firmware. The plots below
 are drawn from the step samples the unit tests use.
@@ -253,6 +253,29 @@ With some exceptions:
   non-sleep threshold, the user is considered awake.
 - If the watch was not worn, the session is discarded; see below.
 
+### van Hees sleep detection
+
+By default, sleep minutes are not told apart by the sleep threshold above
+but by the method of van Hees et al., _A Novel, Open Access Method to
+Assess Sleep Duration Using a Wrist-Worn Accelerometer_ (PLOS ONE, 2015).
+It looks at the posture of the wrist rather than at how much it moves. The
+sleep threshold can be selected instead in Settings > System > Debugging >
+Sleep Algorithm.
+
+For each 5 second epoch, the median of each axis gives the angle of the Z
+axis, perpendicular to the skin, to the horizontal plane. A _posture
+change_ is a difference of more than 5 degrees between the angles of two
+successive epochs. A minute is a sleep minute when it lies entirely in a
+period of at least 5 minutes without posture change.
+
+The rules above then build sleep sessions out of the sleep minutes, with
+the same not-worn detection. The exceptions that depend on the VMC do not
+apply: the wrist angle alone decides. Restful sleep is still found from
+the filtered VMC, as the method has no notion of it.
+
+Both algorithms see every sample, so the setting applies from the next
+minute on, to a sleep session in progress too.
+
 ### Restful sleep
 
 A second pass over a sleep session finds its _restful sleep_. A _restful
@@ -291,12 +314,15 @@ watch's orientation.
 ### Code organization
 
 ```text
-fw/services/activity/
+pebble/services/activity/
   activity.c
   activity_insights.c
   kraepelin/
-    kraepelin_algorithm.c
     activity_algorithm_kraepelin.c
+lib/kraepelin/
+  kraepelin.c
+lib/vanhees/
+  vanhees.c
 ```
 
 `activity.c`
@@ -307,17 +333,22 @@ fw/services/activity/
 `activity_insights.c`
 : The Health timeline pins and notifications.
 
-`kraepelin/kraepelin_algorithm.c`
-: The step and sleep algorithms themselves. It depends on almost nothing
-  outside itself, and originates from open source code provided by the
-  Stanford Wearables Lab.
+`lib/kraepelin/kraepelin.c`
+: The step and sleep algorithms themselves, a library that depends on
+  nothing but the utility library. It originates from open source code
+  provided by the Stanford Wearables Lab.
+
+`lib/vanhees/vanhees.c`
+: The van Hees sleep minute classifier, a library with the same
+  dependencies. It only classifies minutes; its verdicts are passed to
+  Kraepelin, which builds the sleep sessions.
 
 `kraepelin/activity_algorithm_kraepelin.c`
 : Adapts the algorithms to the algorithm interface `activity.c` expects,
   and handles their memory, persistent storage and the rest of their
   integration. Another algorithm would implement the same interface.
 
-The Health API for apps is `fw/applib/health_service.c`, which runs
+The Health API for apps is `pebble/applib/health_service.c`, which runs
 unprivileged and calls into the activity service for the step and sleep
 data.
 
@@ -325,8 +356,8 @@ data.
 
 `activity.c` asks the algorithm for its accelerometer sampling rate and
 subscribes to the accel service with it. All step and sleep processing
-runs on the KernelBackground task: the subscription is made from a
-KernelBackground callback.
+runs on the SysWorkq task: the subscription is made from a
+SysWorkq callback.
 
 The accel service calls `activity.c` once a second with 25 samples, which
 it passes to the algorithm's handler in `activity_algorithm_kraepelin.c`.
@@ -359,8 +390,10 @@ byte by taking its square root, and the orientation is one byte as well:
 
 ## Testing
 
-The unit tests in `tests/fw/services/activity/` run recorded data through
-`kraepelin_algorithm.c` and check its results.
+The unit tests in `tests/pebble/services/activity/` run recorded data through
+`lib/kraepelin/kraepelin.c` and check its results. The van Hees classifier
+is tested with generated samples: the recorded sleep samples are minute
+data, which it cannot use.
 
 ### Step samples
 

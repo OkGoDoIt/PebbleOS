@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+if PLATFORM_FLINT
+
+config PLATFORM_NAME
+    default "flint"
+
+config PLATFORM_DISPLAY_WIDTH
+    default 144
+
+config PLATFORM_DISPLAY_HEIGHT
+    default 168
+
+config PLATFORM_MICROPHONE
+    default y
+
+config PLATFORM_HEALTH
+    default y
+
+config PLATFORM_COMPASS
+    default y
+
+config PLATFORM_SPEAKER
+    default y
+
+# RAM of an app and of its runtime.
+
+config APP_RAM_4X_SEGMENT_SIZE
+    default 67584
+
+config APP_RAM_4X_RUNTIME_SIZE
+    default 30720
+
+endif # PLATFORM_FLINT

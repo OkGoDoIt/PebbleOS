@@ -38,13 +38,13 @@
  *
  * pbl_accel_set_listener(ACCEL, &s_listener);
  * pbl_accel_set_sampling_interval(ACCEL, 40000, &interval_us);
- * pbl_accel_set_num_samples(ACCEL, MIN(25, pbl_accel_get_max_num_samples(ACCEL)));
+ * pbl_accel_set_num_samples(ACCEL, PBL_MIN(25, pbl_accel_get_max_num_samples(ACCEL)));
  * @endcode
  * @{
  */
 
 /** @brief Accelerometer sample. */
-typedef struct {
+struct pbl_accel_sample {
   /** Sample time in microseconds since the epoch, with no guaranteed precision. */
   uint64_t timestamp_us;
   /** Acceleration along the x axis, in milli-g. */
@@ -53,7 +53,7 @@ typedef struct {
   int16_t y;
   /** Acceleration along the z axis, in milli-g. */
   int16_t z;
-} AccelDriverSample;
+};
 
 /**
  * @brief Batch of raw samples in a driver-owned buffer.
@@ -141,7 +141,7 @@ struct pbl_accel_ops {
   /** Get the depth of the hardware FIFO. */
   uint32_t (*get_max_num_samples)(const struct pbl_accel *accel);
   /** Read the most recent sample. */
-  int (*peek)(const struct pbl_accel *accel, AccelDriverSample *sample);
+  int (*peek)(const struct pbl_accel *accel, struct pbl_accel_sample *sample);
   /** Optional. Enable or disable shake detection. */
   int (*set_shake_detection)(const struct pbl_accel *accel, bool on);
   /** Optional. Enable or disable double tap detection. */
@@ -187,6 +187,10 @@ extern const struct pbl_accel *const ACCEL;
   PBL_DEVICE_STATE_DEFINE(sym);     \
   static struct pbl_accel_state sym##_accel_state = {.lock = PBL_MUTEX_INITIALIZER}
 
+/** @cond INTERNAL_HIDDEN */
+extern const struct pbl_device_class pbl_accel_class;
+/** @endcond */
+
 /**
  * @brief Initializer for the struct pbl_accel of accelerometer @p sym.
  *
@@ -196,11 +200,11 @@ extern const struct pbl_accel *const ACCEL;
  * @param _parent Parent device, such as the I2C bus, or NULL.
  * @param _ops Driver operations.
  */
-#define PBL_ACCEL_INIT(sym, _name, _parent, _ops)                             \
-  {                                                                           \
-    .dev = PBL_DEVICE_INIT(sym, _name, pbl_accel_dev_init, _parent, nullptr), \
-    .ops = (_ops),                                                            \
-    .state = &sym##_accel_state,                                              \
+#define PBL_ACCEL_INIT(sym, _name, _parent, _ops)                                            \
+  {                                                                                          \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_accel_dev_init, _parent, &pbl_accel_class), \
+    .ops = (_ops),                                                                           \
+    .state = &sym##_accel_state,                                                             \
   }
 
 /**
@@ -304,7 +308,7 @@ uint32_t pbl_accel_get_max_num_samples(const struct pbl_accel *accel);
  * @param[out] sample Most recent sample.
  * @return 0 on success, or a negative errno.
  */
-int pbl_accel_peek(const struct pbl_accel *accel, AccelDriverSample *sample);
+int pbl_accel_peek(const struct pbl_accel *accel, struct pbl_accel_sample *sample);
 
 /**
  * @brief Enable or disable shake detection.
@@ -384,7 +388,7 @@ void pbl_accel_report_samples(const struct pbl_accel *accel, const AccelRawBatch
  * @param accel Accelerometer.
  * @param sample Sample.
  */
-void pbl_accel_report_sample(const struct pbl_accel *accel, const AccelDriverSample *sample);
+void pbl_accel_report_sample(const struct pbl_accel *accel, const struct pbl_accel_sample *sample);
 
 /**
  * @brief Report an event to the listener.

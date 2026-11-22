@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/iio/adc/sifli,sf32lb52-gpadc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: SiFli SF32LB52 general purpose ADC
+
+maintainers:
+  - Gerard Marull-Paretas <gerard@teslabs.com>
+
+description:
+  General purpose ADC with eight conversion slots. The radio calibration
+  borrows it to measure the transmitter output.
+
+properties:
+  compatible:
+    enum:
+      - sifli,sf32lb52-gpadc
+      - sifli,sf32lb57-gpadc
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  "#io-channel-cells":
+    const: 1
+
+  nvmem-cells:
+    maxItems: 1
+    description: Factory calibration of the SF32LB57 transfer, two points and the VBAT reference.
+
+  nvmem-cell-names:
+    const: calibration
+
+  sifli,hpsys-cfg:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: HPSYS configuration, enabling the bandgap the SF32LB57 reference runs from.
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - "#io-channel-cells"
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          const: sifli,sf32lb57-gpadc
+    then:
+      required:
+        - sifli,hpsys-cfg
+
+additionalProperties: false
+
+examples:
+  - |
+    adc@50087000 {
+        compatible = "sifli,sf32lb52-gpadc";
+        reg = <0x50087000 0x1000>;
+        interrupts = <65>;
+        clocks = <&rcc 35>;
+        #io-channel-cells = <1>;
+    };

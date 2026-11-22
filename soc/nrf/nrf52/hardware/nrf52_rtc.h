@@ -5,10 +5,6 @@
 
 #include <pbl/util/bits.h>
 
-#include <hardware/nrf52_memorymap.h>
-
-#define NRF52_RTC_CLOCK_HZ 32768U
-
 /* Register offsets */
 
 #define NRF52_RTC_TASKS_START_OFFSET       0x0000

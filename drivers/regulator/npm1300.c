@@ -3,13 +3,14 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/regulator/npm1300.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/logging/logging.h>
 #include <pbl/util/bits.h>
 #include <pbl/util/misc.h>
 
-PBL_LOG_MODULE_DEFINE(driver_regulator_npm1300, CONFIG_DRIVER_REGULATOR_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_regulator, CONFIG_DRIVER_REGULATOR_LOG_LEVEL);
 
 // BUCK block: per-rail registers at base + rail * stride
 #define NPM1300_BUCK_ENASET(n)          (0x0400U + 2U * (n))
@@ -38,7 +39,7 @@ PBL_LOG_MODULE_DEFINE(driver_regulator_npm1300, CONFIG_DRIVER_REGULATOR_LOG_LEVE
 #define NPM1300_VOUT_STEP_MV 100U
 
 static const struct pbl_npm1300_regulator *prv_rail(const struct pbl_regulator *reg) {
-  return container_of(reg, const struct pbl_npm1300_regulator, reg);
+  return PBL_CONTAINER_OF(reg, const struct pbl_npm1300_regulator, reg);
 }
 
 static const struct pbl_npm1300 *prv_pmic(const struct pbl_regulator *reg) {
@@ -222,3 +223,5 @@ const struct pbl_regulator_ops pbl_npm1300_regulator_ops = {
   .enable = prv_enable,
   .disable = prv_disable,
 };
+
+#include PBL_DT_INSTANCES(nordic_npm1300_regulator)

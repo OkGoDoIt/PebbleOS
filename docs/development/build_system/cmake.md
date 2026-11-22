@@ -14,8 +14,8 @@ pbl_library_sources(service.c util.c)
 
 `pbl_library()`
 : Declare the library the following `pbl_library_*()` calls apply to,
-  named after its directory (`fw/services/timeline` →
-  `fw__services__timeline`). The target is only created once it gets its
+  named after its directory (`pebble/services/timeline` →
+  `pebble__services__timeline`). The target is only created once it gets its
   first source, so a directory whose sources are all configured out
   contributes nothing.
 
@@ -40,7 +40,7 @@ pbl_library_sources(service.c util.c)
 : Add the sources matching glob patterns, re-evaluated when the build
   regenerates. An `EXCLUDE` pattern is a glob relative to the directory
   (`voice/*.c`, `**/system_nrf*.c`) or a directory whose whole subtree is
-  dropped (`vendor`, `ble_hrm/**`).
+  dropped (`vendor`, `legacy/**`).
 
 `pbl_library_include_directories(dir...)`, `pbl_library_compile_definitions(def...)`, `pbl_library_compile_options(opt...)`
 : Compile settings private to the current library.
@@ -103,7 +103,7 @@ can use Kconfig symbols, `#include` and `#if`. Libraries add to it at fixed
 hook points:
 
 ```cmake
-pbl_linker_sources(rom-start shell.ld)
+pbl_iterable_section(shell_root)
 pbl_library_ramfunc(${ramfunc_sources})
 ```
 
@@ -115,6 +115,15 @@ pbl_library_ramfunc(${ramfunc_sources})
 : Include linker script fragments at a hook point: `memory`, `rom-start`,
   `ram-sections`, `ramfunc` or `footer`. Fragments are included sorted by
   sort key, then by registration order.
+
+`pbl_iterable_section(tag [UNSORTED] [RAMFUNC])`
+: Gather the table `tag` of the objects placed with
+  `PBL_ITERABLE_SECTION()` in flash, in section `.i_<tag>` between
+  `__start_i_<tag>` and `__stop_i_<tag>`.
+  Entries are sorted by their key, or kept in link order with `UNSORTED`.
+  With `RAMFUNC` the table goes to `.ramfunc` instead when `CONFIG_RAMFUNC`
+  is set, for code that walks it while flash is unavailable. A no-op for
+  builds linked without the firmware linker script.
 
 `pbl_library_ramfunc(src...)`
 : Place the code and read-only data of some of the current library's

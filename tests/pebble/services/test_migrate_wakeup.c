@@ -1,0 +1,165 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <pbl/fs/fs.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/services/event_service.h>
+#include <pbl/services/wakeup.h>
+#include <pbl/settings/settings.h>
+
+#include <clar.h>
+#include <process_management/app_install_manager.h>
+#include <syscall/syscall.h>
+
+// Fakes
+//////////////////////////////////////////////////////////
+#include <fake_app_manager.h>
+#include <fake_pbl_malloc.h>
+#include <fake_pfs.h>
+#include <fake_rtc.h>
+#include <fake_spi_flash.h>
+#include <fake_sys_work.h>
+#include <fake_time.h>
+
+// Stubs
+//////////////////////////////////////////////////////////
+
+#define SETTINGS_FILE_NAME "/wakeup"
+#define SETTINGS_FILE_SIZE 2048
+
+#define WAKEUP_REASON 0x1337
+#define TIMESTAMP     1337
+
+// Structures
+////////////////////////////////////
+
+typedef struct PBL_PACKED {
+  Uuid uuid;
+  int32_t reason;
+  bool repeating;
+  uint16_t repeat_hours_missed;
+  bool notify_if_missed;
+} WakeupEntryV1;
+
+typedef struct PBL_PACKED {
+  Uuid uuid;
+  int32_t reason;
+  bool repeating;
+  uint16_t repeat_hours_missed;
+  bool notify_if_missed;
+  int32_t timestamp;
+  bool utc;
+} WakeupEntryV2;
+
+// Globals
+////////////////////////////////////
+
+static const Uuid app_uuid = (Uuid){0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5};
+
+static AppInstallEntry s_app_install_entry = {
+  .install_id = 1,
+};
+
+static WakeupEntryV1 w_entry;
+
+// Local Stubs
+////////////////////////////////////
+void event_service_init(PebbleEventType type, EventServiceAddSubscriberCallback start_cb,
+                        EventServiceRemoveSubscriberCallback stop_cb) {
+  return;
+}
+
+void wakeup_popup_window(uint8_t missed_apps_count, uint8_t *missed_apps_banks) {
+  return;
+}
+
+bool app_install_get_entry_from_install_id(const AppInstallId id, AppInstallEntry *entry) {
+  *entry = s_app_install_entry;
+  return true;
+}
+
+bool clock_is_timezone_set(void) {
+  return false;
+}
+
+// Helpers
+////////////////////////////////////
+
+void open_settings_file(struct pbl_settings_file *file) {
+  cl_must_pass(pbl_settings_open(file, SETTINGS_FILE_NAME, SETTINGS_FILE_SIZE));
+}
+
+void close_settings_file(struct pbl_settings_file *file) {
+  pbl_settings_close(file);
+}
+
+// Tests
+////////////////////////////////////
+
+void test_migrate_wakeup__initialize(void) {
+  fake_spi_flash_init(0, 0x1000000);
+  fake_pfs_mount();
+  pbl_fs_format("/");
+
+  // Load pre-migration wakeup entry onto pfs
+  struct pbl_settings_file file;
+  const int32_t timestamp = TIMESTAMP;
+
+  // Create the Migration Entry
+  w_entry = (WakeupEntryV1){
+    .uuid = app_uuid,
+    .reason = WAKEUP_REASON,
+    .repeating = false,
+    .repeat_hours_missed = 0,
+    .notify_if_missed = true
+  };
+
+  open_settings_file(&file);
+
+  cl_must_pass(pbl_settings_set(&file, (uint8_t *)&timestamp, sizeof(timestamp),
+                                (uint8_t *)&w_entry, sizeof(w_entry)));
+
+  close_settings_file(&file);
+}
+
+void test_migrate_wakeup__test_migration_of_wakeup_entries(void) {
+  struct pbl_settings_file file;
+  WakeupId wakeup_id = TIMESTAMP;
+  WakeupEntryV1 wakeup_entry_v1;
+
+  open_settings_file(&file);
+
+  cl_must_pass(pbl_settings_get(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id),
+                                (uint8_t *)&wakeup_entry_v1, sizeof(wakeup_entry_v1)));
+  cl_assert_equal_i(wakeup_entry_v1.reason, WAKEUP_REASON);
+  cl_assert_equal_i(wakeup_entry_v1.repeat_hours_missed, 0);
+  cl_assert(!wakeup_entry_v1.repeating);
+  cl_assert(wakeup_entry_v1.notify_if_missed);
+  uuid_equal(&wakeup_entry_v1.uuid, &app_uuid);
+
+  close_settings_file(&file);
+
+  // Migrate the timezone and check that the new entry is correct and the second version
+  // of a Wakeup Entry
+  wakeup_init();
+
+  WakeupEntryV2 wakeup_entry_v2;
+
+  open_settings_file(&file);
+
+  cl_must_pass(pbl_settings_exists(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id)));
+  cl_assert_equal_i(pbl_settings_get_len(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id)),
+                    sizeof(WakeupEntryV2));
+  cl_must_pass(pbl_settings_get(&file, (uint8_t *)&wakeup_id, sizeof(wakeup_id),
+                                (uint8_t *)&wakeup_entry_v2, sizeof(wakeup_entry_v2)));
+
+  cl_assert_equal_i(wakeup_entry_v2.reason, wakeup_entry_v1.reason);
+  cl_assert_equal_i(wakeup_entry_v2.repeat_hours_missed, wakeup_entry_v1.repeat_hours_missed);
+  cl_assert_equal_i(wakeup_entry_v2.timestamp, (int32_t)TIMESTAMP);
+  cl_assert(wakeup_entry_v2.utc == false);
+  cl_assert(wakeup_entry_v2.repeating == wakeup_entry_v1.repeating);
+  cl_assert(wakeup_entry_v2.notify_if_missed == wakeup_entry_v1.notify_if_missed);
+  uuid_equal(&wakeup_entry_v2.uuid, &wakeup_entry_v2.uuid);
+
+  close_settings_file(&file);
+}

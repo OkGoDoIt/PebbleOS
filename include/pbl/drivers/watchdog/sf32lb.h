@@ -1,0 +1,54 @@
+/* SPDX-FileCopyrightText: 2026 Core Devices LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#pragma once
+
+#include <stdint.h>
+
+#include <pbl/device.h>
+#include <pbl/drivers/clk.h>
+
+/**
+ * @defgroup drivers_watchdog_sf32lb SiFli SF32LB watchdog
+ * @ingroup drivers_watchdog
+ * @brief WDT1 of the SF32LB52, behind the @ref drivers_watchdog functions.
+ *
+ * The device starts the watchdog when it comes up, with a timeout of
+ * @c CONFIG_WATCHDOG_TIMEOUT_MS at the rate of its clock. Until then, the watchdog the
+ * bootloader started keeps running.
+ * @{
+ */
+
+/** @brief Watchdog device. */
+struct pbl_watchdog_sf32lb {
+  /** Device. */
+  struct pbl_device dev;
+  /** Registers. */
+  uintptr_t base;
+  /** Clock. */
+  struct pbl_clk clk;
+  /** HPSYS configuration registers, routing the watchdog to the reboot, 0 if unused. */
+  uintptr_t cfg;
+};
+
+/** @cond INTERNAL_HIDDEN */
+int pbl_watchdog_sf32lb_init(const struct pbl_device *dev);
+/** @endcond */
+
+/**
+ * @brief Define the watchdog device.
+ *
+ * @param sym Symbol of the device.
+ * @param _name Name.
+ * @param _base Registers.
+ * @param _clk Clock, from PBL_CLK().
+ * @param _cfg HPSYS configuration registers.
+ */
+#define PBL_WATCHDOG_SF32LB_DEFINE(sym, _name, _base, _clk, _cfg)                           \
+  PBL_DEVICE_STATE_DEFINE(sym);                                                             \
+  PBL_DEVICE_INSTANCE_DEV(sym, struct pbl_watchdog_sf32lb) {                                \
+    .dev = PBL_DEVICE_INIT(sym, _name, pbl_watchdog_sf32lb_init, nullptr), .base = (_base), \
+    .clk = _clk, .cfg = (_cfg),                                                             \
+  }
+
+/** @} */

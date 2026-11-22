@@ -3,14 +3,14 @@
 
 #include <errno.h>
 
+#include <pbl/analytics/analytics.h>
 #include <pbl/drivers/i2c.h>
+#include <pbl/kernel/cache.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/kernel/sem.h>
 #include <pbl/kernel/types.h>
 #include <pbl/logging/logging.h>
-#include <pbl/mcu/cache.h>
-#include <pbl/services/analytics/analytics.h>
 #include <pbl/util/misc.h>
 
 PBL_LOG_MODULE_DEFINE(driver_i2c, CONFIG_DRIVER_I2C_LOG_LEVEL);
@@ -19,8 +19,8 @@ PBL_LOG_MODULE_DEFINE(driver_i2c, CONFIG_DRIVER_I2C_LOG_LEVEL);
 
 PBL_DEVICE_CLASS_DEFINE(pbl_i2c_bus_class, "i2c");
 
-int pbl_i2c_bus_init(const struct pbl_device *dev) {
-  const struct pbl_i2c_bus *bus = container_of(dev, const struct pbl_i2c_bus, dev);
+int pbl_i2c_bus_dev_init(const struct pbl_device *dev) {
+  const struct pbl_i2c_bus *bus = PBL_CONTAINER_OF(dev, const struct pbl_i2c_bus, dev);
 
   *bus->state = (struct pbl_i2c_bus_state){0};
   pbl_sem_init(&bus->state->done, 0, 1);
@@ -41,7 +41,7 @@ static int prv_validate(const struct pbl_i2c_msg *msgs, uint8_t num_msgs) {
 
   for (uint8_t i = 0U; i < num_msgs; i++) {
     if ((msgs[i].flags & PBL_I2C_MSG_DMA_SAFE) != 0U &&
-        ((uintptr_t)msgs[i].buf & (DCACHE_LINE_SIZE_MAX - 1U)) != 0U) {
+        ((uintptr_t)msgs[i].buf & (PBL_DCACHE_LINE_SIZE - 1U)) != 0U) {
       return -EINVAL;
     }
 
@@ -96,7 +96,7 @@ int pbl_i2c_transfer(const struct pbl_i2c_dev *dev, struct pbl_i2c_msg *msgs, ui
 
   if (ret != 0) {
     PBL_ANALYTICS_ADD(i2c_transfer_error_count, 1);
-    PBL_LOG_DBG("Transfer to 0x%02x on %s failed (%d)", dev->addr, bus->dev.name, ret);
+    PBL_LOG_DBG("Transfer to 0x%02x on %s failed (%d)", dev->addr, pbl_device_name(&bus->dev), ret);
   }
 
   return ret;

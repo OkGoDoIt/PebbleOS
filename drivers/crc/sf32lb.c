@@ -1,12 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <errno.h>
 #include <inttypes.h>
 #include <string.h>
 
 #include <pbl/device.h>
-#include <pbl/drivers/clk/sf32lb.h>
+#include <pbl/devicetree.h>
 #include <pbl/drivers/crc.h>
+#include <pbl/drivers/crc/sf32lb.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/irq.h>
 #include <pbl/kernel/mmio.h>
@@ -15,7 +17,7 @@
 
 #include <hardware/sf32lb52_crc.h>
 
-PBL_LOG_MODULE_DEFINE(driver_crc_sf32lb, CONFIG_DRIVER_CRC_LOG_LEVEL);
+PBL_LOG_MODULE_DEFINE(driver_crc, CONFIG_DRIVER_CRC_LOG_LEVEL);
 
 #define CRC32_POLY 0x04C11DB7U
 
@@ -33,21 +35,16 @@ enum algo {
   ALGO_CRC32_LEGACY,
 };
 
-enum state {
-  STATE_UNTESTED,
-  STATE_OK,
-  STATE_BROKEN,
-};
+extern const struct pbl_crc_sf32lb pbl_crc_sf32lb_inst;
 
-static const struct pbl_clk s_clk = PBL_CLK(SF32LB_HPSYS_RCC, SF32LB52_HPSYS_CLK_CRC1);
-static volatile enum state s_state = STATE_UNTESTED;
+static const struct pbl_crc_sf32lb *const s_crc = &pbl_crc_sf32lb_inst;
 
 static inline uint32_t prv_getreg(uint32_t offset) {
-  return pbl_readl(SF32LB52_CRC1_BASE + offset);
+  return pbl_readl(s_crc->base + offset);
 }
 
 static inline void prv_putreg(uint32_t offset, uint32_t value) {
-  pbl_writel(value, SF32LB52_CRC1_BASE + offset);
+  pbl_writel(value, s_crc->base + offset);
 }
 
 static uint32_t prv_burst(enum algo algo, uint32_t value, const uint8_t *data, size_t len) {
@@ -83,12 +80,12 @@ static size_t prv_compute(enum algo algo, uint32_t *value, const void *data, siz
     const size_t burst = (total - done < BURST_LEN) ? (total - done) : BURST_LEN;
 
     pbl_irq_lock();
-    if (pbl_clk_enable(&s_clk) != 0) {
+    if (pbl_clk_enable(&s_crc->clk) != 0) {
       pbl_irq_unlock();
       break;
     }
     *value = prv_burst(algo, *value, &bytes[done], burst);
-    pbl_clk_disable(&s_clk);
+    pbl_clk_disable(&s_crc->clk);
     pbl_irq_unlock();
     done += burst;
   }
@@ -96,7 +93,7 @@ static size_t prv_compute(enum algo algo, uint32_t *value, const void *data, siz
   return done;
 }
 
-static bool prv_check(enum algo algo, uint32_t init, uint32_t expected) {
+static int prv_check(enum algo algo, uint32_t init, uint32_t expected) {
   static const char vector[] = "0123456789abcdef";
   const size_t len = sizeof(vector) - 1;
 
@@ -111,23 +108,26 @@ static bool prv_check(enum algo algo, uint32_t init, uint32_t expected) {
     PBL_LOG_ERR("CRC unit self-test failed (algo %d): 0x%08" PRIx32 "/0x%08" PRIx32
                 ", expected 0x%08" PRIx32,
                 algo, whole, resumed, expected);
-    return false;
+    return -EIO;
   }
-  return true;
+
+  return 0;
 }
 
-static bool prv_ready(void) {
-  if (s_state == STATE_UNTESTED) {
-    if (pbl_device_init(&s_clk.ctrl->dev) != 0) {
-      s_state = STATE_BROKEN;
-      return false;
-    }
+int pbl_crc_sf32lb_init(const struct pbl_device *dev) {
+  int ret;
 
-    const bool ok = prv_check(ALGO_CRC32, 0, 0x68c4f033U) &&
-                    prv_check(ALGO_CRC32_LEGACY, 0xffffffffU, 0x50b663c0U);
-    s_state = ok ? STATE_OK : STATE_BROKEN;
+  ret = prv_check(ALGO_CRC32, 0, 0x68c4f033U);
+  if (ret != 0) {
+    return ret;
   }
-  return s_state == STATE_OK;
+
+  return prv_check(ALGO_CRC32_LEGACY, 0xffffffffU, 0x50b663c0U);
+}
+
+// Before the unit is up, or if it failed its self-test, callers fall back to software
+static bool prv_ready(void) {
+  return pbl_device_is_ready(&s_crc->dev);
 }
 
 size_t pbl_crc_hw_crc32(uint32_t *crc, const void *data, size_t len) {
@@ -137,3 +137,5 @@ size_t pbl_crc_hw_crc32(uint32_t *crc, const void *data, size_t len) {
 size_t pbl_crc_hw_crc32_legacy(uint32_t *reg, const void *data, size_t len) {
   return prv_ready() ? prv_compute(ALGO_CRC32_LEGACY, reg, data, len) : 0;
 }
+
+#include PBL_DT_INSTANCES(sifli_sf32lb52_crc)

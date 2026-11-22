@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+console_uart: uart2
+qemu_uart: uart1
+bt_hci_uart: uart3
+display: display
+backlight: display
+flash: flash0
+extram: psram
+accel:
+  symbol: SIM_ACCEL
+  include: pbl/drivers/imu/sim.h
+als:
+  symbol: SIM_ALS
+  include: pbl/drivers/als/sim.h
+touch: touchscreen
+vibe:
+  symbol: SIM_VIBE
+  include: pbl/drivers/vibe/sim.h
+mic:
+  symbol: SIM_MIC
+  include: pbl/drivers/audio/sim.h
+die_temp:
+  symbol: SIM_TEMP
+  include: pbl/drivers/temp/sim.h
+rtc:
+  symbol: QEMU_RTC
+  include: pbl/drivers/rtc/qemu.h
+charger:
+  symbol: SIM_CHARGER
+  include: pbl/drivers/charger/sim.h

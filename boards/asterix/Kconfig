@@ -4,4 +4,4 @@
 config BOARD_ASTERIX
     bool
     default y
-    select BOARD_PARTITIONS_SINGLE_SLOT
+    select BOARD_DISPLAY_CORNERS

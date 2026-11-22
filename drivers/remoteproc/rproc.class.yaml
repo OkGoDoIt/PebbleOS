@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+class: rproc
+type: struct pbl_rproc
+include: pbl/drivers/remoteproc.h
+roles:
+  bt_controller: NIMBLE_HCI_SF32LB

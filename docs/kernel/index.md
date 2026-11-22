@@ -13,11 +13,13 @@ threads.md
 syscalls.md
 interrupts.md
 time.md
+work.md
 boot.md
 idle.md
 memory.md
 fatal.md
 reboot.md
+print.md
 compiler.md
 internals.md
 ```
@@ -54,6 +56,9 @@ Next to the API, `include/pbl/kernel/` holds:
 | Semaphore | `struct pbl_sem` | `PBL_SEM_DEFINE` |
 | Message queue | `struct pbl_msgq` | `PBL_MSGQ_DEFINE` |
 | Poll group | `struct pbl_poll_group` | `PBL_POLL_GROUP_DEFINE` |
+| Work item | `struct pbl_work` | `PBL_WORK_DEFINE` |
+| Delayed work item | `struct pbl_delayed_work` | `PBL_DELAYED_WORK_DEFINE` |
+| Work queue | `struct pbl_workq` | `PBL_WORKQ_DEFINE` |
 
 Conventions:
 
@@ -82,8 +87,10 @@ stack alignment the MPU guard needs.
 its core (`CPU_CORTEX_M4`, `CPU_CORTEX_M33`, `CPU_STAR_MC1`) and features
 (`CPU_HAS_FPU`), the core selects its architecture (`ARMV7_M`,
 `ARMV8_M_MAINLINE`) and the architecture its traits (`CPU_CORTEX_M_HAS_SPLIM`).
-The compiler flags and the MPU backend are derived from these symbols. QEMU boards
-pick the emulated core with `SOC_QEMU_CORTEX_M4` or `SOC_QEMU_CORTEX_M33`.
+The compiler flags and the MPU backend are derived from these symbols.
+Floating-point arguments go in FPU registers (`-mfloat-abi=hard`) unless
+`FP_SOFTFP_ABI` is selected, as the Pebble firmware does for its soft-float apps. QEMU boards
+pick the emulated core with `SOC_QEMU_PEBBLE_CORTEX_M4` or `SOC_QEMU_PEBBLE_CORTEX_M33`.
 
 ## Modules
 

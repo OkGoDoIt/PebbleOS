@@ -23,22 +23,31 @@ static const struct pbl_clk_controller *prv_ctrl(const struct pbl_shell *sh, con
     return nullptr;
   }
 
-  return container_of(dev, const struct pbl_clk_controller, dev);
+  return PBL_CONTAINER_OF(dev, const struct pbl_clk_controller, dev);
 }
 
 static int prv_cmd_list(const struct pbl_shell *sh, size_t argc, char **argv) {
   const struct pbl_device *dev;
 
   PBL_DEVICE_CLASS_FOREACH(&pbl_clk_controller_class, dev) {
-    const struct pbl_clk_controller *ctrl = container_of(dev, const struct pbl_clk_controller, dev);
+    const struct pbl_clk_controller *ctrl =
+        PBL_CONTAINER_OF(dev, const struct pbl_clk_controller, dev);
 
-    pbl_shell_print(sh, "%s: %u clocks", dev->name, ctrl->num_clks);
+    pbl_shell_print(sh, "%s: %u clocks", pbl_device_name(dev), ctrl->num_clks);
     for (uint16_t id = 0U; id < ctrl->num_clks; id++) {
       const struct pbl_clk clk = PBL_CLK(ctrl, id);
+      struct pbl_clk parent;
       uint64_t rate_mhz;
 
-      if (pbl_clk_get_rate(&clk, &rate_mhz) == 0) {
-        pbl_shell_print(sh, "  %u: %" PRIu64 " mHz", id, rate_mhz);
+      if (pbl_clk_get_rate(&clk, &rate_mhz) != 0) {
+        continue;
+      }
+
+      if (pbl_clk_get_parent(&clk, &parent) == 0) {
+        pbl_shell_print(sh, "  %u: %" PRIu64 " mHz, from %s %" PRIu32 ", %u users", id, rate_mhz,
+                        pbl_device_name(&parent.ctrl->dev), parent.id, ctrl->use_counts[id]);
+      } else {
+        pbl_shell_print(sh, "  %u: %" PRIu64 " mHz, %u users", id, rate_mhz, ctrl->use_counts[id]);
       }
     }
   }
@@ -74,8 +83,8 @@ static int prv_cmd_rate(const struct pbl_shell *sh, size_t argc, char **argv) {
 }
 
 #ifdef CONFIG_CLK_CAL
-static struct pbl_clk_cal *prv_cal(const struct pbl_shell *sh, const char *name) {
-  struct pbl_clk_cal *cal = pbl_clk_cal_find(name);
+static const struct pbl_clk_cal *prv_cal(const struct pbl_shell *sh, const char *name) {
+  const struct pbl_clk_cal *cal = pbl_clk_cal_find(name);
 
   if (cal == nullptr) {
     pbl_shell_error(sh, "no calibrated clock '%s'", name);
@@ -85,7 +94,7 @@ static struct pbl_clk_cal *prv_cal(const struct pbl_shell *sh, const char *name)
 }
 
 static int prv_cmd_cal_status(const struct pbl_shell *sh, size_t argc, char **argv) {
-  struct pbl_clk_cal *cal = prv_cal(sh, argv[1]);
+  const struct pbl_clk_cal *cal = prv_cal(sh, argv[1]);
   struct pbl_clk_cal_status st;
 
   if (cal == nullptr) {
@@ -105,7 +114,7 @@ static int prv_cmd_cal_status(const struct pbl_shell *sh, size_t argc, char **ar
 // A header, then one line per gate: uptime (ms) and frequency (mHz), for
 // tools/clk_characterize.py.
 static int prv_cmd_cal_sample(const struct pbl_shell *sh, size_t argc, char **argv) {
-  struct pbl_clk_cal *cal = prv_cal(sh, argv[1]);
+  const struct pbl_clk_cal *cal = prv_cal(sh, argv[1]);
   long cycles;
   long count;
   long period_ms = 0;
@@ -141,7 +150,7 @@ static int prv_cmd_cal_sample(const struct pbl_shell *sh, size_t argc, char **ar
 }
 
 static int prv_cmd_cal_hold(const struct pbl_shell *sh, size_t argc, char **argv) {
-  struct pbl_clk_cal *cal = prv_cal(sh, argv[1]);
+  const struct pbl_clk_cal *cal = prv_cal(sh, argv[1]);
   long rate_mhz;
 
   if (cal == nullptr) {

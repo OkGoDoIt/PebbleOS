@@ -34,8 +34,8 @@ command's own options.
 | {doc}`clean` | {doc}`emulator` |
 | {doc}`test` | {doc}`image_resources` |
 | {doc}`itest` | {doc}`image_recovery` |
-| | {doc}`erase` |
-| | {doc}`lab` |
+| {doc}`samples` | {doc}`erase` |
+| {doc}`sdk` | {doc}`lab` |
 | | {doc}`power` |
 
 ## Shared options
@@ -90,7 +90,7 @@ board can be flashed with one runner and debugged with another;
 | --- | --- | --- |
 | `openocd` | asterix | flash (with resources), erase, debug, debugserver |
 | `nrfutil` | asterix | flash (with resources), erase |
-| `sftool` | obelix, getafix | flash (with resources), erase |
+| `sftool` | obelix, getafix, sf32lb57_dpi_hdk | flash (with resources), erase |
 | `probe-rs` | asterix, obelix, getafix | debug, debugserver |
 | `phone` | asterix, obelix, getafix | flash (always with resources) |
 | `qemu` | qemu_* | run, debug, debugserver |
@@ -98,10 +98,11 @@ board can be flashed with one runner and debugged with another;
 | `wasm` | native_*/wasm | run |
 
 For the OpenOCD runner, the probe and target configuration lives in the
-board's `support/openocd.cfg`, and how to write the resources and erase
-ranges, in `support/flash.cfg`.
+board's `support/openocd.cfg`, and how to write files such as the resources
+to the external flash and erase ranges of it, in `support/flash.cfg`.
 
-The `nrfutil` runner needs a J-Link probe. To write the resources it takes
+The `nrfutil` runner needs a J-Link probe. To write files such as the
+resources to the external flash it takes
 the external flash configuration from the board's
 `support/nrfutil_ext_mem.json`.
 
@@ -128,6 +129,8 @@ menuconfig.md
 clean.md
 test.md
 itest.md
+samples.md
+sdk.md
 ```
 
 ```{toctree}

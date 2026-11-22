@@ -54,8 +54,9 @@ pbl build
 pbl run -- -s 2
 ```
 
-`--bt-hci` connects the Bluetooth HCI UART of a `CONFIG_BT_HCI_UART` build
-to a controller, as in the emulator.
+`--bt-hci` connects the Bluetooth HCI UART of a `CONFIG_NIMBLE_HCI_UART` build
+to a controller, and `--bt-addr` gives the watch its Bluetooth address, as in
+the emulator.
 
 ## In a browser
 
@@ -88,6 +89,18 @@ The first time, the system resources have to be written too. The `sftool`
 runner, and the `openocd` and `nrfutil` ones on asterix, take `--resources`;
 otherwise, image them over the serial console once the firmware is running,
 with {doc}`image_resources`.
+
+`pbl run` flashes every image of the build, such as the bootloader the
+firmware boots with (see {ref}`application-images`). `--image app` flashes
+only the application.
+
+A recovery firmware build is flashed to run, like any other. `--provision`
+installs it instead the way a watch is provisioned, where the bootloader
+takes it from: on asterix, whose bootloader copies the firmware into place,
+it is written to its partition of the external flash and the firmware is
+erased from the internal flash, so the bootloader copies the recovery
+firmware in on the next boot. On the SF32LB watches the recovery firmware
+runs from its partition, so it is flashed there either way.
 
 When both firmware and resources are written, the watch boots into the
 main application; {doc}`console` shows its logs.

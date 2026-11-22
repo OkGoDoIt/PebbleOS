@@ -9,7 +9,6 @@
 #include <pbl/settings/settings.h>
 
 #include <clar_asserts.h>
-#include <system/status_codes.h>
 
 struct {
   bool open;

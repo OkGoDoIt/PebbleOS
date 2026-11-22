@@ -1,0 +1,535 @@
+/* SPDX-FileCopyrightText: 2025 Core Devices LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "../battery_state_store.h"
+
+#include <math.h>
+
+#include <pbl/analytics/analytics.h>
+#include <pbl/drivers/battery.h>
+#include <pbl/drivers/charger.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/syscall.h>
+#include <pbl/kernel/time.h>
+#include <pbl/kernel/work.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/battery/battery_charger.h>
+#include <pbl/services/battery/battery_state.h>
+#include <pbl/util/ratio.h>
+
+#include <kernel/events.h>
+#include <nrf_fuel_gauge.h>
+
+PBL_LOG_MODULE_DECLARE(service_battery, CONFIG_SERVICE_BATTERY_LOG_LEVEL);
+
+#if !defined(CONFIG_RECOVERY_FW) || defined(CONFIG_MFG)
+#define FUEL_GAUGE_STATEFUL 1
+#else
+#define FUEL_GAUGE_STATEFUL 0
+#endif
+
+#define ALWAYS_UPDATE_PCT     10.0f
+#define RECONNECTION_DELAY_MS (1 * 1000)
+// TODO: Adjust sample rate based on activity periods once we have good
+// power consumption profiles
+#define BATTERY_SAMPLE_RATE_MIN 1
+
+#define LOG_MIN_SEC 30
+
+// Minimum valid battery voltage for battery swap detection (mV)
+#define BATTERY_MIN_VALID_VOLTAGE_MV 3300
+
+static const struct battery_model prv_battery_model = {
+#ifdef CONFIG_BOARD_ASTERIX
+#include <battery_asterix.inc>
+#elifdef CONFIG_BOARD_OBELIX
+#include <battery_obelix.inc>
+#elifdef CONFIG_BOARD_GETAFIX
+#include <battery_getafix.inc>
+#else
+#error "Battery model not defined for this platform"
+#endif
+};
+
+static PreciseBatteryChargeState s_last_battery_charge_state;
+static void prv_update_callback(struct pbl_work *work);
+static PBL_DELAYED_WORK_DEFINE(s_periodic_timer, prv_update_callback);
+
+static volatile bool s_update_pending = false;
+static volatile bool s_pending_force_update = false;
+
+static enum pbl_charger_status s_last_chg_status;
+static uint64_t prv_ref_time;
+static int32_t s_last_voltage_mv;
+static int32_t s_last_temp_mc;
+static uint32_t s_last_soc_cpct;
+static uint32_t s_soc_cpct_min = UINT32_MAX;
+static int32_t s_analytics_last_voltage_mv;
+static uint32_t s_analytics_last_cpct;
+
+//! Track the lowest SOC seen since the last heartbeat: hourly snapshots miss
+//! brief deep discharges, which matter when correlating battery behavior with
+//! brownout-cleared states.
+static void prv_track_soc_min(void) {
+  if (s_last_soc_cpct < s_soc_cpct_min) {
+    s_soc_cpct_min = s_last_soc_cpct;
+  }
+}
+static uint32_t s_last_tte;
+static uint32_t s_last_ttf;
+static uint64_t s_last_log;
+static bool s_charger_enabled;
+
+#if FUEL_GAUGE_STATEFUL
+// Updates between saves of the state: about 5 hours at one update a minute.
+// Each change of the reported percentage also saves.
+#define FUEL_GAUGE_SAVE_INTERVAL_UPDATES 300
+
+static uint32_t s_save_counter;
+
+static void prv_save_state(void) {
+  uint8_t buf[nrf_fuel_gauge_state_size];
+  int ret;
+
+  ret = nrf_fuel_gauge_state_get(buf, sizeof(buf));
+  if (ret != 0) {
+    PBL_LOG_ERR("Failed to get fuel gauge state (%d)", ret);
+    return;
+  }
+
+  ret = battery_state_store_save(buf, sizeof(buf));
+  if (ret < 0) {
+    PBL_LOG_ERR("Could not save the fuel gauge state (%d)", ret);
+  }
+}
+#endif // FUEL_GAUGE_STATEFUL
+
+static void prv_schedule_update(uint32_t delay);
+
+static bool prv_charger_online(void) {
+  bool online = false;
+
+  (void)pbl_charger_is_online(CHARGER, &online);
+
+  return online;
+}
+
+static int prv_fuel_gauge_init_common(const struct pbl_charger_measurements *constants,
+                                      bool load_state) {
+  struct nrf_fuel_gauge_init_parameters parameters = {};
+  int ret;
+
+  parameters.model = &prv_battery_model;
+  parameters.v0 = (float)constants->voltage_mv / 1000.0f;
+  parameters.i0 = (float)constants->current_ua / 1000000.0f;
+  parameters.t0 = (float)constants->temp_mc / 1000.0f;
+
+#if FUEL_GAUGE_STATEFUL
+  uint8_t saved_state[nrf_fuel_gauge_state_size];
+
+  if (load_state) {
+    if (battery_state_store_load(saved_state, sizeof(saved_state)) == 0) {
+      parameters.state = saved_state;
+    }
+  }
+#endif
+
+  ret = nrf_fuel_gauge_init(&parameters, nullptr);
+#if FUEL_GAUGE_STATEFUL
+  if (ret != 0 && parameters.state != nullptr) {
+    PBL_LOG_WRN("Failed to initialize fuel gauge with saved state, erasing");
+
+    (void)battery_state_store_erase();
+
+    parameters.state = nullptr;
+    ret = nrf_fuel_gauge_init(&parameters, nullptr);
+  }
+#endif
+
+  return ret;
+}
+
+static void prv_charge_status_inform(enum pbl_charger_status chg_status) {
+  union nrf_fuel_gauge_ext_state_info_data state_info;
+  int ret;
+
+  switch (chg_status) {
+    case PBL_CHARGER_STATUS_FULL:
+      state_info.charge_state = NRF_FUEL_GAUGE_CHARGE_STATE_COMPLETE;
+      break;
+    case PBL_CHARGER_STATUS_TRICKLE:
+      state_info.charge_state = NRF_FUEL_GAUGE_CHARGE_STATE_TRICKLE;
+      break;
+    case PBL_CHARGER_STATUS_CONSTANT_CURRENT:
+      state_info.charge_state = NRF_FUEL_GAUGE_CHARGE_STATE_CC;
+      break;
+    case PBL_CHARGER_STATUS_CONSTANT_VOLTAGE:
+      state_info.charge_state = NRF_FUEL_GAUGE_CHARGE_STATE_CV;
+      break;
+    default:
+      state_info.charge_state = NRF_FUEL_GAUGE_CHARGE_STATE_IDLE;
+      break;
+  }
+
+  ret = nrf_fuel_gauge_ext_state_update(NRF_FUEL_GAUGE_EXT_STATE_INFO_CHARGE_STATE_CHANGE,
+                                        &state_info);
+  PBL_ASSERTN(ret == 0);
+}
+
+static void prv_battery_state_put_change_event(PreciseBatteryChargeState state) {
+  PebbleEvent e = {
+    .type = PEBBLE_BATTERY_STATE_CHANGE_EVENT,
+    .battery_state = {
+      .new_state = state,
+    },
+  };
+  event_put(&e);
+}
+
+static void prv_update_state(void *force_update) {
+  enum pbl_charger_status chg_status;
+  struct pbl_charger_measurements constants;
+  uint64_t now, delta;
+  uint8_t pct_int;
+  bool is_plugged;
+  bool is_charging;
+  bool update;
+  float pct;
+  int ret;
+
+  s_update_pending = false;
+  update = (force_update != nullptr) || s_pending_force_update;
+  s_pending_force_update = false;
+
+  ret = pbl_charger_get_measurements(CHARGER, &constants);
+  if (ret < 0) {
+    PBL_LOG_ERR("Could not obtain constants, skipping update (%d)", ret);
+    return;
+  }
+
+  is_plugged = prv_charger_online();
+  if (is_plugged != s_last_battery_charge_state.is_plugged) {
+    ret = nrf_fuel_gauge_ext_state_update(is_plugged
+                                              ? NRF_FUEL_GAUGE_EXT_STATE_INFO_VBUS_CONNECTED
+                                              : NRF_FUEL_GAUGE_EXT_STATE_INFO_VBUS_DISCONNECTED,
+                                          nullptr);
+    PBL_ASSERTN(ret == 0);
+    s_last_battery_charge_state.is_plugged = is_plugged;
+    if (is_plugged) {
+      PBL_ANALYTICS_TIMER_STOP(battery_discharge_duration_ms);
+    } else {
+      PBL_ANALYTICS_TIMER_START(battery_discharge_duration_ms);
+    }
+    update = true;
+  }
+
+  ret = pbl_charger_get_status(CHARGER, &chg_status);
+  if (ret < 0) {
+    PBL_LOG_ERR("Could not obtain charge status, skipping update (%d)", ret);
+    return;
+  }
+
+  if (chg_status != s_last_chg_status) {
+    s_last_chg_status = chg_status;
+    prv_charge_status_inform(chg_status);
+  }
+
+  is_charging = is_plugged && !(chg_status == PBL_CHARGER_STATUS_FULL ||
+                                chg_status == PBL_CHARGER_STATUS_UNKNOWN);
+  if (is_charging != s_last_battery_charge_state.is_charging) {
+    s_last_battery_charge_state.is_charging = is_charging;
+    if (is_charging) {
+      PBL_ANALYTICS_TIMER_START(battery_charge_time_ms);
+    } else {
+      PBL_ANALYTICS_TIMER_STOP(battery_charge_time_ms);
+    }
+    update = true;
+  }
+
+  s_last_voltage_mv = constants.voltage_mv;
+  s_last_temp_mc = constants.temp_mc;
+
+  now = pbl_uptime_ticks();
+  delta = (now - prv_ref_time) / PBL_TICK_HZ;
+  prv_ref_time = now;
+
+  pct = nrf_fuel_gauge_process((float)constants.voltage_mv / 1000.0f,
+                               (float)constants.current_ua / 1000000.0f,
+                               (float)constants.temp_mc / 1000.0f, (float)delta, nullptr);
+
+  pct_int = (uint8_t)ceilf(pct);
+  s_last_soc_cpct = (uint32_t)(pct * 100.0f);
+  prv_track_soc_min();
+  if (pct_int != s_last_battery_charge_state.pct) {
+    s_last_battery_charge_state.pct = pct_int;
+    s_last_battery_charge_state.charge_percent = (uint32_t)(pct * PBL_RATIO32_MAX) / 100U;
+    update = true;
+  }
+
+  if (s_last_battery_charge_state.is_charging) {
+    float ttf;
+
+    ttf = nrf_fuel_gauge_ttf_get();
+    if (!isnan(ttf)) {
+      s_last_ttf = (uint32_t)ttf;
+    }
+
+    s_last_tte = 0U;
+  } else {
+    float tte;
+
+    tte = nrf_fuel_gauge_tte_get();
+    if (!isnan(tte)) {
+      s_last_tte = (uint32_t)tte;
+    }
+
+    s_last_ttf = 0U;
+  }
+
+#if FUEL_GAUGE_STATEFUL
+  if (update || (++s_save_counter >= FUEL_GAUGE_SAVE_INTERVAL_UPDATES)) {
+    s_save_counter = 0;
+    prv_save_state();
+  }
+#endif
+
+  PBL_LOG_VERBOSE(
+      "Battery state: v_mv: %ld, i_ua: %ld, t_mc: %ld, td: %lu, soc: %u, tte: %lu, ttf: %lu",
+      constants.voltage_mv, constants.current_ua, constants.temp_mc, (uint32_t)delta,
+      s_last_battery_charge_state.pct, s_last_tte, s_last_ttf);
+
+  if (update || (((now - s_last_log) / PBL_TICK_HZ > LOG_MIN_SEC) &&
+                 (s_last_battery_charge_state.is_charging || (pct < ALWAYS_UPDATE_PCT)))) {
+    PBL_LOG_INFO("Percent: %" PRIu8 ", V: %" PRId32 " mV, I: %" PRId32
+                 " uA, "
+                 "T: %" PRId32 " mC, charging: %s, plugged: %s",
+                 s_last_battery_charge_state.pct, constants.voltage_mv, constants.current_ua,
+                 constants.temp_mc, s_last_battery_charge_state.is_charging ? "yes" : "no",
+                 s_last_battery_charge_state.is_plugged ? "yes" : "no");
+    prv_battery_state_put_change_event(s_last_battery_charge_state);
+    s_last_log = now;
+  }
+
+  // Enable battery charging after fuel gauge state has been updated for the first time
+  if (!s_charger_enabled) {
+    s_charger_enabled = true;
+    (void)pbl_charger_enable(CHARGER, true);
+  }
+}
+
+static void prv_enqueue_update(bool force) {
+  if (force) {
+    s_pending_force_update = true;
+  }
+  if (s_update_pending) {
+    return;
+  }
+  if (pbl_sys_work_call(prv_update_state, nullptr)) {
+    s_update_pending = true;
+  }
+}
+
+static void prv_update_callback(struct pbl_work *work) {
+  pbl_delayed_work_cancel(&s_periodic_timer);
+  prv_enqueue_update(true);
+}
+
+static void prv_sample_cb(struct pbl_work *work) {
+  prv_enqueue_update(false);
+}
+
+static void prv_schedule_update(uint32_t delay) {
+  pbl_delayed_work_reschedule(&pbl_sys_workq_high, &s_periodic_timer, PBL_MSEC(delay));
+}
+
+void battery_state_force_update(void) {
+  prv_schedule_update(0);
+}
+
+void battery_state_init(void) {
+  int ret;
+  struct nrf_fuel_gauge_runtime_parameters runtime_parameters = {};
+  struct pbl_charger_measurements constants;
+
+  ret = pbl_charger_get_measurements(CHARGER, &constants);
+  PBL_ASSERTN(ret == 0);
+
+  s_last_voltage_mv = constants.voltage_mv;
+
+  ret = prv_fuel_gauge_init_common(&constants, true);
+  PBL_ASSERTN(ret == 0);
+
+  ret = nrf_fuel_gauge_ext_state_update(
+      NRF_FUEL_GAUGE_EXT_STATE_INFO_CHARGE_CURRENT_LIMIT,
+      &(union nrf_fuel_gauge_ext_state_info_data){
+        .charge_current_limit = (float)BATTERY->constant_charge_current_ua / 1000000.0f
+      });
+  PBL_ASSERTN(ret == 0);
+
+  ret = nrf_fuel_gauge_ext_state_update(
+      NRF_FUEL_GAUGE_EXT_STATE_INFO_TERM_CURRENT,
+      &(union nrf_fuel_gauge_ext_state_info_data){
+        .charge_term_current = (float)BATTERY->charge_term_current_ua / 1000000.0f
+      });
+  PBL_ASSERTN(ret == 0);
+
+  runtime_parameters.a = NAN;
+  runtime_parameters.b = NAN;
+  runtime_parameters.c = NAN;
+  runtime_parameters.d = NAN;
+  runtime_parameters.discard_positive_deltaz = true;
+
+  nrf_fuel_gauge_param_adjust(&runtime_parameters);
+
+  ret = pbl_charger_get_status(CHARGER, &s_last_chg_status);
+  PBL_ASSERTN(ret == 0);
+
+  prv_charge_status_inform(s_last_chg_status);
+
+  s_last_battery_charge_state.is_plugged = prv_charger_online();
+  s_last_battery_charge_state.is_charging =
+      s_last_battery_charge_state.is_plugged && !(s_last_chg_status == PBL_CHARGER_STATUS_FULL ||
+                                                  s_last_chg_status == PBL_CHARGER_STATUS_UNKNOWN);
+
+  float pct = nrf_fuel_gauge_process((float)constants.voltage_mv / 1000.0f,
+                                     (float)constants.current_ua / 1000000.0f,
+                                     (float)constants.temp_mc / 1000.0f, 0.0f, nullptr);
+#if FUEL_GAUGE_STATEFUL
+  if ((uint8_t)ceilf(pct) == 0 && constants.voltage_mv >= BATTERY_MIN_VALID_VOLTAGE_MV) {
+    PBL_LOG_WRN("Invalid state detected, reloading without state");
+    (void)battery_state_store_erase();
+    ret = prv_fuel_gauge_init_common(&constants, false);
+    PBL_ASSERTN(ret == 0);
+    pct = nrf_fuel_gauge_process((float)constants.voltage_mv / 1000.0f,
+                                 (float)constants.current_ua / 1000000.0f,
+                                 (float)constants.temp_mc / 1000.0f, 0.0f, nullptr);
+  }
+#endif
+
+  prv_ref_time = pbl_uptime_ticks();
+
+  s_last_soc_cpct = (uint32_t)(pct * 100.0f);
+  prv_track_soc_min();
+  s_last_battery_charge_state.pct = (uint8_t)ceilf(pct);
+  s_last_battery_charge_state.charge_percent = (uint32_t)(pct * PBL_RATIO32_MAX) / 100U;
+
+  if (s_last_battery_charge_state.is_charging) {
+    PBL_ANALYTICS_TIMER_START(battery_charge_time_ms);
+  } else if (!s_last_battery_charge_state.is_plugged) {
+    PBL_ANALYTICS_TIMER_START(battery_discharge_duration_ms);
+  }
+
+  battery_state_force_update();
+
+  static struct pbl_wallclock_work sample_timer;
+  pbl_wallclock_work_init(&sample_timer, prv_sample_cb);
+  pbl_wallclock_work_start(&pbl_sys_workq_high, &sample_timer, 60, BATTERY_SAMPLE_RATE_MIN);
+
+  s_analytics_last_voltage_mv = s_last_voltage_mv;
+  s_analytics_last_cpct = s_last_soc_cpct;
+}
+
+void battery_state_handle_connection_event(bool is_connected) {
+  prv_schedule_update(RECONNECTION_DELAY_MS);
+}
+
+PBL_SYSCALL(BatteryChargeState, sys_battery_get_charge_state) {
+  return battery_get_charge_state();
+}
+
+BatteryChargeState battery_get_charge_state(void) {
+  BatteryChargeState state;
+
+  state.charge_percent = s_last_battery_charge_state.pct;
+  state.is_charging = s_last_battery_charge_state.is_charging;
+  state.is_plugged = s_last_battery_charge_state.is_plugged;
+
+  return state;
+}
+
+// For unit tests
+struct pbl_delayed_work *battery_state_get_periodic_timer(void) {
+  return &s_periodic_timer;
+}
+
+uint16_t battery_state_get_voltage(void) {
+  return (uint16_t)s_last_voltage_mv;
+}
+
+int32_t battery_state_get_temperature(void) {
+  return s_last_temp_mc;
+}
+
+/////////////////
+// Analytics
+
+// Note that this is run on a different thread than battery_state!
+static void prv_collect_battery(void) {
+  int32_t battery_mv = s_last_voltage_mv;
+  uint32_t battery_soc_cpct = s_last_soc_cpct;
+  int32_t d_mv;
+  uint32_t d_soc_cpct;
+
+  d_mv = battery_mv - s_analytics_last_voltage_mv;
+  PBL_ANALYTICS_SET_UNSIGNED(battery_voltage, battery_mv);
+  PBL_ANALYTICS_SET_SIGNED(battery_voltage_delta, d_mv);
+  PBL_ANALYTICS_SET_SIGNED(battery_temp_c, s_last_temp_mc);
+  PBL_ANALYTICS_SET_UNSIGNED(battery_soc_pct_min,
+                             s_soc_cpct_min < battery_soc_cpct ? s_soc_cpct_min : battery_soc_cpct);
+  s_soc_cpct_min = battery_soc_cpct;
+  s_analytics_last_voltage_mv = battery_mv;
+
+  d_soc_cpct = PBL_MAX((int32_t)s_analytics_last_cpct - (int32_t)battery_soc_cpct, 0);
+  PBL_ANALYTICS_SET_UNSIGNED(battery_soc_pct, battery_soc_cpct);
+  PBL_ANALYTICS_SET_UNSIGNED(battery_soc_pct_drop, d_soc_cpct);
+  s_analytics_last_cpct = battery_soc_cpct;
+
+  PBL_ANALYTICS_SET_UNSIGNED(battery_tte_s, s_last_tte);
+}
+PBL_ANALYTICS_COLLECTOR_DEFINE(prv_collect_battery);
+
+#ifdef CONFIG_SHELL
+#include <errno.h>
+
+#include <pbl/shell/shell.h>
+
+static int prv_cmd_status(const struct pbl_shell *sh, size_t argc, char **argv) {
+  pbl_shell_print(sh, "%" PRId32 " mV", s_last_voltage_mv);
+  pbl_shell_print(sh, "soc: %" PRIu8 "%% (%" PRIu32 ")", s_last_battery_charge_state.pct,
+                  s_last_battery_charge_state.charge_percent);
+  if (s_last_tte == 0U) {
+    pbl_shell_print(sh, "tte: N/A");
+  } else {
+    pbl_shell_print(sh, "tte: %" PRIu32 "s", s_last_tte);
+  }
+  if (s_last_ttf == 0U) {
+    pbl_shell_print(sh, "ttf: N/A");
+  } else {
+    pbl_shell_print(sh, "ttf: %" PRIu32 "s", s_last_ttf);
+  }
+  pbl_shell_print(sh, "plugged: %s", s_last_battery_charge_state.is_plugged ? "YES" : "NO");
+  pbl_shell_print(sh, "charging: %s", s_last_battery_charge_state.is_charging ? "YES" : "NO");
+  return 0;
+}
+
+static int prv_cmd_chargeopt(const struct pbl_shell *sh, size_t argc, char **argv) {
+  bool is_charging;
+
+  if (!strcmp("disable", argv[1])) {
+    is_charging = false;
+  } else if (!strcmp("enable", argv[1])) {
+    is_charging = true;
+  } else {
+    pbl_shell_error(sh, "invalid option '%s'", argv[1]);
+    return -EINVAL;
+  }
+
+  battery_force_charge_enable(is_charging);
+  battery_state_force_update();
+  return 0;
+}
+
+PBL_SHELL_SUBCMD_ADD(sub_battery, status, nullptr, "Print the battery state", prv_cmd_status, 0, 0);
+PBL_SHELL_SUBCMD_ADD(sub_battery, chargeopt, nullptr, "Force charging <enable|disable>",
+                     prv_cmd_chargeopt, 2, 0);
+#endif

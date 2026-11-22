@@ -15,7 +15,7 @@ PBL_WEAK int g_pbl_log_level = 0;
 
 PBL_WEAK void stub_log_internal(uint8_t log_level, const char *src_filename, int src_line_number,
                                 const char *fmt, va_list args) {
-  printf("%s:%d> ", GET_FILE_NAME(src_filename), src_line_number);
+  printf("%s:%d> ", PBL_BASENAME(src_filename), src_line_number);
   vprintf(fmt, args);
   printf("\n");
 }
@@ -61,10 +61,7 @@ PBL_WEAK void app_log(uint8_t log_level, const char *src_filename, int src_line_
   va_end(args);
 }
 
-PBL_WEAK void kernel_pbl_log_from_fault_handler_fmt(const char *src_filename,
-                                                    uint16_t src_line_number, char *buffer,
-                                                    unsigned int buffer_size, const char *fmt,
-                                                    ...) {
+PBL_WEAK void pbl_log_fault(const char *src_filename, int src_line_number, const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
   stub_log_internal(LOG_LEVEL_ALWAYS, src_filename, src_line_number, fmt, args);

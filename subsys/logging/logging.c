@@ -14,18 +14,10 @@
 #include <pbl/util/byteorder.h>
 #include <pbl/util/string.h>
 
-#ifndef PBL_NO_LINKER_SCRIPT
-extern const struct pbl_log_backend __pbl_log_backends_start[];
-extern const struct pbl_log_backend __pbl_log_backends_end[];
-#else
-extern const struct pbl_log_backend __pbl_log_backends_start[] PBL_UNSORTED_SECTION_START(
-    pbl_log_be);
-extern const struct pbl_log_backend __pbl_log_backends_end[] PBL_UNSORTED_SECTION_END(pbl_log_be);
-#endif
+PBL_ITERABLE_SECTION_DECLARE(const struct pbl_log_backend, log_backends);
 
-#define PRV_FOREACH_BACKEND(_backend)                                     \
-  for (const struct pbl_log_backend *_backend = __pbl_log_backends_start; \
-       _backend < __pbl_log_backends_end; _backend++)
+#define PRV_FOREACH_BACKEND(_backend) \
+  PBL_ITERABLE_SECTION_FOREACH(const struct pbl_log_backend, log_backends, _backend)
 
 bool g_pbl_log_enabled = true;
 
@@ -72,14 +64,6 @@ const struct pbl_log_backend *pbl_log_backend_get_by_name(const char *name) {
   }
 
   return nullptr;
-}
-
-void pbl_log_early_init(void) {
-  PRV_FOREACH_BACKEND(backend) {
-    if (backend->api->early_init) {
-      backend->api->early_init(backend);
-    }
-  }
 }
 
 void pbl_log_init(void) {
@@ -283,15 +267,14 @@ void kernel_pbl_log_from_fault_handler(const char *src_filename, uint16_t src_li
   prv_dispatch(&msg, true);
 }
 
-void kernel_pbl_log_from_fault_handler_fmt(const char *src_filename, uint16_t src_line_number,
-                                           char *buffer, unsigned int buffer_size, const char *fmt,
-                                           ...) {
+void pbl_log_fault(const char *src_filename, int src_line_number, const char *fmt, ...) {
+  char buffer[96];
   va_list ap;
   va_start(ap, fmt);
-  vsniprintf(buffer, buffer_size, fmt, ap);
+  vsnprintf(buffer, sizeof(buffer), fmt, ap);
   va_end(ap);
 
-  kernel_pbl_log_from_fault_handler(src_filename, src_line_number, buffer);
+  kernel_pbl_log_from_fault_handler(src_filename, (uint16_t)src_line_number, buffer);
 }
 
 #ifdef CONFIG_SHELL

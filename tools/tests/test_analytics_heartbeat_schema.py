@@ -17,12 +17,11 @@ from analytics_heartbeat_schema import parse_heartbeat_dls_create_buffered
 from analytics_heartbeat_schema import parse_heartbeat_dls_create_item_size
 
 
-ANALYTICS_DEF = os.path.join(repo_dir, "include", "pbl", "services", "analytics", "analytics.def")
-NATIVE_C = os.path.join(repo_dir, "fw", "services", "analytics", "native.c")
+ANALYTICS_DEF = os.path.join(repo_dir, "include", "pbl", "analytics", "analytics.def")
+NATIVE_C = os.path.join(repo_dir, "subsys", "analytics", "native.c")
 DLS_PRIVATE_H = os.path.join(repo_dir, "include", "pbl", "services", "data_logging",
                              "dls_private.h")
-COMM_PROTOCOL_H = os.path.join(repo_dir, "include", "pbl", "services", "comm_session",
-                               "protocol.h")
+COMM_PROTOCOL_H = os.path.join(repo_dir, "include", "pbl", "pp", "protocol.h")
 
 # Wire size the official backend decodes for each heartbeat record version. The version byte at
 # offset 0 is its only layout selector, so these pairs are a compatibility contract, not a
@@ -38,10 +37,11 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.fields = native_heartbeat_layout(self.metrics)
         self.offsets = field_offsets(self.fields)
 
-    def test_matches_official_v4_40_wire_layout(self):
+    def test_matches_official_v4_47_wire_layout(self):
         # 563 bytes are version 3; v4.33 and v4.40 appended four metrics after it without a
         # version bump, and those are never transmitted (test_truncated_tail_is_only_post_v3_appends).
-        self.assertEqual(wire_size(self.fields), 579)
+        # v4.47 inserted ram_used_ms before the BLE metrics, still version 3; the fork appends it.
+        self.assertEqual(wire_size(self.fields), 583)
         self.assertEqual(self.offsets["version"], 0)
         self.assertEqual(self.offsets["timestamp"], 1)
         self.assertEqual(self.offsets["build_id"], 9)
@@ -63,6 +63,7 @@ class TestAnalyticsHeartbeatSchema(unittest.TestCase):
         self.assertEqual(self.offsets["metric_display_update_count"], 567)
         self.assertEqual(self.offsets["metric_display_flush_time_ms"], 571)
         self.assertEqual(self.offsets["metric_touch_driver_awake_time_ms"], 575)
+        self.assertEqual(self.offsets["metric_ram_used_ms"], 579)
 
     def test_dls_session_item_size_is_the_transmitted_prefix(self):
         """dls_create's item size is what goes on the wire: it must be the transmit constant.

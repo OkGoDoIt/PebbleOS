@@ -3,10 +3,19 @@
 
 config CONSOLE
     bool "Serial console"
-    default y if !RELEASE || MFG
+    select CRC
     help
       Text console on the board's console port, CONSOLE_UART: logs and
       the shell. Off on release firmware, which leaves the port unused.
+
+config CONSOLE_IMAGING
+    bool "Flash imaging"
+    depends on CONSOLE && FLASH && $(has_partition,safe-firmware)
+    depends on $(has_partition,system-resources-bank-0) && $(has_partition,system-resources-bank-1)
+    select FLASH_CRC
+    help
+      Write the system resources and the recovery firmware to flash
+      over the console, as manufacturing does.
 
 config CONSOLE_BAUDRATE
     int "Console baud rate"
@@ -14,3 +23,12 @@ config CONSOLE_BAUDRATE
     default 1000000
     help
       Line rate of the board's console port, CONSOLE_UART.
+
+config CONSOLE_STDOUT
+    bool "Standard output"
+    depends on CONSOLE
+    help
+      Send the C library's standard output and error, printf() and
+      friends, to the console. Newlines go out as CR LF. Not for
+      interrupt context. Native builds print to the process's
+      standard output and error unbuffered, where their console goes.

@@ -41,7 +41,7 @@ the properties, the users and the last sample.
 ## Delivery
 
 `pbl_input_report()` calls every listener before it returns, in the context
-of the report: the debounce ISR for buttons, the system task for touch, the
+of the report: the debounce ISR for buttons, the background work queue for touch, the
 calling thread for injected input. There is no queue or thread of its own;
 the listeners that need to defer work already have the kernel event queue.
 
@@ -60,13 +60,13 @@ PBL_INPUT_CALLBACK_DEFINE(prv_input_cb, NULL);
 
 The firmware has three listeners:
 
-- `fw/kernel/input_buttons.c` turns key events into
+- `pebble/kernel/input_buttons.c` turns key events into
   `PEBBLE_BUTTON_DOWN_EVENT` / `PEBBLE_BUTTON_UP_EVENT`, so the click
   recognizers and everything above them are unchanged. It also tracks the
   held buttons and swaps up and down while the watch is rotated.
-- The touch service (`fw/services/touch/touch.c`) collects each report and
+- The touch service (`pebble/services/touch/touch.c`) collects each report and
   passes it to `touch_handle_update()` and `touch_handle_gesture()`.
-- `fw/system/reset_keys.c` hard resets the watch when BACK and SELECT are
+- `pebble/system/reset_keys.c` hard resets the watch when BACK and SELECT are
   held for 5 seconds, into PRF if UP is held too, except in MFG builds. It
   has to work when every thread is wedged, so it times the hold with a
   kernel timer, which expires in the tick interrupt.
@@ -79,7 +79,7 @@ Injected input goes through the same path as the hardware:
   `input dump on` logs every event (`CONFIG_INPUT_SHELL`).
 - `button raw <btn> <0|1>` reports a button transition.
 - `button click` / `hold` / `multi` and the remote input endpoint
-  (`fw/kernel/remote_input.c`) report their button presses.
+  (`pebble/kernel/remote_input.c`) report their button presses.
 
 Injected touch gestures (`touch_handle_injected_update()`) still go straight
 to the touch service, which arbitrates between them and the physical sensor.

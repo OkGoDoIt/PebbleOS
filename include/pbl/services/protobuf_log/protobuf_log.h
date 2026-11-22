@@ -11,7 +11,7 @@
 
 #include <system/version.h>
 
-// Generated from fw/services/protobuf_log/proto
+// Generated from pebble/services/protobuf_log/proto
 #include <event.pb.h>
 #include <measurements.pb.h>
 
@@ -21,7 +21,7 @@
  * @brief Protobuf payloads of measurements or events sent to the phone.
  *
  * Samples are accumulated into a @c pebble_pipeline_Payload (schemas in
- * @c fw/services/protobuf_log/proto) until it fills a record, which is then handed to the
+ * @c pebble/services/protobuf_log/proto) until it fills a record, which is then handed to the
  * session's transport. The default transport logs each record, prefixed by a @ref PLogMessageHdr
  * and zero padded to @ref PLOG_DLS_RECORD_SIZE, to a buffered @ref services_data_logging session
  * with tag @c DlsSystemTagProtobufLogSession.
@@ -36,12 +36,12 @@
  * };
  * ProtobufLogConfig config = {
  *   .type = ProtobufLogType_Measurements,
- *   .measurements = { .num_types = ARRAY_LENGTH(types), .types = types },
+ *   .measurements = { .num_types = PBL_ARRAY_SIZE(types), .types = types },
  * };
  * ProtobufLogRef log = protobuf_log_create(&config, NULL, 0);
  *
  * uint32_t values[] = { bpm, quality };
- * protobuf_log_session_add_measurements(log, pbl_realtime(), ARRAY_LENGTH(values), values);
+ * protobuf_log_session_add_measurements(log, pbl_realtime(), PBL_ARRAY_SIZE(values), values);
  *
  * protobuf_log_session_delete(log);
  * @endcode

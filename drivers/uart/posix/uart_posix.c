@@ -24,7 +24,7 @@ struct rx {
 };
 
 static const struct pbl_uart_posix *prv_posix(const struct pbl_uart *uart) {
-  return container_of(uart, const struct pbl_uart_posix, uart);
+  return PBL_CONTAINER_OF(uart, const struct pbl_uart_posix, uart);
 }
 
 static void prv_rx_isr(void *arg) {
@@ -93,3 +93,9 @@ const struct pbl_uart_ops pbl_uart_posix_ops = {
   .rx_enable = prv_rx_enable,
   .rx_disable = prv_rx_disable,
 };
+
+PBL_UART_POSIX_DEFINE(pbl_uart_posix_console, "console", PBL_UART_POSIX_CONSOLE, 115200);
+PBL_UART_POSIX_DEFINE(pbl_uart_posix_qemu, "qemu", PBL_UART_POSIX_QEMU, 115200);
+#ifdef CONFIG_UART_POSIX_BT_HCI
+PBL_UART_POSIX_DEFINE(pbl_uart_posix_bt_hci, "bt_hci", PBL_UART_POSIX_BT_HCI, 115200);
+#endif

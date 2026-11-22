@@ -8,15 +8,15 @@
 
 #include <pbl/console/console.h>
 #include <pbl/crc/crc.h>
-#include <pbl/services/new_timer/new_timer.h>
-#include <pbl/services/system_task.h>
+#include <pbl/kernel/work.h>
+#include <pbl/pp/transports/console.h>
 #include <pbl/util/base64.h>
 
 #define ESC 0x1b
 
 #define SEQ_LEN     1U
 #define CRC_LEN     sizeof(uint32_t)
-#define RAW_MAX     (SEQ_LEN + CONSOLE_FRAME_MTU + CRC_LEN)
+#define RAW_MAX     (SEQ_LEN + PBL_CONSOLE_FRAME_MTU + CRC_LEN)
 #define B64_MAX     ((RAW_MAX + 2U) / 3U * 4U)
 #define ACK_RAW_LEN (SEQ_LEN + 1U + CRC_LEN)
 #define ACK_B64_LEN 8U
@@ -52,7 +52,7 @@ static uint32_t prv_crc(char channel, const void *data, size_t len) {
   return pbl_crc32(pbl_crc32(0, &channel, 1), data, len);
 }
 
-void pbl_console__frame_send(char channel, uint8_t seq, const void *data, size_t len) {
+void pbl_console_frame_send(char channel, uint8_t seq, const void *data, size_t len) {
   pbl_console_lock();
 
   s_tx_raw[0] = seq;
@@ -89,30 +89,37 @@ static void prv_process_frame(void *unused) {
 
   const uint8_t seq = (uint8_t)s_rx_buf[1];
   if (seq == 0U || seq != s_last_seq) {
-    const void *payload = &s_rx_buf[1 + SEQ_LEN];
-    const size_t payload_len = (size_t)raw_len - SEQ_LEN - CRC_LEN;
+    [[maybe_unused]] const void *payload = &s_rx_buf[1 + SEQ_LEN];
+    [[maybe_unused]] const size_t payload_len = (size_t)raw_len - SEQ_LEN - CRC_LEN;
 
-    if (channel == CONSOLE_FRAME_CHANNEL_PP) {
-      pbl_console__pp_handle_frame(payload, payload_len);
-    } else if (channel == CONSOLE_FRAME_CHANNEL_IMAGING) {
+#ifdef CONFIG_CONSOLE_IMAGING
+    if (channel == CONSOLE_FRAME_CHANNEL_IMAGING) {
       pbl_console__imaging_handle_frame(payload, payload_len);
     }
+#endif
+#ifdef CONFIG_PP_TRANSPORT_CONSOLE
+    if (channel == PBL_CONSOLE_CHANNEL_PP) {
+      pbl_pp_console_receive(payload, payload_len);
+    }
+#endif
     s_last_seq = (seq == 0U) ? -1 : seq;
   }
 
   // Before acknowledging, as the host's next frame follows right away.
   s_rx_pending = false;
-  pbl_console__frame_send(CONSOLE_FRAME_CHANNEL_ACK, 0U, &seq, sizeof(seq));
+  pbl_console_frame_send(CONSOLE_FRAME_CHANNEL_ACK, 0U, &seq, sizeof(seq));
 }
 
 static void prv_process_ack(void *unused) {
   uint8_t raw[ACK_RAW_LEN];
-  const int raw_len = pbl_base64_decode(raw, sizeof(raw), s_ack_buf, ACK_B64_LEN);
+  [[maybe_unused]] const int raw_len = pbl_base64_decode(raw, sizeof(raw), s_ack_buf, ACK_B64_LEN);
 
+#ifdef CONFIG_PP_TRANSPORT_CONSOLE
   if (raw_len == (int)ACK_RAW_LEN &&
       prv_crc(CONSOLE_FRAME_CHANNEL_ACK, raw, ACK_RAW_LEN) == PBL_CRC32_RESIDUE) {
-    pbl_console__pp_handle_ack(raw[SEQ_LEN]);
+    pbl_pp_console_ack(raw[SEQ_LEN]);
   }
+#endif
 }
 
 static bool prv_is_frame_char(char c) {
@@ -167,7 +174,7 @@ void pbl_console__frame_input_from_isr(char c, void (*text_input)(char c)) {
       s_rx_state = RX_TEXT;
       if (c == '\\' && !s_rx_dropping && s_rx_len > 1U) {
         s_rx_pending = true;
-        if (!system_task_add_callback_from_isr(prv_process_frame, nullptr)) {
+        if (!pbl_sys_work_call_from_isr(prv_process_frame, nullptr)) {
           s_rx_pending = false;
         }
       }
@@ -184,7 +191,7 @@ void pbl_console__frame_input_from_isr(char c, void (*text_input)(char c)) {
     case RX_ACK_END:
       s_rx_state = RX_TEXT;
       if (c == '\\' && s_ack_len == ACK_B64_LEN) {
-        new_timer_add_work_callback_from_isr(prv_process_ack, nullptr);
+        pbl_sys_work_call_high_from_isr(prv_process_ack, nullptr);
       }
       break;
   }

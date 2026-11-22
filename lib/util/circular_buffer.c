@@ -73,7 +73,7 @@ uint16_t circular_buffer_write_prepare(CircularBuffer *buffer, uint8_t **data_ou
 }
 
 void circular_buffer_write_finish(CircularBuffer *buffer, uint16_t written_length) {
-  UTIL_ASSERT(buffer->data_length + written_length <= buffer->buffer_size);
+  PBL_UTIL_ASSERT(buffer->data_length + written_length <= buffer->buffer_size);
   buffer->data_length += written_length;
   buffer->write_in_progress = false;
 }
@@ -87,7 +87,7 @@ bool circular_buffer_read(const CircularBuffer *buffer, uint16_t length, const u
   *data_out = &buffer->buffer[buffer->read_index];
 
   const uint16_t remaining_length = buffer->buffer_size - buffer->read_index;
-  *length_out = MIN(remaining_length, length);
+  *length_out = PBL_MIN(remaining_length, length);
 
   return true;
 }
@@ -105,12 +105,12 @@ uint16_t circular_buffer_copy_offset(const CircularBuffer *buffer, uint16_t star
   const uint16_t read_index = (buffer->read_index + start_offset) % buffer->buffer_size;
   const uint16_t data_length = buffer->data_length - start_offset;
 
-  length_to_copy = MIN(length_to_copy, data_length);
+  length_to_copy = PBL_MIN(length_to_copy, data_length);
 
   // Number of total bytes after the read index to end of buffer:
   const uint16_t total_length_to_end = buffer->buffer_size - read_index;
   // Number of bytes of after the read index that need to be copied:
-  const uint16_t end_copy_length = MIN(total_length_to_end, length_to_copy);
+  const uint16_t end_copy_length = PBL_MIN(total_length_to_end, length_to_copy);
   memcpy(data_out, &buffer->buffer[read_index], end_copy_length);
 
   // If length_to_copy > total_length_to_end, there is more data at the
@@ -125,7 +125,7 @@ uint16_t circular_buffer_copy_offset(const CircularBuffer *buffer, uint16_t star
 
 bool circular_buffer_read_or_copy(const CircularBuffer *buffer, uint8_t **data_out, size_t length,
                                   void *(*malloc_imp)(size_t), bool *caller_should_free) {
-  UTIL_ASSERT(buffer && malloc_imp && data_out && caller_should_free);
+  PBL_UTIL_ASSERT(buffer && malloc_imp && data_out && caller_should_free);
   if (buffer->data_length < length) {
     return false;
   }

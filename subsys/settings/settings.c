@@ -258,7 +258,7 @@ int pbl_settings_rewrite_filtered(struct pbl_settings_file *file,
   // One reusable buffer for key+val per record, sized to the largest record
   // rather than the worst case: a ~2 KiB allocation can fail on a fragmented
   // kernel heap, and then every write to a full file fails too.
-  const size_t kv_buf_len = MAX(prv_max_live_key_val_len(file), 1U);
+  const size_t kv_buf_len = PBL_MAX(prv_max_live_key_val_len(file), 1U);
   uint8_t *kv_buf = pbl_malloc(kv_buf_len);
   char *name = pbl_strdup(file->name);
   if (!kv_buf || !name) {
@@ -726,7 +726,7 @@ static int prv_rewrite_transaction(struct pbl_settings_file *old_file,
 }
 
 static int prv_transaction(struct pbl_settings_file *file, pbl_settings_transaction_cb_t cb,
-                            void *context, bool recover_commit);
+                           void *context, bool recover_commit);
 
 int pbl_settings_rewrite(struct pbl_settings_file *file, pbl_settings_rewrite_cb_t cb,
                          void *context) {
@@ -740,7 +740,7 @@ int pbl_settings_transaction(struct pbl_settings_file *file, pbl_settings_transa
 }
 
 static int prv_transaction(struct pbl_settings_file *file, pbl_settings_transaction_cb_t cb,
-                            void *context, bool recover_commit) {
+                           void *context, bool recover_commit) {
   char *name = pbl_strdup(file->name);
   if (!name) {
     PBL_LOG_ERR("Could not allocate name to rewrite settings file %s", file->name);

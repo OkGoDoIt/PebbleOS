@@ -1,0 +1,19 @@
+// SPDX-FileCopyrightText: 2026 Core Devices LLC
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+
+/dts-v1/;
+
+#include "getafix.dtsi"
+
+/ {
+	compatible = "coredevices,getafix-dvt", "coredevices,getafix", "sifli,sf32lb52j";
+};
+
+&i2c3 {
+	haptics: haptics@5a {
+		compatible = "awinic,aw86233";
+		reg = <0x5a>;
+		reset-gpios = <&gpio1 20 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&ldsw1>;
+	};
+};

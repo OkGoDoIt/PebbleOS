@@ -27,6 +27,20 @@ class Run(PblCommand):
             action="store_true",
             help="When flashing a device, also flash the system resources",
         )
+        parser.add_argument(
+            "--provision",
+            action="store_true",
+            help="When flashing a recovery firmware build, write it where the "
+            "bootloader installs it from and erase the firmware, as a watch is "
+            "provisioned, instead of flashing it to run",
+        )
+        parser.add_argument(
+            "--image",
+            action="append",
+            metavar="NAME",
+            help="When flashing a device, flash only this image of the build, "
+            "e.g. app to leave the bootloader as it is (repeatable)",
+        )
         runner_options(parser)
         return parser
 
@@ -43,6 +57,8 @@ class Run(PblCommand):
                 ("run", "flash"),
                 resources=args.resources,
                 extra_args=extra_args,
+                images=args.image,
+                provision=args.provision,
                 watch=self.lab_watch(build, args.tty),
             )
             if "run" not in runner.capabilities().commands:

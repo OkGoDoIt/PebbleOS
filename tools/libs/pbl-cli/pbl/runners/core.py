@@ -45,8 +45,10 @@ class RunnerCaps:
     """Declares what a runner class can do."""
 
     commands: set = field(default_factory=lambda: {"flash"})
-    # Whether flash() can also program system resources.
-    flash_resources: bool = False
+    # Whether flash() can also write files to the flash, e.g. resources.
+    flash_data: bool = False
+    # Whether flash() can erase a range of the code flash first.
+    erase_code: bool = False
 
     def __post_init__(self):
         invalid = self.commands - set(COMMANDS)
@@ -60,12 +62,13 @@ class RunnerConfig(NamedTuple):
     board_dir: str  # boards/<board>
     soc: str | None = None  # CONFIG_SOC, e.g. "NRF52", "SF32LB52"
     hex_file: str | None = None
+    flash_files: tuple = ()  # Intel HEX files to flash, in order
     elf_file: str | None = None
     bin_file: str | None = None
     pbpack_file: str | None = None  # None on PRF builds
     firmware_slot: int | None = None  # None without multiple slots
-    resources_file: str | None = None
-    resources_address: int | None = None  # offset in the flash
+    data_files: tuple = ()  # (file, offset in the flash), flashed after the images
+    erase_code: tuple = ()  # (address, size) of the code flash, erased first
     erase_ranges: tuple = ()  # (offset, size) in the flash
     sftool: str = "sftool"
     gdb: str | None = None
@@ -111,15 +114,28 @@ class Runner(ABC):
     def do_create(cls, cfg, args):
         return cls(cfg)
 
+    def console_command(self):
+        """``(argv, env)`` running the build on the host with nothing on the
+        screen, its console on stdout and no port another instance would
+        want, for the runners that can. ``env`` is added to the environment.
+        """
+        raise UnsupportedOperation(
+            f"{self.name} runner cannot run the build with its console on stdout"
+        )
+
     def run(self, command):
         caps = self.capabilities()
         if command not in caps.commands:
             raise UnsupportedOperation(
                 f"{self.name} runner does not support {command}"
             )
-        if command == "flash" and self.cfg.resources_file and not caps.flash_resources:
+        if command == "flash" and self.cfg.data_files and not caps.flash_data:
             raise UnsupportedOperation(
-                f"{self.name} runner does not support flashing resources"
+                f"{self.name} runner does not support writing files to the flash"
+            )
+        if command == "flash" and self.cfg.erase_code and not caps.erase_code:
+            raise UnsupportedOperation(
+                f"{self.name} runner does not support erasing the code flash"
             )
         if self.cfg.dry_run:
             return self.do_run(command)

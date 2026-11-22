@@ -3,8 +3,10 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
+#include <pbl/drivers/regulator.h>
 #include <pbl/drivers/vibe.h>
 #include <pbl/drivers/vibe/aw8623x.h>
 #include <pbl/kernel/delay.h>
@@ -13,7 +15,7 @@
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
 
-PBL_LOG_MODULE_DEFINE(driver_vibe_aw8623x, CONFIG_DRIVER_VIBE_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_vibe, CONFIG_DRIVER_VIBE_LOG_LEVEL);
 
 #define AW8623X_PLAYCFG3                0x08U
 #define AW8623X_PLAYCFG3_BRK_EN         PBL_BIT(2)
@@ -72,7 +74,7 @@ PBL_LOG_MODULE_DEFINE(driver_vibe_aw8623x, CONFIG_DRIVER_VIBE_LOG_LEVEL);
 #define AW8623X_LRA_F0_HZ 235U
 
 static const struct pbl_aw8623x *prv_get(const struct pbl_vibe *vibe) {
-  return container_of(vibe, const struct pbl_aw8623x, vibe);
+  return PBL_CONTAINER_OF(vibe, const struct pbl_aw8623x, vibe);
 }
 
 static int prv_read_register(const struct pbl_aw8623x *dev, uint8_t reg, uint8_t *val) {
@@ -140,8 +142,7 @@ static int prv_set_strength(const struct pbl_aw8623x *dev, uint8_t strength) {
                             PBL_FIELD_PREP(AW8623X_CONTCFG7_DRV2_LVL_MASK, scale));
 }
 
-static int prv_init(const struct pbl_vibe *vibe) {
-  const struct pbl_aw8623x *dev = prv_get(vibe);
+static int prv_probe(const struct pbl_aw8623x *dev) {
   uint8_t val;
   int ret;
 
@@ -176,7 +177,7 @@ static int prv_init(const struct pbl_vibe *vibe) {
     {AW8623X_VBATCTRL, AW8623X_VBATCTRL_VBAT_MODE_HW},
   };
 
-  for (size_t i = 0; i < ARRAY_LENGTH(config); i++) {
+  for (size_t i = 0; i < PBL_ARRAY_SIZE(config); i++) {
     ret = prv_write_register(dev, config[i][0], config[i][1]);
     if (ret != 0) {
       PBL_LOG_ERR("Could not write register 0x%02x (%d)", config[i][0], ret);
@@ -187,6 +188,30 @@ static int prv_init(const struct pbl_vibe *vibe) {
   ret = prv_set_strength(dev, dev->state->strength);
   if (ret != 0) {
     PBL_LOG_ERR("Could not set the strength (%d)", ret);
+  }
+
+  return ret;
+}
+
+static int prv_init(const struct pbl_vibe *vibe) {
+  const struct pbl_aw8623x *dev = prv_get(vibe);
+  int ret;
+
+  if (dev->supply != nullptr) {
+    ret = pbl_device_init(&dev->supply->dev);
+    if (ret != 0) {
+      return ret;
+    }
+
+    ret = pbl_regulator_enable(dev->supply);
+    if (ret != 0) {
+      return ret;
+    }
+  }
+
+  ret = prv_probe(dev);
+  if (ret != 0 && dev->supply != nullptr) {
+    (void)pbl_regulator_disable(dev->supply);
   }
 
   return ret;
@@ -254,3 +279,5 @@ const struct pbl_vibe_ops pbl_aw8623x_ops = {
   .start = prv_start,
   .stop = prv_stop,
 };
+
+#include PBL_DT_INSTANCES(awinic_aw86233)

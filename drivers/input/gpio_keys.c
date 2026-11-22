@@ -1,13 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/input/gpio_keys.h>
 #include <pbl/input/input.h>
 #include <pbl/util/misc.h>
 
 static void prv_debounced(struct pbl_timer *timer) {
   struct pbl_gpio_keys_key_state *state =
-      container_of(timer, struct pbl_gpio_keys_key_state, timer);
+      PBL_CONTAINER_OF(timer, struct pbl_gpio_keys_key_state, timer);
   int pressed = pbl_gpio_get(&state->key->gpio);
 
   if (pressed < 0 || (pressed != 0) == state->pressed) {
@@ -58,6 +59,13 @@ static int prv_key_init(const struct pbl_gpio_keys_key *key,
     return ret;
   }
 
+  if (key->wakeup_source) {
+    ret = pbl_intc_set_wake(&irq, true);
+    if (ret != 0) {
+      return ret;
+    }
+  }
+
   ret = pbl_intc_enable(&irq);
   if (ret != 0) {
     return ret;
@@ -69,7 +77,7 @@ static int prv_key_init(const struct pbl_gpio_keys_key *key,
 }
 
 int pbl_gpio_keys_init(const struct pbl_device *dev) {
-  const struct pbl_gpio_keys *keys = container_of(dev, const struct pbl_gpio_keys, dev);
+  const struct pbl_gpio_keys *keys = PBL_CONTAINER_OF(dev, const struct pbl_gpio_keys, dev);
   int ret;
 
   for (uint8_t i = 0U; i < keys->num_keys; i++) {
@@ -81,3 +89,5 @@ int pbl_gpio_keys_init(const struct pbl_device *dev) {
 
   return 0;
 }
+
+#include PBL_DT_INSTANCES(gpio_keys)

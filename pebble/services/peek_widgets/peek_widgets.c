@@ -1,0 +1,951 @@
+/* SPDX-FileCopyrightText: 2026 Core Devices LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "pbl/services/peek_widgets.h"
+
+#include "apps/system_app_ids.h"
+#include "kernel/event_loop.h"
+#include "kernel/ui/modals/modal_manager.h"
+#include "pbl/kernel/mutex.h"
+#include "pbl/services/music.h"
+#include "popups/timeline/peek.h"
+#include "process_management/app_install_manager.h"
+#include "process_management/app_manager.h"
+#include "resource/resource_ids.auto.h"
+#include "resource/timeline_resource_ids.auto.h"
+
+#include <pbl/kernel/time.h>
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include "pbl/services/audio_companion.h"
+#endif
+#include "kernel/pebble_tasks.h"
+#include "pbl/kernel/work.h"
+#include "pbl/services/blob_db/pin_db.h"
+#include "pbl/services/notifications/alerts.h"
+#include "pbl/services/notifications/alerts_preferences.h"
+#include "pbl/services/notifications/alerts_preferences_private.h"
+#include "pbl/services/notifications/do_not_disturb.h"
+#include "pbl/services/notifications/notification_storage.h"
+#include "pbl/services/timeline/attribute.h"
+#include "pbl/services/timeline/item.h"
+#include "pbl/services/timeline/notification_layout.h"
+#include "pbl/services/timeline/timeline_resources.h"
+#include "pbl/util/hash.h"
+#include "pbl/util/math.h"
+#include "shell/normal/watchface.h"
+#include "shell/prefs.h"
+
+#include <string.h>
+
+#include <pbl/logging/logging.h>
+#include <pbl/util/units.h>
+
+PBL_LOG_MODULE_DEFINE(service_peek_widgets, CONFIG_SERVICE_PEEK_WIDGETS_LOG_LEVEL);
+
+//! How long the music widget stays up after a track change in Start of Track mode.
+#define PEEK_WIDGET_TRACK_START_SHOW_S (10)
+
+//! How far past the end of the track a still-"playing" position may run before the playing
+//! report is treated as stale. Covers the gap before the next track's metadata arrives.
+#define PEEK_WIDGET_TRACK_END_GRACE_MS (30 * PBL_MSEC_PER_SEC)
+
+//! How long after a music server connects its updates count as the replay of its stored state.
+//! AMS sends that while registering, within a second or two of connecting.
+#define PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S (15)
+
+//! How often to re-ask the phone whether its audio is playing while the media service says so:
+//! soon after a "playing" answer, to catch a pause the media service never reports, and rarely
+//! after "not playing" or no answer at all (an app that predates the question).
+#define PEEK_WIDGET_PHONE_REQUERY_PLAYING_S (30)
+#define PEEK_WIDGET_PHONE_REQUERY_IDLE_S    (5 * 60)
+//! An answer older than this no longer counts, whatever happened since.
+#define PEEK_WIDGET_PHONE_REPORT_MAX_AGE_MS (10 * 60 * PBL_MSEC_PER_SEC)
+
+#define PEEK_WIDGET_MAX_APP_WIDGETS (8)
+
+//! Item id for the music widget's synthetic content. App widgets use their owner UUID and the
+//! notification widget uses the notification UUID, so content changes animate naturally.
+static const Uuid s_music_widget_item_id = {
+  0x8f, 0x1c, 0x5e, 0x0a, 0x3d, 0x27, 0x4b, 0x9e, 0x91, 0x64, 0x2b, 0x7a, 0xc4, 0x55, 0x08, 0x31,
+};
+
+typedef struct AppPeekWidget {
+  bool in_use;
+  bool dismissed;
+  Uuid owner;
+  uint32_t icon;
+  char title[PEEK_WIDGET_APP_TITLE_MAX_LEN + 1];
+  char subtitle[PEEK_WIDGET_APP_SUBTITLE_MAX_LEN + 1];
+  uint32_t launch_code;
+  time_t published_at;
+  time_t expires_at; //!< 0 = no expiry
+} AppPeekWidget;
+
+typedef struct PeekWidgetsState {
+  bool initialized;
+  //! What the overlay is currently showing.
+  PeekWidgetSource shown;
+  //! Set by a source handler when its content changed and the overlay needs a new layout.
+  bool content_dirty;
+
+  // Timeline candidate, replayed from the most recent timeline peek event.
+  bool timeline_active;
+  TimelineItemId timeline_item_id;
+  bool timeline_started;
+  uint8_t timeline_num_concurrent;
+  bool timeline_first;
+
+  // Music.
+  bool music_dismissed;
+  bool music_generation_seen;
+  uint8_t music_generation;
+  //! Identity of the current track, 0 until one is known. Unlike the generation it survives a
+  //! reconnect, which clears the now playing metadata and replays the same track.
+  uint32_t music_track_id;
+  time_t track_changed_at;
+  bool music_past_end_logged;
+  //! When the music server last connected, to tell its replayed state from live changes.
+  time_t music_connected_at;
+  //! Whether the last playback state update said playing.
+  bool music_last_playing;
+  //! Whether playback has been seen to start while connected: a change to playing, or a track
+  //! change while playing. The state a phone replays on connect is not enough: iOS replays a
+  //! stale "playing" for a paused player (Audible) on every reconnect, hours after it stopped.
+  bool music_playing_seen_live;
+  //! Whether the phone has answered "is your audio playing" since the media service's last
+  //! playback update. While it has, its answer decides; until it does, the rules above do.
+  bool phone_report_valid;
+  //! When to ask the phone again, 0 for never (the media service does not say playing).
+  time_t phone_next_query_at;
+
+  // Notification.
+  Uuid notif_id;
+  bool notif_armed; //!< Waiting for the watchface to regain focus.
+  bool notif_active;
+  time_t notif_expires_at; //!< 0 = no expiry (Until Dismissed)
+
+  //! App-published widgets. Guarded by lock: publish/withdraw may run on any task.
+  struct pbl_mutex app_lock;
+  AppPeekWidget app_widgets[PEEK_WIDGET_MAX_APP_WIDGETS];
+
+  struct pbl_delayed_work timer;
+} PeekWidgetsState;
+
+static PeekWidgetsState s_state;
+
+static void prv_refresh(bool animated);
+
+// Refresh marshaling
+////////////////////////////////////////////////////////////////
+
+static void prv_refresh_main_cb(void *data) {
+  prv_refresh(true /* animated */);
+}
+
+static void prv_request_refresh(void) {
+  launcher_task_add_callback(prv_refresh_main_cb, NULL);
+}
+
+static void prv_timer_cb(struct pbl_work *work) {
+  prv_request_refresh();
+}
+
+// Music source
+////////////////////////////////////////////////////////////////
+
+static bool prv_play_state_is_playing(MusicPlayState play_state) {
+  return (play_state == MusicPlayStatePlaying) || (play_state == MusicPlayStateForwarding) ||
+         (play_state == MusicPlayStateRewinding);
+}
+
+static bool prv_music_in_replay_window(void) {
+  return (pbl_realtime() < (s_state.music_connected_at + PEEK_WIDGET_MUSIC_REPLAY_WINDOW_S));
+}
+
+static bool prv_music_is_active(void) {
+  const QuickViewMusicMode mode = quick_view_prefs_get_music_mode();
+  if (mode == QuickViewMusicMode_Disabled) {
+    return false;
+  }
+  if (s_state.music_dismissed) {
+    return false;
+  }
+  if (!music_has_now_playing()) {
+    return false;
+  }
+  if (!prv_play_state_is_playing(music_get_playback_state())) {
+    return false;
+  }
+  // The media service can say playing while nothing plays: a player that publishes a playing
+  // rate while paused (BookPlayer) never sends it a pause. The phone's own audio system knows.
+  bool phone_playing;
+  uint32_t phone_report_age_ms;
+  if (s_state.phone_report_valid &&
+      music_get_phone_audio_report(&phone_playing, &phone_report_age_ms) &&
+      (phone_report_age_ms < PEEK_WIDGET_PHONE_REPORT_MAX_AGE_MS)) {
+    if (!phone_playing) {
+      return false;
+    }
+  } else if (!s_state.music_playing_seen_live) {
+    return false;
+  }
+  // The phone sends no updates while a track plays, so a lost or never-sent pause would leave a
+  // stale "playing" behind. A position that has run past the end of the track gives that away.
+  int64_t ms_until_track_end;
+  if (music_get_ms_until_track_end(&ms_until_track_end) &&
+      (ms_until_track_end < -PEEK_WIDGET_TRACK_END_GRACE_MS)) {
+    if (!s_state.music_past_end_logged) {
+      s_state.music_past_end_logged = true;
+      PBL_LOG_INFO("Music reported playing %" PRId32 " s past the track end; hiding",
+                   (int32_t)(-ms_until_track_end / PBL_MSEC_PER_SEC));
+    }
+    return false;
+  }
+  if (mode == QuickViewMusicMode_TrackStart) {
+    return (pbl_realtime() < (s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S));
+  }
+  return true;
+}
+
+//! Looks up an installed app's own icon, the way the launcher and app glances do. A widget
+//! that launches an app wears that app's icon unless it supplied one of its own.
+//! @return true if the app is installed and has an icon.
+static bool prv_get_app_icon(const Uuid *uuid, AppResourceInfo *icon_out) {
+  AppInstallEntry entry;
+  const AppInstallId install_id = app_install_get_id_for_uuid(uuid);
+  if ((install_id == INSTALL_ID_INVALID) ||
+      !app_install_get_entry_for_install_id(install_id, &entry)) {
+    return false;
+  }
+  const uint32_t res_id = app_install_entry_get_icon_resource_id(&entry);
+  if (res_id == RESOURCE_ID_INVALID) {
+    return false;
+  }
+  *icon_out = (AppResourceInfo){
+    .res_app_num = app_install_get_app_icon_bank(&entry),
+    .res_id = res_id,
+  };
+  return true;
+}
+
+//! The icon of the app a widget launches, for widgets that have no icon of their own.
+static const AppResourceInfo *prv_get_launch_target_icon(AppInstallId app_id,
+                                                         AppResourceInfo *icon_out) {
+  AppInstallEntry entry;
+  if (!app_install_get_entry_for_install_id(app_id, &entry)) {
+    return NULL;
+  }
+  return prv_get_app_icon(&entry.uuid, icon_out) ? icon_out : NULL;
+}
+
+static void prv_show_music(bool animated) {
+  char title[MUSIC_BUFFER_LENGTH];
+  char artist[MUSIC_BUFFER_LENGTH];
+  char album[MUSIC_BUFFER_LENGTH];
+  music_get_now_playing(title, artist, album);
+
+  AttributeList attr_list = {};
+  attribute_list_add_cstring(&attr_list, AttributeIdTitle, title);
+  if (artist[0] != '\0') {
+    attribute_list_add_cstring(&attr_list, AttributeIdSubtitle, artist);
+  }
+
+  TimelineItem *item =
+      timeline_item_create_with_attributes(pbl_realtime(), 0 /* duration */, TimelineItemTypePin,
+                                           LayoutIdGeneric, &attr_list, NULL /* action_group */);
+  attribute_list_destroy_list(&attr_list);
+  if (!item) {
+    return;
+  }
+  item->header.id = s_music_widget_item_id;
+  // Wear the Music app's own icon rather than a timeline pin icon
+  AppResourceInfo icon;
+  timeline_peek_set_widget_item(PeekWidgetSource_Music, item,
+                                prv_get_launch_target_icon(APP_ID_MUSIC, &icon), animated);
+  timeline_item_destroy(item);
+}
+
+//! @return An identity for the now playing track, or 0 while its title is unknown (AMS sends
+//! the title last, so a half-replayed track is not mistaken for a new one).
+static uint32_t prv_music_track_id(void) {
+  struct {
+    char title[MUSIC_BUFFER_LENGTH];
+    char artist[MUSIC_BUFFER_LENGTH];
+    char album[MUSIC_BUFFER_LENGTH];
+  } now_playing = {};
+  music_get_now_playing(now_playing.title, now_playing.artist, now_playing.album);
+  if (now_playing.title[0] == '\0') {
+    return 0;
+  }
+  const uint32_t track_id = hash((const uint8_t *)&now_playing, sizeof(now_playing));
+  return track_id ?: 1;
+}
+
+//! Asks the companion app whether the phone's audio is playing, if one is listening.
+static void prv_query_phone(void) {
+  s_state.phone_next_query_at = 0;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  if (audio_companion_query_phone_media()) {
+    // Ask again later even if no answer comes (an app that predates the question)
+    s_state.phone_next_query_at = pbl_realtime() + PEEK_WIDGET_PHONE_REQUERY_IDLE_S;
+  }
+#endif
+}
+
+static void prv_maybe_query_phone(void) {
+  if (!prv_play_state_is_playing(music_get_playback_state())) {
+    s_state.phone_next_query_at = 0;
+    return;
+  }
+  if (s_state.phone_next_query_at && (pbl_realtime() >= s_state.phone_next_query_at)) {
+    prv_query_phone();
+  }
+}
+
+void peek_widgets_handle_media_event(PebbleMediaEvent *event) {
+  switch (event->type) {
+    case PebbleMediaEventTypeNowPlayingChanged: {
+      const uint8_t generation = music_get_now_playing_generation();
+      if (!s_state.music_generation_seen || (generation != s_state.music_generation)) {
+        s_state.music_generation_seen = true;
+        s_state.music_generation = generation;
+        s_state.content_dirty = true;
+      }
+      const uint32_t track_id = prv_music_track_id();
+      if (track_id && (track_id != s_state.music_track_id)) {
+        s_state.music_track_id = track_id;
+        s_state.track_changed_at = pbl_realtime();
+        s_state.music_dismissed = false;
+        s_state.music_past_end_logged = false;
+        // Tracks only move on while something plays
+        if (s_state.music_last_playing && !prv_music_in_replay_window()) {
+          s_state.music_playing_seen_live = true;
+        }
+      }
+      break;
+    }
+    case PebbleMediaEventTypePlaybackStateChanged: {
+      s_state.music_past_end_logged = false;
+      const bool playing = prv_play_state_is_playing(event->playback_state);
+      // Any playback update can be a player's paused-but-"playing" republish: ask again.
+      s_state.phone_report_valid = false;
+      if (playing) {
+        prv_query_phone();
+      } else {
+        s_state.phone_next_query_at = 0;
+      }
+      if (!playing) {
+        s_state.music_playing_seen_live = false;
+      } else if (!s_state.music_last_playing && !prv_music_in_replay_window()) {
+        s_state.music_playing_seen_live = true;
+      }
+      s_state.music_last_playing = playing;
+      break;
+    }
+    case PebbleMediaEventTypeServerConnected:
+      s_state.music_connected_at = pbl_realtime();
+      s_state.music_playing_seen_live = false;
+      break;
+    case PebbleMediaEventTypeServerDisconnected:
+      s_state.music_playing_seen_live = false;
+      break;
+    case PebbleMediaEventTypePhoneAudioReported: {
+      bool phone_playing = false;
+      music_get_phone_audio_report(&phone_playing, NULL);
+      s_state.phone_report_valid = true;
+      if (prv_play_state_is_playing(music_get_playback_state())) {
+        s_state.phone_next_query_at =
+            pbl_realtime() + (phone_playing ? PEEK_WIDGET_PHONE_REQUERY_PLAYING_S
+                                            : PEEK_WIDGET_PHONE_REQUERY_IDLE_S);
+      }
+      break;
+    }
+    default:
+      // Volume/track position/album art changes don't affect the widget's layout.
+      return;
+  }
+  prv_refresh(true /* animated */);
+}
+
+// Notification source
+////////////////////////////////////////////////////////////////
+
+static bool prv_watchface_has_focus(void) {
+  return app_manager_is_watchface_running() &&
+         (modal_manager_get_properties() & ModalProperty_Unfocused);
+}
+
+static void prv_notif_clear(void) {
+  s_state.notif_armed = false;
+  s_state.notif_active = false;
+  s_state.notif_expires_at = 0;
+}
+
+static void prv_notif_activate(void) {
+  const uint16_t seconds = quick_view_prefs_get_notif_seconds();
+  if (seconds == 0) {
+    prv_notif_clear();
+    return;
+  }
+  s_state.notif_armed = false;
+  s_state.notif_active = true;
+  s_state.notif_expires_at =
+      (seconds == QUICK_VIEW_NOTIF_SECONDS_PERSISTENT) ? 0 : (pbl_realtime() + seconds);
+}
+
+//! Builds the notification widget's content from the stored notification.
+//! @return false when the notification no longer exists.
+static bool prv_show_notification(bool animated) {
+  TimelineItem notif = {};
+  if (!notification_storage_get(&s_state.notif_id, &notif)) {
+    return false;
+  }
+
+  const char *title = attribute_get_string(&notif.attr_list, AttributeIdTitle, NULL);
+  const char *subtitle = attribute_get_string(&notif.attr_list, AttributeIdSubtitle, NULL);
+  const char *body = attribute_get_string(&notif.attr_list, AttributeIdBody, NULL);
+  const char *primary = title ?: subtitle ?: body;
+  const char *secondary = title ? (subtitle ?: body) : (subtitle ? body : NULL);
+  if (!primary) {
+    timeline_item_free_allocated_buffer(&notif);
+    return false;
+  }
+
+  // Show the sender's icon, exactly as the notification list does: the icon id lives in
+  // AttributeIdIconTiny, and an app-published one resolves against the publishing app's UUID,
+  // which is one hop away through the pin the notification belongs to.
+  const TimelineResourceId fallback_icon =
+      notification_layout_get_fallback_icon_id(notif.header.type);
+  TimelineResourceId icon =
+      attribute_get_uint32(&notif.attr_list, AttributeIdIconTiny, fallback_icon);
+  Uuid icon_app_id = UUID_INVALID;
+  if (!timeline_resources_is_system(icon)) {
+    TimelineItem pin;
+    if (pin_db_read_item_header(&pin, &notif.header.parent_id) == 0) {
+      icon_app_id = pin.header.parent_id;
+    } else {
+      // The publishing app is unknown, so the id cannot be resolved
+      icon = fallback_icon;
+    }
+  }
+
+  AttributeList attr_list = {};
+  attribute_list_add_cstring(&attr_list, AttributeIdTitle, primary);
+  if (secondary) {
+    attribute_list_add_cstring(&attr_list, AttributeIdSubtitle, secondary);
+  }
+  attribute_list_add_resource_id(&attr_list, AttributeIdIconTiny, icon);
+
+  TimelineItem *item =
+      timeline_item_create_with_attributes(pbl_realtime(), 0 /* duration */, TimelineItemTypePin,
+                                           LayoutIdGeneric, &attr_list, NULL /* action_group */);
+  attribute_list_destroy_list(&attr_list);
+  const bool shown = (item != NULL);
+  if (item) {
+    item->header.id = s_state.notif_id;
+    item->header.parent_id = icon_app_id;
+    timeline_peek_set_widget_item(PeekWidgetSource_Notification, item, NULL /* icon_override */,
+                                  animated);
+    timeline_item_destroy(item);
+  }
+  timeline_item_free_allocated_buffer(&notif);
+  return shown;
+}
+
+static void prv_maybe_activate_armed_notification(void) {
+  if (s_state.notif_armed && !s_state.notif_active && prv_watchface_has_focus()) {
+    prv_notif_activate();
+    prv_refresh(true /* animated */);
+  }
+}
+
+static void prv_maybe_activate_main_cb(void *data) {
+  prv_maybe_activate_armed_notification();
+}
+
+//! Silenced on the phone, when the wearer asked the watch to respect that: no popup and no
+//! vibration, so it is as muted as one Quiet Time hides.
+static bool prv_notification_is_phone_silenced(const Uuid *id) {
+  if (!alerts_preferences_get_notification_respect_phone_silence()) {
+    return false;
+  }
+  TimelineItem item = {};
+  if (!notification_storage_get(id, &item)) {
+    return false;
+  }
+  const bool silent = item.header.silent;
+  timeline_item_free_allocated_buffer(&item);
+  return silent;
+}
+
+void peek_widgets_handle_notification_event(PebbleSysNotificationEvent *event) {
+  switch (event->type) {
+    case NotificationAdded: {
+      if (quick_view_prefs_get_notif_seconds() == 0) {
+        return;
+      }
+      // A notification the Alerts filter, Quiet Time, low power or the phone muted gets no
+      // popup or vibration; it shows here only as the silent peek the muted pref asks for. One
+      // that alerts shows here at once only in place of the popup; with a popup it comes here
+      // only if the popup is missed (peek_widgets_handle_notification_missed).
+      const bool muted =
+          (do_not_disturb_is_active() &&
+           (alerts_preferences_dnd_get_show_notifications() == DndNotificationModeHide)) ||
+          !alerts_should_notify_for_type(AlertMobile) ||
+          prv_notification_is_phone_silenced(event->notification_id);
+      if (muted ? !quick_view_prefs_get_notif_muted_enabled()
+                : (quick_view_prefs_get_notif_style() != QuickViewNotifStyle_Peek)) {
+        return;
+      }
+      s_state.notif_id = *event->notification_id;
+      s_state.notif_active = false;
+      s_state.notif_armed = true;
+      s_state.content_dirty = true;
+      // The notification popup is pushed while this same event is handled, but the modal
+      // manager only accounts for it between events. Checking focus now would find the
+      // watchface "focused" and start the display window underneath the popup.
+      launcher_task_add_callback(prv_maybe_activate_main_cb, NULL);
+      break;
+    }
+    case NotificationActedUpon:
+    case NotificationRemoved:
+      if (!uuid_equal(event->notification_id, &s_state.notif_id)) {
+        return;
+      }
+      prv_notif_clear();
+      break;
+    default:
+      return;
+  }
+  prv_refresh(true /* animated */);
+}
+
+void peek_widgets_handle_notification_missed(const Uuid *notification_id) {
+  if (!s_state.initialized || (quick_view_prefs_get_notif_seconds() == 0) ||
+      (quick_view_prefs_get_notif_style() != QuickViewNotifStyle_FullScreenPeekIfMissed)) {
+    return;
+  }
+  s_state.notif_id = *notification_id;
+  s_state.notif_active = false;
+  s_state.notif_armed = true;
+  s_state.content_dirty = true;
+  // Called while the popup is being removed; check focus once the modal manager has caught up
+  launcher_task_add_callback(prv_maybe_activate_main_cb, NULL);
+  prv_refresh(true /* animated */);
+}
+
+bool peek_widgets_notifications_replace_popup(void) {
+  return s_state.initialized && (quick_view_prefs_get_notif_style() == QuickViewNotifStyle_Peek) &&
+         (quick_view_prefs_get_notif_seconds() != 0);
+}
+
+void peek_widgets_handle_app_focus_event(PebbleAppFocusEvent *event) {
+  if (event->in_focus) {
+    prv_maybe_activate_armed_notification();
+  }
+}
+
+void peek_widgets_handle_watchface_started(void) {
+  // Called synchronously during the app switch; defer to a KernelMain callback.
+  launcher_task_add_callback(prv_maybe_activate_main_cb, NULL);
+}
+
+// Timeline source
+////////////////////////////////////////////////////////////////
+
+void peek_widgets_handle_timeline_peek_event(PebbleTimelinePeekEvent *event) {
+  timeline_peek_note_event_flags(event->is_future_empty);
+  bool active = false;
+  bool started = false;
+  if (event->item_id != NULL) {
+    switch (event->time_type) {
+      case TimelinePeekTimeType_None:
+      case TimelinePeekTimeType_SomeTimeNext:
+      case TimelinePeekTimeType_WillEnd:
+        break;
+      case TimelinePeekTimeType_ShowWillStart:
+        active = true;
+        break;
+      case TimelinePeekTimeType_ShowStarted:
+        active = true;
+        started = true;
+        break;
+    }
+  }
+  s_state.timeline_active = active;
+  if (active) {
+    s_state.timeline_item_id = *event->item_id;
+    s_state.timeline_started = started;
+    s_state.timeline_num_concurrent = event->num_concurrent;
+    s_state.timeline_first = event->is_first_event;
+  }
+  s_state.content_dirty = true;
+  prv_refresh(true /* animated */);
+}
+
+//! @return false when the pin no longer exists.
+static bool prv_show_timeline(bool animated) {
+  TimelineItem item = {};
+  const int rv = pin_db_get(&s_state.timeline_item_id, &item);
+  if (rv < 0) {
+    // The pin may have just been deleted; a follow-up peek event will normally correct us.
+    return false;
+  }
+  timeline_peek_set_item(&item, s_state.timeline_started, s_state.timeline_num_concurrent,
+                         s_state.timeline_first, animated);
+  timeline_item_free_allocated_buffer(&item);
+  return true;
+}
+
+// App source
+////////////////////////////////////////////////////////////////
+
+//! Picks the freshest live app widget. Expired and dismissed entries are dropped in place.
+//! Must be called with app_lock held.
+static AppPeekWidget *prv_pick_app_widget(void) {
+  const time_t now = pbl_realtime();
+  AppPeekWidget *best = NULL;
+  for (unsigned int i = 0; i < PEEK_WIDGET_MAX_APP_WIDGETS; i++) {
+    AppPeekWidget *widget = &s_state.app_widgets[i];
+    if (!widget->in_use) {
+      continue;
+    }
+    if (widget->expires_at && (now >= widget->expires_at)) {
+      widget->in_use = false;
+      continue;
+    }
+    if (widget->dismissed) {
+      continue;
+    }
+    if (!best || (widget->published_at > best->published_at)) {
+      best = widget;
+    }
+  }
+  return best;
+}
+
+static bool prv_app_widget_is_active(void) {
+  if (!quick_view_prefs_get_apps_enabled()) {
+    return false;
+  }
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
+  AppPeekWidget *widget = prv_pick_app_widget();
+  bool active = false;
+  if (widget) {
+    // Drop widgets whose app has been uninstalled.
+    if (app_install_get_id_for_uuid(&widget->owner) == INSTALL_ID_INVALID) {
+      widget->in_use = false;
+    } else {
+      active = true;
+    }
+  }
+  pbl_mutex_unlock(&s_state.app_lock);
+  return active;
+}
+
+//! @return false when no live app widget remains.
+static bool prv_show_app_widget(bool animated) {
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
+  AppPeekWidget *widget = prv_pick_app_widget();
+  if (!widget) {
+    pbl_mutex_unlock(&s_state.app_lock);
+    return false;
+  }
+  const AppPeekWidget copy = *widget;
+  pbl_mutex_unlock(&s_state.app_lock);
+
+  AttributeList attr_list = {};
+  attribute_list_add_cstring(&attr_list, AttributeIdTitle, copy.title);
+  if (copy.subtitle[0] != '\0') {
+    attribute_list_add_cstring(&attr_list, AttributeIdSubtitle, copy.subtitle);
+  }
+  if (copy.icon != PEEK_WIDGET_APP_ICON_DEFAULT) {
+    // A published media id, resolved against the owning app below
+    attribute_list_add_resource_id(&attr_list, AttributeIdIconTiny, copy.icon);
+  }
+
+  TimelineItem *item =
+      timeline_item_create_with_attributes(pbl_realtime(), 0 /* duration */, TimelineItemTypePin,
+                                           LayoutIdGeneric, &attr_list, NULL /* action_group */);
+  attribute_list_destroy_list(&attr_list);
+  if (!item) {
+    return false;
+  }
+  item->header.id = copy.owner;
+  item->header.parent_id = copy.owner;
+  // No published icon: wear the app's own icon like an app glance does, or the launcher's
+  // generic app icon. Either beats a timeline pin icon, which an app widget is not.
+  AppResourceInfo icon = {
+    .res_app_num = SYSTEM_APP,
+    .res_id = RESOURCE_ID_MENU_LAYER_GENERIC_WATCHAPP_ICON,
+  };
+  const AppResourceInfo *icon_override = NULL;
+  if (copy.icon == PEEK_WIDGET_APP_ICON_DEFAULT) {
+    prv_get_app_icon(&copy.owner, &icon);
+    icon_override = &icon;
+  }
+  timeline_peek_set_widget_item(PeekWidgetSource_App, item, icon_override, animated);
+  timeline_item_destroy(item);
+  return true;
+}
+
+bool peek_widgets_publish_app_widget(const PeekWidgetAppPublish *publish) {
+  if (!s_state.initialized || !publish || uuid_is_invalid(&publish->owner) || !publish->title ||
+      (publish->title[0] == '\0')) {
+    return false;
+  }
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
+  AppPeekWidget *slot = NULL;
+  AppPeekWidget *oldest = NULL;
+  for (unsigned int i = 0; i < PEEK_WIDGET_MAX_APP_WIDGETS; i++) {
+    AppPeekWidget *widget = &s_state.app_widgets[i];
+    if (widget->in_use && uuid_equal(&widget->owner, &publish->owner)) {
+      slot = widget; // Republish replaces the app's existing widget
+      break;
+    }
+    if (!widget->in_use) {
+      slot = slot ?: widget;
+    } else if (!oldest || (widget->published_at < oldest->published_at)) {
+      oldest = widget;
+    }
+  }
+  if (!slot) {
+    slot = oldest; // Full: evict the oldest publish
+  }
+  const time_t now = pbl_realtime();
+  const uint16_t timeout_s = PBL_MIN(publish->timeout_s, PEEK_WIDGET_APP_TIMEOUT_MAX_S);
+  *slot = (AppPeekWidget){
+    .in_use = true,
+    .owner = publish->owner,
+    .icon = publish->icon,
+    .launch_code = publish->launch_code,
+    .published_at = now,
+    .expires_at = timeout_s ? (now + timeout_s) : 0,
+  };
+  strncpy(slot->title, publish->title, PEEK_WIDGET_APP_TITLE_MAX_LEN);
+  if (publish->subtitle) {
+    strncpy(slot->subtitle, publish->subtitle, PEEK_WIDGET_APP_SUBTITLE_MAX_LEN);
+  }
+  pbl_mutex_unlock(&s_state.app_lock);
+
+  s_state.content_dirty = true;
+  prv_request_refresh();
+  return true;
+}
+
+void peek_widgets_withdraw_app_widget(const Uuid *owner) {
+  if (!s_state.initialized || !owner) {
+    return;
+  }
+  bool removed = false;
+  pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
+  for (unsigned int i = 0; i < PEEK_WIDGET_MAX_APP_WIDGETS; i++) {
+    AppPeekWidget *widget = &s_state.app_widgets[i];
+    if (widget->in_use && uuid_equal(&widget->owner, owner)) {
+      widget->in_use = false;
+      removed = true;
+    }
+  }
+  pbl_mutex_unlock(&s_state.app_lock);
+  if (removed) {
+    prv_request_refresh();
+  }
+}
+
+// Arbitration
+////////////////////////////////////////////////////////////////
+
+static PeekWidgetSource prv_pick(void) {
+  if (s_state.notif_active) {
+    const time_t now = pbl_realtime();
+    if (s_state.notif_expires_at && (now >= s_state.notif_expires_at)) {
+      prv_notif_clear();
+    } else {
+      return PeekWidgetSource_Notification;
+    }
+  }
+  if (s_state.timeline_active && timeline_peek_is_enabled()) {
+    return PeekWidgetSource_Timeline;
+  }
+  if (prv_app_widget_is_active()) {
+    return PeekWidgetSource_App;
+  }
+  if (prv_music_is_active()) {
+    return PeekWidgetSource_Music;
+  }
+  return PeekWidgetSource_None;
+}
+
+//! Re-arms the wake timer for the next music/notification policy transition.
+static void prv_update_timer(void) {
+  const time_t now = pbl_realtime();
+  time_t deadline = 0;
+  if (s_state.notif_active && s_state.notif_expires_at) {
+    deadline = s_state.notif_expires_at;
+  }
+  if (s_state.phone_next_query_at && (!deadline || (s_state.phone_next_query_at < deadline))) {
+    deadline = s_state.phone_next_query_at;
+  }
+  if (s_state.shown == PeekWidgetSource_Music) {
+    if (quick_view_prefs_get_music_mode() == QuickViewMusicMode_TrackStart) {
+      const time_t track_deadline = s_state.track_changed_at + PEEK_WIDGET_TRACK_START_SHOW_S;
+      if (!deadline || (track_deadline < deadline)) {
+        deadline = track_deadline;
+      }
+    }
+    int64_t ms_until_track_end;
+    if (music_get_ms_until_track_end(&ms_until_track_end)) {
+      const time_t track_end_deadline =
+          now + ((ms_until_track_end + PEEK_WIDGET_TRACK_END_GRACE_MS) / PBL_MSEC_PER_SEC) + 1;
+      if (!deadline || (track_end_deadline < deadline)) {
+        deadline = track_end_deadline;
+      }
+    }
+  }
+  if (deadline) {
+    const uint32_t timeout_ms = (deadline > now) ? ((deadline - now) * PBL_MSEC_PER_SEC) : 1;
+    pbl_delayed_work_reschedule(&pbl_sys_workq_high, &s_state.timer, PBL_MSEC(timeout_ms));
+  } else {
+    pbl_delayed_work_cancel(&s_state.timer);
+  }
+}
+
+static void prv_refresh(bool animated) {
+  if (!s_state.initialized) {
+    return;
+  }
+  PBL_ASSERT_TASK(PebbleTask_KernelMain);
+
+  prv_maybe_query_phone();
+
+  PeekWidgetSource winner;
+  for (;;) {
+    winner = prv_pick();
+    if ((winner == s_state.shown) && !s_state.content_dirty) {
+      break;
+    }
+    bool shown = true;
+    switch (winner) {
+      case PeekWidgetSource_Notification:
+        shown = prv_show_notification(animated);
+        if (!shown) {
+          prv_notif_clear();
+        }
+        break;
+      case PeekWidgetSource_Timeline:
+        shown = prv_show_timeline(animated);
+        if (!shown) {
+          s_state.timeline_active = false;
+        }
+        break;
+      case PeekWidgetSource_App:
+        shown = prv_show_app_widget(animated);
+        // prv_show_app_widget already dropped the dead entry on failure
+        break;
+      case PeekWidgetSource_Music:
+        prv_show_music(animated);
+        break;
+      case PeekWidgetSource_None:
+      default:
+        timeline_peek_set_item(NULL, false /* started */, 0 /* num_concurrent */, false /* first */,
+                               animated);
+        break;
+    }
+    if (shown) {
+      break;
+    }
+    // The winner could not be displayed; re-arbitrate with it deactivated.
+  }
+
+  if (winner != s_state.shown) {
+    PBL_LOG_DBG("Quick View widget source %u -> %u", s_state.shown, winner);
+  }
+  s_state.shown = winner;
+  s_state.content_dirty = false;
+  prv_update_timer();
+  watchface_peek_widget_state_changed();
+}
+
+// Shell hooks
+////////////////////////////////////////////////////////////////
+
+bool peek_widgets_handle_dismiss(void) {
+  switch (s_state.shown) {
+    case PeekWidgetSource_Notification:
+      prv_notif_clear();
+      break;
+    case PeekWidgetSource_Music:
+      s_state.music_dismissed = true;
+      break;
+    case PeekWidgetSource_App: {
+      pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
+      AppPeekWidget *widget = prv_pick_app_widget();
+      if (widget) {
+        widget->dismissed = true;
+      }
+      pbl_mutex_unlock(&s_state.app_lock);
+      break;
+    }
+    case PeekWidgetSource_Timeline:
+    case PeekWidgetSource_None:
+    default:
+      return false;
+  }
+  prv_refresh(true /* animated */);
+  return true;
+}
+
+bool peek_widgets_get_launch(PeekWidgetLaunch *launch_out) {
+  AppInstallId app_id = INSTALL_ID_INVALID;
+  uint32_t launch_code = 0;
+  Uuid notification_id = UUID_INVALID;
+  switch (s_state.shown) {
+    case PeekWidgetSource_Music:
+      app_id = APP_ID_MUSIC;
+      break;
+    case PeekWidgetSource_Notification:
+      app_id = APP_ID_NOTIFICATIONS;
+      // Deep-link into the notification on screen, not the list it belongs to.
+      notification_id = s_state.notif_id;
+      break;
+    case PeekWidgetSource_App: {
+      pbl_mutex_lock(&s_state.app_lock, PBL_FOREVER);
+      AppPeekWidget *widget = prv_pick_app_widget();
+      if (widget) {
+        app_id = app_install_get_id_for_uuid(&widget->owner);
+        launch_code = widget->launch_code;
+      }
+      pbl_mutex_unlock(&s_state.app_lock);
+      break;
+    }
+    case PeekWidgetSource_Timeline:
+    case PeekWidgetSource_None:
+    default:
+      return false;
+  }
+  if (app_id == INSTALL_ID_INVALID) {
+    return false;
+  }
+  if (launch_out) {
+    *launch_out = (PeekWidgetLaunch){
+      .app_id = app_id,
+      .launch_code = launch_code,
+      .notification_id = notification_id,
+    };
+  }
+  return true;
+}
+
+void peek_widgets_handle_prefs_changed(void) {
+  if (!s_state.initialized) {
+    return;
+  }
+  prv_request_refresh();
+}
+
+void peek_widgets_init(void) {
+  s_state = (PeekWidgetsState){};
+  pbl_delayed_work_init(&s_state.timer, prv_timer_cb);
+  pbl_mutex_init(&s_state.app_lock);
+  s_state.initialized = true;
+}

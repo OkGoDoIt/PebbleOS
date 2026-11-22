@@ -4,12 +4,15 @@
 menu "Bluetooth"
 
 config BT
-    bool
-    default y
-    select MBEDTLS
+    bool "Bluetooth"
+    select BTUTIL
+    select BT_GATT_CLIENT
+    select NIMBLE
+    select NIMBLE_STORE_CONFIG
+    select TASK_WDT
     help
-      The Bluetooth subsystem: the NimBLE host and the PebbleOS glue
-      around it.
+      The Bluetooth subsystem: the pbl_bt API, implemented on the NimBLE
+      host.
 
 if BT
 
@@ -25,117 +28,21 @@ config BT_VENDOR_NAME
     help
       Manufacturer name in the Device Information Service.
 
-config BT_HOST_THREAD_STACK_SIZE
-    int "Host thread stack size in bytes"
-    default 5000
-
-config BT_HOST_THREAD_PRIO
-    int "Host thread priority"
-    default 3
-
-config BT_LL_THREAD_STACK_SIZE
-    int "Link layer thread stack size in bytes"
-    default 1384
-
-config BT_LL_THREAD_PRIO
-    int "Link layer thread priority"
-    default 4
-
-config BT_HCI_THREAD_STACK_SIZE
-    int "HCI transport thread stack size in bytes"
-    default 1024
-
-config BT_HCI_THREAD_PRIO
-    int "HCI transport thread priority"
-    default 3
-
-choice BT_HCI
-    prompt "HCI transport"
-    default BT_HCI_FAKE
-    help
-      How the NimBLE host reaches its controller. The default is derived
-      from the SoC (see each soc/<soc>/Kconfig.defconfig); the fake
-      controller is the fallback where there is no radio.
-
-config BT_HCI_NRF52
-    bool "NimBLE controller on the nRF52 radio"
-    depends on SOC_NRF52
-    select NIMBLE_CONTROLLER
-    select NIMBLE_DRIVER_NRF5X
-    help
-      Run the NimBLE link layer in the same image, on the nRF52 radio.
-
-config BT_HCI_SF32LB52
-    bool "SiFli LCPU over IPC"
-    depends on REMOTEPROC_SF32LB52
-    help
-      Talk H4 HCI to the SiFli controller running on the LCPU, over the
-      byte rings its ROM shares with the HCPU.
-
-config BT_HCI_UART
-    bool "H4 over UART"
-    depends on QEMU || SOC_POSIX
-    help
-      Talk H4 HCI to an external controller over the board's BT_HCI_UART.
-      On QEMU this is the fourth serial port, on native boards the -b
-      option; either can be attached to a host controller such as an
-      nRF52840 dongle running Zephyr's hci_uart.
-
-config BT_HCI_FAKE
-    bool "Fake controller"
-    help
-      Answer every HCI command locally with success and never raise an
-      event. The host synchronises and the GATT server runs, but no link
-      can be established. For targets without a radio, such as QEMU.
-
-endchoice
-
-choice BT_ID_ADDR_SOURCE
-    prompt "Identity address"
-    default BT_ID_ADDR_CONTROLLER
-    help
-      Where the watch's Bluetooth identity address comes from. The default
-      is derived from the SoC (see each soc/<soc>/Kconfig.defconfig).
-
-config BT_ID_ADDR_CONTROLLER
-    bool "Controller"
-    help
-      Use the address the controller reports, or let NimBLE pick one.
-
-config BT_ID_ADDR_SF32LB52_EFUSE
-    bool "SF32LB52 eFUSE"
-    depends on NVMEM_SF32LB52
-    select BT_ID_ADDR
-    help
-      Public address derived from the unique ID in the SoC's eFUSE.
-
-config BT_ID_ADDR_STORAGE
-    bool "Stored random static address"
-    depends on SERVICE_SHARED_PRF_STORAGE
-    select BT_ID_ADDR
-    help
-      Generate a random static address once and keep it in shared PRF
-      storage, for controllers without an address of their own.
-
-endchoice
-
-config BT_ID_ADDR
-    bool
-    help
-      An identity address backend is selected (pbl/bluetooth/id_addr.h).
-
 module = BT
 module-str = Bluetooth
 source "subsys/logging/Kconfig.template.log_level"
 
-config BT_HRM_SERVICE
-    bool
+config BT_REPEAT_PAIRING_ALWAYS
+    bool "Always accept repeat pairing"
     help
-      The backend implements the Heart Rate Service
-      (pbl/bluetooth/hrm_service.h).
+      Forget the keys of a bonded peer that pairs again and accept it, even
+      without secure connections and user confirmation. For firmware with
+      no other way to forget a pairing.
 
 rsource "services/Kconfig"
 
 endif
+
+rsource "clients/Kconfig"
 
 endmenu

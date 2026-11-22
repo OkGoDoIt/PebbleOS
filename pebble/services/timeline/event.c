@@ -1,0 +1,223 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <errno.h>
+#include <stdatomic.h>
+#include <time.h>
+
+#include <pbl/kernel/malloc.h>
+#include <pbl/kernel/mutex.h>
+#include <pbl/kernel/time.h>
+#include <pbl/kernel/work.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/blob_db/pin_db.h>
+#include <pbl/services/time.h>
+#include <pbl/services/timeline/calendar.h>
+#include <pbl/services/timeline/event.h>
+#include <pbl/services/timeline/peek.h>
+#include <pbl/util/units.h>
+
+#include <kernel/events.h>
+#include <kernel/pebble_tasks.h>
+
+PBL_LOG_MODULE_DECLARE(service_timeline, CONFIG_SERVICE_TIMELINE_LOG_LEVEL);
+
+typedef struct TimelineEventState {
+  const TimelineEventImpl *impl;
+  SerializedTimelineItemHeader *filter_header;
+  void *context;
+} TimelineEventState;
+
+static TimelineEventImplGetter s_services[TimelineEventServiceCount] = {
+  [TimelineEventService_Calendar] = calendar_get_event_service,
+  [TimelineEventService_Peek] = timeline_peek_get_event_service,
+};
+
+// This mutex protects all state, but is only used for factory resetting synchronously, therefore
+// it should not significantly increase blocking time.
+static PBL_MUTEX_DEFINE(s_mutex);
+static bool s_initialized;
+
+static TimelineEventState s_states[TimelineEventServiceCount];
+
+static atomic_flag s_cb_scheduled;
+
+static void prv_update_status(void);
+
+static void prv_update_status_sys_work_callback(void *unused) {
+  atomic_flag_clear_explicit(&s_cb_scheduled, memory_order_relaxed);
+  prv_update_status();
+}
+
+static void prv_update_status_async(void) {
+  if (atomic_flag_test_and_set_explicit(&s_cb_scheduled, memory_order_relaxed)) {
+    return; // we already have a cb scheduled
+  }
+
+  pbl_sys_work_call(prv_update_status_sys_work_callback, nullptr);
+}
+
+static void prv_timer_callback(struct pbl_work *work) {
+  prv_update_status_async();
+}
+
+static PBL_DELAYED_WORK_DEFINE(s_timer, prv_timer_callback);
+
+static uint32_t prv_calc_timeout(const TimelineItem *item) {
+  const time_t now = pbl_realtime();
+  const time_t start = item->header.timestamp;
+  const time_t end = start + (item->header.duration * PBL_SEC_PER_MIN);
+  if (now >= end) {
+    return 0;
+  }
+  const uint32_t timeout_s = ((start > now) ? start : end) - now;
+  return PBL_MIN(timeout_s, UINT32_MAX / PBL_MSEC_PER_SEC) * PBL_MSEC_PER_SEC;
+}
+
+static void prv_set_timer(unsigned int timeout_ms) {
+  if (!timeout_ms) {
+    PBL_LOG_ERR("Not setting timer");
+    return;
+  }
+
+  pbl_delayed_work_reschedule(&pbl_sys_workq_high, &s_timer, PBL_MSEC(timeout_ms));
+  PBL_LOG_DBG("Set timer for %u", timeout_ms);
+}
+
+static bool prv_should_use_item(TimelineEventState *state, SerializedTimelineItemHeader *header) {
+  // Use the new item if ...
+  return ((uuid_is_invalid(&state->filter_header->common.id)) || // There is no old item
+          (state->impl->comparator && // Or the comparator chooses the new item
+           (state->impl->comparator(header, state->filter_header, &state->context) < 0)) ||
+          (header->common.timestamp < state->filter_header->common.timestamp)); // Or it's earlier
+}
+
+static bool prv_item_header_filter(SerializedTimelineItemHeader *header, void *unused) {
+  bool filter = false;
+  for (unsigned int i = 0; i < TimelineEventServiceCount; i++) {
+    TimelineEventState *state = &s_states[i];
+    // Pass all items through the filter to allow clients to process all item headers
+    if (state->impl && state->impl->filter(header, &state->context)) {
+      if (prv_should_use_item(state, header)) {
+        *state->filter_header = *header;
+      }
+      filter = true;
+    }
+  }
+  return filter;
+}
+
+static void prv_update_status(void) {
+  PBL_ASSERT_TASK(PebbleTask_SysWorkq);
+  if (!s_initialized) {
+    return;
+  }
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  pbl_delayed_work_cancel(&s_timer);
+  SerializedTimelineItemHeader *filter_headers =
+      pbl_zalloc_check(TimelineEventServiceCount * sizeof(SerializedTimelineItemHeader));
+
+  // Will update
+  for (unsigned int i = 0; i < TimelineEventServiceCount; i++) {
+    TimelineEventState *state = &s_states[i];
+    if (state->impl) {
+      state->filter_header = &filter_headers[i];
+      state->filter_header->common.id = UUID_INVALID;
+      if (state->impl->will_update) {
+        state->impl->will_update(&state->context);
+      }
+    }
+  }
+
+  // Filter
+  TimelineItem item = {};
+  const int rv = pin_db_next_item_header(&item, prv_item_header_filter);
+  uint32_t timeout_ms = 0;
+  if ((rv < 0) && (rv != -ENOENT)) {
+    // A failure occurred. Call the update functions with a NULL item
+    PBL_LOG_ERR("Failed to find next event.");
+  } else if (rv == 0) {
+    // Calculate the timeout before the item buffer is re-used
+    timeout_ms = prv_calc_timeout(&item);
+  }
+
+  // Update
+  for (unsigned int i = 0; i < TimelineEventServiceCount; i++) {
+    TimelineEventState *state = &s_states[i];
+    if (!state->impl) {
+      continue;
+    }
+    const bool has_item = !uuid_is_invalid(&state->filter_header->common.id);
+    if (has_item) {
+      timeline_item_deserialize_header(&item, state->filter_header);
+    }
+    const uint32_t other_timeout_ms =
+        state->impl->update(has_item ? &item : nullptr, &state->context);
+    if (other_timeout_ms) {
+      timeout_ms = timeout_ms ? PBL_MIN(timeout_ms, other_timeout_ms) : other_timeout_ms;
+    }
+  }
+
+  // Did update
+  for (int i = 0; i < TimelineEventServiceCount; i++) {
+    TimelineEventState *state = &s_states[i];
+    if (state->impl && state->impl->did_update) {
+      state->impl->did_update(&state->context);
+    }
+  }
+
+  prv_set_timer(timeout_ms);
+  pbl_free(filter_headers);
+  pbl_mutex_unlock(&s_mutex);
+}
+
+static void prv_init([[maybe_unused]] void *data) {
+  s_initialized = true;
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+
+  for (unsigned int i = 0; i < TimelineEventServiceCount; i++) {
+    TimelineEventState *state = &s_states[i];
+    state->impl = s_services[i]();
+  }
+
+  pbl_mutex_unlock(&s_mutex);
+  prv_update_status();
+}
+
+void timeline_event_init(void) {
+  pbl_sys_work_call(prv_init, nullptr);
+}
+
+void timeline_event_deinit(void) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+
+  pbl_delayed_work_cancel(&s_timer);
+
+  pbl_mutex_unlock(&s_mutex);
+  s_initialized = false;
+}
+
+void timeline_event_handle_blobdb_event(void) {
+  prv_update_status_async();
+}
+
+void timeline_event_refresh(void) {
+  prv_update_status_async();
+}
+
+bool timeline_event_is_all_day(CommonTimelineItemHeader *common) {
+  return (common->all_day || (common->duration >= PBL_MIN_PER_DAY)); // Include >= 24 hour events
+}
+
+bool timeline_event_is_ongoing(time_t now, time_t event_start, int event_duration_m) {
+  return ((event_start <= now) && ((event_start + (PBL_SEC_PER_MIN * event_duration_m)) > now));
+}
+
+bool timeline_event_starts_within(CommonTimelineItemHeader *common, time_t now, int delta_start_s,
+                                  int delta_end_s) {
+  return ((common->type == TimelineItemTypePin) &&              // Ignore non-pins
+          (((delta_start_s == TIMELINE_EVENT_DELTA_INFINITE) || // Any past event or
+            (common->timestamp > (now + delta_start_s))) &&     // Begins after range start and
+           ((delta_end_s == TIMELINE_EVENT_DELTA_INFINITE) ||   // Any future event or
+            (common->timestamp < (now + delta_end_s)))));       // Begins before range end
+}

@@ -1,39 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-menu "NimBLE BLE stack"
-
-choice
-    prompt "SF32LB52 HCI trace"
-    default NIMBLE_HCI_SF32LB52_TRACE_NONE
-    depends on BT_HCI_SF32LB52
+menuconfig NIMBLE
+    bool "NimBLE"
+    select MBEDTLS
     help
-      Trace mode for the SF32LB52 HCI transport.
+      The NimBLE Bluetooth Low Energy stack: its host, its porting layer
+      on the PebbleOS kernel, and the HCI transport to the controller.
 
-config NIMBLE_HCI_SF32LB52_TRACE_NONE
-    bool "Disabled"
+if NIMBLE
 
-config NIMBLE_HCI_SF32LB52_TRACE_BINARY
-    bool "Binary"
-    help
-      Capture raw HCI traffic in a binary format suitable for offline
-      decoding.
-
-config NIMBLE_HCI_SF32LB52_TRACE_LOG
-    bool "Log"
-    help
-      Emit human-readable HCI trace lines through the standard logger.
-
-config NIMBLE_HCI_SF32LB52_TRACE_EVENTS
-    bool "Events and commands only"
-    help
-      Log one line per HCI command and per HCI event (except Number Of
-      Completed Packets) at INFO level in the NimBLE module, without
-      payloads or ACL data. Cheap enough to leave on while a phone link
-      streams; shows what the controller reported about advertising,
-      connections and their failures.
-
-endchoice
+rsource "port/Kconfig"
+rsource "transport/Kconfig"
+rsource "store/Kconfig"
 
 choice "NIMBLE_LOG_LEVEL_CHOICE"
     default NIMBLE_LOG_LEVEL_OFF
@@ -44,14 +23,16 @@ module-str = NimBLE host
 source "subsys/logging/Kconfig.template.log_level"
 
 # NimBLE's own options, generated from its syscfg.yml files by
-# scripts/gen_syscfg.py. PebbleOS-wide values live in
-# subsys/bluetooth/Kconfig.defconfig, per-SoC ones in soc/*/Kconfig.defconfig.
+# scripts/gen_syscfg.py. Their defaults go in Kconfig.defconfig files sourced
+# before them: the porting ones here, the Bluetooth subsystem's in
+# subsys/bluetooth, per-SoC ones in soc/*.
 rsource "Kconfig.ble"
 rsource "Kconfig.host"
 rsource "Kconfig.svcs"
+rsource "Kconfig.store"
 rsource "Kconfig.transport"
 rsource "Kconfig.controller"
 rsource "Kconfig.drivers"
 rsource "Kconfig.port"
 
-endmenu
+endif # NIMBLE

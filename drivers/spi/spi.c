@@ -18,8 +18,8 @@ struct prv_sync {
   int status;
 };
 
-int pbl_spi_bus_init(const struct pbl_device *dev) {
-  const struct pbl_spi_bus *bus = container_of(dev, const struct pbl_spi_bus, dev);
+int pbl_spi_bus_dev_init(const struct pbl_device *dev) {
+  const struct pbl_spi_bus *bus = PBL_CONTAINER_OF(dev, const struct pbl_spi_bus, dev);
 
   *bus->state = (struct pbl_spi_bus_state){0};
   pbl_sem_init(&bus->state->lock, 1, 1);
@@ -174,7 +174,7 @@ int pbl_spi_transfer(const struct pbl_spi_dev *dev, const struct pbl_spi_xfer *x
   pbl_sem_deinit(&sync.done);
 
   if (ret != 0) {
-    PBL_LOG_DBG("Transfer on %s failed (%d)", dev->bus->dev.name, ret);
+    PBL_LOG_DBG("Transfer on %s failed (%d)", pbl_device_name(&dev->bus->dev), ret);
   }
 
   return ret;

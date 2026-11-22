@@ -1,0 +1,152 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/remoteproc/sifli,sf32lb52-lcpu.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: SiFli SF32LB52 and SF32LB57 low-power CPU
+
+maintainers:
+  - Gerard Marull-Paretas <gerard@teslabs.com>
+
+description:
+  The LCPU of the SF32LB52 and SF32LB57, running the Bluetooth controller
+  from ROM. It exchanges messages with the HCPU over rings signalled with a
+  doorbell in each direction; the HCPU to LCPU ring is in HCPU memory
+  reserved for it.
+
+properties:
+  compatible:
+    enum:
+      - sifli,sf32lb52-lcpu
+      - sifli,sf32lb57-lcpu
+
+  reg:
+    description: ROM patch controller
+    maxItems: 1
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 1
+
+  dma-ranges:
+    description:
+      Memory as the LCPU sees it, LPSYS SRAM through its code bus first, then
+      HPSYS SRAM.
+    items:
+      - description: LPSYS SRAM through the code bus
+      - description: HPSYS SRAM
+
+  mboxes:
+    items:
+      - description: Doorbell to the LCPU
+      - description: Doorbell from the LCPU
+
+  mbox-names:
+    items:
+      - const: tx
+      - const: rx
+
+  memory-region:
+    description: HCPU memory holding the HCPU to LCPU ring.
+    maxItems: 1
+
+  sram:
+    description: LPSYS SRAM region the LCPU works in.
+    maxItems: 1
+
+  clocks:
+    items:
+      - description: LCPU clock
+      - description: LPSYS APB clock
+      - description: LPSYS second APB clock
+      - description: Low-power clock, from the RTC
+
+  clock-names:
+    items:
+      - const: hclk
+      - const: pclk
+      - const: pclk2
+      - const: lpclk
+
+  sifli,bt-rfc:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Bluetooth RF controller, calibrated before the LCPU boots.
+
+  sifli,bt-phy:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Bluetooth PHY, set up by the radio calibration.
+
+  sifli,bt-mac:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Bluetooth controller, forced to transmit during calibration.
+
+  sifli,gpadc:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: ADC measuring the transmitter output during calibration.
+
+  sifli,dmac:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: DMA controller capturing samples during calibration.
+
+  sifli,lpsys-rcc:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: LPSYS clock and reset controller.
+
+  sifli,hpsys-cfg:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: HPSYS configuration registers, for the bandgap.
+
+  sifli,pmuc:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Power management unit, for the buck during calibration.
+
+required:
+  - compatible
+  - reg
+  - "#address-cells"
+  - "#size-cells"
+  - dma-ranges
+  - mboxes
+  - mbox-names
+  - memory-region
+  - sram
+  - clocks
+  - clock-names
+  - sifli,bt-rfc
+  - sifli,bt-phy
+  - sifli,bt-mac
+  - sifli,gpadc
+  - sifli,dmac
+  - sifli,lpsys-rcc
+  - sifli,hpsys-cfg
+  - sifli,pmuc
+
+additionalProperties: false
+
+examples:
+  - |
+    remoteproc@40004000 {
+        compatible = "sifli,sf32lb52-lcpu";
+        reg = <0x40004000 0x1000>;
+        #address-cells = <1>;
+        #size-cells = <1>;
+        dma-ranges = <0x00400000 0x20400000 0x10000>,
+                     <0x2a000000 0x20000000 0x80000>;
+        mboxes = <&mailbox1 0>, <&mailbox2 0>;
+        mbox-names = "tx", "rx";
+        memory-region = <&lcpu_ipc>;
+        sram = <&lcpu_sram>;
+        clocks = <&lpsys_rcc 1>, <&lpsys_rcc 2>, <&lpsys_rcc 3>, <&rtc>;
+        clock-names = "hclk", "pclk", "pclk2", "lpclk";
+        sifli,bt-rfc = <&bt_rfc>;
+        sifli,bt-phy = <&bt_phy>;
+        sifli,bt-mac = <&bt_mac>;
+        sifli,gpadc = <&gpadc>;
+        sifli,dmac = <&dmac2>;
+        sifli,lpsys-rcc = <&lpsys_rcc>;
+        sifli,hpsys-cfg = <&hpsys_cfg>;
+        sifli,pmuc = <&pmuc>;
+    };

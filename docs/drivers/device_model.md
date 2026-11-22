@@ -10,13 +10,13 @@ implemented in `drivers/base/`.
 
 The model follows the Linux kernel: a device class embeds `struct pbl_device`
 in its own struct, a driver embeds the class struct in a driver-specific one,
-and `container_of()` walks back out.
+and `PBL_CONTAINER_OF()` walks back out.
 
 ```{mermaid}
 classDiagram
   direction LR
   class pbl_device {
-    name, init, parent, deps, state
+    name, init, parent, cls, state
     include/pbl/device.h
   }
   class pbl_gpio_port {
@@ -46,28 +46,38 @@ A driver provides a `PBL_<DRIVER>_DEFINE(sym, ...)` macro built from three
 core pieces:
 
 - `PBL_DEVICE_STATE_DEFINE(sym)` allocates the runtime state;
-- `PBL_DEVICE_INIT(sym, name, init, parent, deps)` initializes the embedded
+- `PBL_DEVICE_INIT(sym, name, init, parent)` initializes the embedded
   `struct pbl_device`;
 - `PBL_DEVICE_REGISTER(sym, dev)` adds a pointer to the device to the device
-  table, the `.pbl_devices` section (`drivers/base/device.ld`).
+  table, the `devices` iterable section.
+
+A device class wraps `PBL_DEVICE_INIT_CLASS()` in its own init macro, which
+takes `(sym, name, init, parent, ops, ...)`: the device init only for classes
+whose drivers bring the device up themselves, the parent always, `NULL` for
+none, then what the class needs.
 
 Things that are not devices of their own (a pin, a bus address) are plain
 structs that point at their device.
 
 ## Initialization
 
-`pbl_device_init_all()`, called at the top of `init_drivers()` in
-`fw/main.c` once the kernel services drivers rely on are up, walks the device
-table and calls `pbl_device_init()` on each entry. Ordering is by dependency,
-not by table position:
+The kernel calls `pbl_device_init_all()` on the main thread, right before
+`main()`: it walks the device table and calls `pbl_device_init()` on each
+entry. An application therefore starts with its devices ready, and drivers
+may only rely on the kernel in their init. Ordering is by dependency, not by
+table position:
 
 - a device's `parent` is initialized first: the bus a sensor sits on, or the
   multi-function device it is a function of. A parent may also bring its
   children up from its own init with `pbl_device_init_children()`;
 - a driver's init calls `pbl_device_init()` on the other devices it uses, so
   structural dependencies are not written down twice;
-- anything else, such as a supply that has to be up first, goes in the
-  instance's `PBL_DEVICE_DEPS()`.
+- anything else, such as a supply that has to be up first, is listed next to
+  the instance with `PBL_DEVICE_DEPENDS()`, in the `dev_deps` iterable
+  section. The devicetree writes these for the devices a node refers to.
+
+`CONFIG_DEVICE_INIT_REVERSE` walks the table backwards, to check that nothing
+relies on its position.
 
 This is a synchronous take on Linux's deferred probe and `fw_devlink`.
 `pbl_device_init()` is idempotent, so a device is initialized exactly once
@@ -76,10 +86,22 @@ however many others depend on it. A failed init marks the device
 their own init. An init returning `-ENODEV` means the device is not present,
 which is not logged as an error. A dependency cycle asserts.
 
-Runtime APIs assert that their device is ready and never initialize on
-demand: bring-up is deterministic and happens in one place. Code that runs
-before `init_drivers()`, such as the boot splash bringing up the display,
-calls `pbl_device_init()` on the devices it uses itself.
+Runtime APIs never initialize on demand: bring-up is deterministic and
+happens in one place. What they do with a device that is not ready depends
+on what the device is to its callers:
+
+- a device other devices are built on asserts it, as its consumers only
+  come up once it is: a call on it before then is a bug;
+- a device a caller may find absent or failed returns `-ENODEV`, which the
+  caller handles;
+- a device used before the devices come up, or while the memory holding
+  the device model may be unreadable, does not check: its users already
+  know it is up, and the check could not run.
+
+A driver may still leave to the first use of its device the work that only
+matters once something uses it, such as turning on a clock that would
+otherwise run with nothing behind it: the device is ready after its init,
+and what is left stays inside the driver.
 
 Hardware needed before the kernel runs, such as clocks
 (`pbl_soc_early_init()`), stays outside the model, as in Linux.
@@ -94,7 +116,7 @@ in the subsystem of its class.
 | Part | Driver | Device |
 | --- | --- | --- |
 | Core | `drivers/mfd/npm1300.c` | `struct pbl_npm1300` |
-| Charger | `drivers/pmic/npm1300.c` | `struct pbl_npm1300_charger` |
+| Charger | `drivers/charger/npm1300.c` | `struct pbl_charger_npm1300` (a `struct pbl_charger`) |
 | GPIOs | `drivers/gpio/npm1300.c` | `struct pbl_npm1300_gpio` (a `struct pbl_gpio_port`) |
 | Rails | `drivers/regulator/npm1300.c` | `struct pbl_npm1300_regulator` (a `struct pbl_regulator`) |
 
@@ -130,6 +152,6 @@ lock to order against it.
 
 1. Define the driver struct embedding the class struct, the class ops and
    an init that recovers the driver struct with
-   `container_of(dev, const struct <driver>, <class>.dev)`.
+   `PBL_CONTAINER_OF(dev, const struct <driver>, <class>.dev)`.
 2. Provide the `PBL_<DRIVER>_DEFINE()` macro.
 3. Instantiate the device in the board or SoC file.

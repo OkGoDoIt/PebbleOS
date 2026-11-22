@@ -3,8 +3,8 @@
 
 if SOC_POSIX
 
-choice BT_ID_ADDR_SOURCE
-    default BT_ID_ADDR_STORAGE
+choice NIMBLE_ID_ADDR_SOURCE
+    default NIMBLE_ID_ADDR_POSIX
 endchoice
 
 # Emulated external flash, backed by a file on the host.

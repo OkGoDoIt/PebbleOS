@@ -8,6 +8,7 @@
 #include <pbl/drivers/clk.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/intc.h>
+#include <pbl/kernel/irq.h>
 
 /**
  * @defgroup drivers_gpio_sf32lb SF32LB GPIO
@@ -19,6 +20,10 @@
  */
 
 /** @cond INTERNAL_HIDDEN */
+/** @cond INTERNAL_HIDDEN */
+struct pbl_gpio_sf32lb_pads;
+/** @endcond */
+
 struct pbl_gpio_sf32lb_state {
   uint32_t od[2];
 };
@@ -28,23 +33,20 @@ struct pbl_gpio_sf32lb_state {
 struct pbl_gpio_sf32lb {
   /** GPIO port. */
   struct pbl_gpio_port port;
-  /** Interrupt controller of the pins, child of the port. */
-  struct pbl_intc intc;
+  /** Pads of the series. */
+  const struct pbl_gpio_sf32lb_pads *pads;
   /** Register base address. */
   uintptr_t base;
+  /** Interrupt line. */
+  pbl_irq_t irq;
   /** Clock. */
   struct pbl_clk clk;
+  /** HPSYS always-on block base address, where wakeup pins latch. */
+  uintptr_t aon;
+  /** PMU base address, whose wake pins wake the SF32LB52 from hibernate. */
+  uintptr_t pmuc;
   /** Runtime state. */
   struct pbl_gpio_sf32lb_state *state;
 };
-
-/** @cond INTERNAL_HIDDEN */
-extern const struct pbl_gpio_sf32lb pbl_gpio_sf32lb_gpio1;
-/** @endcond */
-
-/** Port GPIO1 (PA). */
-#define SF32LB_GPIO1 (&pbl_gpio_sf32lb_gpio1.port)
-/** Interrupt controller of port GPIO1. */
-#define SF32LB_GPIO1_INTC (&pbl_gpio_sf32lb_gpio1.intc)
 
 /** @} */

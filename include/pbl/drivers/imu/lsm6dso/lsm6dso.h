@@ -9,9 +9,9 @@
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/intc.h>
+#include <pbl/kernel/cache.h>
 #include <pbl/kernel/compiler.h>
-#include <pbl/mcu/cache.h>
-#include <pbl/services/regular_timer.h>
+#include <pbl/kernel/work.h>
 
 /**
  * @defgroup drivers_imu IMU
@@ -23,13 +23,13 @@
  * interrupt and axis mapping.
  *
  * @code{.c}
- * PBL_LSM6DSO_DEFINE(s_lsm6dso, &s_i2c2.bus, 0x6A,
+ * PBL_LSM6DSO_DEFINE(s_lsm6dso, &s_i2c2, 0x6A,
  *                    .int1 = ...,
  *                    .int1_in = ...,
  *                    .axis_map = {0, 1, 2},
  *                    .axis_dir = {1, 1, 1});
  *
- * const struct pbl_accel *const ACCEL = &s_lsm6dso.accel;
+ * const struct pbl_accel *const ACCEL = &s_lsm6dso;
  * @endcode
  */
 
@@ -50,7 +50,7 @@
 #define LSM6DSO_FIFO_SIZE LSM6DSO_FIFO_THRESHOLD
 
 /** @brief LSM6DSO driver state, owned by the driver. */
-typedef struct LSM6DSOState {
+struct pbl_lsm6dso_state {
   /** Watch mounted rotated 180 degrees: X and Y are inverted. */
   bool rotated;
   /** Shake detection requested. */
@@ -62,16 +62,18 @@ typedef struct LSM6DSOState {
   /** Samples per FIFO batch requested by the subscribers, 0 when not streaming. */
   uint16_t num_samples;
   /** Raw FIFO read buffer, filled through DMA, see @ref PBL_I2C_MSG_DMA_SAFE. */
-  uint8_t raw_sample_buf[DCACHE_ROUND_UP(
-      LSM6DSO_FIFO_SIZE * LSM6DSO_FIFO_WORD_SIZE_BYTES)] PBL_ALIGNED(DCACHE_LINE_SIZE_MAX);
+  uint8_t raw_sample_buf[PBL_DCACHE_ROUND_UP(
+      LSM6DSO_FIFO_SIZE * LSM6DSO_FIFO_WORD_SIZE_BYTES)] PBL_ALIGNED(PBL_DCACHE_LINE_SIZE);
   /** Watchdog timer detecting a stalled INT1 stream. */
-  RegularTimerInfo int1_wdt_timer;
+  struct pbl_wallclock_work int1_wdt_timer;
   /** Time of the last FIFO read. */
   uint64_t last_fifo_read_tick;
   /** Expected INT1 period in milliseconds. */
   uint32_t int1_period_ms;
   /** Number of stream recoveries performed. */
   uint32_t num_recoveries;
+  /** Number of INT1 interrupts taken. */
+  uint32_t num_int1_irqs;
   /** Current wake-up (shake) threshold register value. */
   uint8_t wk_ths_curr;
   /** Consecutive watchdog passes with INT1 stuck high in shake-only mode. */
@@ -82,14 +84,14 @@ typedef struct LSM6DSOState {
   bool wu_active;
   /** The INT1 servicing pass was requeued while the pad stayed high. */
   bool int1_requeued;
-} LSM6DSOState;
+};
 
 /** @brief LSM6DSO accelerometer. */
 struct pbl_lsm6dso {
   /** Accelerometer, child of the I2C bus. */
   struct pbl_accel accel;
   /** Driver state. */
-  LSM6DSOState *state;
+  struct pbl_lsm6dso_state *state;
   /** I2C device. */
   struct pbl_i2c_dev i2c;
   /** INT1 interrupt line. */
@@ -111,21 +113,18 @@ extern const struct pbl_accel_ops pbl_lsm6dso_ops;
  *
  * Only one instance is supported.
  *
- * @param sym Symbol of the instance; the accelerometer is @c sym.accel.
+ * @param sym Symbol of the instance, a struct pbl_accel.
  * @param _bus I2C bus.
  * @param _addr 7-bit I2C address.
  * @param ... Designated initializers of the remaining fields: @c int1, @c int1_in, @c axis_map
  *            and @c axis_dir.
  */
-#define PBL_LSM6DSO_DEFINE(sym, _bus, _addr, ...)                            \
-  PBL_ACCEL_STATE_DEFINE(sym);                                               \
-  static LSM6DSOState sym##_lsm6dso_state;                                   \
-  const struct pbl_lsm6dso sym = {                                           \
-    .accel = PBL_ACCEL_INIT(sym, "lsm6dso", &(_bus)->dev, &pbl_lsm6dso_ops), \
-    .state = &sym##_lsm6dso_state,                                           \
-    .i2c = PBL_I2C_DEV(_bus, _addr),                                         \
-    __VA_ARGS__,                                                             \
-  };                                                                         \
-  PBL_DEVICE_REGISTER(sym, &sym.accel.dev)
+#define PBL_LSM6DSO_DEFINE(sym, _bus, _addr, ...)                                \
+  PBL_ACCEL_STATE_DEFINE(sym);                                                   \
+  static struct pbl_lsm6dso_state sym##_lsm6dso_state;                           \
+  PBL_DEVICE_INSTANCE(sym, struct pbl_lsm6dso, struct pbl_accel, accel) {        \
+    .accel = PBL_ACCEL_INIT(sym, "lsm6dso", &(_bus)->dev, &pbl_lsm6dso_ops),     \
+    .state = &sym##_lsm6dso_state, .i2c = PBL_I2C_DEV(_bus, _addr), __VA_ARGS__, \
+  }
 
 /** @} */

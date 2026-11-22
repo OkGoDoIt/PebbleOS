@@ -1,24 +1,36 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-config MBOX
-    bool
+menuconfig MBOX
+    bool "Mailbox controllers"
     help
       Mailbox controller class (pbl/drivers/mbox.h), selected by the
-      controller drivers.
+      drivers that ring mailbox channels.
 
-config MBOX_SF32LB52
-    bool "SiFli SF32LB52 mailbox"
-    default y if SOC_SF32LB52
-    depends on CLK_SF32LB
-    select MBOX
+if MBOX
+
+config MBOX_SF32LB
+    bool "SiFli SF32LB mailbox"
+    default y
+    depends on DT_HAS_SIFLI_SF32LB52_MAILBOX_ENABLED
+    select CLK
     help
-      SF32LB52 mailbox blocks (MAILBOX1, MAILBOX2), channel 1 doorbells.
+      SF32LB52 and SF32LB57 mailbox blocks (MAILBOX1, MAILBOX2), channel 1
+      doorbells.
+
+config MBOX_SF32LB_IRQ_PRIO
+    int "Interrupt priority"
+    default 5
+    depends on MBOX_SF32LB
+    help
+      Priority of the interrupt of the blocks rung by the remote.
 
 config MBOX_SHELL
     bool "Mailbox shell commands"
     default DRIVER_SHELL
-    depends on MBOX && SHELL
+    depends on SHELL && DEVICE_NAMES
     help
       The mbox shell command, to list the controllers with their channel
       counters and ring a channel.
+
+endif # MBOX

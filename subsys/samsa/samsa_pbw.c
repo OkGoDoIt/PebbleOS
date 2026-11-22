@@ -14,13 +14,16 @@
 
 #include <pbl/fs/fs.h>
 #include <pbl/kernel/malloc.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/app_cache.h>
 #include <pbl/services/blob_db/app_db.h>
 #include <pbl/services/process_management/app_storage.h>
-#include <pbl/services/system_task.h>
+#include <pbl/util/byteorder.h>
+#include <pbl/util/math.h>
 #include <pbl/util/size.h>
 
+#include <applib/platform.h>
 #include <kernel/event_loop.h>
 #include <kernel/events.h>
 #include <pbl_arch_posix.h>
@@ -33,20 +36,30 @@
 
 PBL_LOG_MODULE_DECLARE(samsa, CONFIG_SAMSA_LOG_LEVEL);
 
-// The platform directories of a .pbw to take an app from, best first.
+// The platform directories of a .pbw to take an app from, best first: the
+// platform's own, then those of the platforms whose apps fit this one, as
+// docs/sdk/platforms.md ranks them, then the root, where 2.x apps are. By
+// name: a directory is not read for what it says of its platform. A
+// flexible binary of this platform's class comes after the first.
 static const char *const s_platforms[] = {
-#if defined(CONFIG_PLATFORM_EMERY)
-  "emery/",
-  "basalt/",
-  "",
-#elif defined(CONFIG_PLATFORM_GABBRO)
+  CONFIG_PLATFORM_NAME "/",
+#if defined(CONFIG_PLATFORM_ROUND)
+#if CONFIG_PLATFORM_DISPLAY_WIDTH >= 260 && CONFIG_PLATFORM_DISPLAY_HEIGHT >= 260 && \
+    CONFIG_PLATFORM_MAX_APP_MEMORY_SIZE >= 131072
   "gabbro/",
+#endif
   "chalk/",
-#elif defined(CONFIG_PLATFORM_FLINT)
+#else
+#if defined(CONFIG_PLATFORM_COLOR)
+#if CONFIG_PLATFORM_DISPLAY_WIDTH >= 200 && CONFIG_PLATFORM_DISPLAY_HEIGHT >= 228 && \
+    CONFIG_PLATFORM_MAX_APP_MEMORY_SIZE >= 131072
+  "emery/",
+#endif
+  "basalt/",
+#endif
   "flint/",
   "diorite/",
-  "",
-#else
+  "aplite/",
   "",
 #endif
 };
@@ -75,14 +88,6 @@ static Install s_install;
 // ----------------------------------------------------------------------------
 // Zip
 
-static uint16_t prv_rd16(const uint8_t *p) {
-  return (uint16_t)(p[0] | p[1] << 8);
-}
-
-static uint32_t prv_rd32(const uint8_t *p) {
-  return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
 //! Find a file in the zip's central directory.
 static bool prv_zip_find(const uint8_t *zip, size_t len, const char *name, ZipEntry *out) {
   // The end of central directory record, before an optional comment.
@@ -90,35 +95,37 @@ static bool prv_zip_find(const uint8_t *zip, size_t len, const char *name, ZipEn
     return false;
   }
   size_t eocd = len - 22;
-  while (prv_rd32(zip + eocd) != 0x06054b50) {
+  while (pbl_get_le32(zip + eocd) != 0x06054b50) {
     if (eocd == 0 || len - eocd > 22 + 0xffff) {
       return false;
     }
     eocd--;
   }
-  const uint16_t count = prv_rd16(zip + eocd + 10);
-  size_t at = prv_rd32(zip + eocd + 16);
+  const uint16_t count = pbl_get_le16(zip + eocd + 10);
+  size_t at = pbl_get_le32(zip + eocd + 16);
   const size_t name_len = strlen(name);
   for (uint16_t i = 0; i < count; i++) {
-    if (at + 46 > len || prv_rd32(zip + at) != 0x02014b50) {
+    if (at + 46 > len || pbl_get_le32(zip + at) != 0x02014b50) {
       return false;
     }
-    const uint16_t this_len = prv_rd16(zip + at + 28);
-    const size_t next = at + 46 + this_len + prv_rd16(zip + at + 30) + prv_rd16(zip + at + 32);
+    const uint16_t this_len = pbl_get_le16(zip + at + 28);
+    const size_t next =
+        at + 46 + this_len + pbl_get_le16(zip + at + 30) + pbl_get_le16(zip + at + 32);
     if (next > len) {
       return false;
     }
     if (this_len == name_len && memcmp(zip + at + 46, name, name_len) == 0) {
-      const size_t local = prv_rd32(zip + at + 42);
-      if (local + 30 > len || prv_rd32(zip + local) != 0x04034b50) {
+      const size_t local = pbl_get_le32(zip + at + 42);
+      if (local + 30 > len || pbl_get_le32(zip + local) != 0x04034b50) {
         return false;
       }
-      const size_t data = local + 30 + prv_rd16(zip + local + 26) + prv_rd16(zip + local + 28);
+      const size_t data =
+          local + 30 + pbl_get_le16(zip + local + 26) + pbl_get_le16(zip + local + 28);
       *out = (ZipEntry){
         .data = zip + data,
-        .compressed_size = prv_rd32(zip + at + 20),
-        .size = prv_rd32(zip + at + 24),
-        .method = prv_rd16(zip + at + 10),
+        .compressed_size = pbl_get_le32(zip + at + 20),
+        .size = pbl_get_le32(zip + at + 24),
+        .method = pbl_get_le16(zip + at + 10),
       };
       return data + out->compressed_size <= len && (out->method == 0 || out->method == 8);
     }
@@ -217,7 +224,7 @@ static void prv_install_files(void *data) {
   }
   if (ok) {
     const uint32_t total = install->app.size + install->worker.size + install->res.size;
-    ok = app_cache_add_entry(install->id, total) == S_SUCCESS;
+    ok = app_cache_add_entry(install->id, total) == 0;
   }
   if (ok) {
     PBL_LOG_INFO("Installed %s as app %" PRId32, install->info.name, install->id);
@@ -229,14 +236,72 @@ static void prv_install_files(void *data) {
   prv_finish(install);
 }
 
+// The directory of a flexible binary is named after its class and the
+// resource tags of the features it requires, in the order of
+// PebblePlatformFeature: rect-color+mic+health.
+#if defined(CONFIG_PLATFORM_ROUND)
+#define FLEXIBLE_CLASS "round-color"
+#elif defined(CONFIG_PLATFORM_COLOR)
+#define FLEXIBLE_CLASS "rect-color"
+#else
+#define FLEXIBLE_CLASS "rect-bw"
+#endif
+
+// By bit of PebblePlatformFeature. One without a tag cannot be required.
+static const char *const s_feature_tags[] = {
+  "mic", "strap", "strappower", "health", "compass", "touch", nullptr, "speaker",
+};
+
+//! The flexible binary of this platform's class that requires the most of
+//! the features the platform has.
+static bool prv_find_flexible(Install *install, char *directory, size_t size) {
+  const uint32_t has = platform_get_features();
+  int best = -1;
+  for (uint32_t requires = 0; requires < (1u << PBL_ARRAY_SIZE(s_feature_tags)); requires++) {
+    const int count = __builtin_popcount(requires);
+    if ((requires & ~has) || count <= best) {
+      continue;
+    }
+    char name[96];
+    int at = snprintf(name, sizeof(name), FLEXIBLE_CLASS);
+    bool tagged = true;
+    for (unsigned bit = 0; bit < PBL_ARRAY_SIZE(s_feature_tags); bit++) {
+      if (!(requires & (1u << bit))) {
+        continue;
+      }
+      if (!s_feature_tags[bit]) {
+        tagged = false;
+        break;
+      }
+      at += snprintf(name + at, sizeof(name) - at, "+%s", s_feature_tags[bit]);
+    }
+    if (!tagged) {
+      continue;
+    }
+    snprintf(name + at, sizeof(name) - at, "/");
+    char file[sizeof(name) + 16];
+    snprintf(file, sizeof(file), "%spebble-app.bin", name);
+    ZipEntry app;
+    if (prv_zip_find(install->pbw, install->len, file, &app)) {
+      best = count;
+      install->app = app;
+      snprintf(directory, size, "%s", name);
+    }
+  }
+  return best >= 0;
+}
+
 static void prv_install(void *data) {
   Install *install = data;
   const char *platform = nullptr;
-  char name[48];
-  for (unsigned i = 0; i < ARRAY_LENGTH(s_platforms) && !platform; i++) {
+  char flexible[96];
+  char name[112];
+  for (unsigned i = 0; i < PBL_ARRAY_SIZE(s_platforms) && !platform; i++) {
     snprintf(name, sizeof(name), "%spebble-app.bin", s_platforms[i]);
     if (prv_zip_find(install->pbw, install->len, name, &install->app)) {
       platform = s_platforms[i];
+    } else if (i == 0 && prv_find_flexible(install, flexible, sizeof(flexible))) {
+      platform = flexible;
     }
   }
   if (!platform) {
@@ -291,11 +356,11 @@ static void prv_install(void *data) {
     .sdk_version = install->info.sdk_version,
   };
   memcpy(&entry.uuid, &install->info.uuid, sizeof(entry.uuid));
-  strncpy(entry.name, install->info.name, MIN(sizeof(entry.name), sizeof(install->info.name)));
-  const status_t status = app_db_insert((const uint8_t *)&entry.uuid, sizeof(entry.uuid),
-                                        (const uint8_t *)&entry, sizeof(entry));
-  if (status != S_SUCCESS) {
-    PBL_LOG_ERR("Could not add %s to the app database: %" PRId32, install->info.name, status);
+  strncpy(entry.name, install->info.name, PBL_MIN(sizeof(entry.name), sizeof(install->info.name)));
+  const int rv = app_db_insert((const uint8_t *)&entry.uuid, sizeof(entry.uuid),
+                               (const uint8_t *)&entry, sizeof(entry));
+  if (rv != 0) {
+    PBL_LOG_ERR("Could not add %s to the app database: %d", install->info.name, rv);
     prv_finish(install);
     return;
   }
@@ -305,9 +370,9 @@ static void prv_install(void *data) {
 
 //! On KernelMain, which takes events once the launcher runs, after the
 //! services an install needs have started. The work itself goes to the
-//! system task.
+//! background work queue.
 static void prv_install_when_ready(void *data) {
-  system_task_add_callback(prv_install, data);
+  pbl_sys_work_call(prv_install, data);
 }
 
 static void prv_install_isr(void *arg) {

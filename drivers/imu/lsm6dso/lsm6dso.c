@@ -2,24 +2,26 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <errno.h>
+#include <inttypes.h>
 
+#include <pbl/analytics/analytics.h>
+#include <pbl/devicetree.h>
 #include <pbl/drivers/accel.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/imu/lsm6dso/lsm6dso.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/time.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/analytics/analytics.h>
 #include <pbl/services/imu/units.h>
-#include <pbl/services/new_timer/new_timer.h>
-#include <pbl/services/regular_timer.h>
 #include <pbl/util/bits.h>
+#include <pbl/util/byteorder.h>
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
 
-PBL_LOG_MODULE_DEFINE(driver_accel_lsm6dso, CONFIG_DRIVER_IMU_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_accel, CONFIG_DRIVER_IMU_LOG_LEVEL);
 
 // The single instance, for interrupt and timer contexts
 static const struct pbl_lsm6dso *s_dev;
@@ -56,6 +58,9 @@ static const struct pbl_lsm6dso *s_dev;
 // stalled (>1x to tolerate scheduling jitter), and threshold lower bound
 #define LSM6DSO_STALL_MARGIN 2U
 #define LSM6DSO_STALL_MIN_MS 1000U
+
+// Max buffer-sized reads when draining the FIFO
+#define LSM6DSO_DRAIN_CHUNKS_MAX 4U
 
 // INT1 watchdog poll rate in shake-only mode (no FIFO cadence to track)
 #define LSM6DSO_SHAKE_WDT_PERIOD_S 5U
@@ -194,7 +199,7 @@ static bool prv_lsm6dso_read_fifo(uint16_t samples) {
      .flags = PBL_I2C_MSG_READ | PBL_I2C_MSG_DMA_SAFE},
   };
 
-  return pbl_i2c_transfer(&s_dev->i2c, msgs, ARRAY_LENGTH(msgs)) == 0;
+  return pbl_i2c_transfer(&s_dev->i2c, msgs, PBL_ARRAY_SIZE(msgs)) == 0;
 }
 
 static uint8_t prv_fs_bits(void) {
@@ -213,7 +218,7 @@ static uint8_t prv_fs_bits(void) {
 }
 
 static int16_t prv_raw_to_s16(const uint8_t *raw) {
-  return (int16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8U));
+  return (int16_t)pbl_get_le16(raw);
 }
 
 static int16_t prv_axis_raw_mg(IMUCoordinateAxis axis, const uint8_t *raw) {
@@ -233,7 +238,7 @@ static int16_t prv_axis_raw_mg(IMUCoordinateAxis axis, const uint8_t *raw) {
   return val;
 }
 
-static void prv_raw_to_mg(const uint8_t *raw, AccelDriverSample *sample) {
+static void prv_raw_to_mg(const uint8_t *raw, struct pbl_accel_sample *sample) {
   sample->x = prv_axis_raw_mg(AXIS_X, raw);
   sample->y = prv_axis_raw_mg(AXIS_Y, raw);
   sample->z = prv_axis_raw_mg(AXIS_Z, raw);
@@ -300,7 +305,7 @@ static bool prv_lsm6dso_enable_fifo(uint16_t num_samples) {
   }
 
   // Watermark threshold WTM[8:0]: low 8 bits in FIFO_CTRL1, MSB in FIFO_CTRL2
-  wtm = MIN(num_samples, LSM6DSO_FIFO_WTM_MAX);
+  wtm = PBL_MIN(num_samples, LSM6DSO_FIFO_WTM_MAX);
 
   val = PBL_FIELD_GET(PBL_GENMASK(7, 0), wtm);
   ret = prv_lsm6dso_write(LSM6DSO_FIFO_CTRL1, &val, 1);
@@ -340,27 +345,29 @@ static bool prv_lsm6dso_enable_fifo(uint16_t num_samples) {
 
 //! Salvage and dispatch any samples queued in the FIFO
 static void prv_lsm6dso_drain_fifo(void) {
-  uint8_t status[2];
-  uint16_t samples;
+  for (unsigned int i = 0U; i < LSM6DSO_DRAIN_CHUNKS_MAX; i++) {
+    uint8_t status[2];
+    uint16_t samples;
 
-  if (!prv_lsm6dso_read(LSM6DSO_FIFO_STATUS1, status, 2)) {
-    PBL_LOG_ERR("Could not read FIFO_STATUS registers");
-    return;
+    if (!prv_lsm6dso_read(LSM6DSO_FIFO_STATUS1, status, 2)) {
+      PBL_LOG_ERR("Could not read FIFO_STATUS registers");
+      return;
+    }
+
+    samples = (PBL_FIELD_GET(LSM6DSO_FIFO_STATUS2_DIFF_HI_MASK, status[1]) << 8U) | status[0];
+    samples = PBL_MIN(samples, LSM6DSO_FIFO_SIZE);
+    if (samples == 0U) {
+      return;
+    }
+
+    if (!prv_lsm6dso_read_fifo(samples)) {
+      PBL_LOG_ERR("Failed to read samples");
+      return;
+    }
+
+    prv_lsm6dso_process_samples(samples, prv_get_curr_system_time_us());
+    s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
   }
-
-  samples = (PBL_FIELD_GET(LSM6DSO_FIFO_STATUS2_DIFF_HI_MASK, status[1]) << 8U) | status[0];
-  samples = MIN(samples, LSM6DSO_FIFO_SIZE);
-  if (samples == 0U) {
-    return;
-  }
-
-  if (!prv_lsm6dso_read_fifo(samples)) {
-    PBL_LOG_ERR("Failed to read samples");
-    return;
-  }
-
-  prv_lsm6dso_process_samples(samples, prv_get_curr_system_time_us());
-  s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
 }
 
 static void prv_lsm6dso_recover(void);
@@ -384,7 +391,7 @@ static void prv_lsm6dso_dispatch_shake(uint8_t wake_up_src) {
     }
 
     v = prv_axis_raw_mg(a, raw);
-    if (!found || ABS(v) > ABS(val)) {
+    if (!found || PBL_ABS(v) > PBL_ABS(val)) {
       axis = a;
       val = v;
       found = true;
@@ -399,15 +406,15 @@ static void prv_lsm6dso_dispatch_shake(uint8_t wake_up_src) {
 }
 
 //! INT1 servicing pass kind, logged by the no-action diagnostic
-typedef enum {
-  Lsm6dsoInt1PassInitial = 0,
-  Lsm6dsoInt1PassRequeue = 1,
-  Lsm6dsoInt1PassRetry = 2,
-} Lsm6dsoInt1Pass;
+enum int1_pass {
+  INT1_PASS_INITIAL = 0,
+  INT1_PASS_REQUEUE = 1,
+  INT1_PASS_RETRY = 2,
+};
 
 //! Single INT1 servicing pass; returns true if any INT source was handled.
 //! fifo_progress is set when FIFO data was consumed (samples or overrun).
-static bool prv_lsm6dso_service_int1(Lsm6dsoInt1Pass pass, bool *fifo_progress) {
+static bool prv_lsm6dso_service_int1(enum int1_pass pass, bool *fifo_progress) {
   bool ret;
   uint8_t fifo_status[2] = {0U, 0U};
   uint8_t wake_up_src = 0U;
@@ -505,19 +512,18 @@ static void prv_work_cb(void *data) {
 
 //! Run driver work on the timer task, with the device lock held
 static void prv_queue_work(void (*work)(void)) {
-  new_timer_add_work_callback(prv_work_cb, (void *)work);
+  pbl_sys_work_call_high(prv_work_cb, (void *)work);
 }
 
 static void prv_queue_work_from_isr(void (*work)(void)) {
-  new_timer_add_work_callback_from_isr(prv_work_cb, (void *)work);
+  pbl_sys_work_call_high_from_isr(prv_work_cb, (void *)work);
 }
 
 static void prv_lsm6dso_int1_work_handler(void) {
   bool fifo_progress = false;
   // Best-effort pass tagging: an ISR enqueue racing a pending requeue gets
   // labeled as a requeue; diagnostic only
-  Lsm6dsoInt1Pass pass =
-      s_dev->state->int1_requeued ? Lsm6dsoInt1PassRequeue : Lsm6dsoInt1PassInitial;
+  enum int1_pass pass = s_dev->state->int1_requeued ? INT1_PASS_REQUEUE : INT1_PASS_INITIAL;
   bool action_taken;
 
   s_dev->state->int1_requeued = false;
@@ -545,7 +551,7 @@ static void prv_lsm6dso_int1_work_handler(void) {
   // Retry the servicing pass once (a latched wake-up or a fresh FIFO
   // threshold is visible on re-read) and only recover if the pad is still
   // high with nothing serviced.
-  action_taken = prv_lsm6dso_service_int1(Lsm6dsoInt1PassRetry, &fifo_progress);
+  action_taken = prv_lsm6dso_service_int1(INT1_PASS_RETRY, &fifo_progress);
   if (fifo_progress) {
     s_dev->state->int1_requeued = true;
     prv_queue_work(prv_lsm6dso_int1_work_handler);
@@ -555,6 +561,7 @@ static void prv_lsm6dso_int1_work_handler(void) {
 }
 
 static void prv_lsm6dso_int1_irq_handler(void *arg) {
+  s_dev->state->num_int1_irqs++;
   // A rising edge proves the pad was low, i.e. the wake-up source deasserted
   s_dev->state->wu_active = false;
   // ... which also breaks any stuck-high streak the watchdog counted
@@ -710,24 +717,24 @@ static uint32_t prv_ms_since_last_fifo_read(void) {
 }
 
 static uint32_t prv_stall_threshold_ms(void) {
-  return MAX(LSM6DSO_STALL_MARGIN * s_dev->state->int1_period_ms, LSM6DSO_STALL_MIN_MS);
+  return PBL_MAX(LSM6DSO_STALL_MARGIN * s_dev->state->int1_period_ms, LSM6DSO_STALL_MIN_MS);
 }
 
 //! Arm/disarm the INT1 stall watchdog to match the active INT1 sources.
 //! Call after num_samples or shake_detection_enabled changes.
 static void prv_update_int1_watchdog(void) {
-  regular_timer_remove_callback(&s_dev->state->int1_wdt_timer);
+  pbl_wallclock_work_stop(&s_dev->state->int1_wdt_timer);
   s_dev->state->shake_stuck_passes = 0U;
 
   if (s_dev->state->num_samples > 0U) {
     s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
     s_dev->state->int1_period_ms =
         (s_dev->state->sampling_interval_us * s_dev->state->num_samples) / 1000;
-    regular_timer_add_multisecond_callback(
-        &s_dev->state->int1_wdt_timer, MAX(DIVIDE_CEIL(s_dev->state->int1_period_ms, 1000UL), 1U));
+    pbl_wallclock_work_start(&pbl_sys_workq_high, &s_dev->state->int1_wdt_timer, 1,
+                             PBL_MAX(PBL_DIV_ROUND_UP(s_dev->state->int1_period_ms, 1000UL), 1U));
   } else if (s_dev->state->shake_detection_enabled) {
-    regular_timer_add_multisecond_callback(&s_dev->state->int1_wdt_timer,
-                                           LSM6DSO_SHAKE_WDT_PERIOD_S);
+    pbl_wallclock_work_start(&pbl_sys_workq_high, &s_dev->state->int1_wdt_timer, 1,
+                             LSM6DSO_SHAKE_WDT_PERIOD_S);
   }
 }
 
@@ -735,6 +742,7 @@ static void prv_update_int1_watchdog(void) {
 //! re-validates the stall at execution time.
 static void prv_stall_check_work_cb(void) {
   uint32_t ms_since_last_read;
+  uint8_t fifo_status[2] = {0U, 0U};
 
   s_dev->state->recovery_pending = false;
 
@@ -765,11 +773,19 @@ static void prv_stall_check_work_cb(void) {
     return;
   }
 
-  PBL_LOG_WRN("FIFO stream stalled for %" PRIu32 " ms", ms_since_last_read);
+  // Tells a lost edge (pad high) from an IMU not raising INT1 (pad low)
+  if (!prv_lsm6dso_read(LSM6DSO_FIFO_STATUS1, fifo_status, 2)) {
+    PBL_LOG_ERR("Could not read FIFO_STATUS registers");
+  }
+
+  PBL_LOG_WRN("FIFO stream stalled for %" PRIu32 " ms (INT1 pad %d irqs %" PRIu32
+              " FIFO_STATUS1 0x%02" PRIx8 " FIFO_STATUS2 0x%02" PRIx8 ")",
+              ms_since_last_read, pbl_gpio_get(&s_dev->int1_in), s_dev->state->num_int1_irqs,
+              fifo_status[0], fifo_status[1]);
   prv_lsm6dso_recover();
 }
 
-static void prv_int1_wdt_cb(void *data) {
+static void prv_int1_wdt_cb(struct pbl_work *work) {
   prv_queue_work(prv_stall_check_work_cb);
 }
 
@@ -782,7 +798,7 @@ static int prv_init(const struct pbl_accel *accel) {
   int err;
   uint8_t val;
 
-  s_dev = container_of(accel, const struct pbl_lsm6dso, accel);
+  s_dev = PBL_CONTAINER_OF(accel, const struct pbl_lsm6dso, accel);
 
   // Check device ID
   ret = prv_lsm6dso_read(LSM6DSO_WHO_AM_I, &val, 1);
@@ -896,7 +912,7 @@ static int prv_init(const struct pbl_accel *accel) {
     return err;
   }
 
-  s_dev->state->int1_wdt_timer.cb = prv_int1_wdt_cb;
+  pbl_wallclock_work_init(&s_dev->state->int1_wdt_timer, prv_int1_wdt_cb);
 
   return 0;
 }
@@ -991,7 +1007,7 @@ static bool prv_data_ready(bool *read_ok) {
   return !*read_ok || (status & LSM6DSO_STATUS_REG_XLDA) != 0U;
 }
 
-static int prv_peek(const struct pbl_accel *accel, AccelDriverSample *data) {
+static int prv_peek(const struct pbl_accel *accel, struct pbl_accel_sample *data) {
   int err = 0;
   bool ret;
   uint8_t ctrl1;
@@ -1168,3 +1184,5 @@ const struct pbl_accel_ops pbl_lsm6dso_ops = {
   .set_shake_sensitivity_high = prv_set_shake_sensitivity_high,
   .set_shake_sensitivity_percent = prv_set_shake_sensitivity_percent,
 };
+
+#include PBL_DT_INSTANCES(st_lsm6dso)

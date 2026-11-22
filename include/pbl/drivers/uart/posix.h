@@ -46,9 +46,22 @@ extern const struct pbl_uart_ops pbl_uart_posix_ops;
 #define PBL_UART_POSIX_DEFINE(sym, _name, _channel, _baudrate)                  \
   PBL_UART_STATE_DEFINE(sym);                                                   \
   const struct pbl_uart_posix sym = {                                           \
-    .uart = PBL_UART_INIT(sym, _name, &pbl_uart_posix_ops, _baudrate, nullptr), \
+    .uart = PBL_UART_INIT(sym, _name, nullptr, &pbl_uart_posix_ops, _baudrate), \
     .channel = (_channel),                                                      \
   };                                                                            \
   PBL_DEVICE_REGISTER(sym, &sym.uart.dev)
+
+/** @cond INTERNAL_HIDDEN */
+extern const struct pbl_uart_posix pbl_uart_posix_console;
+extern const struct pbl_uart_posix pbl_uart_posix_qemu;
+extern const struct pbl_uart_posix pbl_uart_posix_bt_hci;
+/** @endcond */
+
+/** @brief The POSIX console port. */
+#define POSIX_CONSOLE_UART (&pbl_uart_posix_console.uart)
+/** @brief The POSIX QEMU serial protocol port. */
+#define POSIX_QEMU_UART (&pbl_uart_posix_qemu.uart)
+/** @brief The POSIX Bluetooth HCI port, with @c CONFIG_UART_POSIX_BT_HCI. */
+#define POSIX_BT_HCI_UART (&pbl_uart_posix_bt_hci.uart)
 
 /** @} */

@@ -208,6 +208,14 @@ struct pbl_spi_mem_ops {
    */
   void (*power_down)(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm,
                      pbl_spi_mem_pm_fn_t fn, void *arg);
+  /**
+   * Optional, not with @ref PBL_SPI_MEM_XIP. Run @p pm->enter, if @p pm is not NULL, and power
+   * the controller down until @c pm_resume, with interrupts disabled. Returns 0, or @c -EBUSY
+   * while a transfer is in progress.
+   */
+  int (*pm_suspend)(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm);
+  /** With @c pm_suspend. Power the controller back up and run @p pm->exit. */
+  void (*pm_resume)(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm);
 };
 
 /**
@@ -255,17 +263,16 @@ struct pbl_spi_mem {
  * @param sym Symbol of the controller instance, with its state defined by
  * PBL_SPI_MEM_STATE_DEFINE().
  * @param _name Name.
- * @param _deps Dependencies from PBL_DEVICE_DEPS(), or NULL.
+ * @param _parent Parent device, as the memory controller the function is part of, or NULL.
  * @param _ops Driver operations.
  * @param _flags Flags, @c PBL_SPI_MEM_*.
  */
-#define PBL_SPI_MEM_INIT(sym, _name, _deps, _ops, _flags)                          \
-  {                                                                                \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_spi_mem_dev_init, nullptr, _deps, \
-                                 &pbl_spi_mem_class),                              \
-    .ops = (_ops),                                                                 \
-    .state = &sym##_spi_mem_state,                                                 \
-    .flags = (_flags),                                                             \
+#define PBL_SPI_MEM_INIT(sym, _name, _parent, _ops, _flags)                                      \
+  {                                                                                              \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, pbl_spi_mem_dev_init, _parent, &pbl_spi_mem_class), \
+    .ops = (_ops),                                                                               \
+    .state = &sym##_spi_mem_state,                                                               \
+    .flags = (_flags),                                                                           \
   }
 
 /**
@@ -393,6 +400,28 @@ void pbl_spi_mem_dirmap_invalidate(const struct pbl_spi_mem *mem,
  */
 void pbl_spi_mem_power_down(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm,
                             pbl_spi_mem_pm_fn_t fn, void *arg);
+
+/**
+ * @brief Power the memory and the controller down until pbl_spi_mem_pm_resume(), with interrupts
+ * disabled.
+ *
+ * For a memory the CPU does not execute from, see pbl_spi_mem_power_down() otherwise.
+ *
+ * @param mem Controller.
+ * @param pm Memory low power commands, or NULL to leave the memory as is.
+ * @retval 0 Powered down.
+ * @retval -EBUSY A transfer is in progress.
+ * @retval -ENOTSUP The controller cannot.
+ */
+int pbl_spi_mem_pm_suspend(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm);
+
+/**
+ * @brief Power the memory and the controller back up after pbl_spi_mem_pm_suspend().
+ *
+ * @param mem Controller.
+ * @param pm Memory low power commands given to pbl_spi_mem_pm_suspend().
+ */
+void pbl_spi_mem_pm_resume(const struct pbl_spi_mem *mem, const struct pbl_spi_mem_pm *pm);
 
 /**
  * @brief Poll for completion instead of sleeping, e.g. from a fault handler.

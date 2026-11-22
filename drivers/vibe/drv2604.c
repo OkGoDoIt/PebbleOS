@@ -3,6 +3,7 @@
 
 #include <errno.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/vibe.h>
@@ -12,7 +13,7 @@
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
 
-PBL_LOG_MODULE_DEFINE(driver_vibe_drv2604, CONFIG_DRIVER_VIBE_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_vibe, CONFIG_DRIVER_VIBE_LOG_LEVEL);
 
 #define DRV2604_STATUS                      0x00
 #define DRV2604_MODE                        0x01
@@ -64,7 +65,7 @@ PBL_LOG_MODULE_DEFINE(driver_vibe_drv2604, CONFIG_DRIVER_VIBE_LOG_LEVEL);
    DRV2604_CONTROL2_IDISS_TIME(1))
 
 static const struct pbl_drv2604 *prv_get(const struct pbl_vibe *vibe) {
-  return container_of(vibe, const struct pbl_drv2604, vibe);
+  return PBL_CONTAINER_OF(vibe, const struct pbl_drv2604, vibe);
 }
 
 static int prv_read_register(const struct pbl_drv2604 *dev, uint8_t reg, uint8_t *val) {
@@ -127,7 +128,7 @@ static int prv_init(const struct pbl_vibe *vibe) {
     return -ENODEV;
   }
 
-  ret = prv_write_registers(dev, s_config, ARRAY_LENGTH(s_config));
+  ret = prv_write_registers(dev, s_config, PBL_ARRAY_SIZE(s_config));
 
   // Disabling the chip keeps its registers
   (void)pbl_gpio_set(&dev->enable, false);
@@ -179,7 +180,7 @@ static int prv_calibrate(const struct pbl_vibe *vibe, uint8_t *cali) {
     {DRV2604_GO, DRV2604_GO_GO},
   };
 
-  return prv_write_registers(prv_get(vibe), s_autocal, ARRAY_LENGTH(s_autocal));
+  return prv_write_registers(prv_get(vibe), s_autocal, PBL_ARRAY_SIZE(s_autocal));
 }
 
 const struct pbl_vibe_ops pbl_drv2604_ops = {
@@ -188,3 +189,5 @@ const struct pbl_vibe_ops pbl_drv2604_ops = {
   .stop = prv_stop,
   .calibrate = prv_calibrate,
 };
+
+#include PBL_DT_INSTANCES(ti_drv2604)

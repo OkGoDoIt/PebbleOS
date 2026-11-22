@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Core Devices LLC
 # SPDX-License-Identifier: Apache-2.0
 
-set(nimble mynewt-nimble)
+set(nimble ${CMAKE_CURRENT_SOURCE_DIR}/mynewt-nimble)
 
 set(includes
   # Ahead of porting/nimble/include, whose syscfg.h is a placeholder.
@@ -32,10 +32,13 @@ file(GLOB sources CONFIGURE_DEPENDS
   ${nimble}/nimble/host/services/gatt/src/*.c
   ${nimble}/nimble/transport/src/*.c
   ${nimble}/nimble/transport/common/hci_h4/src/*.c
-  port/src/npl_os_pebble.c
 )
 if(CONFIG_NIMBLE_BLE_SVC_BAS)
   list(APPEND sources ${nimble}/nimble/host/services/bas/src/ble_svc_bas.c)
+endif()
+if(CONFIG_NIMBLE_STORE_CONFIG)
+  list(APPEND sources ${nimble}/nimble/host/store/config/src/ble_store_config.c)
+  list(APPEND includes ${nimble}/nimble/host/store/config/include)
 endif()
 if(CONFIG_NIMBLE_BLE_SVC_DIS)
   list(APPEND sources ${nimble}/nimble/host/services/dis/src/ble_svc_dis.c)
@@ -65,35 +68,9 @@ if(CONFIG_NIMBLE_DRIVER_NRF5X)
   list(PREPEND includes ${nimble}/nimble/drivers/nrf5x/include)
 endif()
 
-if(CONFIG_BT_HCI_NRF52)
-  list(APPEND sources
-    ${nimble}/porting/nimble/src/hal_timer.c
-    port/src/nrf52.c
-  )
+if(CONFIG_NIMBLE_HCI_NRF52)
+  list(APPEND sources ${nimble}/porting/nimble/src/hal_timer.c)
   list(APPEND defines FREERTOS=1 PEBBLEOS NRF52_SERIES)
-elseif(CONFIG_BT_HCI_SF32LB52)
-  list(APPEND sources
-    transport/hci_sf32lb52.c
-    ../nonfree/pebbleos-nonfree/sf32lb52/lcpu_52x.c
-  )
-  if(CONFIG_NIMBLE_HCI_SF32LB52_TRACE_EVENTS)
-    list(APPEND sources transport/hci_trace_events.c)
-  endif()
-  if(CONFIG_NIMBLE_HCI_SF32LB52_TRACE_BINARY)
-    pbl_compile_definitions(NIMBLE_HCI_SF32LB52_TRACE NIMBLE_HCI_SF32LB52_TRACE_BINARY)
-  elseif(CONFIG_NIMBLE_HCI_SF32LB52_TRACE_LOG)
-    pbl_compile_definitions(NIMBLE_HCI_SF32LB52_TRACE NIMBLE_HCI_SF32LB52_TRACE_LOG)
-  elseif(CONFIG_NIMBLE_HCI_SF32LB52_TRACE_EVENTS)
-    pbl_compile_definitions(NIMBLE_HCI_SF32LB52_TRACE_EVENTS)
-  endif()
-elseif(CONFIG_BT_HCI_UART)
-  list(APPEND sources transport/hci_uart.c)
-elseif(CONFIG_BT_HCI_FAKE)
-  list(APPEND sources transport/hci_fake.c)
-endif()
-
-if(CONFIG_NIMBLE_TRNG)
-  list(APPEND sources port/src/trng.c)
 endif()
 
 pbl_include_directories(${includes})
@@ -109,3 +86,8 @@ pbl_library_compile_options(
   -Wno-unused-but-set-global
   -Wimplicit-fallthrough=1
 )
+
+# The PebbleOS side, built with the usual warnings.
+add_subdirectory(port)
+add_subdirectory(transport)
+add_subdirectory(store)

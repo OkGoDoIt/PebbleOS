@@ -12,10 +12,6 @@
 
 #include <pbl/kernel/compiler.h>
 
-#include <system/die.h>
-#include <system/reboot_reason.h>
-#include <system/status_codes.h>
-
 /**
  * @defgroup logging Logging
  * @ingroup subsys
@@ -53,15 +49,6 @@
  * Other files of the same module use PBL_LOG_MODULE_DECLARE() with the same arguments.
  * @{
  */
-
-/**
- * @brief Expand a 64-bit value into two 32-bit arguments, high word first.
- *
- * Hashed logs only take 32-bit arguments; print the result with two conversions.
- *
- * @param x 64-bit value.
- */
-#define SPLIT_64_BIT_ARG(x) (uint32_t)((x >> 32) & 0xFFFFFFFF), (uint32_t)(x & 0xFFFFFFFF)
 
 /** @brief Size of the buffer a log message is formatted into, header included. */
 #define LOG_BUFFER_LENGTH 128
@@ -183,6 +170,20 @@ void pbl_log_filtered(uint8_t log_level, const char *src_filename, int src_line_
  */
 void pbl_log_filtered_sync(uint8_t log_level, const char *src_filename, int src_line_number,
                            const char *fmt, ...) PBL_FORMAT_PRINTF(4, 5);
+
+/**
+ * @brief Log a message from a fault handler, sent before returning.
+ *
+ * For contexts where OS services can't be trusted: never filtered, never recorded to flash, and
+ * formatted on a small stack buffer. Prefer PBL_LOG_FAULT().
+ *
+ * @param src_filename Source file name.
+ * @param src_line_number Source line number.
+ * @param fmt printf-style format.
+ * @param ... Format arguments.
+ */
+void pbl_log_fault(const char *src_filename, int src_line_number, const char *fmt, ...)
+    PBL_FORMAT_PRINTF(3, 4);
 
 /**
  * @brief Log data as xxd-style lines of 16 bytes, sent before returning.
@@ -315,28 +316,6 @@ int pbl_log_get_bin_format(char *buffer, int buffer_len, const uint8_t log_level
 /** @brief Color of @ref LOG_LEVEL_DEBUG_VERBOSE messages. */
 #define LOG_COLOR_FOR_VERBOSE LOG_COLOR_GREY
 /** @} */
-
-#ifndef STRINGIFY
-/**
- * @brief Turn the argument into a string literal without expanding it.
- *
- * @param a Argument.
- */
-#define STRINGIFY_NX(a) #a
-/**
- * @brief Turn the expansion of the argument into a string literal.
- *
- * @param a Argument.
- */
-#define STRINGIFY(a) STRINGIFY_NX(a)
-#endif // STRINGIFY
-
-/**
- * @brief Turn the expansion of a status code into a string literal.
- *
- * @param s Status code.
- */
-#define STATUS_STRING(s) STRINGIFY(s)
 
 /** @cond INTERNAL_HIDDEN */
 // Per-module compile-time log level and name. PBL_LOG_MODULE_DEFINE /
@@ -527,8 +506,19 @@ int pbl_log_get_bin_format(char *buffer, int buffer_len, const uint8_t log_level
   } while (0)
 #endif
 #else // !CONFIG_LOG
-#define PBL_LOG_COLOR(level, color, fmt, ...)
-#define PBL_LOG_COLOR_SYNC(level, color, fmt, ...)
+/** @cond INTERNAL_HIDDEN */
+static inline void _pbl_log_unused(const char *fmt, ...) PBL_FORMAT_PRINTF(1, 2);
+static inline void _pbl_log_unused(const char *fmt, ...) {
+}
+/** @endcond */
+// Arguments stay used, and the format checked, but nothing is evaluated.
+#define PBL_LOG_COLOR(level, color, fmt, ...) \
+  do {                                        \
+    if (0) {                                  \
+      _pbl_log_unused(fmt, ##__VA_ARGS__);    \
+    }                                         \
+  } while (0)
+#define PBL_LOG_COLOR_SYNC(level, color, fmt, ...) PBL_LOG_COLOR(level, color, fmt, ##__VA_ARGS__)
 #endif // CONFIG_LOG
 
 // Level-named macros (async)
@@ -579,6 +569,14 @@ int pbl_log_get_bin_format(char *buffer, int buffer_len, const uint8_t log_level
  */
 #define PBL_LOG_VERBOSE(fmt, ...) \
   PBL_LOG_COLOR(LOG_LEVEL_DEBUG_VERBOSE, LOG_COLOR_FOR_VERBOSE, fmt, ##__VA_ARGS__)
+
+/**
+ * @brief Log a message from a fault handler, sent before returning.
+ *
+ * @param fmt printf-style format, a string literal.
+ * @param ... Format arguments.
+ */
+#define PBL_LOG_FAULT(fmt, ...) pbl_log_fault(__FILE_NAME__, __LINE__, fmt, ##__VA_ARGS__)
 
 // Level-named sync macros
 /**
@@ -648,7 +646,13 @@ int pbl_log_get_bin_format(char *buffer, int buffer_len, const uint8_t log_level
     }                                                                \
   } while (0)
 #else
-#define PBL_LOG_HEXDUMP(level, data, length)
+#define PBL_LOG_HEXDUMP(level, data, length) \
+  do {                                       \
+    if (0) {                                 \
+      (void)(data);                          \
+      (void)(length);                        \
+    }                                        \
+  } while (0)
 #endif
 
 /**
@@ -686,34 +690,5 @@ int pbl_log_get_bin_format(char *buffer, int buffer_len, const uint8_t log_level
  * @param length Length of @p data in bytes.
  */
 #define PBL_LOG_HEXDUMP_VERBOSE(data, length) PBL_LOG_HEXDUMP(LOG_LEVEL_DEBUG_VERBOSE, data, length)
-
-/**
- * @def RETURN_STATUS
- * @brief Return a status code, logging a warning if it is a failure.
- *
- * @param st Status code.
- */
-/**
- * @def RETURN_STATUS_UP
- * @brief Return a status code to the caller, turning @c E_INVALID_ARGUMENT into @c E_INTERNAL.
- *
- * An invalid argument passed down by this layer is an internal error for its caller.
- *
- * @param st Status code.
- */
-#ifdef CONFIG_LOG
-#define RETURN_STATUS(st)           \
-  do {                              \
-    if (FAILED(st)) {               \
-      PBL_LOG_WRN("%d", (int)(st)); \
-    }                               \
-    return st;                      \
-  } while (0)
-
-#define RETURN_STATUS_UP(st) return ((st) != E_INVALID_ARGUMENT ? (st) : E_INTERNAL)
-#else // CONFIG_LOG
-#define RETURN_STATUS(st)    return (st)
-#define RETURN_STATUS_UP(st) return ((st) == E_INVALID_ARGUMENT ? E_INTERNAL : (st))
-#endif // CONFIG_LOG
 
 /** @} */

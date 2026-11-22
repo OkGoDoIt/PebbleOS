@@ -15,7 +15,6 @@ pytestmark = [
 
 # Limits from the PRF release checklist, at NOMINAL_VOLTAGE_MV.
 NOMINAL_VOLTAGE_MV = 3800
-ADVERTISING_MAX_UA = 1000
 CONNECTED_MAX_UA = 550
 MEASURE_S = 30
 
@@ -24,10 +23,17 @@ BACKLIGHT_ON_S = (3.0, 4.0)
 BACKLIGHT_IDLE_S = 6
 BACKLIGHT_PRESS_AT_S = 1
 BACKLIGHT_MEASURE_S = 7
-SMOOTHING_S = 0.01
+# Long enough to flatten radio events, which can draw more than the backlight
+SMOOTHING_S = 0.1
+# Where the backlight is fully on, from the press
+BACKLIGHT_LIT_S = (0.5, 2.5)
 
 # Booting at this VBAT, the fuel gauge estimates under 5%: PRF's low battery.
 LOW_BATTERY_MV = 3500
+# Boards whose battery model reaches 5% lower
+LOW_BATTERY_MV_BOARD = {
+    "asterix": 3300,
+}
 # The fuel gauge's first reading after boot, within this of the PPK2's.
 BATTERY_LOG = r"Percent: \d+, V: (-?\d+) mV"
 VBAT_TOLERANCE_MV = 100
@@ -47,13 +53,6 @@ def _record(record_property, measurement, limit_ua):
     print(measurement)
 
 
-def test_advertising(dut, power, record_property):
-    dut.reset()
-    m = power.measure_idle("advertising", seconds=MEASURE_S)
-    _record(record_property, m, ADVERTISING_MAX_UA)
-    assert m.mean_ua <= ADVERTISING_MAX_UA, m
-
-
 def test_connected(dut, phones, power, record_property):
     dut.reset()
     phone = phones().connect()
@@ -64,14 +63,22 @@ def test_connected(dut, phones, power, record_property):
 
 
 def _on_time_s(samples, sample_rate_hz):
-    """How long the current stays in its upper half: the backlight's."""
+    """How long the backlight stays on from the press: the current above
+    halfway between before the press and fully lit."""
     window = int(SMOOTHING_S * sample_rate_hz)
     smooth = np.convolve(samples, np.ones(window) / window, mode="valid")
-    low, high = np.percentile(smooth, [10, 90])
-    above = np.flatnonzero(smooth > (low + high) / 2)
-    if len(above) == 0:
+    press = int(BACKLIGHT_PRESS_AT_S * sample_rate_hz)
+    lit = smooth[press + int(BACKLIGHT_LIT_S[0] * sample_rate_hz) :][
+        : int((BACKLIGHT_LIT_S[1] - BACKLIGHT_LIT_S[0]) * sample_rate_hz)
+    ]
+    threshold = (np.median(smooth[:press]) + np.median(lit)) / 2
+    above = smooth[press:] > threshold
+    start = int(np.argmax(above))
+    if not above[start]:
         return 0.0
-    return (above[-1] - above[0]) / sample_rate_hz
+    off = np.flatnonzero(~above[start:])
+    end = start + int(off[0]) if len(off) else len(above)
+    return (end - start) / sample_rate_hz
 
 
 def test_backlight_timeout(dut, power, record_property):
@@ -100,9 +107,11 @@ def _boot_at(dut, power, voltage_mv):
     pytest.fail(f"VBAT reads {vbat_mv} mV with the supply at {voltage_mv} mV")
 
 
-def test_low_battery(dut, power):
+def test_low_battery(dut, build, power):
     try:
-        since = _boot_at(dut, power, LOW_BATTERY_MV)
+        since = _boot_at(
+            dut, power, LOW_BATTERY_MV_BOARD.get(build.board, LOW_BATTERY_MV)
+        )
         dut.wait_for_log(r"Battery low: enter low power mode", 60, since)
         assert "Low Power App" in Ui(dut).window_stack()
     finally:

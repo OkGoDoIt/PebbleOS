@@ -1,0 +1,1048 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include <string.h>
+
+#include <pbl/cron/cron.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/kernel/mutex.h>
+#include <pbl/logging/logging.h>
+#include <pbl/services/clock.h>
+#include <pbl/services/notifications/alerts_preferences.h>
+#include <pbl/services/notifications/alerts_preferences_private.h>
+#include <pbl/services/notifications/do_not_disturb.h>
+#include <pbl/services/vibes/vibe_intensity.h>
+#include <pbl/settings/settings.h>
+#include <pbl/util/math.h>
+#include <pbl/util/size.h>
+
+#include <shell/prefs_private.h>
+
+PBL_LOG_MODULE_DECLARE(service_notifications, CONFIG_SERVICE_NOTIFICATIONS_LOG_LEVEL);
+
+static PBL_MUTEX_DEFINE(s_mutex);
+
+///////////////////////////////////
+//! Preference keys
+///////////////////////////////////
+
+#define PREF_KEY_MASK "mask"
+static AlertMask s_mask = AlertMaskAllOn;
+
+#define PREF_KEY_DND_INTERRUPTIONS_MASK "dndInterruptionsMask"
+static AlertMask s_dnd_interruptions_mask = AlertMaskAllOff;
+
+#define PREF_KEY_DND_SHOW_NOTIFICATIONS "dndShowNotifications"
+static DndNotificationMode s_dnd_show_notifications = DndNotificationModeShow;
+
+#define PREF_KEY_DND_MOTION_BACKLIGHT "dndMotionBacklight"
+static bool s_dnd_motion_backlight = true;
+
+#define PREF_KEY_DND_TOUCH_BACKLIGHT "dndTouchBacklight"
+static bool s_dnd_touch_backlight = true;
+
+#define PREF_KEY_DND_NOTIFICATION_BACKLIGHT "dndNotificationBacklight"
+static bool s_dnd_notification_backlight = true;
+
+#define PREF_KEY_DND_MUTE_SPEAKER "dndMuteSpeaker"
+static bool s_dnd_mute_speaker = false;
+
+#define PREF_KEY_DND_AUTO_DISMISS "dndAutoDismiss"
+static bool s_dnd_auto_dismiss = false;
+
+#define PREF_KEY_SPEAKER_MUTED "speakerMuted"
+static bool s_speaker_muted = false;
+
+#define PREF_KEY_SPEAKER_VOLUME "speakerVolume"
+static uint8_t s_speaker_volume = 100;
+
+#define PREF_KEY_VIBE "vibe"
+static bool s_vibe_on_notification = true;
+
+#define PREF_KEY_VIBE_INTENSITY "vibeIntensity"
+static VibeIntensity s_vibe_intensity = DEFAULT_VIBE_INTENSITY;
+
+#define PREF_KEY_VIBE_SCORE_NOTIFICATIONS ("vibeScoreNotifications")
+static VibeScoreId s_vibe_score_notifications = DEFAULT_VIBE_SCORE_NOTIFS;
+
+#define PREF_KEY_VIBE_SCORE_INCOMING_CALLS ("vibeScoreIncomingCalls")
+static VibeScoreId s_vibe_score_incoming_calls = DEFAULT_VIBE_SCORE_INCOMING_CALLS;
+
+#define PREF_KEY_VIBE_SCORE_ALARMS ("vibeScoreAlarms")
+static VibeScoreId s_vibe_score_alarms = DEFAULT_VIBE_SCORE_ALARMS;
+
+#define PREF_KEY_VIBE_SCORE_HOURLY ("vibeScoreHourly")
+static VibeScoreId s_vibe_score_hourly = DEFAULT_VIBE_SCORE_HOURLY;
+
+#define PREF_KEY_VIBE_SCORE_ON_DISCONNECT ("vibeScoreOnDisconnect")
+static VibeScoreId s_vibe_score_on_disconnect = DEFAULT_VIBE_SCORE_ON_DISCONNECT;
+
+#define PREF_KEY_DND_MANUALLY_ENABLED "dndManuallyEnabled"
+static bool s_do_not_disturb_manually_enabled = false;
+
+#define PREF_KEY_DND_SMART_ENABLED "dndSmartEnabled"
+static bool s_do_not_disturb_smart_dnd_enabled = false;
+
+static const char *const s_dnd_schedule_slot_keys[] = {DND_SCHEDULE_SLOT_KEYS};
+static_assert(PBL_ARRAY_SIZE(s_dnd_schedule_slot_keys) == DND_NUM_SCHEDULE_SLOTS);
+static DoNotDisturbScheduleSlot s_dnd_schedule_slots[DND_NUM_SCHEDULE_SLOTS];
+
+#define PREF_KEY_FIRST_USE_COMPLETE "firstUseComplete"
+static uint32_t s_first_use_complete = 0;
+
+#define PREF_KEY_NOTIF_WINDOW_TIMEOUT "notifWindowTimeout"
+static uint32_t s_notif_window_timeout_ms = NOTIF_WINDOW_TIMEOUT_DEFAULT;
+
+#define PREF_KEY_NOTIF_DESIGN_STYLE "notifDesignStyle"
+static bool s_notification_alternative_design =
+    false; // true = alternative (black banner), false = standard (default)
+
+#define PREF_KEY_NOTIF_VIBE_DELAY "notifVibeDelay"
+static bool s_notification_vibe_delay =
+    true; // true = vibe at end of animation (default), false = vibe immediately
+
+#define PREF_KEY_NOTIF_BACKLIGHT "notifBacklight"
+static bool s_notification_backlight =
+    true; // true = enable backlight (default), false = disable backlight
+
+#define PREF_KEY_NOTIF_RESPECT_PHONE_SILENCE "notifRespectPhoneSilence"
+static bool s_notification_respect_phone_silence = false;
+
+#define PREF_KEY_NOTIF_DISMISSAL_SYNC "notifDismissalSync"
+static bool s_notification_dismissal_sync = false;
+
+#define PREF_KEY_NOTIF_GROUPING_RANGE "notifGroupingRange"
+static NotificationGroupingRange s_notification_grouping_range = NotificationGroupingRange_Never;
+
+#define PREF_KEY_NOTIF_STATUS_BAR_STYLE "notifStatusBarStyle"
+static NotificationStatusBarStyle s_notification_status_bar_style =
+    NotificationStatusBarStyle_Default;
+
+#define PREF_KEY_NOTIF_TEXT_SIZE  "notifTextSize"
+#define SHELL_PREF_KEY_TEXT_STYLE "textStyle"
+static PreferredContentSize s_notification_content_size = PreferredContentSizeDefault;
+
+///////////////////////////////////
+//! Legacy preference keys
+///////////////////////////////////
+
+#define PREF_KEY_LEGACY_DND_SCHEDULE "dndSchedule"
+static const DoNotDisturbSchedule s_default_dnd_schedule = {
+  .from_hour = 0,
+  .to_hour = 6,
+};
+static DoNotDisturbSchedule s_legacy_dnd_schedule = s_default_dnd_schedule;
+
+#define PREF_KEY_LEGACY_DND_SCHEDULE_ENABLED "dndEnabled"
+static bool s_legacy_dnd_schedule_enabled = false;
+
+#define PREF_KEY_LEGACY_DND_MANUAL_FIRST_USE "dndManualFirstUse"
+#define PREF_KEY_LEGACY_DND_SMART_FIRST_USE  "dndSmartFirstUse"
+
+///////////////////////////////////
+//! Variables
+///////////////////////////////////
+
+//! Weekday and weekend schedules, superseded by the schedule slots. Phones still sync them, and
+//! they stay mirrored with slots 0 and 1.
+typedef enum DoNotDisturbScheduleType {
+  WeekdaySchedule,
+  WeekendSchedule,
+  NumDNDSchedules,
+} DoNotDisturbScheduleType;
+
+typedef struct DoNotDisturbScheduleConfig {
+  DoNotDisturbSchedule schedule;
+  bool enabled;
+} DoNotDisturbScheduleConfig;
+
+typedef struct DoNotDisturbScheduleConfigKeys {
+  const char *schedule_pref_key;
+  const char *enabled_pref_key;
+} DoNotDisturbScheduleConfigKeys;
+
+static DoNotDisturbScheduleConfig s_dnd_schedule[NumDNDSchedules];
+
+static const DoNotDisturbScheduleConfigKeys s_dnd_schedule_keys[NumDNDSchedules] = {
+  [WeekdaySchedule] =
+      {
+        .schedule_pref_key = "dndWeekdaySchedule",
+        .enabled_pref_key = "dndWeekdayScheduleEnabled",
+      },
+  [WeekendSchedule] = {
+    .schedule_pref_key = "dndWeekendSchedule",
+    .enabled_pref_key = "dndWeekendScheduleEnabled",
+  }
+};
+
+// Notifications used to render with the legacy "textStyle" content size. Seed the dedicated
+// preference from it once so an existing choice survives. Shell prefs are not loaded yet
+// when this runs, so read their file directly.
+static void prv_migrate_notification_content_size(struct pbl_settings_file *file) {
+  if (pbl_settings_exists(file, PREF_KEY_NOTIF_TEXT_SIZE, strlen(PREF_KEY_NOTIF_TEXT_SIZE))) {
+    return;
+  }
+
+  s_notification_content_size = PreferredContentSizeDefault;
+  struct pbl_settings_file shell_prefs = {};
+  if (pbl_settings_open(&shell_prefs, SHELL_PREFS_FILE_NAME, SHELL_PREFS_FILE_LEN) == 0) {
+    uint8_t text_style;
+    // Shell pref keys are stored with their NUL terminator.
+    if (pbl_settings_get(&shell_prefs, SHELL_PREF_KEY_TEXT_STYLE, sizeof(SHELL_PREF_KEY_TEXT_STYLE),
+                         &text_style, sizeof(text_style)) == 0 &&
+        text_style < NumPreferredContentSizes) {
+      s_notification_content_size = text_style;
+    }
+    pbl_settings_close(&shell_prefs);
+  }
+
+  pbl_settings_set(file, PREF_KEY_NOTIF_TEXT_SIZE, strlen(PREF_KEY_NOTIF_TEXT_SIZE),
+                   &s_notification_content_size, sizeof(s_notification_content_size));
+}
+
+static void prv_migrate_legacy_dnd_schedule(struct pbl_settings_file *file) {
+  // If Weekday schedule does not exist, assume that the other 3 settings files are missing as well
+  // Set the new schedules to the legacy schedule and delete the legacy schedule
+  if (!pbl_settings_exists(file, s_dnd_schedule_keys[WeekdaySchedule].schedule_pref_key,
+                           strlen(s_dnd_schedule_keys[WeekdaySchedule].schedule_pref_key))) {
+#define SET_PREF_ALREADY_OPEN(key, value) \
+  pbl_settings_set(file, key, strlen(key), value, sizeof(*(value)));
+
+    s_dnd_schedule[WeekdaySchedule].schedule = s_legacy_dnd_schedule;
+    SET_PREF_ALREADY_OPEN(s_dnd_schedule_keys[WeekdaySchedule].schedule_pref_key,
+                          &s_dnd_schedule[WeekdaySchedule].schedule);
+    s_dnd_schedule[WeekdaySchedule].enabled = s_legacy_dnd_schedule_enabled;
+    SET_PREF_ALREADY_OPEN(s_dnd_schedule_keys[WeekdaySchedule].enabled_pref_key,
+                          &s_dnd_schedule[WeekdaySchedule].enabled);
+    s_dnd_schedule[WeekendSchedule].schedule = s_legacy_dnd_schedule;
+    SET_PREF_ALREADY_OPEN(s_dnd_schedule_keys[WeekendSchedule].schedule_pref_key,
+                          &s_dnd_schedule[WeekendSchedule].schedule);
+    s_dnd_schedule[WeekendSchedule].enabled = s_legacy_dnd_schedule_enabled;
+    SET_PREF_ALREADY_OPEN(s_dnd_schedule_keys[WeekendSchedule].enabled_pref_key,
+                          &s_dnd_schedule[WeekendSchedule].enabled);
+#undef SET_PREF_ALREADY_OPEN
+
+#define DELETE_PREF(key)                               \
+  do {                                                 \
+    if (pbl_settings_exists(file, key, strlen(key))) { \
+      pbl_settings_delete(file, key, strlen(key));     \
+    }                                                  \
+  } while (0)
+
+    DELETE_PREF(PREF_KEY_LEGACY_DND_SCHEDULE);
+    DELETE_PREF(PREF_KEY_LEGACY_DND_SCHEDULE_ENABLED);
+#undef DELETE_PREF
+  }
+}
+
+static const uint8_t s_dnd_schedule_days[NumDNDSchedules] = {
+  [WeekdaySchedule] = PBL_CRON_WDAY_WEEKDAYS,
+  [WeekendSchedule] = PBL_CRON_WDAY_WEEKENDS,
+};
+
+static DoNotDisturbScheduleSlot prv_slot_from_legacy(DoNotDisturbScheduleType type) {
+  const DoNotDisturbScheduleConfig *legacy = &s_dnd_schedule[type];
+  return (DoNotDisturbScheduleSlot){
+    .used = true,
+    .enabled = legacy->enabled,
+    .kind = (type == WeekdaySchedule) ? DoNotDisturbScheduleKindWeekdays
+                                      : DoNotDisturbScheduleKindWeekends,
+    .schedule = legacy->schedule,
+    .legacy = true,
+  };
+}
+
+static bool prv_slot_mirrors_legacy(DoNotDisturbScheduleType type,
+                                    const DoNotDisturbScheduleSlot *slot) {
+  return slot->used && slot->legacy &&
+         do_not_disturb_schedule_slot_get_days(slot) == s_dnd_schedule_days[type];
+}
+
+static void prv_migrate_dnd_schedule_slots(struct pbl_settings_file *file) {
+  if (pbl_settings_exists(file, s_dnd_schedule_slot_keys[0], strlen(s_dnd_schedule_slot_keys[0]))) {
+    return;
+  }
+
+  // Slot 0 marks the migration as done, so both slots are written even when unused
+  for (int type = 0; type < NumDNDSchedules; type++) {
+    DoNotDisturbScheduleConfig *legacy = &s_dnd_schedule[type];
+    if (legacy->enabled ||
+        memcmp(&legacy->schedule, &s_default_dnd_schedule, sizeof(s_default_dnd_schedule)) != 0) {
+      s_dnd_schedule_slots[type] = prv_slot_from_legacy(type);
+      if (!do_not_disturb_schedule_slot_is_valid(&s_dnd_schedule_slots[type])) {
+        PBL_LOG_WRN("Resetting invalid DND schedule %d", type);
+        legacy->schedule = s_default_dnd_schedule;
+        s_dnd_schedule_slots[type].schedule = legacy->schedule;
+        const char *key = s_dnd_schedule_keys[type].schedule_pref_key;
+        pbl_settings_set(file, key, strlen(key), &legacy->schedule, sizeof(legacy->schedule));
+      }
+    }
+    pbl_settings_set(file, s_dnd_schedule_slot_keys[type], strlen(s_dnd_schedule_slot_keys[type]),
+                     &s_dnd_schedule_slots[type], sizeof(s_dnd_schedule_slots[type]));
+  }
+}
+
+//! Make the legacy keys of a schedule describe its slot. A slot that doesn't mirror the legacy
+//! schedule leaves it disabled.
+static void prv_sync_legacy_schedule(struct pbl_settings_file *file,
+                                     DoNotDisturbScheduleType type) {
+  const DoNotDisturbScheduleSlot *slot = &s_dnd_schedule_slots[type];
+  DoNotDisturbScheduleConfig *legacy = &s_dnd_schedule[type];
+  const DoNotDisturbScheduleConfigKeys *keys = &s_dnd_schedule_keys[type];
+  const bool mirrors = prv_slot_mirrors_legacy(type, slot);
+  const bool enabled = mirrors && slot->enabled;
+
+  if (mirrors && memcmp(&legacy->schedule, &slot->schedule, sizeof(legacy->schedule)) != 0) {
+    legacy->schedule = slot->schedule;
+    pbl_settings_set(file, keys->schedule_pref_key, strlen(keys->schedule_pref_key),
+                     &legacy->schedule, sizeof(legacy->schedule));
+  }
+  if (legacy->enabled != enabled) {
+    legacy->enabled = enabled;
+    pbl_settings_set(file, keys->enabled_pref_key, strlen(keys->enabled_pref_key), &legacy->enabled,
+                     sizeof(legacy->enabled));
+  }
+}
+
+static void prv_migrate_legacy_first_use_settings(struct pbl_settings_file *file) {
+  // These don't need to be initialized since pbl_settings_get will clear them on error
+  uint8_t manual_dnd_first_use_complete;
+  bool smart_dnd_first_use_complete;
+
+  // Migrate the old first use dialog prefs
+#define RESTORE_AND_DELETE_PREF(key, var)                                   \
+  do {                                                                      \
+    if (pbl_settings_get(file, key, strlen(key), &var, sizeof(var)) == 0) { \
+      pbl_settings_delete(file, key, strlen(key));                          \
+    }                                                                       \
+  } while (0)
+
+  RESTORE_AND_DELETE_PREF(PREF_KEY_LEGACY_DND_MANUAL_FIRST_USE, manual_dnd_first_use_complete);
+  RESTORE_AND_DELETE_PREF(PREF_KEY_LEGACY_DND_SMART_FIRST_USE, smart_dnd_first_use_complete);
+
+  s_first_use_complete |= manual_dnd_first_use_complete << FirstUseSourceManualDNDActionMenu;
+  s_first_use_complete |= smart_dnd_first_use_complete << FirstUseSourceSmartDND;
+
+#undef RESTORE_AND_DELETE_PREF
+}
+
+// Persist any vibe score values that were modified by migration. Skipping
+// unchanged keys avoids bumping their settings_file timestamps on every boot,
+// which would otherwise make the watch win every sync conflict against the
+// phone and leave settings_blob_db's INSERT_WITH_TIMESTAMP path permanently
+// rejecting the user's chosen value.
+static void prv_save_changed_vibe_scores_to_file(struct pbl_settings_file *file,
+                                                 VibeScoreId orig_notifications,
+                                                 VibeScoreId orig_incoming_calls,
+                                                 VibeScoreId orig_alarms, VibeScoreId orig_hourly,
+                                                 VibeScoreId orig_on_disconnect) {
+#define SET_PREF_IF_CHANGED(key, value, orig)                            \
+  do {                                                                   \
+    if ((value) != (orig)) {                                             \
+      pbl_settings_set(file, key, strlen(key), &(value), sizeof(value)); \
+    }                                                                    \
+  } while (0)
+
+  SET_PREF_IF_CHANGED(PREF_KEY_VIBE_SCORE_NOTIFICATIONS, s_vibe_score_notifications,
+                      orig_notifications);
+  SET_PREF_IF_CHANGED(PREF_KEY_VIBE_SCORE_INCOMING_CALLS, s_vibe_score_incoming_calls,
+                      orig_incoming_calls);
+  SET_PREF_IF_CHANGED(PREF_KEY_VIBE_SCORE_ALARMS, s_vibe_score_alarms, orig_alarms);
+  SET_PREF_IF_CHANGED(PREF_KEY_VIBE_SCORE_HOURLY, s_vibe_score_hourly, orig_hourly);
+  SET_PREF_IF_CHANGED(PREF_KEY_VIBE_SCORE_ON_DISCONNECT, s_vibe_score_on_disconnect,
+                      orig_on_disconnect);
+#undef SET_PREF_IF_CHANGED
+}
+
+static VibeScoreId prv_return_default_if_invalid(VibeScoreId id, VibeScoreId default_id) {
+  return vibe_score_info_is_valid(id) ? id : default_id;
+}
+
+// Uses the default vibe pattern id if the given score isn't valid
+static void prv_ensure_valid_vibe_scores(void) {
+  s_vibe_score_notifications =
+      prv_return_default_if_invalid(s_vibe_score_notifications, DEFAULT_VIBE_SCORE_NOTIFS);
+  s_vibe_score_incoming_calls =
+      prv_return_default_if_invalid(s_vibe_score_incoming_calls, DEFAULT_VIBE_SCORE_INCOMING_CALLS);
+  s_vibe_score_alarms =
+      prv_return_default_if_invalid(s_vibe_score_alarms, DEFAULT_VIBE_SCORE_ALARMS);
+  s_vibe_score_hourly =
+      prv_return_default_if_invalid(s_vibe_score_hourly, DEFAULT_VIBE_SCORE_HOURLY);
+  s_vibe_score_on_disconnect =
+      prv_return_default_if_invalid(s_vibe_score_on_disconnect, DEFAULT_VIBE_SCORE_ON_DISCONNECT);
+}
+
+static void prv_set_vibe_scores_based_on_legacy_intensity(VibeIntensity intensity) {
+  if (intensity == VibeIntensityHigh) {
+    s_vibe_score_notifications = VibeScoreId_StandardShortPulseHigh;
+    s_vibe_score_incoming_calls = VibeScoreId_StandardLongPulseHigh;
+    s_vibe_score_alarms = VibeScoreId_StandardLongPulseHigh;
+  } else {
+    s_vibe_score_notifications = VibeScoreId_StandardShortPulseLow;
+    s_vibe_score_incoming_calls = VibeScoreId_StandardLongPulseLow;
+    s_vibe_score_alarms = VibeScoreId_StandardLongPulseLow;
+  }
+}
+
+static void prv_migrate_vibe_intensity_to_vibe_scores(struct pbl_settings_file *file) {
+  // We use the existence of the notifications vibe score pref as a shallow measurement of whether
+  // or not the user has migrated to vibe scores
+  const bool user_has_migrated_to_vibe_scores = pbl_settings_exists(
+      file, PREF_KEY_VIBE_SCORE_NOTIFICATIONS, strlen(PREF_KEY_VIBE_SCORE_NOTIFICATIONS));
+
+  if (!user_has_migrated_to_vibe_scores) {
+    // If the user previously set a vibration intensity, set the vibe scores based on that intensity
+    if (pbl_settings_exists(file, PREF_KEY_VIBE_INTENSITY, strlen(PREF_KEY_VIBE_INTENSITY))) {
+      prv_set_vibe_scores_based_on_legacy_intensity(s_vibe_intensity);
+    } else if (clock_is_timezone_set()) {
+      // Otherwise, if the timezone has been set, then we assume this is a user on 3.10 and lower
+      // that has not touched their vibe intensity preferences.
+      // clock_is_timezone_set() was chosen because it is a setting that gets written when the user
+      // connects their watch to a phone
+      prv_set_vibe_scores_based_on_legacy_intensity(DEFAULT_VIBE_INTENSITY);
+    }
+  }
+
+  // PREF_KEY_VIBE, which used to track whether the user enabled/disabled vibrations, has been
+  // deprecated in favor of the "disabled vibe score", VibeScoreId_Disabled, so switch to using it
+  // and delete PREF_KEY_VIBE from the settings file if PREF_KEY_VIBE exists in the settings file
+  if (pbl_settings_exists(file, PREF_KEY_VIBE, strlen(PREF_KEY_VIBE))) {
+    if (!s_vibe_on_notification) {
+      s_vibe_score_notifications = VibeScoreId_Disabled;
+      s_vibe_score_incoming_calls = VibeScoreId_Disabled;
+    }
+    pbl_settings_delete(file, PREF_KEY_VIBE, strlen(PREF_KEY_VIBE));
+  }
+}
+
+void alerts_preferences_init(void) {
+  struct pbl_settings_file file = {};
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) != 0) {
+    return;
+  }
+
+  // The notif-prefs file may contain records keyed with strlen() (local writes)
+  // or strlen()+1 (legacy phone-pushed records from before settings_blob_db
+  // canonicalised the key length). Settings file lookups match key_len exactly,
+  // so probe both lengths to remain backwards compatible with records written
+  // by older firmware.
+#define RESTORE_PREF(key, var)                                                     \
+  do {                                                                             \
+    typeof(var) _tmp;                                                              \
+    if (pbl_settings_get(&file, key, strlen(key), &_tmp, sizeof(_tmp)) == 0 ||     \
+        pbl_settings_get(&file, key, strlen(key) + 1, &_tmp, sizeof(_tmp)) == 0) { \
+      var = _tmp;                                                                  \
+    }                                                                              \
+  } while (0)
+
+  RESTORE_PREF(PREF_KEY_MASK, s_mask);
+  RESTORE_PREF(PREF_KEY_VIBE, s_vibe_on_notification);
+  RESTORE_PREF(PREF_KEY_VIBE_INTENSITY, s_vibe_intensity);
+  RESTORE_PREF(PREF_KEY_VIBE_SCORE_NOTIFICATIONS, s_vibe_score_notifications);
+  RESTORE_PREF(PREF_KEY_VIBE_SCORE_INCOMING_CALLS, s_vibe_score_incoming_calls);
+  RESTORE_PREF(PREF_KEY_VIBE_SCORE_ALARMS, s_vibe_score_alarms);
+  RESTORE_PREF(PREF_KEY_VIBE_SCORE_HOURLY, s_vibe_score_hourly);
+  RESTORE_PREF(PREF_KEY_VIBE_SCORE_ON_DISCONNECT, s_vibe_score_on_disconnect);
+  RESTORE_PREF(PREF_KEY_DND_MANUALLY_ENABLED, s_do_not_disturb_manually_enabled);
+  RESTORE_PREF(PREF_KEY_DND_SMART_ENABLED, s_do_not_disturb_smart_dnd_enabled);
+  RESTORE_PREF(PREF_KEY_DND_INTERRUPTIONS_MASK, s_dnd_interruptions_mask);
+  RESTORE_PREF(PREF_KEY_DND_SHOW_NOTIFICATIONS, s_dnd_show_notifications);
+  RESTORE_PREF(PREF_KEY_DND_MOTION_BACKLIGHT, s_dnd_motion_backlight);
+  RESTORE_PREF(PREF_KEY_DND_TOUCH_BACKLIGHT, s_dnd_touch_backlight);
+  RESTORE_PREF(PREF_KEY_DND_NOTIFICATION_BACKLIGHT, s_dnd_notification_backlight);
+  RESTORE_PREF(PREF_KEY_DND_MUTE_SPEAKER, s_dnd_mute_speaker);
+  RESTORE_PREF(PREF_KEY_SPEAKER_MUTED, s_speaker_muted);
+  RESTORE_PREF(PREF_KEY_SPEAKER_VOLUME, s_speaker_volume);
+  RESTORE_PREF(PREF_KEY_LEGACY_DND_SCHEDULE, s_legacy_dnd_schedule);
+  RESTORE_PREF(PREF_KEY_LEGACY_DND_SCHEDULE_ENABLED, s_legacy_dnd_schedule_enabled);
+  RESTORE_PREF(s_dnd_schedule_keys[WeekdaySchedule].schedule_pref_key,
+               s_dnd_schedule[WeekdaySchedule].schedule);
+  RESTORE_PREF(s_dnd_schedule_keys[WeekdaySchedule].enabled_pref_key,
+               s_dnd_schedule[WeekdaySchedule].enabled);
+  RESTORE_PREF(s_dnd_schedule_keys[WeekendSchedule].schedule_pref_key,
+               s_dnd_schedule[WeekendSchedule].schedule);
+  RESTORE_PREF(s_dnd_schedule_keys[WeekendSchedule].enabled_pref_key,
+               s_dnd_schedule[WeekendSchedule].enabled);
+  for (int i = 0; i < DND_NUM_SCHEDULE_SLOTS; i++) {
+    RESTORE_PREF(s_dnd_schedule_slot_keys[i], s_dnd_schedule_slots[i]);
+    if (!s_dnd_schedule_slots[i].used) {
+      s_dnd_schedule_slots[i] = (DoNotDisturbScheduleSlot){};
+    } else if (!do_not_disturb_schedule_slot_is_valid(&s_dnd_schedule_slots[i])) {
+      PBL_LOG_ERR("Dropping invalid DND schedule slot %d", i);
+      s_dnd_schedule_slots[i] = (DoNotDisturbScheduleSlot){};
+    }
+  }
+  RESTORE_PREF(PREF_KEY_FIRST_USE_COMPLETE, s_first_use_complete);
+  RESTORE_PREF(PREF_KEY_NOTIF_WINDOW_TIMEOUT, s_notif_window_timeout_ms);
+  RESTORE_PREF(PREF_KEY_NOTIF_DESIGN_STYLE, s_notification_alternative_design);
+  RESTORE_PREF(PREF_KEY_NOTIF_VIBE_DELAY, s_notification_vibe_delay);
+  RESTORE_PREF(PREF_KEY_NOTIF_BACKLIGHT, s_notification_backlight);
+  RESTORE_PREF(PREF_KEY_NOTIF_RESPECT_PHONE_SILENCE, s_notification_respect_phone_silence);
+  RESTORE_PREF(PREF_KEY_NOTIF_DISMISSAL_SYNC, s_notification_dismissal_sync);
+  RESTORE_PREF(PREF_KEY_NOTIF_GROUPING_RANGE, s_notification_grouping_range);
+  RESTORE_PREF(PREF_KEY_NOTIF_STATUS_BAR_STYLE, s_notification_status_bar_style);
+  RESTORE_PREF(PREF_KEY_NOTIF_TEXT_SIZE, s_notification_content_size);
+  RESTORE_PREF(PREF_KEY_DND_AUTO_DISMISS, s_dnd_auto_dismiss);
+#undef RESTORE_PREF
+
+  prv_migrate_legacy_dnd_schedule(&file);
+  prv_migrate_notification_content_size(&file);
+  prv_migrate_dnd_schedule_slots(&file);
+  for (int type = 0; type < NumDNDSchedules; type++) {
+    prv_sync_legacy_schedule(&file, type);
+  }
+
+  const VibeScoreId orig_vibe_score_notifications = s_vibe_score_notifications;
+  const VibeScoreId orig_vibe_score_incoming_calls = s_vibe_score_incoming_calls;
+  const VibeScoreId orig_vibe_score_alarms = s_vibe_score_alarms;
+  const VibeScoreId orig_vibe_score_hourly = s_vibe_score_hourly;
+  const VibeScoreId orig_vibe_score_on_disconnect = s_vibe_score_on_disconnect;
+
+  prv_migrate_legacy_first_use_settings(&file);
+  prv_migrate_vibe_intensity_to_vibe_scores(&file);
+  prv_ensure_valid_vibe_scores();
+  // RESTORE_PREF writes straight into the globals, bypassing the setter that
+  // clamps this, so an out-of-range stored value has to be caught here.
+  if (s_speaker_volume > 100) {
+    s_speaker_volume = 100;
+  }
+  prv_save_changed_vibe_scores_to_file(&file, orig_vibe_score_notifications,
+                                       orig_vibe_score_incoming_calls, orig_vibe_score_alarms,
+                                       orig_vibe_score_hourly, orig_vibe_score_on_disconnect);
+
+  pbl_settings_close(&file);
+}
+
+// Convenience macro for setting a string key to a non-pointer value.
+#define SET_PREF(key, value) prv_set_pref(key, strlen(key), &value, sizeof(value))
+static void prv_set_pref(const void *key, size_t key_len, const void *value, size_t value_len) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  struct pbl_settings_file file = {};
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) != 0) {
+    goto cleanup;
+  }
+  pbl_settings_set(&file, key, key_len, value, value_len);
+  pbl_settings_close(&file);
+cleanup:
+  pbl_mutex_unlock(&s_mutex);
+}
+
+AlertMask alerts_preferences_get_alert_mask(void) {
+  if (s_mask == AlertMaskAllOnLegacy) {
+    // Migration for notification settings previously configured under
+    // old bit setup.
+    alerts_preferences_set_alert_mask(AlertMaskAllOn);
+  }
+  return s_mask;
+}
+
+void alerts_preferences_set_alert_mask(AlertMask mask) {
+  s_mask = mask;
+  SET_PREF(PREF_KEY_MASK, s_mask);
+}
+
+uint32_t alerts_preferences_get_notification_window_timeout_ms(void) {
+  return PBL_MAX(s_notif_window_timeout_ms, NOTIF_WINDOW_TIMEOUT_MIN);
+}
+
+void alerts_preferences_set_notification_window_timeout_ms(uint32_t timeout_ms) {
+  s_notif_window_timeout_ms = timeout_ms;
+  SET_PREF(PREF_KEY_NOTIF_WINDOW_TIMEOUT, s_notif_window_timeout_ms);
+}
+
+bool alerts_preferences_get_notification_alternative_design(void) {
+  return s_notification_alternative_design;
+}
+
+void alerts_preferences_set_notification_alternative_design(bool alternative) {
+  s_notification_alternative_design = alternative;
+  SET_PREF(PREF_KEY_NOTIF_DESIGN_STYLE, s_notification_alternative_design);
+}
+
+bool alerts_preferences_get_notification_vibe_delay(void) {
+  return s_notification_vibe_delay;
+}
+
+void alerts_preferences_set_notification_vibe_delay(bool delay) {
+  s_notification_vibe_delay = delay;
+  SET_PREF(PREF_KEY_NOTIF_VIBE_DELAY, s_notification_vibe_delay);
+}
+
+bool alerts_preferences_get_notification_backlight(void) {
+  return s_notification_backlight;
+}
+
+void alerts_preferences_set_notification_backlight(bool enable) {
+  s_notification_backlight = enable;
+  SET_PREF(PREF_KEY_NOTIF_BACKLIGHT, s_notification_backlight);
+}
+
+bool alerts_preferences_get_notification_respect_phone_silence(void) {
+  return s_notification_respect_phone_silence;
+}
+
+void alerts_preferences_set_notification_respect_phone_silence(bool enable) {
+  s_notification_respect_phone_silence = enable;
+  SET_PREF(PREF_KEY_NOTIF_RESPECT_PHONE_SILENCE, s_notification_respect_phone_silence);
+}
+
+bool alerts_preferences_get_notification_dismissal_sync(void) {
+  return s_notification_dismissal_sync;
+}
+
+void alerts_preferences_set_notification_dismissal_sync(bool enable) {
+  s_notification_dismissal_sync = enable;
+  SET_PREF(PREF_KEY_NOTIF_DISMISSAL_SYNC, s_notification_dismissal_sync);
+}
+
+NotificationGroupingRange alerts_preferences_get_notification_grouping_range(void) {
+  return (s_notification_grouping_range < NotificationGroupingRangeCount)
+             ? s_notification_grouping_range
+             : NotificationGroupingRange_Never;
+}
+
+void alerts_preferences_set_notification_grouping_range(NotificationGroupingRange range) {
+  s_notification_grouping_range = range;
+  SET_PREF(PREF_KEY_NOTIF_GROUPING_RANGE, s_notification_grouping_range);
+}
+
+NotificationStatusBarStyle alerts_preferences_get_notification_status_bar_style(void) {
+  return s_notification_status_bar_style;
+}
+
+void alerts_preferences_set_notification_status_bar_style(NotificationStatusBarStyle style) {
+  s_notification_status_bar_style = style;
+  SET_PREF(PREF_KEY_NOTIF_STATUS_BAR_STYLE, s_notification_status_bar_style);
+}
+
+PreferredContentSize alerts_preferences_get_notification_content_size(void) {
+  return (s_notification_content_size <= NotificationContentSizeSystem)
+             ? s_notification_content_size
+             : PreferredContentSizeDefault;
+}
+
+void alerts_preferences_set_notification_content_size(PreferredContentSize size) {
+  if (size > NotificationContentSizeSystem) {
+    return;
+  }
+  s_notification_content_size = size;
+  SET_PREF(PREF_KEY_NOTIF_TEXT_SIZE, s_notification_content_size);
+}
+
+bool alerts_preferences_get_speaker_muted(void) {
+  return s_speaker_muted;
+}
+
+void alerts_preferences_set_speaker_muted(bool muted) {
+  s_speaker_muted = muted;
+  SET_PREF(PREF_KEY_SPEAKER_MUTED, s_speaker_muted);
+}
+
+uint8_t alerts_preferences_get_speaker_volume(void) {
+  return s_speaker_volume;
+}
+
+void alerts_preferences_set_speaker_volume(uint8_t volume) {
+  if (volume > 100) {
+    volume = 100;
+  }
+  s_speaker_volume = volume;
+  SET_PREF(PREF_KEY_SPEAKER_VOLUME, s_speaker_volume);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//! Vibes
+
+bool alerts_preferences_get_vibrate(void) {
+  return s_vibe_on_notification;
+}
+
+void alerts_preferences_set_vibrate(bool enable) {
+  s_vibe_on_notification = enable;
+  SET_PREF(PREF_KEY_VIBE, s_vibe_on_notification);
+}
+
+VibeIntensity alerts_preferences_get_vibe_intensity(void) {
+  return s_vibe_intensity;
+}
+
+void alerts_preferences_set_vibe_intensity(VibeIntensity intensity) {
+  s_vibe_intensity = intensity;
+  SET_PREF(PREF_KEY_VIBE_INTENSITY, s_vibe_intensity);
+}
+
+VibeScoreId alerts_preferences_get_vibe_score_for_client(VibeClient client) {
+  switch (client) {
+    case VibeClient_Notifications:
+      return s_vibe_score_notifications;
+    case VibeClient_PhoneCalls:
+      return s_vibe_score_incoming_calls;
+    case VibeClient_Alarms:
+      return s_vibe_score_alarms;
+    case VibeClient_Hourly:
+      return s_vibe_score_hourly;
+    case VibeClient_OnDisconnect:
+      return s_vibe_score_on_disconnect;
+    default:
+      pbl_panic();
+  }
+}
+
+void alerts_preferences_set_vibe_score_for_client(VibeClient client, VibeScoreId id) {
+  const char *key = nullptr;
+  switch (client) {
+    case VibeClient_Notifications: {
+      s_vibe_score_notifications = id;
+      key = PREF_KEY_VIBE_SCORE_NOTIFICATIONS;
+      break;
+    }
+    case VibeClient_PhoneCalls: {
+      s_vibe_score_incoming_calls = id;
+      key = PREF_KEY_VIBE_SCORE_INCOMING_CALLS;
+      break;
+    }
+    case VibeClient_Alarms: {
+      s_vibe_score_alarms = id;
+      key = PREF_KEY_VIBE_SCORE_ALARMS;
+      break;
+    }
+    case VibeClient_Hourly: {
+      s_vibe_score_hourly = id;
+      key = PREF_KEY_VIBE_SCORE_HOURLY;
+      break;
+    }
+    case VibeClient_OnDisconnect: {
+      s_vibe_score_on_disconnect = id;
+      key = PREF_KEY_VIBE_SCORE_ON_DISCONNECT;
+      break;
+    }
+    default: {
+      pbl_panic();
+    }
+  }
+  SET_PREF(key, id);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//! DND
+
+void alerts_preferences_dnd_set_mask(AlertMask mask) {
+  s_dnd_interruptions_mask = mask;
+  SET_PREF(PREF_KEY_DND_INTERRUPTIONS_MASK, s_dnd_interruptions_mask);
+}
+
+AlertMask alerts_preferences_dnd_get_mask(void) {
+  return s_dnd_interruptions_mask;
+}
+
+void alerts_preferences_dnd_set_show_notifications(DndNotificationMode mode) {
+  s_dnd_show_notifications = mode;
+  SET_PREF(PREF_KEY_DND_SHOW_NOTIFICATIONS, s_dnd_show_notifications);
+}
+
+DndNotificationMode alerts_preferences_dnd_get_show_notifications(void) {
+  return s_dnd_show_notifications;
+}
+
+void alerts_preferences_dnd_set_motion_backlight(bool enable) {
+  s_dnd_motion_backlight = enable;
+  SET_PREF(PREF_KEY_DND_MOTION_BACKLIGHT, s_dnd_motion_backlight);
+}
+
+bool alerts_preferences_dnd_get_motion_backlight(void) {
+  return s_dnd_motion_backlight;
+}
+
+void alerts_preferences_dnd_set_touch_backlight(bool enable) {
+  s_dnd_touch_backlight = enable;
+  SET_PREF(PREF_KEY_DND_TOUCH_BACKLIGHT, s_dnd_touch_backlight);
+}
+
+bool alerts_preferences_dnd_get_touch_backlight(void) {
+  return s_dnd_touch_backlight;
+}
+
+void alerts_preferences_dnd_set_notification_backlight(bool enable) {
+  s_dnd_notification_backlight = enable;
+  SET_PREF(PREF_KEY_DND_NOTIFICATION_BACKLIGHT, s_dnd_notification_backlight);
+}
+
+bool alerts_preferences_dnd_get_notification_backlight(void) {
+  return s_dnd_notification_backlight;
+}
+
+void alerts_preferences_dnd_set_mute_speaker(bool enable) {
+  s_dnd_mute_speaker = enable;
+  SET_PREF(PREF_KEY_DND_MUTE_SPEAKER, s_dnd_mute_speaker);
+}
+
+bool alerts_preferences_dnd_get_mute_speaker(void) {
+  return s_dnd_mute_speaker;
+}
+
+void alerts_preferences_dnd_set_auto_dismiss(bool enable) {
+  s_dnd_auto_dismiss = enable;
+  SET_PREF(PREF_KEY_DND_AUTO_DISMISS, s_dnd_auto_dismiss);
+}
+
+bool alerts_preferences_dnd_get_auto_dismiss(void) {
+  return s_dnd_auto_dismiss;
+}
+
+bool alerts_preferences_dnd_is_manually_enabled(void) {
+  return s_do_not_disturb_manually_enabled;
+}
+
+void alerts_preferences_dnd_set_manually_enabled(bool enable) {
+  s_do_not_disturb_manually_enabled = enable;
+  SET_PREF(PREF_KEY_DND_MANUALLY_ENABLED, s_do_not_disturb_manually_enabled);
+}
+
+void alerts_preferences_dnd_get_schedule_slot(unsigned int index, DoNotDisturbScheduleSlot *slot) {
+  PBL_ASSERTN(index < DND_NUM_SCHEDULE_SLOTS);
+  *slot = s_dnd_schedule_slots[index];
+}
+
+void alerts_preferences_dnd_set_schedule_slot(unsigned int index,
+                                              const DoNotDisturbScheduleSlot *slot) {
+  PBL_ASSERTN(index < DND_NUM_SCHEDULE_SLOTS);
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  s_dnd_schedule_slots[index] = *slot;
+  if (index >= NumDNDSchedules) {
+    s_dnd_schedule_slots[index].legacy = false;
+  }
+  struct pbl_settings_file file = {};
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) == 0) {
+    pbl_settings_set(&file, s_dnd_schedule_slot_keys[index],
+                     strlen(s_dnd_schedule_slot_keys[index]), &s_dnd_schedule_slots[index],
+                     sizeof(s_dnd_schedule_slots[index]));
+    if (index < NumDNDSchedules) {
+      prv_sync_legacy_schedule(&file, index);
+    }
+    pbl_settings_close(&file);
+  }
+  pbl_mutex_unlock(&s_mutex);
+}
+
+bool alerts_preferences_check_and_set_first_use_complete(FirstUseSource source) {
+  if (s_first_use_complete & (1 << source)) {
+    return true;
+  };
+
+  s_first_use_complete |= (1 << source);
+  SET_PREF(PREF_KEY_FIRST_USE_COMPLETE, s_first_use_complete);
+  return false;
+}
+
+bool alerts_preferences_dnd_is_smart_enabled(void) {
+  return s_do_not_disturb_smart_dnd_enabled;
+}
+
+void alerts_preferences_dnd_set_smart_enabled(bool enable) {
+  s_do_not_disturb_smart_dnd_enabled = enable;
+  SET_PREF(PREF_KEY_DND_SMART_ENABLED, s_do_not_disturb_smart_dnd_enabled);
+}
+
+void alerts_preferences_lock(void) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+}
+
+void alerts_preferences_unlock(void) {
+  pbl_mutex_unlock(&s_mutex);
+}
+
+//! Keys that feed do_not_disturb_is_active() or the DND schedule timer
+static bool prv_is_dnd_state_key(const char *key) {
+  if (strcmp(key, PREF_KEY_DND_MANUALLY_ENABLED) == 0 ||
+      strcmp(key, PREF_KEY_DND_SMART_ENABLED) == 0) {
+    return true;
+  }
+  for (int i = 0; i < NumDNDSchedules; i++) {
+    if (strcmp(key, s_dnd_schedule_keys[i].schedule_pref_key) == 0 ||
+        strcmp(key, s_dnd_schedule_keys[i].enabled_pref_key) == 0) {
+      return true;
+    }
+  }
+  for (int i = 0; i < DND_NUM_SCHEDULE_SLOTS; i++) {
+    if (strcmp(key, s_dnd_schedule_slot_keys[i]) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+//! Apply a phone write of a legacy schedule to its mirrored slot. Only the written field is
+//! applied, and an unused slot is only filled when the schedule gets enabled. Writes that can't
+//! be applied are reverted, which leaves them dirty so the next sync restores the phone's copy.
+static void prv_mirror_legacy_schedule(struct pbl_settings_file *file, const char *key) {
+  for (int type = 0; type < NumDNDSchedules; type++) {
+    const DoNotDisturbScheduleConfigKeys *keys = &s_dnd_schedule_keys[type];
+    const bool is_schedule = (strcmp(key, keys->schedule_pref_key) == 0);
+    const bool is_enabled = (strcmp(key, keys->enabled_pref_key) == 0);
+    if (!is_schedule && !is_enabled) {
+      continue;
+    }
+
+    DoNotDisturbScheduleSlot *slot = &s_dnd_schedule_slots[type];
+    DoNotDisturbScheduleConfig *legacy = &s_dnd_schedule[type];
+    const bool mirrors = prv_slot_mirrors_legacy(type, slot);
+    const DoNotDisturbScheduleSlot from_legacy = prv_slot_from_legacy(type);
+    if (!do_not_disturb_schedule_slot_is_valid(&from_legacy)) {
+      PBL_LOG_WRN("Rejecting invalid DND schedule %d", type);
+      if (!mirrors) {
+        legacy->schedule = s_default_dnd_schedule;
+        pbl_settings_set(file, keys->schedule_pref_key, strlen(keys->schedule_pref_key),
+                         &legacy->schedule, sizeof(legacy->schedule));
+      }
+    } else if (mirrors || (!slot->used && is_enabled && legacy->enabled)) {
+      if (!mirrors) {
+        *slot = from_legacy;
+      } else if (is_schedule) {
+        slot->schedule = legacy->schedule;
+      } else {
+        slot->enabled = legacy->enabled;
+      }
+      pbl_settings_set(file, s_dnd_schedule_slot_keys[type], strlen(s_dnd_schedule_slot_keys[type]),
+                       slot, sizeof(*slot));
+    }
+    prv_sync_legacy_schedule(file, type);
+    return;
+  }
+}
+
+//! Reload a schedule slot written by the phone. Invalid writes are reverted, which leaves the
+//! record dirty so the next sync restores the phone's copy.
+static void prv_reload_schedule_slot(struct pbl_settings_file *file, unsigned int index,
+                                     const uint8_t *key, int key_len) {
+  DoNotDisturbScheduleSlot slot;
+  if (pbl_settings_get_len(file, key, key_len) != sizeof(slot) ||
+      pbl_settings_get(file, key, key_len, &slot, sizeof(slot)) != 0 ||
+      (slot.used && !do_not_disturb_schedule_slot_is_valid(&slot))) {
+    PBL_LOG_WRN("Rejecting invalid DND schedule slot %u", index);
+    pbl_settings_set(file, key, key_len, &s_dnd_schedule_slots[index],
+                     sizeof(s_dnd_schedule_slots[index]));
+    return;
+  }
+
+  if (!slot.used) {
+    slot = (DoNotDisturbScheduleSlot){};
+  }
+  const DoNotDisturbScheduleSlot *current = &s_dnd_schedule_slots[index];
+  if (slot.legacy && (index >= NumDNDSchedules || !current->used ||
+                      do_not_disturb_schedule_slot_get_days(current) !=
+                          do_not_disturb_schedule_slot_get_days(&slot))) {
+    slot.legacy = false;
+    pbl_settings_set(file, key, key_len, &slot, sizeof(slot));
+  }
+  s_dnd_schedule_slots[index] = slot;
+  if (index < NumDNDSchedules) {
+    prv_sync_legacy_schedule(file, index);
+  }
+}
+
+void alerts_preferences_handle_blob_db_event(PebbleBlobDBEvent *event) {
+  if (event->type != BlobDBEventTypeInsert) {
+    return;
+  }
+
+  const uint8_t *key = event->key;
+  int key_len = event->key_len;
+  const char *matched_key = nullptr;
+
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+
+  struct pbl_settings_file file = {};
+  if (pbl_settings_open(&file, NOTIF_PREFS_FILE_NAME, NOTIF_PREFS_FILE_LEN) != 0) {
+    pbl_mutex_unlock(&s_mutex);
+    return;
+  }
+
+  // Helper macro to reload a single preference from file if key matches
+  // key_len may or may not include the null terminator depending on BlobDB protocol
+  // IMPORTANT: pbl_settings_get uses exact key_len matching, so we must use the same
+  // key_len that was used when writing the record (i.e., key_len from the event)
+#define RELOAD_IF_MATCH(pref_key, var)                                          \
+  do {                                                                          \
+    size_t _pref_strlen = strlen(pref_key);                                     \
+    if ((key_len == (int)_pref_strlen || key_len == (int)(_pref_strlen + 1)) && \
+        memcmp(key, pref_key, _pref_strlen) == 0) {                             \
+      typeof(var) _tmp;                                                         \
+      if (pbl_settings_get(&file, key, key_len, &_tmp, sizeof(_tmp)) == 0) {    \
+        var = _tmp;                                                             \
+        matched_key = pref_key;                                                 \
+      }                                                                         \
+      goto done;                                                                \
+    }                                                                           \
+  } while (0)
+
+  RELOAD_IF_MATCH(PREF_KEY_MASK, s_mask);
+  RELOAD_IF_MATCH(PREF_KEY_DND_INTERRUPTIONS_MASK, s_dnd_interruptions_mask);
+  RELOAD_IF_MATCH(PREF_KEY_DND_SHOW_NOTIFICATIONS, s_dnd_show_notifications);
+  RELOAD_IF_MATCH(PREF_KEY_VIBE_INTENSITY, s_vibe_intensity);
+  RELOAD_IF_MATCH(PREF_KEY_VIBE_SCORE_NOTIFICATIONS, s_vibe_score_notifications);
+  RELOAD_IF_MATCH(PREF_KEY_VIBE_SCORE_INCOMING_CALLS, s_vibe_score_incoming_calls);
+  RELOAD_IF_MATCH(PREF_KEY_VIBE_SCORE_ALARMS, s_vibe_score_alarms);
+  RELOAD_IF_MATCH(PREF_KEY_DND_MANUALLY_ENABLED, s_do_not_disturb_manually_enabled);
+  RELOAD_IF_MATCH(PREF_KEY_DND_SMART_ENABLED, s_do_not_disturb_smart_dnd_enabled);
+  RELOAD_IF_MATCH(s_dnd_schedule_keys[WeekdaySchedule].schedule_pref_key,
+                  s_dnd_schedule[WeekdaySchedule].schedule);
+  RELOAD_IF_MATCH(s_dnd_schedule_keys[WeekdaySchedule].enabled_pref_key,
+                  s_dnd_schedule[WeekdaySchedule].enabled);
+  RELOAD_IF_MATCH(s_dnd_schedule_keys[WeekendSchedule].schedule_pref_key,
+                  s_dnd_schedule[WeekendSchedule].schedule);
+  RELOAD_IF_MATCH(s_dnd_schedule_keys[WeekendSchedule].enabled_pref_key,
+                  s_dnd_schedule[WeekendSchedule].enabled);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_WINDOW_TIMEOUT, s_notif_window_timeout_ms);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_DESIGN_STYLE, s_notification_alternative_design);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_VIBE_DELAY, s_notification_vibe_delay);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_BACKLIGHT, s_notification_backlight);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_RESPECT_PHONE_SILENCE, s_notification_respect_phone_silence);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_DISMISSAL_SYNC, s_notification_dismissal_sync);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_GROUPING_RANGE, s_notification_grouping_range);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_STATUS_BAR_STYLE, s_notification_status_bar_style);
+  RELOAD_IF_MATCH(PREF_KEY_NOTIF_TEXT_SIZE, s_notification_content_size);
+  RELOAD_IF_MATCH(PREF_KEY_DND_MOTION_BACKLIGHT, s_dnd_motion_backlight);
+  RELOAD_IF_MATCH(PREF_KEY_DND_TOUCH_BACKLIGHT, s_dnd_touch_backlight);
+  RELOAD_IF_MATCH(PREF_KEY_DND_NOTIFICATION_BACKLIGHT, s_dnd_notification_backlight);
+  RELOAD_IF_MATCH(PREF_KEY_DND_MUTE_SPEAKER, s_dnd_mute_speaker);
+  RELOAD_IF_MATCH(PREF_KEY_SPEAKER_MUTED, s_speaker_muted);
+  RELOAD_IF_MATCH(PREF_KEY_DND_AUTO_DISMISS, s_dnd_auto_dismiss);
+  RELOAD_IF_MATCH(PREF_KEY_SPEAKER_VOLUME, s_speaker_volume);
+
+#undef RELOAD_IF_MATCH
+
+  for (unsigned int i = 0; i < DND_NUM_SCHEDULE_SLOTS; i++) {
+    const char *slot_key = s_dnd_schedule_slot_keys[i];
+    const size_t slot_key_len = strlen(slot_key);
+    if ((key_len == (int)slot_key_len || key_len == (int)(slot_key_len + 1)) &&
+        memcmp(key, slot_key, slot_key_len) == 0) {
+      prv_reload_schedule_slot(&file, i, key, key_len);
+      matched_key = slot_key;
+      break;
+    }
+  }
+
+done:
+  if (matched_key) {
+    prv_mirror_legacy_schedule(&file, matched_key);
+  }
+  pbl_settings_close(&file);
+  pbl_mutex_unlock(&s_mutex);
+
+  if (matched_key) {
+    // DND state keys are reloaded behind the DND service's back; kick it so the
+    // change re-arms the schedule timer and fires PEBBLE_DO_NOT_DISTURB_EVENT.
+    if (prv_is_dnd_state_key(matched_key)) {
+      do_not_disturb_handle_pref_synced();
+    }
+    PebbleEvent pref_event = {
+      .type = PEBBLE_PREF_CHANGE_EVENT,
+      .pref_change = {
+        .key = matched_key,
+        .key_len = strlen(matched_key) + 1,
+      },
+    };
+    event_put(&pref_event);
+  }
+}

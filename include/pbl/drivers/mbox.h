@@ -17,11 +17,11 @@
  * consumer holds a struct pbl_mbox_chan, what a devicetree @c mboxes entry describes: the
  * controller and its specifier cells, which the controller translates to one of its channels. It
  * requests the channel with a struct pbl_mbox_client, usually embedded in its own state so the
- * callbacks get back to it with container_of():
+ * callbacks get back to it with PBL_CONTAINER_OF():
  *
  * @code{.c}
  * static void prv_rx(const struct pbl_mbox_client *cl, const void *msg) {
- *   const struct foo *foo = container_of(cl, const struct foo, cl);
+ *   const struct foo *foo = PBL_CONTAINER_OF(cl, const struct foo, cl);
  *   // interrupt context
  * }
  *
@@ -140,15 +140,23 @@ struct pbl_mbox_controller {
   uint16_t txpoll_period_ms;
 };
 
+/** @cond INTERNAL_HIDDEN */
+void pbl_mbox_poll(struct pbl_timer *timer);
+/** @endcond */
+
 /**
  * @brief Define the state of a controller, for providers.
  *
- * @param sym Controller symbol.
+ * @param sym Controller symbol, of type struct pbl_mbox_controller.
  * @param _num_chans Number of channels.
  */
-#define PBL_MBOX_CONTROLLER_STATE_DEFINE(sym, _num_chans)        \
-  PBL_DEVICE_STATE_DEFINE(sym);                                  \
-  static struct pbl_mbox_controller_state sym##_mbox_ctrl_state; \
+#define PBL_MBOX_CONTROLLER_STATE_DEFINE(sym, _num_chans)           \
+  PBL_DEVICE_STATE_DEFINE(sym);                                     \
+  extern const struct pbl_mbox_controller sym;                      \
+  static struct pbl_mbox_controller_state sym##_mbox_ctrl_state = { \
+    .poll = PBL_TIMER_INITIALIZER(pbl_mbox_poll),                   \
+    .ctrl = &sym,                                                   \
+  };                                                                \
   static struct pbl_mbox_chan_state sym##_mbox_chans[_num_chans]
 
 /**
@@ -157,13 +165,13 @@ struct pbl_mbox_controller {
  * @param sym Controller symbol, with its PBL_MBOX_CONTROLLER_STATE_DEFINE().
  * @param _name Device name.
  * @param _init Device init function.
- * @param _deps Device dependencies.
+ * @param _parent Parent device, or NULL.
  * @param _ops Operations.
  * @param _txpoll_period_ms Completion poll period in milliseconds, 0 for none.
  */
-#define PBL_MBOX_CONTROLLER_INIT(sym, _name, _init, _deps, _ops, _txpoll_period_ms)   \
+#define PBL_MBOX_CONTROLLER_INIT(sym, _name, _init, _parent, _ops, _txpoll_period_ms) \
   {                                                                                   \
-    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, nullptr, _deps, &pbl_mbox_class), \
+    .dev = PBL_DEVICE_INIT_CLASS(sym, _name, _init, _parent, &pbl_mbox_class),        \
     .ops = (_ops),                                                                    \
     .state = &sym##_mbox_ctrl_state,                                                  \
     .chans = sym##_mbox_chans,                                                        \

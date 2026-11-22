@@ -5,12 +5,14 @@
 
 #include "flash_translation.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include <pbl/analytics/analytics.h>
 #include <pbl/board/partitions.h>
 #include <pbl/crc/crc.h>
 #include <pbl/drivers/flash.h>
@@ -22,11 +24,8 @@
 #include <pbl/kernel/mutex.h>
 #include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/analytics/analytics.h>
 #include <pbl/task_wdt/task_wdt.h>
 #include <pbl/util/math.h>
-
-#include <kernel/pebble_tasks.h>
 
 PBL_LOG_MODULE_DECLARE(fs, CONFIG_FS_LOG_LEVEL);
 
@@ -418,13 +417,12 @@ static ReadHeaderStatus read_header(uint16_t page, PageHeader *pg_hdr, FileHeade
   return (PageAndFileHdrValid);
 }
 
-static status_t write_file_header(FileHeader *hdr, uint16_t pg) {
+static void write_file_header(FileHeader *hdr, uint16_t pg) {
   hdr->hdr_crc = compute_file_header_crc(hdr);
   prv_flash_write((uint8_t *)hdr, sizeof(*hdr), prv_page_to_flash_offset(pg) + FILEHEADER_OFFSET);
-  return (S_SUCCESS);
 }
 
-static status_t write_pg_header(PageHeader *hdr, uint16_t pg) {
+static void write_pg_header(PageHeader *hdr, uint16_t pg) {
   // recover current erase count which is updated in erase routine
   prv_flash_read((uint8_t *)&hdr->erase_count, sizeof(hdr->erase_count),
                  prv_page_to_flash_offset(pg) + offsetof(PageHeader, erase_count));
@@ -433,15 +431,13 @@ static status_t write_pg_header(PageHeader *hdr, uint16_t pg) {
 
   hdr->hdr_crc = compute_pg_header_crc(hdr);
   prv_flash_write((uint8_t *)hdr, sizeof(*hdr), prv_page_to_flash_offset(pg));
-
-  return (S_SUCCESS);
 }
 
-static status_t unlink_flash_file(uint16_t page);
+static int unlink_flash_file(uint16_t page);
 
 // note: the goal here is to do as few flash reads as possible
 // while scanning the flash to find a given file.
-static status_t locate_flash_file(const char *name, uint16_t *page) {
+static int locate_flash_file(const char *name, uint16_t *page) {
   const int file_namelen_offset = FILEHEADER_OFFSET + offsetof(FileHeader, file_namelen);
   uint8_t namelen = strlen(name);
   uint16_t corrupt_pg = INVALID_PAGE;
@@ -481,17 +477,17 @@ static status_t locate_flash_file(const char *name, uint16_t *page) {
         }
 
         *page = pg;
-        return (S_SUCCESS);
+        return 0;
       }
     }
   }
 
-  return (E_DOES_NOT_EXIST);
+  return -ENOENT;
 }
 
 // Populates 'hdr' with what the new erase header for the 'page' specified
 // should look like
-static int get_updated_erase_hdr(PageHeader *hdr, uint16_t page) {
+static void get_updated_erase_hdr(PageHeader *hdr, uint16_t page) {
   memset(hdr, 0xff, sizeof(*hdr));
 
   // before wiping a page, get its erase_count. This is not currently used but
@@ -521,8 +517,6 @@ static int get_updated_erase_hdr(PageHeader *hdr, uint16_t page) {
   if (hdr->last_written != LAST_WRITTEN_TAG) {
     hdr->last_written = 0xff; // reset last written tag
   }
-
-  return (S_SUCCESS);
 }
 
 static int s_last_page_written = 0;
@@ -613,8 +607,8 @@ static int prv_find_free_erase_region(bool skip_gc_region) {
   return (-1);
 }
 
-static status_t garbage_collect_sector(uint16_t *free_page, uint16_t sector_start_page,
-                                       uint32_t sectors_active);
+static int garbage_collect_sector(uint16_t *free_page, uint16_t sector_start_page,
+                                  uint32_t sectors_active);
 
 //! Updates the last written page to point to next_page
 static PBL_NOINLINE void prv_update_last_written_page(uint16_t next_page) {
@@ -656,7 +650,13 @@ static PBL_NOINLINE void prv_update_last_written_page(uint16_t next_page) {
 //! @param use_gc_allocator - should be true iff the page should be allocated
 //!      from the region dedicated for garbage collection handling
 //! @param use_page - should be true iff the page is about to be used in a file.
-static status_t find_free_page(uint16_t *free_page, bool use_gc_allocator, bool use_page) {
+//! @param collected - if not NULL, set to whether a sector had to be garbage collected
+static int find_free_page(uint16_t *free_page, bool use_gc_allocator, bool use_page,
+                          bool *collected) {
+  if (collected != nullptr) {
+    *collected = false;
+  }
+
   // if we are allocating a file from the garbage collection region,
   // we don't need to search for free pages since we know what ones to use
   if (use_gc_allocator) {
@@ -664,7 +664,7 @@ static status_t find_free_page(uint16_t *free_page, bool use_gc_allocator, bool 
     PBL_ASSERTN(s_gc_block.block_valid && (next_page >= s_gc_block.gc_start_page) &&
                 (next_page < (s_gc_block.gc_start_page + PFS_PAGES_PER_ERASE_SECTOR)));
     *free_page = next_page;
-    return (S_SUCCESS);
+    return 0;
   }
 
   uint16_t next_page = INVALID_PAGE;
@@ -717,6 +717,9 @@ static status_t find_free_page(uint16_t *free_page, bool use_gc_allocator, bool 
         // we can erase this region and have at least 1 free page after
         uint16_t sector_start_pg = curr_region * PFS_PAGES_PER_ERASE_SECTOR;
         garbage_collect_sector(&next_page, sector_start_pg, sectors_active);
+        if (collected != nullptr) {
+          *collected = true;
+        }
         break;
       }
     }
@@ -728,10 +731,10 @@ static status_t find_free_page(uint16_t *free_page, bool use_gc_allocator, bool 
     }
 
     *free_page = s_last_page_written = next_page;
-    return (S_SUCCESS);
+    return 0;
   }
 
-  return (E_OUT_OF_STORAGE);
+  return -ENOSPC;
 }
 
 //! Note: expects that the caller does _not_ hold the pfs mutex
@@ -750,12 +753,13 @@ static void pfs_prepare_for_file_creation(uint32_t file_size, uint32_t max_elaps
 
   uint16_t last_written_page = s_last_page_written;
   while ((pages_to_find > 0) && (free_page != INVALID_PAGE)) {
+    bool collected;
     pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
-    find_free_page(&free_page, false, false);
+    find_free_page(&free_page, false, false, &collected);
     pbl_mutex_unlock(&s_pfs_mutex);
-    // TODO: might be nice to only sleep here if we had to perform GC as part
-    // of finding a free page
-    if ((pages_to_find % 4) == 0) {
+    // Garbage collection erases a sector, which takes a while, so let other
+    // tasks run after one. Pages that are already erased are found quickly.
+    if (collected) {
       pbl_sleep_ms(2);
     }
     pages_to_find--;
@@ -777,47 +781,42 @@ static uint8_t crc8_next_page(uint16_t next_page) {
   return pbl_crc8_reversed(0, &next_page, sizeof(next_page));
 }
 
-static status_t get_next_page(uint16_t curr_page, uint16_t *next_page) {
+static bool get_next_page(uint16_t curr_page, uint16_t *next_page) {
   PageHeader hdr;
   prv_flash_read((uint8_t *)&hdr.next_page_crc, sizeof(hdr.next_page_crc) + sizeof(hdr.next_page),
                  prv_page_to_flash_offset(curr_page) + offsetof(PageHeader, next_page_crc));
   *next_page = hdr.next_page;
 
   if (*next_page == INVALID_PAGE) {
-    return (S_NO_MORE_ITEMS);
+    return false;
   }
 
-  if (crc8_next_page(*next_page) == hdr.next_page_crc) {
-    if (*next_page < s_pfs_page_count) {
-      return (S_SUCCESS);
-    }
-  }
-
-  return (E_INTERNAL); // the next page pointer is corrupt
+  // false as well if the next page pointer is corrupt
+  return (crc8_next_page(*next_page) == hdr.next_page_crc) && (*next_page < s_pfs_page_count);
 }
 
-static status_t unlink_flash_file(uint16_t page) {
+static int unlink_flash_file(uint16_t page) {
   uint16_t first_page = page;
   if (page > s_pfs_page_count) { // should never happen
-    return (E_INTERNAL);
+    return -EIO;
   }
 
   // Mark the files to indicate that they are ready to be erased
   PageHeader hdr;
   hdr.page_flags = 0xff;
   SET_PAGE_FLAGS(hdr.page_flags, PAGE_FLAG_DELETED_PAGE);
-  int rv = S_SUCCESS;
+  int rv = 0;
   int unlink_count = 0;
   do {
     if ((page > s_pfs_page_count) || (unlink_count > s_pfs_page_count)) {
-      rv = E_INTERNAL; // should never happen
+      rv = -EIO; // should never happen
       break;
     }
     prv_flash_write((uint8_t *)&hdr.page_flags, sizeof(hdr.page_flags),
                     prv_page_to_flash_offset(page) + offsetof(PageHeader, page_flags));
 
     unlink_count++;
-  } while (get_next_page(page, &page) == S_SUCCESS);
+  } while (get_next_page(page, &page));
 
   // Add a tag to indicate that all pages within a file have been marked for
   // deletion we check for this during reboot to clean up a partial delete
@@ -826,8 +825,8 @@ static status_t unlink_flash_file(uint16_t page) {
   return (rv);
 }
 
-static status_t create_flash_file(File *f) {
-  status_t rv;
+static int create_flash_file(File *f) {
+  int rv;
   uint16_t start_page = INVALID_PAGE;
 
   PageHeader pg_hdr;
@@ -835,7 +834,7 @@ static status_t create_flash_file(File *f) {
 
   bool use_gc_allocator = (strcmp(f->name, GC_FILE_NAME) == 0);
 
-  if ((rv = find_free_page(&start_page, use_gc_allocator, true)) != S_SUCCESS) {
+  if ((rv = find_free_page(&start_page, use_gc_allocator, true, nullptr)) < 0) {
     return (rv);
   }
 
@@ -855,7 +854,7 @@ static status_t create_flash_file(File *f) {
                     prv_page_to_flash_offset(curr_page) + offsetof(PageHeader, page_flags));
 
     if (pgs_needed > 0) { // do we need to find a free page
-      if ((rv = find_free_page(&next_page, use_gc_allocator, true)) != S_SUCCESS) {
+      if ((rv = find_free_page(&next_page, use_gc_allocator, true, nullptr)) < 0) {
         unlink_flash_file(start_page); // on failure, unallocate
         return (rv);
       }
@@ -895,10 +894,10 @@ static status_t create_flash_file(File *f) {
   // finally, mark the creation as complete
   update_curr_state(start_page, CREATE_STATE_OFFSET, CREATE_STATE_DONE);
 
-  return (S_SUCCESS);
+  return 0;
 }
 
-static status_t scan_to_offset(File *f, uint32_t *pg_offset) {
+static int scan_to_offset(File *f, uint32_t *pg_offset) {
   uint32_t data_offset = f->offset + f->start_offset;
   uint16_t target_vpg = data_offset / free_bytes_in_page(f->start_page);
 
@@ -918,7 +917,7 @@ static status_t scan_to_offset(File *f, uint32_t *pg_offset) {
         continue;
       }
 
-      uint16_t contig_pgs = MIN(pgc->contiguous_pgs, target_vpg - pgc->virtual_pg);
+      uint16_t contig_pgs = PBL_MIN(pgc->contiguous_pgs, target_vpg - pgc->virtual_pg);
       if ((pgc->virtual_pg + contig_pgs) > vpg) {
         vpg = pgc->virtual_pg + contig_pgs;
         next_page = pgc->physical_pg + contig_pgs;
@@ -927,8 +926,8 @@ static status_t scan_to_offset(File *f, uint32_t *pg_offset) {
   }
 
   for (; vpg < target_vpg; vpg++) {
-    if (get_next_page(next_page, &next_page) != S_SUCCESS) {
-      return (E_RANGE);
+    if (!get_next_page(next_page, &next_page)) {
+      return -EIO;
     }
   }
 
@@ -936,10 +935,10 @@ static status_t scan_to_offset(File *f, uint32_t *pg_offset) {
   f->curr_vpg = target_vpg;
 
   *pg_offset = data_offset % free_bytes_in_page(f->curr_page);
-  return (S_SUCCESS);
+  return 0;
 }
 
-static int mark_fd_free(int fd) {
+static void mark_fd_free(int fd) {
   if (PFS_FD(fd).file.name != nullptr) {
     pbl_free(PFS_FD(fd).file.name);
     PFS_FD(fd).file.name = nullptr;
@@ -951,8 +950,6 @@ static int mark_fd_free(int fd) {
   }
 
   PFS_FD(fd).fd_status = FD_STATUS_FREE;
-
-  return (S_SUCCESS);
 }
 
 typedef enum {
@@ -1008,32 +1005,32 @@ static AvailFdStatus get_avail_fd(const char *name, int *fdp, bool is_tmp) {
  * Exported PFS APIs
  */
 
-status_t pfs_stat(const char *name, size_t *size) {
+int pfs_stat(const char *name, size_t *size) {
   size_t namelen = (name == nullptr) ? 0 : strlen(name);
   if ((namelen < 1) || (namelen > FILE_MAX_NAME_LEN)) {
-    return E_INVALID_ARGUMENT;
+    return -EINVAL;
   }
 
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
 
-  status_t rv = E_DOES_NOT_EXIST;
+  int rv = -ENOENT;
   for (int fd = FD_INDEX_OFFSET; fd < FD_INDEX_OFFSET + PFS_FD_SET_SIZE; fd++) {
     File *f = &PFS_FD(fd).file;
     if (!f->is_tmp && (f->name != nullptr) && !IS_DEFERRED(f) && (strcmp(f->name, name) == 0)) {
       *size = f->file_size;
-      rv = S_SUCCESS;
+      rv = 0;
       goto cleanup;
     }
   }
 
   uint16_t page;
-  if ((rv = locate_flash_file(name, &page)) == S_SUCCESS) {
+  if ((rv = locate_flash_file(name, &page)) == 0) {
     PageHeader pg_hdr;
     FileHeader file_hdr;
     if (read_header(page, &pg_hdr, &file_hdr) == PageAndFileHdrValid) {
       *size = file_hdr.file_size;
     } else {
-      rv = E_INTERNAL;
+      rv = -EIO;
     }
   }
 
@@ -1065,35 +1062,36 @@ int pfs_read(int fd, void *buf_ptr, size_t size) {
   uint8_t *buf = buf_ptr;
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
 
-  int res = E_UNKNOWN;
+  int res;
   if (!FD_VALID(fd) || (buf == nullptr) || (size == 0)) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
   File *file = &PFS_FD(fd).file;
 
   if ((file->op_flags & OP_FLAG_READ) == 0) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
   if ((file->offset + size) > file->file_size) {
     PBL_LOG_DBG("Out of bound read at %d", (int)(file->offset + size));
-    res = E_RANGE;
+    res = -ERANGE;
     goto cleanup;
   }
 
   uint32_t pg_offset;
-  if (scan_to_offset(file, &pg_offset) != S_SUCCESS) {
-    res = E_INTERNAL;
+  if (scan_to_offset(file, &pg_offset) < 0) {
+    res = -EIO;
     goto cleanup;
   }
 
   // we have found the page from which to start reading data from
   size_t bytes_read = 0;
   while (bytes_read < size) {
-    size_t bytes_to_read = MIN(free_bytes_in_page(file->curr_page) - pg_offset, size - bytes_read);
+    size_t bytes_to_read =
+        PBL_MIN(free_bytes_in_page(file->curr_page) - pg_offset, size - bytes_read);
 
     prv_flash_read(buf + bytes_read, bytes_to_read,
                    prv_page_to_flash_offset(file->curr_page) + AVAIL_BYTES_OFFSET + pg_offset);
@@ -1106,10 +1104,10 @@ int pfs_read(int fd, void *buf_ptr, size_t size) {
     }
 
     pg_offset = 0; // first usable byte next page
-    if (get_next_page(file->curr_page, &file->curr_page) != S_SUCCESS) {
+    if (!get_next_page(file->curr_page, &file->curr_page)) {
       PBL_LOG_WRN("R:Couldn't find next page for %d", file->curr_page);
       file->curr_page = INVALID_PAGE;
-      res = E_INTERNAL;
+      res = -EIO;
       goto cleanup;
     }
     file->curr_vpg++;
@@ -1123,9 +1121,9 @@ cleanup:
 
 int pfs_seek(int fd, int offset, FSeekType seek_type) {
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
-  int res = E_UNKNOWN;
+  int res;
   if (!FD_VALID(fd)) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
@@ -1141,7 +1139,7 @@ int pfs_seek(int fd, int offset, FSeekType seek_type) {
     PFS_FD(fd).file.offset = (uint32_t)new_offset;
     res = new_offset;
   } else {
-    res = E_RANGE;
+    res = -EINVAL;
   }
 
 cleanup:
@@ -1152,34 +1150,34 @@ cleanup:
 int pfs_write(int fd, const void *buf_ptr, size_t size) {
   const uint8_t *buf = buf_ptr;
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
-  int res = E_UNKNOWN;
+  int res;
   if (!FD_VALID(fd) || (buf == nullptr) || (size == 0)) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
   File *file = &PFS_FD(fd).file;
 
   if ((file->op_flags & (OP_FLAG_WRITE | OP_FLAG_OVERWRITE)) == 0) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
   if ((file->offset + size) > file->file_size) {
-    res = E_RANGE;
+    res = -EFBIG;
     goto cleanup;
   }
 
   uint32_t pg_offset;
-  if (scan_to_offset(file, &pg_offset) != S_SUCCESS) {
-    res = E_INTERNAL;
+  if (scan_to_offset(file, &pg_offset) < 0) {
+    res = -EIO;
     goto cleanup;
   }
 
   size_t bytes_written = 0;
   while (bytes_written < size) {
     size_t bytes_to_write =
-        MIN(free_bytes_in_page(file->curr_page) - pg_offset, size - bytes_written);
+        PBL_MIN(free_bytes_in_page(file->curr_page) - pg_offset, size - bytes_written);
 
     prv_flash_write(buf + bytes_written, bytes_to_write,
                     prv_page_to_flash_offset(file->curr_page) + AVAIL_BYTES_OFFSET + pg_offset);
@@ -1192,10 +1190,10 @@ int pfs_write(int fd, const void *buf_ptr, size_t size) {
     }
 
     pg_offset = 0; // first usable byte next page
-    if (get_next_page(file->curr_page, &file->curr_page) != S_SUCCESS) {
+    if (!get_next_page(file->curr_page, &file->curr_page)) {
       PBL_LOG_WRN("W:Couldn't find next page for %d", file->curr_page);
       file->curr_page = INVALID_PAGE;
-      res = E_INTERNAL;
+      res = -EIO;
       goto cleanup;
     }
     file->curr_vpg++;
@@ -1293,7 +1291,7 @@ void pfs_reboot_cleanup(void) {
                            prv_page_to_flash_offset(curr_pg) + FILE_NAME_OFFSET);
             name[hdr.file_namelen] = 0;
             uint16_t original;
-            recover = locate_flash_file(name, &original) == E_DOES_NOT_EXIST;
+            recover = locate_flash_file(name, &original) == -ENOENT;
           }
         }
         if (recover) {
@@ -1361,12 +1359,12 @@ static bool prv_update_gc_reserved_region(void) {
   return (true); // gc block must be valid to get here
 }
 
-status_t pfs_close(int fd) {
+int pfs_close(int fd) {
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
 
-  int res = E_UNKNOWN;
+  int res;
   if (!FD_VALID(fd)) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
@@ -1374,7 +1372,7 @@ status_t pfs_close(int fd) {
   if (IS_DEFERRED(f)) {
     // Never created: nothing to commit, keep the original of an overwrite
     mark_fd_free(fd);
-    res = S_SUCCESS;
+    res = 0;
     goto cleanup;
   }
 
@@ -1405,15 +1403,15 @@ status_t pfs_close(int fd) {
   PFS_FD(fd).fd_status = FD_STATUS_UNREFERENCED;
   PFS_FD(fd).time_closed = time_closed_counter++;
 
-  res = S_SUCCESS;
+  res = 0;
 cleanup:
   pbl_mutex_unlock(&s_pfs_mutex);
   return (res);
 }
 
-status_t pfs_abort_overwrite(int fd) {
+int pfs_abort_overwrite(int fd) {
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
-  status_t status = E_INVALID_ARGUMENT;
+  int status = -EINVAL;
   if (FD_VALID(fd) && PFS_FD(fd).file.is_tmp) {
     const uint16_t page = PFS_FD(fd).file.start_page;
     mark_fd_free(fd);
@@ -1423,23 +1421,23 @@ status_t pfs_abort_overwrite(int fd) {
   return status;
 }
 
-status_t pfs_prepare_overwrite_commit(int fd) {
+int pfs_prepare_overwrite_commit(int fd) {
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
-  status_t status = E_INVALID_ARGUMENT;
+  int status = -EINVAL;
   if (FD_VALID(fd) && PFS_FD(fd).file.is_tmp) {
     update_curr_state(PFS_FD(fd).file.start_page, TMP_STATE_OFFSET, TMP_STATE_COMMITTING);
-    status = S_SUCCESS;
+    status = 0;
   }
   pbl_mutex_unlock(&s_pfs_mutex);
   return status;
 }
 
-status_t pfs_close_and_remove(int fd) {
+int pfs_close_and_remove(int fd) {
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
 
-  status_t res = E_UNKNOWN;
+  int res;
   if (!FD_VALID(fd)) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
   } else {
     File *f = &PFS_FD(fd).file;
     char file_name[f->namelen + 1];
@@ -1455,26 +1453,27 @@ status_t pfs_close_and_remove(int fd) {
   return (res);
 }
 
-status_t pfs_remove(const char *name) {
+int pfs_remove(const char *name) {
   if (name == nullptr) {
-    return E_INVALID_ARGUMENT;
+    return -EINVAL;
   }
   size_t namelen = strlen(name);
   if ((namelen < 1) || (namelen > FILE_MAX_NAME_LEN)) {
-    return (E_INVALID_ARGUMENT);
+    return -EINVAL;
   }
 
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
   uint16_t page = 0;
   int fd;
-  status_t rv = get_avail_fd(name, &fd, false);
-  if (rv >= FDAlreadyLoaded) { // the file is in the cache
-    if (rv == FDBusy) {
+  int rv;
+  AvailFdStatus fd_status = get_avail_fd(name, &fd, false);
+  if (fd_status >= FDAlreadyLoaded) { // the file is in the cache
+    if (fd_status == FDBusy) {
       pbl_panic("Cannot delete %s, it is currently in use", PFS_FD(fd).file.name);
     }
     page = PFS_FD(fd).file.start_page;
     mark_fd_free(fd);
-  } else if ((rv = locate_flash_file(name, &page)) != S_SUCCESS) {
+  } else if ((rv = locate_flash_file(name, &page)) < 0) {
     goto cleanup; // could not find the file on flash
   }
 
@@ -1605,7 +1604,7 @@ static PBL_NOINLINE void allocate_page_cache(int fd) {
 
   FilePageCache curr = {.virtual_pg = 0, .physical_pg = f->start_page, .contiguous_pgs = 0};
 
-  while (get_next_page(curr_page, &next_page) == S_SUCCESS) {
+  while (get_next_page(curr_page, &next_page)) {
     if (next_page == (curr_page + 1)) {
       curr.contiguous_pgs++;
     } else {
@@ -1648,10 +1647,10 @@ static PBL_NOINLINE bool file_found_in_cache(const char *name, uint8_t op_flags,
   bool file_found = false;
 
   if ((res = get_avail_fd(name, &fd, is_tmp)) == NoFDAvail) {
-    res = E_OUT_OF_RESOURCES;
+    res = -EMFILE;
     goto cleanup;
   } else if (res == FDBusy) {
-    res = E_BUSY; // the file is already open
+    res = -EBUSY; // the file is already open
     goto cleanup;
   }
 
@@ -1692,10 +1691,10 @@ cleanup:
 }
 
 // handles the creation of a file which was not previously on the FS
-static PBL_NOINLINE status_t pfs_open_handle_create_request(int fd, uint8_t file_type,
-                                                            size_t start_size) {
+static PBL_NOINLINE int pfs_open_handle_create_request(int fd, uint8_t file_type,
+                                                       size_t start_size) {
   if (!VALID_TYPE(file_type) || (start_size == 0)) {
-    return (E_INVALID_ARGUMENT);
+    return -EINVAL;
   }
 
   File *file = &PFS_FD(fd).file;
@@ -1720,7 +1719,7 @@ static PBL_NOINLINE status_t pfs_open_handle_create_request(int fd, uint8_t file
 
 // given the fd and start page of a file, loads file description with relevent
 // info about file so it can be read from
-static PBL_NOINLINE status_t pfs_open_handle_read_request(int fd, uint16_t page) {
+static PBL_NOINLINE int pfs_open_handle_read_request(int fd, uint16_t page) {
   PageHeader pg_hdr;
   FileHeader file_hdr;
   int hdr_rv;
@@ -1731,11 +1730,11 @@ static PBL_NOINLINE status_t pfs_open_handle_read_request(int fd, uint16_t page)
     file->file_type = file_hdr.file_type;
     file->start_page = file->curr_page = page;
     file->curr_vpg = 0;
-    return (S_SUCCESS);
+    return 0;
   }
 
   PBL_LOG_WRN("Could not read header %d", hdr_rv);
-  return (E_INTERNAL);
+  return -EIO;
 }
 
 static int file_found_or_added_to_pfs(int fd, const char *name, uint8_t op_flags, uint8_t file_type,
@@ -1743,7 +1742,7 @@ static int file_found_or_added_to_pfs(int fd, const char *name, uint8_t op_flags
   uint16_t page = 0;
   int res = locate_flash_file(name, &page);
 
-  if ((res != S_SUCCESS) && (res != E_DOES_NOT_EXIST)) { // unexpected error
+  if ((res < 0) && (res != -ENOENT)) { // unexpected error
     goto cleanup;
   }
 
@@ -1752,7 +1751,7 @@ static int file_found_or_added_to_pfs(int fd, const char *name, uint8_t op_flags
       (op_flags & (OP_FLAG_READ | OP_FLAG_WRITE | OP_FLAG_OVERWRITE)) == OP_FLAG_READ;
   bool is_tmp = ((op_flags & OP_FLAG_OVERWRITE) != 0);
   bool no_create = ((op_flags & OP_FLAG_NO_CREATE) != 0);
-  if ((is_read_only || is_tmp || no_create) && (res == E_DOES_NOT_EXIST)) {
+  if ((is_read_only || is_tmp || no_create) && (res == -ENOENT)) {
     goto cleanup;
   }
 
@@ -1762,30 +1761,30 @@ static int file_found_or_added_to_pfs(int fd, const char *name, uint8_t op_flags
 
   file_desc->fd_status = FD_STATUS_UNREFERENCED; // set to IN_USE on success
   if ((file->name = pbl_strdup(name)) == nullptr) {
-    res = E_OUT_OF_MEMORY;
+    res = -ENOMEM;
     goto cleanup;
   }
   file->namelen = strlen(name);
   file->start_offset = FILEDATA_LEN + file->namelen;
 
-  if (is_tmp || ((res == E_DOES_NOT_EXIST) && ((op_flags & OP_FLAG_WRITE) != 0))) {
+  if (is_tmp || ((res == -ENOENT) && ((op_flags & OP_FLAG_WRITE) != 0))) {
     if ((op_flags & OP_FLAG_DEFER_CREATE) != 0) {
       file->file_size = 0;
       file->file_type = FILE_TYPE_STATIC;
       file->start_page = file->curr_page = INVALID_PAGE;
       file->curr_vpg = 0;
-      res = S_SUCCESS;
+      res = 0;
     } else {
       res = pfs_open_handle_create_request(fd, file_type, start_size);
     }
   } else if ((op_flags & OP_FLAG_READ) != 0) {
     res = pfs_open_handle_read_request(fd, page);
   } else { // unexpected situation
-    res = E_INTERNAL;
+    res = -EIO;
   }
 
 cleanup:
-  if (res < S_SUCCESS) {
+  if (res < 0) {
     mark_fd_free(fd);
   } else {
     PFS_FD(fd).fd_status = FD_STATUS_IN_USE;
@@ -1796,24 +1795,24 @@ cleanup:
 int pfs_open(const char *name, uint8_t op_flags, uint8_t file_type, size_t start_size) {
   size_t namelen = (name == nullptr) ? 0 : strlen(name);
   if ((namelen < 1) || (namelen > FILE_MAX_NAME_LEN)) {
-    return (E_INVALID_ARGUMENT);
+    return -EINVAL;
   }
 
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
   int res;
   // if the file is in the cache or we encountered a failure we are done
-  if (file_found_in_cache(name, op_flags, &res) || (res < S_SUCCESS)) {
+  if (file_found_in_cache(name, op_flags, &res) || (res < 0)) {
     goto cleanup;
   }
 
   // The file is not in the cache, let's see if it's on the filesystem
   int fd = res;
-  if ((res = file_found_or_added_to_pfs(fd, name, op_flags, file_type, start_size)) >= S_SUCCESS) {
+  if ((res = file_found_or_added_to_pfs(fd, name, op_flags, file_type, start_size)) >= 0) {
     res = fd; // success so return the fd
   }
 
 cleanup:
-  if (res >= S_SUCCESS) {
+  if (res >= 0) {
     // we are returning a valid file handle so if the user has asked for the
     // page translations to be cached let's do that now
     if (((op_flags & OP_FLAG_USE_PAGE_CACHE) != 0) && !IS_DEFERRED(&PFS_FD(res).file)) {
@@ -1827,23 +1826,23 @@ cleanup:
   return (res);
 }
 
-status_t pfs_create_deferred(int fd, size_t size) {
+int pfs_create_deferred(int fd, size_t size) {
   pbl_mutex_lock(&s_pfs_mutex, PBL_FOREVER);
 
-  status_t res;
+  int res;
   if (!FD_VALID(fd) || (fd == GC_FD_HANDLE_ID)) {
-    res = E_INVALID_ARGUMENT;
+    res = -EINVAL;
     goto cleanup;
   }
 
   File *file = &PFS_FD(fd).file;
   if (!IS_DEFERRED(file)) {
-    res = E_INVALID_OPERATION;
+    res = -EALREADY;
     goto cleanup;
   }
 
   res = pfs_open_handle_create_request(fd, FILE_TYPE_STATIC, size);
-  if (res < S_SUCCESS) {
+  if (res < 0) {
     file->file_size = 0;
     file->start_page = file->curr_page = INVALID_PAGE;
     goto cleanup;
@@ -1884,7 +1883,7 @@ static int pfs_open_gc_file(uint32_t space_needed, bool create) {
   return (res >= 0) ? fd : res;
 }
 
-static status_t copy_or_recover_gc_data(int fd, GCData *gcdata, bool do_copy) {
+static void copy_or_recover_gc_data(int fd, GCData *gcdata, bool do_copy) {
   //////
   //
   // GC File Format
@@ -1931,7 +1930,7 @@ static status_t copy_or_recover_gc_data(int fd, GCData *gcdata, bool do_copy) {
 
     base_addr += sizeof(PageHeader);
     for (int i = 0; i < (int)data_len; i += copy_buf_size) {
-      size_t to_copy = MIN(data_len - i, copy_buf_size);
+      size_t to_copy = PBL_MIN(data_len - i, copy_buf_size);
       if (do_copy) {
         prv_flash_read(buf, to_copy, base_addr + i);
         pfs_write(fd, buf, to_copy);
@@ -1943,7 +1942,6 @@ static status_t copy_or_recover_gc_data(int fd, GCData *gcdata, bool do_copy) {
   }
 
   pbl_free(buf);
-  return (S_SUCCESS);
 }
 
 static void recover_region_from_file(int fd) {
@@ -2007,8 +2005,8 @@ static int prv_copy_sector_to_gc_file(uint16_t *free_page, uint16_t sector_start
   return (fd);
 }
 
-static PBL_NOINLINE status_t garbage_collect_sector(uint16_t *free_page, uint16_t sector_start_page,
-                                                    uint32_t sectors_active) {
+static PBL_NOINLINE int garbage_collect_sector(uint16_t *free_page, uint16_t sector_start_page,
+                                               uint32_t sectors_active) {
   // if no sectors are active in the region, just erase it!
   if (sectors_active == 0) {
     prv_handle_sector_erase(sector_start_page, true);
@@ -2026,14 +2024,14 @@ done:
   for (uint16_t pg = 0; pg < PFS_PAGES_PER_ERASE_SECTOR; pg++) {
     if (((sectors_active >> pg) & 0x1) == 0) {
       *free_page = pg + sector_start_page;
-      return (S_SUCCESS);
+      return 0;
     }
   }
 
-  return (E_INTERNAL);
+  return -EIO;
 }
 
-status_t pfs_init(bool run_filesystem_check) {
+int pfs_init(bool run_filesystem_check) {
   for (int fd = FD_INDEX_OFFSET; fd < FD_INDEX_OFFSET + MAX_FD_HANDLES; fd++) {
     PFS_FD(fd) = (FileDesc){.fd_status = FD_STATUS_FREE};
   }
@@ -2052,7 +2050,7 @@ status_t pfs_init(bool run_filesystem_check) {
   // think a region is free when in reality we just rebooted in the middle of it
   // being re-written
   int fd;
-  if ((fd = pfs_open_gc_file(0, false)) >= S_SUCCESS) {
+  if ((fd = pfs_open_gc_file(0, false)) >= 0) {
     // we rebooted while we were in the middle of a garbage collection
     PBL_LOG_INFO("Recovering flash region from GC file");
     recover_region_from_file(fd);
@@ -2076,7 +2074,7 @@ status_t pfs_init(bool run_filesystem_check) {
 
   pfs_prepare_for_file_creation(bytes_to_free, 15 * PBL_TICK_HZ);
 
-  return (S_SUCCESS);
+  return 0;
 }
 
 void pfs_format(bool write_erase_headers) {
@@ -2165,10 +2163,11 @@ uint32_t pfs_crc_calculate_file(int fd, uint32_t offset, uint32_t num_bytes) {
   return (crc);
 }
 
-void pbl_analytics_external_collect_pfs_stats(void) {
+static void prv_collect_pfs_stats(void) {
   uint16_t avail_kilobytes = (uint16_t)(get_available_pfs_space() / 1024);
   PBL_ANALYTICS_SET_UNSIGNED(pfs_space_free_kb, avail_kilobytes);
 }
+PBL_ANALYTICS_COLLECTOR_DEFINE(prv_collect_pfs_stats);
 
 /*
  * Debug Utilities
@@ -2212,7 +2211,7 @@ void test_force_garbage_collection(uint16_t start_page) {
   garbage_collect_sector(&free_page, start_page, active_sectors);
 }
 
-status_t test_scan_for_last_written(void) {
+int test_scan_for_last_written(void) {
   for (uint16_t pg = 0; pg < s_pfs_page_count; pg++) {
     PageHeader hdr;
     prv_flash_read((uint8_t *)&hdr.last_written, sizeof(hdr.last_written),
@@ -2248,8 +2247,6 @@ void test_override_last_written_page(uint16_t start_page) {
 #endif
 
 #ifdef CONFIG_SHELL
-#include <errno.h>
-
 #include <pbl/shell/shell.h>
 
 static int prv_cmd_format(const struct pbl_shell *sh, size_t argc, char **argv) {
@@ -2302,9 +2299,9 @@ static int prv_cmd_ls(const struct pbl_shell *sh, size_t argc, char **argv) {
 }
 
 static int prv_cmd_rm(const struct pbl_shell *sh, size_t argc, char **argv) {
-  status_t rv = pfs_remove(argv[1]);
-  if (rv != S_SUCCESS) {
-    pbl_shell_error(sh, "remove failed (%" PRId32 ")", rv);
+  int rv = pfs_remove(argv[1]);
+  if (rv < 0) {
+    pbl_shell_error(sh, "remove failed (%d)", rv);
     return -EIO;
   }
 

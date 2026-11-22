@@ -1,0 +1,320 @@
+/* SPDX-FileCopyrightText: 2024 Google LLC */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "pebble_tasks.h"
+
+#include <pbl/analytics/analytics.h>
+#include <pbl/kernel/assert.h>
+#include <pbl/kernel/compiler.h>
+#include <pbl/kernel/debug.h>
+#include <pbl/kernel/fatal.h>
+#include <pbl/kernel/mpu.h>
+#include <pbl/logging/logging.h>
+#include <pbl/util/size.h>
+
+#include <process_management/app_manager.h>
+#include <process_management/worker_manager.h>
+#include <system/die.h>
+#include <system/reboot_reason.h>
+
+struct pbl_thread *g_task_threads[NumPebbleTask] PBL_KERNEL_READONLY_DATA = {};
+
+// Cycles consumed by tasks that have already been destroyed in each slot.
+// Captured at unregister time so the analytics heartbeat can keep accounting
+// for App/Worker activity across short-lived task instances.
+static uint32_t s_dead_task_cycles[NumPebbleTask];
+
+#ifdef CONFIG_USERSPACE
+// App/Worker syscalls run on these instead of the caller's small unprivileged
+// stack, so a process that exhausts its stack faults unprivileged (only that
+// process dies) instead of rebooting the system. ARMv8-M bounds them with
+// PSPLIM; ARMv7-M plants a no-access MPU guard below each. Plain .bss statics
+// land in the privileged-only .kernel_bss output.
+#define SYSCALL_STACK_WORDS       (CONFIG_PROCESS_SYSCALL_STACK_SIZE / sizeof(uint32_t))
+#define SYSCALL_STACK_GUARD_WORDS (CONFIG_KERNEL_STACK_GUARD_SIZE / sizeof(uint32_t))
+
+struct syscall_stack {
+#if CONFIG_KERNEL_STACK_GUARD_SIZE > 0
+  uint32_t guard[SYSCALL_STACK_GUARD_WORDS];
+#endif
+  uint32_t words[SYSCALL_STACK_WORDS];
+};
+
+static struct syscall_stack s_app_syscall_stack PBL_ALIGNED(CONFIG_KERNEL_STACK_ALIGN);
+static struct syscall_stack s_worker_syscall_stack PBL_ALIGNED(CONFIG_KERNEL_STACK_ALIGN);
+
+static struct syscall_stack *prv_syscall_stack(PebbleTask task) {
+  switch (task) {
+    case PebbleTask_App:
+      return &s_app_syscall_stack;
+    case PebbleTask_Worker:
+      return &s_worker_syscall_stack;
+    default:
+      pbl_panic();
+  }
+}
+
+void pebble_task_attr_set_syscall_stack(PebbleTask task, struct pbl_thread_attr *attr) {
+  struct syscall_stack *stack = prv_syscall_stack(task);
+  attr->syscall_stack = stack;
+  attr->syscall_stack_size = sizeof(*stack);
+}
+
+// Peak unused bytes on a syscall stack: scan the zeroed .bss from the base to
+// the first written word (the high-water). For sizing during validation.
+static uint16_t prv_syscall_stack_free_bytes(PebbleTask task) {
+  const uint32_t *words = prv_syscall_stack(task)->words;
+  uint32_t i = 0;
+  while (i < SYSCALL_STACK_WORDS && words[i] == 0) {
+    i++;
+  }
+  return (uint16_t)(i * sizeof(uint32_t));
+}
+#else
+static uint16_t prv_syscall_stack_free_bytes(PebbleTask task) {
+  return 0xFFFF;
+}
+#endif
+
+void pebble_task_register(PebbleTask task, struct pbl_thread *thread) {
+  PBL_KERNEL_READONLY_DATA_SET(g_task_threads[task], thread);
+}
+
+static uint32_t prv_read_task_run_time(const struct pbl_thread *thread) {
+  struct pbl_thread_stats stats[CONFIG_KERNEL_MAX_THREADS];
+  size_t count = pbl_thread_stats_snapshot(stats, PBL_ARRAY_SIZE(stats), nullptr);
+  for (size_t i = 0; i < count; i++) {
+    if (stats[i].thread == thread) {
+      return stats[i].run_time;
+    }
+  }
+  return 0;
+}
+
+void pebble_task_unregister(PebbleTask task) {
+  struct pbl_thread *thread = g_task_threads[task];
+  if (thread == nullptr) {
+    return;
+  }
+  uint32_t cycles = prv_read_task_run_time(thread);
+  // Clear the handle before crediting the cycles: the collector reads
+  // s_dead_task_cycles before walking the task list, so this ordering
+  // ensures cycles are never seen in both buckets simultaneously.
+  PBL_KERNEL_READONLY_DATA_SET(g_task_threads[task], nullptr);
+  s_dead_task_cycles[task] += cycles;
+}
+
+const char *pebble_task_get_name(PebbleTask task) {
+  if (task >= NumPebbleTask) {
+    if (task == PebbleTask_Unknown) {
+      return "Unknown";
+    }
+    pbl_panic();
+  }
+
+  struct pbl_thread *thread = g_task_threads[task];
+  if (!thread) {
+    return "Unknown";
+  }
+  return pbl_thread_name(thread);
+}
+
+// NOTE: The logging support calls toupper() this character if the task is currently running
+// privileged, so
+//  these identifiers should be all lower case and case-insensitive.
+char pebble_task_get_char(PebbleTask task) {
+  switch (task) {
+    case PebbleTask_KernelMain:
+      return 'm';
+    case PebbleTask_SysWorkq:
+      return 's';
+    case PebbleTask_Worker:
+      return 'w';
+    case PebbleTask_App:
+      return 'a';
+    case PebbleTask_BTHost:
+      return 'b';
+    case PebbleTask_BTController:
+      return 'c';
+    case PebbleTask_BTHCI:
+      return 'd';
+    case PebbleTask_SysWorkqHigh:
+      return 't';
+    case NumPebbleTask:
+    case PebbleTask_Unknown:;
+  }
+
+  return '?';
+}
+
+PebbleTask pebble_task_get_current(void) {
+  return pebble_task_get_task_for_thread(pbl_thread_current());
+}
+
+PebbleTask pebble_task_get_task_for_thread(const struct pbl_thread *thread) {
+  if (thread == nullptr) {
+    return PebbleTask_Unknown;
+  }
+  for (int i = 0; i < (int)PBL_ARRAY_SIZE(g_task_threads); ++i) {
+    if (g_task_threads[i] == thread) {
+      return i;
+    }
+  }
+  return PebbleTask_Unknown;
+}
+
+struct pbl_thread *pebble_task_get_thread(PebbleTask task) {
+  return g_task_threads[task];
+}
+
+static uint16_t prv_task_get_stack_free(PebbleTask task) {
+  // If task doesn't exist, return a dummy with max value
+  if (g_task_threads[task] == nullptr) {
+    return 0xFFFF;
+  }
+  struct pbl_thread_stack_info info;
+  pbl_thread_stack_info(g_task_threads[task], &info);
+  return info.high_water;
+}
+
+void pebble_task_suspend(PebbleTask task) {
+  PBL_ASSERTN(task < NumPebbleTask);
+  pbl_thread_suspend(g_task_threads[task]);
+}
+
+static void prv_collect_stack_free(void) {
+  PBL_ANALYTICS_SET_UNSIGNED(stack_free_kernel_main_bytes,
+                             prv_task_get_stack_free(PebbleTask_KernelMain));
+  PBL_ANALYTICS_SET_UNSIGNED(stack_free_kernel_background_bytes,
+                             prv_task_get_stack_free(PebbleTask_SysWorkq));
+  PBL_ANALYTICS_SET_UNSIGNED(stack_free_newtimers_bytes,
+                             prv_task_get_stack_free(PebbleTask_SysWorkqHigh));
+  PBL_ANALYTICS_SET_UNSIGNED(stack_free_app_syscall_bytes,
+                             prv_syscall_stack_free_bytes(PebbleTask_App));
+  PBL_ANALYTICS_SET_UNSIGNED(stack_free_worker_syscall_bytes,
+                             prv_syscall_stack_free_bytes(PebbleTask_Worker));
+}
+PBL_ANALYTICS_COLLECTOR_DEFINE(prv_collect_stack_free);
+
+#ifdef CONFIG_ANALYTICS
+static const enum pbl_analytics_key s_task_cpu_pct_keys[NumPebbleTask] = {
+  [PebbleTask_KernelMain] = PBL_ANALYTICS_KEY(task_cpu_kernel_main_pct),
+  [PebbleTask_SysWorkq] = PBL_ANALYTICS_KEY(task_cpu_kernel_background_pct),
+  [PebbleTask_Worker] = PBL_ANALYTICS_KEY(task_cpu_worker_pct),
+  [PebbleTask_App] = PBL_ANALYTICS_KEY(task_cpu_app_pct),
+  [PebbleTask_BTHost] = PBL_ANALYTICS_KEY(task_cpu_bt_host_pct),
+  [PebbleTask_BTController] = PBL_ANALYTICS_KEY(task_cpu_bt_controller_pct),
+  [PebbleTask_BTHCI] = PBL_ANALYTICS_KEY(task_cpu_bt_hci_pct),
+  [PebbleTask_SysWorkqHigh] = PBL_ANALYTICS_KEY(task_cpu_new_timers_pct),
+};
+
+static void prv_collect_task_cpu_stats(void) {
+  static uint32_t s_prev_total_task_cycles[NumPebbleTask];
+  static uint32_t s_prev_idle_run_time;
+  static uint32_t s_prev_total_run_time;
+
+  // Snapshot dead-task cycles before walking the live task list. Combined with
+  // the (clear-handle, then update-accumulator) ordering in
+  // pebble_task_unregister(), this guarantees that cycles from a task dying
+  // mid-collection are never double-counted; in the worst case they show up
+  // one heartbeat late.
+  uint32_t dead_cycles[NumPebbleTask];
+  for (int task = 0; task < NumPebbleTask; task++) {
+    dead_cycles[task] = s_dead_task_cycles[task];
+  }
+
+  struct pbl_thread_stats stats[CONFIG_KERNEL_MAX_THREADS];
+  uint32_t total_run_time;
+  size_t count = pbl_thread_stats_snapshot(stats, PBL_ARRAY_SIZE(stats), &total_run_time);
+
+  uint32_t delta_total = total_run_time - s_prev_total_run_time;
+  s_prev_total_run_time = total_run_time;
+
+  struct pbl_thread *idle_thread = pbl_thread_idle();
+  uint32_t curr_task_run_time[NumPebbleTask] = {};
+  uint32_t curr_idle_run_time = 0;
+
+  for (size_t i = 0; i < count; i++) {
+    if (stats[i].thread == idle_thread) {
+      curr_idle_run_time = stats[i].run_time;
+      continue;
+    }
+    PebbleTask task = pebble_task_get_task_for_thread(stats[i].thread);
+    if (task < NumPebbleTask) {
+      curr_task_run_time[task] = stats[i].run_time;
+    }
+  }
+
+  for (int task = 0; task < NumPebbleTask; task++) {
+    uint32_t total = dead_cycles[task] + curr_task_run_time[task];
+    uint32_t delta = total - s_prev_total_task_cycles[task];
+    s_prev_total_task_cycles[task] = total;
+    uint32_t pct = delta_total ? (uint32_t)(((uint64_t)delta * 10000U) / delta_total) : 0;
+    sys_pbl_analytics_set_unsigned(s_task_cpu_pct_keys[task], pct);
+  }
+
+  uint32_t idle_delta = curr_idle_run_time - s_prev_idle_run_time;
+  s_prev_idle_run_time = curr_idle_run_time;
+  uint32_t idle_pct = delta_total ? (uint32_t)(((uint64_t)idle_delta * 10000U) / delta_total) : 0;
+  PBL_ANALYTICS_SET_UNSIGNED(task_cpu_idle_pct, idle_pct);
+}
+PBL_ANALYTICS_COLLECTOR_DEFINE(prv_collect_task_cpu_stats);
+#endif
+
+struct pbl_msgq *pebble_task_get_to_queue(PebbleTask task) {
+  struct pbl_msgq *queue;
+  switch (task) {
+    case PebbleTask_KernelMain:
+      queue = event_get_to_kernel_queue(pebble_task_get_current());
+      break;
+    case PebbleTask_Worker:
+      queue = worker_manager_get_task_context()->to_process_event_queue;
+      break;
+    case PebbleTask_App:
+      queue = app_manager_get_task_context()->to_process_event_queue;
+      break;
+    case PebbleTask_SysWorkq:
+      queue = nullptr;
+      break;
+    default:
+      pbl_panic();
+  }
+  return queue;
+}
+
+void pbl_thread_stack_overflow(struct pbl_thread *thread, const char *name) {
+  PebbleTask task = pebble_task_get_task_for_thread(thread);
+
+  // If the task is application or worker, ignore this hook. We have a memory protection region
+  // setup at the bottom of those stacks and the code that catches MPU violations to that
+  // area in fault_handling.c has the logic to safely kill those user tasks without forcing
+  // a reboot.
+  if ((task != PebbleTask_App) && (task != PebbleTask_Worker)) {
+    PBL_LOG_SYNC_ERR("Stack overflow [task: %s]", name);
+    RebootReason reason = {.code = RebootReasonCode_StackOverflow, .data8[0] = task};
+    reboot_reason_set(&reason);
+
+    reset_due_to_software_failure();
+  }
+}
+
+void pebble_task_assert_current(PebbleTask expected_task) {
+  uintptr_t saved_lr = (uintptr_t)PBL_RETURN_ADDRESS(0);
+
+  if (pebble_task_get_current() != expected_task) {
+    PBL_LOG_ALWAYS("LR: %p. Incorrect task! Expected <%s> got <%s>", (void *)saved_lr,
+                   pebble_task_get_name(expected_task),
+                   pebble_task_get_name(pebble_task_get_current()));
+    pbl_fatal_error_handler(saved_lr);
+  }
+}
+
+void pebble_task_assert_not_current(PebbleTask unexpected_task) {
+  uintptr_t saved_lr = (uintptr_t)PBL_RETURN_ADDRESS(0);
+
+  if (pebble_task_get_current() == unexpected_task) {
+    PBL_LOG_ALWAYS("LR: %p. Incorrect task! Can't be <%s>", (void *)saved_lr,
+                   pebble_task_get_name(unexpected_task));
+    pbl_fatal_error_handler(saved_lr);
+  }
+}

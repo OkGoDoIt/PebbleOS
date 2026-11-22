@@ -10,6 +10,7 @@
 /** @cond INTERNAL_HIDDEN */
 
 struct pbl_thread;
+struct pbl_mutex;
 struct pbl_msgq;
 struct pbl_poll_group;
 
@@ -18,26 +19,32 @@ struct pbl_waitq {
   struct pbl_thread *head;
 };
 
+/* Entry of the timeout queue: a blocked thread, or a timer when @c thread is NULL. */
+struct pbl_timeout {
+  struct pbl_timeout *next;
+  uint64_t expires;
+  struct pbl_thread *thread;
+  bool active;
+};
+
 struct pbl_thread_backend {
   void *sp; // saved stack pointer; must stay first
   struct pbl_arch_thread arch;
-  struct pbl_thread *next;         // ready list or wait queue link
-  struct pbl_thread *timeout_next; // timeout list link
-  struct pbl_thread *all_next;     // list of every live thread
-  struct pbl_waitq *waitq;         // object blocked on, NULL for a plain sleep
-  uint32_t wake_at;
+  struct pbl_thread *next;     // ready list or wait queue link
+  struct pbl_thread *all_next; // list of every live thread
+  struct pbl_waitq *waitq;     // object blocked on, NULL for a plain sleep
+  struct pbl_mutex *held;      // mutexes owned, last taken first
+  struct pbl_timeout timeout;
   uint32_t run_time;
-  uint32_t switched_in_at;
   uint32_t number;
   uint8_t state;
   uint8_t base_prio;
-  uint8_t mutexes_held;
-  bool on_timeout_list;
   int wake_rc;
 };
 
 struct pbl_mutex_backend {
   struct pbl_waitq waitq;
+  struct pbl_mutex *next_held; // next mutex of the same owner
 };
 
 struct pbl_sem_backend {

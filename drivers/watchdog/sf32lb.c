@@ -1,96 +1,184 @@
 /* SPDX-FileCopyrightText: 2025 Core Devices LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#include <errno.h>
 #include <stdint.h>
 
+#include <pbl/devicetree.h>
 #include <pbl/drivers/watchdog.h>
+#include <pbl/drivers/watchdog/sf32lb.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/mmio.h>
+#include <pbl/util/misc.h>
 
+#include <devicetree/regs.h>
+
+#ifdef CONFIG_SOC_SF32LB57
+#include <hardware/sf32lb57_pmuc.h>
+#include <hardware/sf32lb57_wdt.h>
+
+#define WDT(reg)  SF32LB57_WDT_##reg##_OFFSET
+#define PMUC(reg) SF32LB57_PMUC_##reg##_OFFSET
+#else
 #include <hardware/sf32lb52_hpsys_cfg.h>
 #include <hardware/sf32lb52_pmuc.h>
 #include <hardware/sf32lb52_wdt.h>
 
+#define WDT(reg)  SF32LB52_WDT_##reg##_OFFSET
+#define PMUC(reg) SF32LB52_PMUC_##reg##_OFFSET
+#endif
+
 #define WDT_CMD_TIMEOUT_US 48000U
 
-static McuRebootReason s_cached_reset_flag;
+static struct pbl_mcu_reboot_reason s_cached_reset_flag;
+// Registers, and counts per timeout at the rate of the clock, once the device is up
+static uintptr_t s_base;
+static uintptr_t s_cfg;
+static uint32_t s_reload;
 
 static inline uint32_t prv_wdt_getreg(uint32_t offset) {
-  return pbl_readl(SF32LB52_WDT1_BASE + offset);
+  return pbl_readl(s_base + offset);
 }
 
 static inline void prv_wdt_putreg(uint32_t offset, uint32_t value) {
-  pbl_writel(value, SF32LB52_WDT1_BASE + offset);
+  pbl_writel(value, s_base + offset);
 }
 
 static inline uint32_t prv_pmuc_getreg(uint32_t offset) {
-  return pbl_readl(SF32LB52_PMUC_BASE + offset);
+  return pbl_readl(PBL_DT_REG_PMUC + offset);
 }
 
 static inline void prv_pmuc_putreg(uint32_t offset, uint32_t value) {
-  pbl_writel(value, SF32LB52_PMUC_BASE + offset);
+  pbl_writel(value, PBL_DT_REG_PMUC + offset);
 }
 
 static void prv_wdt_command(uint32_t cmd, bool active) {
-  prv_wdt_putreg(SF32LB52_WDT_CCR_OFFSET, cmd);
+  prv_wdt_putreg(WDT(CCR), cmd);
 
-  (void)PBL_POLL_BUSY_US(
-      ((prv_wdt_getreg(SF32LB52_WDT_SR_OFFSET) & WDT_SR_WDT_ACTIVE) != 0U) == active, 1U,
-      WDT_CMD_TIMEOUT_US);
+  (void)PBL_POLL_BUSY_US(((prv_wdt_getreg(WDT(SR)) & WDT_SR_WDT_ACTIVE) != 0U) == active, 1U,
+                         WDT_CMD_TIMEOUT_US);
 }
 
 void watchdog_init(void) {
   uint32_t val;
 
+  if (s_base == 0U) {
+    return;
+  }
+
   watchdog_stop();
 
   // Reset only, no interrupt
-  val = prv_wdt_getreg(SF32LB52_WDT_CR_OFFSET);
-  prv_wdt_putreg(SF32LB52_WDT_CR_OFFSET, val & ~WDT_CR_RESPONSE_MODE);
+  val = prv_wdt_getreg(WDT(CR));
+  prv_wdt_putreg(WDT(CR), val & ~WDT_CR_RESPONSE_MODE);
 
-  // On PebbleOS, we use RC32K as WDT clock source.
-  prv_wdt_putreg(SF32LB52_WDT_CVR0_OFFSET, 32U * CONFIG_WATCHDOG_TIMEOUT_MS);
+  prv_wdt_putreg(WDT(CVR0), s_reload);
 
-  pbl_modifyl(0U, PMUC_WER_WDT1, SF32LB52_PMUC_BASE + SF32LB52_PMUC_WER_OFFSET);
-  pbl_modifyl(0U, HPSYS_CFG_SYSCR_WDT1_REBOOT,
-              SF32LB52_HPSYS_CFG_BASE + SF32LB52_HPSYS_CFG_SYSCR_OFFSET);
+#ifdef CONFIG_SOC_SF32LB57
+  // Only the IWDT resets the system
+  pbl_modifyl(0U, PMUC_WER_IWDT, PBL_DT_REG_PMUC + PMUC(WER));
+#else
+  pbl_modifyl(0U, PMUC_WER_WDT1, PBL_DT_REG_PMUC + PMUC(WER));
+  pbl_modifyl(0U, HPSYS_CFG_SYSCR_WDT1_REBOOT, s_cfg + SF32LB52_HPSYS_CFG_SYSCR_OFFSET);
+#endif
 }
 
 void watchdog_start(void) {
+  if (s_base == 0U) {
+    return;
+  }
+
   prv_wdt_command(WDT_CCR_START, true);
 }
 
 void watchdog_stop(void) {
+  if (s_base == 0U) {
+    return;
+  }
+
   pbl_busy_wait_us(1000U);
   prv_wdt_command(WDT_CCR_STOP, false);
   pbl_busy_wait_us(1000U);
 }
 
 void watchdog_feed(void) {
+  if (s_base == 0U) {
+    return;
+  }
+
   prv_wdt_command(WDT_CCR_START, true);
 }
 
+#ifdef CONFIG_SOC_SF32LB57
+#define WSR_WDT_RESET PMUC_WSR_IWDTRST
+#else
+#define WSR_WDT_RESET PMUC_WSR_WDT1
+#endif
+
 bool watchdog_check_reset_flag(void) {
-  return (prv_pmuc_getreg(SF32LB52_PMUC_WSR_OFFSET) & PMUC_WSR_WDT1) != 0U;
+  return (prv_pmuc_getreg(PMUC(WSR)) & WSR_WDT_RESET) != 0U;
 }
 
-McuRebootReason watchdog_clear_reset_flag(void) {
-  uint32_t wsr = prv_pmuc_getreg(SF32LB52_PMUC_WSR_OFFSET);
-  prv_pmuc_putreg(SF32LB52_PMUC_WCR_OFFSET, 0xffffffffU);
+struct pbl_mcu_reboot_reason watchdog_clear_reset_flag(void) {
+  uint32_t wsr = prv_pmuc_getreg(PMUC(WSR));
+  prv_pmuc_putreg(PMUC(WCR), 0xffffffffU);
 
-  s_cached_reset_flag = (McuRebootReason){
+  s_cached_reset_flag = (struct pbl_mcu_reboot_reason){
     .brown_out_reset = 0,
+#ifdef CONFIG_SOC_SF32LB57
+    .pin_reset = 0,
+    .independent_watchdog_reset = (wsr & WSR_WDT_RESET) != 0U,
+    .window_watchdog_reset = 0,
+#else
     .pin_reset = (wsr & (PMUC_WSR_PIN0 | PMUC_WSR_PIN1)) != 0U,
+    .independent_watchdog_reset = 0,
+    .window_watchdog_reset = (wsr & WSR_WDT_RESET) != 0U,
+#endif
     .power_on_reset = 0,
     .software_reset = 0,
-    .independent_watchdog_reset = 0,
-    .window_watchdog_reset = (wsr & PMUC_WSR_WDT1) != 0U,
     .low_power_manager_reset = 0,
   };
 
   return s_cached_reset_flag;
 }
 
-McuRebootReason watchdog_get_reset_flag(void) {
+struct pbl_mcu_reboot_reason watchdog_get_reset_flag(void) {
   return s_cached_reset_flag;
 }
+
+int pbl_watchdog_sf32lb_init(const struct pbl_device *dev) {
+  const struct pbl_watchdog_sf32lb *wdt =
+      PBL_CONTAINER_OF(dev, const struct pbl_watchdog_sf32lb, dev);
+  uint64_t rate_mhz;
+  int ret;
+
+  ret = pbl_device_init(&wdt->clk.ctrl->dev);
+  if (ret != 0) {
+    return ret;
+  }
+
+  ret = pbl_clk_enable(&wdt->clk);
+  if (ret != 0) {
+    return ret;
+  }
+
+  ret = pbl_clk_get_rate(&wdt->clk, &rate_mhz);
+  if (ret != 0) {
+    return ret;
+  }
+
+  s_reload = (uint32_t)((rate_mhz * CONFIG_WATCHDOG_TIMEOUT_MS) / 1000000U);
+  if (s_reload == 0U) {
+    return -EINVAL;
+  }
+  s_base = wdt->base;
+  s_cfg = wdt->cfg;
+
+  watchdog_init();
+  watchdog_start();
+
+  return 0;
+}
+
+#include PBL_DT_INSTANCES(sifli_sf32lb52_wdt)
+#include PBL_DT_INSTANCES(sifli_sf32lb57_iwdt)

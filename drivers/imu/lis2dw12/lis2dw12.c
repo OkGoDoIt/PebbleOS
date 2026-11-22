@@ -2,24 +2,25 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <errno.h>
+#include <inttypes.h>
 
+#include <pbl/analytics/analytics.h>
+#include <pbl/devicetree.h>
 #include <pbl/drivers/accel.h>
 #include <pbl/drivers/gpio.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/imu/lis2dw12/lis2dw12.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/time.h>
+#include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
-#include <pbl/services/analytics/analytics.h>
 #include <pbl/services/imu/units.h>
-#include <pbl/services/new_timer/new_timer.h>
-#include <pbl/services/regular_timer.h>
 #include <pbl/util/bits.h>
 #include <pbl/util/math.h>
 #include <pbl/util/misc.h>
 #include <pbl/util/size.h>
 
-PBL_LOG_MODULE_DEFINE(driver_accel_lis2dw12, CONFIG_DRIVER_IMU_LOG_LEVEL);
+PBL_LOG_MODULE_DECLARE(driver_accel, CONFIG_DRIVER_IMU_LOG_LEVEL);
 
 // The single instance, for interrupt and timer contexts
 static const struct pbl_lis2dw12 *s_dev;
@@ -61,6 +62,9 @@ static const struct pbl_lis2dw12 *s_dev;
 
 // Scale range when in 12-bit mode (low-power mode 1)
 #define LIS2DW12_S12_SCALE_RANGE PBL_BIT(11)
+
+// I2C address bit set by the SA0 pin
+#define LIS2DW12_ADDR_SA0 PBL_BIT(0)
 
 // Registers
 #define LIS2DW12_WHO_AM_I            0x0FU
@@ -178,7 +182,7 @@ static bool prv_lis2dw12_read_fifo(uint8_t samples) {
      .flags = PBL_I2C_MSG_READ | PBL_I2C_MSG_DMA_SAFE},
   };
 
-  return pbl_i2c_transfer(&s_dev->i2c, msgs, ARRAY_LENGTH(msgs)) == 0;
+  return pbl_i2c_transfer(&s_dev->i2c, msgs, PBL_ARRAY_SIZE(msgs)) == 0;
 }
 
 static int16_t prv_raw_to_s12(const uint8_t *raw) {
@@ -209,7 +213,7 @@ static int16_t prv_axis_raw_mg(IMUCoordinateAxis axis, const uint8_t *raw) {
   return val;
 }
 
-static void prv_raw_to_mg(const uint8_t *raw, AccelDriverSample *sample) {
+static void prv_raw_to_mg(const uint8_t *raw, struct pbl_accel_sample *sample) {
   sample->x = prv_axis_raw_mg(AXIS_X, raw);
   sample->y = prv_axis_raw_mg(AXIS_Y, raw);
   sample->z = prv_axis_raw_mg(AXIS_Z, raw);
@@ -289,7 +293,7 @@ static void prv_lis2dw12_drain_fifo(void) {
     return;
   }
 
-  samples = MIN(PBL_FIELD_GET(LIS2DW12_FIFO_SAMPLES_DIFF_MASK, val), LIS2DW12_FIFO_SIZE);
+  samples = PBL_MIN(PBL_FIELD_GET(LIS2DW12_FIFO_SAMPLES_DIFF_MASK, val), LIS2DW12_FIFO_SIZE);
   if (samples == 0U) {
     return;
   }
@@ -304,7 +308,7 @@ static void prv_lis2dw12_drain_fifo(void) {
 }
 
 static void prv_lis2dw12_dispatch_shake(uint8_t wake_up_src) {
-  AccelDriverSample sample = {};
+  struct pbl_accel_sample sample = {};
   IMUCoordinateAxis axis = AXIS_Z;
   int16_t val = 0;
   bool found = false;
@@ -330,7 +334,7 @@ static void prv_lis2dw12_dispatch_shake(uint8_t wake_up_src) {
       continue;
     }
 
-    if (!found || ABS(vals[a]) > ABS(val)) {
+    if (!found || PBL_ABS(vals[a]) > PBL_ABS(val)) {
       axis = a;
       val = vals[a];
       found = true;
@@ -432,11 +436,11 @@ static void prv_work_cb(void *data) {
 
 //! Run driver work on the timer task, with the device lock held
 static void prv_queue_work(void (*work)(void)) {
-  new_timer_add_work_callback(prv_work_cb, (void *)work);
+  pbl_sys_work_call_high(prv_work_cb, (void *)work);
 }
 
 static void prv_queue_work_from_isr(void (*work)(void)) {
-  new_timer_add_work_callback_from_isr(prv_work_cb, (void *)work);
+  pbl_sys_work_call_high_from_isr(prv_work_cb, (void *)work);
 }
 
 static void prv_lis2dw12_int1_work_handler(void) {
@@ -621,24 +625,24 @@ static uint32_t prv_ms_since_last_fifo_read(void) {
 }
 
 static uint32_t prv_stall_threshold_ms(void) {
-  return MAX(LIS2DW12_STALL_MARGIN * s_dev->state->int1_period_ms, LIS2DW12_STALL_MIN_MS);
+  return PBL_MAX(LIS2DW12_STALL_MARGIN * s_dev->state->int1_period_ms, LIS2DW12_STALL_MIN_MS);
 }
 
 //! Arm/disarm the INT1 stall watchdog to match the active INT1 sources.
 //! Call after num_samples or shake_detection_enabled changes.
 static void prv_update_int1_watchdog(void) {
-  regular_timer_remove_callback(&s_dev->state->int1_wdt_timer);
+  pbl_wallclock_work_stop(&s_dev->state->int1_wdt_timer);
   s_dev->state->shake_stuck_passes = 0U;
 
   if (s_dev->state->num_samples > 0U) {
     s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
     s_dev->state->int1_period_ms =
         (s_dev->state->sampling_interval_us * s_dev->state->num_samples) / 1000;
-    regular_timer_add_multisecond_callback(
-        &s_dev->state->int1_wdt_timer, MAX(DIVIDE_CEIL(s_dev->state->int1_period_ms, 1000UL), 1U));
+    pbl_wallclock_work_start(&pbl_sys_workq_high, &s_dev->state->int1_wdt_timer, 1,
+                             PBL_MAX(PBL_DIV_ROUND_UP(s_dev->state->int1_period_ms, 1000UL), 1U));
   } else if (s_dev->state->shake_detection_enabled) {
-    regular_timer_add_multisecond_callback(&s_dev->state->int1_wdt_timer,
-                                           LIS2DW12_SHAKE_WDT_PERIOD_S);
+    pbl_wallclock_work_start(&pbl_sys_workq_high, &s_dev->state->int1_wdt_timer, 1,
+                             LIS2DW12_SHAKE_WDT_PERIOD_S);
   }
 }
 
@@ -680,7 +684,7 @@ static void prv_stall_check_work_cb(void) {
   prv_lis2dw12_recover();
 }
 
-static void prv_int1_wdt_cb(void *data) {
+static void prv_int1_wdt_cb(struct pbl_work *work) {
   prv_queue_work(prv_stall_check_work_cb);
 }
 
@@ -693,7 +697,7 @@ static int prv_init(const struct pbl_accel *accel) {
   int err;
   uint8_t val;
 
-  s_dev = container_of(accel, const struct pbl_lis2dw12, accel);
+  s_dev = PBL_CONTAINER_OF(accel, const struct pbl_lis2dw12, accel);
 
   // Check device ID
   ret = prv_lis2dw12_read(LIS2DW12_WHO_AM_I, &val, 1);
@@ -725,22 +729,22 @@ static int prv_init(const struct pbl_accel *accel) {
     }
   } while ((val & LIS2DW12_CTRL2_BOOT) != 0U);
 
-  // Disable ADDR pull-up if requested
-  // NOTE: This is an undocumented register (provided by FAE)
-#ifdef CONFIG_ACCEL_LIS2DW12_DISABLE_ADDR_PULLUP
-  ret = prv_lis2dw12_read(LIS2DW12_UNDOC, &val, 1);
-  if (!ret) {
-    PBL_LOG_ERR("Failed to read LIS2DW12 register 0x17");
-    return -EIO;
-  }
+  // The address LSB is SA0: a grounded SA0 leaks through its pull-up
+  // (undocumented register, provided by the FAE)
+  if ((s_dev->i2c.addr & LIS2DW12_ADDR_SA0) == 0U) {
+    ret = prv_lis2dw12_read(LIS2DW12_UNDOC, &val, 1);
+    if (!ret) {
+      PBL_LOG_ERR("Failed to read LIS2DW12 register 0x17");
+      return -EIO;
+    }
 
-  val |= LIS2DW12_UNDOC_ADDR_PULLUP_DIS;
-  ret = prv_lis2dw12_write(LIS2DW12_UNDOC, &val, 1);
-  if (!ret) {
-    PBL_LOG_ERR("Failed to write LIS2DW12 register 0x17");
-    return -EIO;
+    val |= LIS2DW12_UNDOC_ADDR_PULLUP_DIS;
+    ret = prv_lis2dw12_write(LIS2DW12_UNDOC, &val, 1);
+    if (!ret) {
+      PBL_LOG_ERR("Failed to write LIS2DW12 register 0x17");
+      return -EIO;
+    }
   }
-#endif
 
   // Single-data conversion via SLP_MODE_1, latch function IRQ
   val = LIS2DW12_CTRL3_SLP_MODE_SEL_SLP_MODE_1 | LIS2DW12_CTRL3_LIR;
@@ -792,6 +796,12 @@ static int prv_init(const struct pbl_accel *accel) {
 
   s_dev->state->wk_ths_curr = CONFIG_ACCEL_LIS2DW12_WK_THS_DEFAULT;
 
+  pbl_wallclock_work_init(&s_dev->state->int1_wdt_timer, prv_int1_wdt_cb);
+
+  if (s_dev->int1.intc == nullptr) {
+    return 0;
+  }
+
   err = pbl_device_init(&s_dev->int1.intc->dev);
   if (err != 0) {
     PBL_LOG_ERR("INT1 interrupt controller unavailable");
@@ -815,8 +825,6 @@ static int prv_init(const struct pbl_accel *accel) {
     PBL_LOG_ERR("Could not enable INT1 (%d)", err);
     return err;
   }
-
-  s_dev->state->int1_wdt_timer.cb = prv_int1_wdt_cb;
 
   return 0;
 }
@@ -856,6 +864,10 @@ static uint32_t prv_get_max_num_samples(const struct pbl_accel *accel) {
 static int prv_set_num_samples(const struct pbl_accel *accel, uint32_t num_samples) {
   bool ret;
   uint8_t val;
+
+  if (num_samples > 0U && s_dev->int1.intc == nullptr) {
+    return -ENOTSUP;
+  }
 
   // Limit to FIFO threshold
   if (num_samples > LIS2DW12_FIFO_SIZE) {
@@ -913,7 +925,7 @@ static bool prv_data_ready(bool *read_ok) {
   return !*read_ok || (status & LIS2DW12_STATUS_DRDY) != 0U;
 }
 
-static int prv_peek(const struct pbl_accel *accel, AccelDriverSample *data) {
+static int prv_peek(const struct pbl_accel *accel, struct pbl_accel_sample *data) {
   int err = 0;
   bool ret;
   uint8_t ctrl1;
@@ -1010,6 +1022,10 @@ end:
 static int prv_set_shake_detection(const struct pbl_accel *accel, bool on) {
   bool ret;
 
+  if (on && s_dev->int1.intc == nullptr) {
+    return -ENOTSUP;
+  }
+
   // Configure ODR (use current interval, will be adjusted if < 12.5Hz)
   ret = prv_configure_odr(s_dev->state->sampling_interval_us, on);
   if (!ret) {
@@ -1105,3 +1121,5 @@ const struct pbl_accel_ops pbl_lis2dw12_ops = {
   .set_shake_sensitivity_high = prv_set_shake_sensitivity_high,
   .set_shake_sensitivity_percent = prv_set_shake_sensitivity_percent,
 };
+
+#include PBL_DT_INSTANCES(st_lis2dw12)

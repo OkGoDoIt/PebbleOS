@@ -8,19 +8,19 @@
   outputs =
     { self, nixpkgs }:
     let
-      sdkVersion = "0.1.11";
+      sdkVersion = "0.1.16";
       sdkBundles = {
         aarch64-darwin = {
           osArch = "darwin-aarch64";
-          sha256 = "310fae6cf4469b9142418b919413e47fa2ce349826d95742b7178731431588eb";
+          sha256 = "6ba21b4ba6d7d9d67fa46371e144f9251db001f37c9a8dc00e7aed62341e08ce";
         };
         aarch64-linux = {
           osArch = "linux-aarch64";
-          sha256 = "68d8d600a2aff1b5119748c7bb9840db5b49d8e834718a2b534abbe8c6716d6a";
+          sha256 = "4b7c806ea4d9b325ef8909513f9f81bd1a8b94bd25b367218de7ab918f8f6097";
         };
         x86_64-linux = {
           osArch = "linux-x86_64";
-          sha256 = "27e605f9a4801866f04a35f7d29a71a3e7ee1ff82e18ac12837b991f69137e45";
+          sha256 = "7a2aec2369d752a5b87da5ccd28bd25c790ccd38531911a3649cb3265cf473ce";
         };
       };
       forSupportedSystems = nixpkgs.lib.genAttrs (builtins.attrNames sdkBundles);
@@ -101,6 +101,7 @@
               ccache
               cmake
               dash
+              dtc
               gettext
               git
               librsvg
@@ -111,6 +112,9 @@
               meson
               ninja
               pkg-config
+              # Applications in Rust; rustup installs rust-toolchain.toml.
+              rust-bindgen
+              rustup
               uv
               # Host compiler for Moddable and tests; x86 Linux tests need multilib.
               (if stdenv.isLinux && stdenv.hostPlatform.isx86_64 then clang_multi else clang)

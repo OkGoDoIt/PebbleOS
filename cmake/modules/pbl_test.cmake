@@ -13,8 +13,6 @@
 
 define_property(GLOBAL PROPERTY PBL_TESTS
   BRIEF_DOCS "Registered clar tests, materialized by pbl_test_finalize()")
-define_property(GLOBAL PROPERTY PBL_TEST_OBJECTS
-  BRIEF_DOCS "Product objects already compiled, keyed by flags and source")
 
 set(PBL_TEST_PLATFORMS default emery gabbro flint)
 
@@ -47,7 +45,7 @@ set(PBL_TEST_INCLUDES_TAIL
   include
   kernel/arch/posix/include
   subsys
-  fw
+  pebble
   third_party/uzlib/uzlib/src
   third_party/upng
   third_party/upng/upng
@@ -58,7 +56,6 @@ set(PBL_TEST_INCLUDES_TAIL
 
 function(pbl_test_init)
   set_property(GLOBAL PROPERTY PBL_TESTS "")
-  set_property(GLOBAL PROPERTY PBL_TEST_OBJECTS "")
 
   set(PBL_TEST_OBJ_DIR ${CMAKE_BINARY_DIR}/objects CACHE INTERNAL "")
   set(PBL_TEST_IMAGE_DIR ${CMAKE_BINARY_DIR}/test_images CACHE INTERNAL "")
@@ -89,7 +86,8 @@ function(_pbl_test_platform_defines platform out_defines out_bitdepth)
     endif()
     set_property(GLOBAL PROPERTY PBL_TEST_PLATFORM_${platform} "${defines}")
     set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-      ${PBL_BASE}/Kconfig.platform ${PBL_BASE}/tools/cmake/platform_config.py
+      ${PBL_BASE}/pebble/Kconfig.platform ${PBL_BASE}/pebble/platforms/Kconfig.${platform}
+      ${PBL_BASE}/tools/cmake/platform_config.py
       ${PBL_BASE}/tools/pebble_sdk_platform.py)
   endif()
 
@@ -225,11 +223,12 @@ function(_pbl_test_object out source key flags)
   set(object ${PBL_TEST_OBJ_DIR}/${key}/${flat}.o)
   set(${out} ${object} PARENT_SCOPE)
 
-  get_property(built GLOBAL PROPERTY PBL_TEST_OBJECTS)
-  if(object IN_LIST built)
+  # One property per object: a lookup in an ever-growing list is quadratic.
+  get_property(built GLOBAL PROPERTY PBL_TEST_OBJECT_${key}/${flat} SET)
+  if(built)
     return()
   endif()
-  set_property(GLOBAL APPEND PROPERTY PBL_TEST_OBJECTS ${object})
+  set_property(GLOBAL PROPERTY PBL_TEST_OBJECT_${key}/${flat} 1)
 
   add_custom_command(
     OUTPUT ${object}

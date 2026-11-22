@@ -2,52 +2,60 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/drivers/flash.h>
+#include <pbl/drivers/ram.h>
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/idle.h>
 #include <pbl/kernel/irq.h>
+#include <pbl/kernel/mmio.h>
 #include <pbl/kernel/section.h>
 #include <pbl/kernel/time.h>
-#include <pbl/soc/sf32lb/sleep.h>
+#include <pbl/soc/sf32lb/idle.h>
 #include <pbl/util/math.h>
 #include <pbl/util/size.h>
-
-#include <kernel/util/idle.h>
 
 #ifdef CONFIG_SHELL
 #include <pbl/shell/shell.h>
 #endif
 
-#include <bf0_hal.h>
+#include <devicetree/idle_states.h>
+#include <devicetree/regs.h>
+#include <hardware/sf32lb52_hpsys_aon.h>
+#include <hardware/sf32lb52_hpsys_rcc.h>
 
-enum {
-  IDLE_WFI,
-  IDLE_DEEPWFI,
-  IDLE_DEEPSLEEP,
-};
+#define HPSYS_AON(reg) (PBL_DT_REG_HPSYS_AON + SF32LB52_HPSYS_AON_##reg##_OFFSET)
+#define HPSYS_RCC(reg) (PBL_DT_REG_HPSYS_RCC + SF32LB52_HPSYS_RCC_##reg##_OFFSET)
 
-static bool s_force_wfi;
+// Settling time after waking up from deep sleep
+#define DEEPSLEEP_EXIT_NOPS 10
 
-static uint32_t s_iser_bak[16];
+static uint32_t s_enabled[(CONFIG_NUM_IRQS + 31) / 32];
 
-//! Audio DMA users that need the deep-WFI clock profile described in sleep.h.
+#define DEEPWFI_DIV_MASK \
+  (HPSYS_RCC_DWCFGR_HDIV_MASK | HPSYS_RCC_DWCFGR_PDIV1_MASK | HPSYS_RCC_DWCFGR_PDIV2_MASK)
+// The boot dividers init.c programs: HCLK = 48 MHz / 12 = 4 MHz, PCLK1 = 4 MHz, PCLK2 = 2 MHz.
+#define DEEPWFI_DIVS_DEFAULT                         \
+  (PBL_FIELD_PREP(HPSYS_RCC_DWCFGR_HDIV_MASK, 12U) | \
+   PBL_FIELD_PREP(HPSYS_RCC_DWCFGR_PDIV1_MASK, 0U) | \
+   PBL_FIELD_PREP(HPSYS_RCC_DWCFGR_PDIV2_MASK, 1U))
+// While audio DMA runs: HCLK stays at 48 MHz, PCLK1 = 48 MHz, PCLK2 = 24 MHz.
+#define DEEPWFI_DIVS_AUDIO                           \
+  (PBL_FIELD_PREP(HPSYS_RCC_DWCFGR_HDIV_MASK, 1U) |  \
+   PBL_FIELD_PREP(HPSYS_RCC_DWCFGR_PDIV1_MASK, 0U) | \
+   PBL_FIELD_PREP(HPSYS_RCC_DWCFGR_PDIV2_MASK, 1U))
+
+//! Audio DMA users that need the deep-WFI clock profile described in idle.h.
 static uint32_t s_audio_profile_holders;
 
-//! Program the clock tree for the next deep WFI with IRQs locked.
+//! Program the clock tree for the next deep WFI, with IRQs locked.
 static void prv_apply_deep_wfi_profile(void) {
-  if (s_audio_profile_holders > 0) {
-    // Audio DMA is running. The vendor's PM_SCENARIO_AUDIO recipe (SiFli-SDK
-    // middleware/system/bf0_pm.c): keep HCLK at the full 48 MHz deep-WFI source
-    // (PCLK1 = 48 MHz, PCLK2 = 24 MHz) and force the HP clock on, so the PDM DMA
-    // keeps moving while the core has its pipeline stopped.
-    HAL_RCC_HCPU_SetDeepWFIDiv(1, 0, 1);
-    hwp_hpsys_rcc->DBGR |= HPSYS_RCC_DBGR_FORCE_HP;
+  if (s_audio_profile_holders > 0U) {
+    // The vendor's audio power scenario: keep HCLK at the full deep-WFI source and force the HP
+    // clock on, so the PDM DMA keeps moving while the core has its pipeline stopped.
+    pbl_modifyl(DEEPWFI_DIV_MASK, DEEPWFI_DIVS_AUDIO, HPSYS_RCC(DWCFGR));
+    pbl_modifyl(0U, HPSYS_RCC_DBGR_FORCE_HP, HPSYS_RCC(DBGR));
   } else {
-    // configure clock dividers for deep WFI:
-    // HCLK = 48MHz / 12 = 4MHz
-    // PCLK1 = 4MHz / 2^0 = 4MHz
-    // PCLK2 = 4MHz / 2^1 = 2MHz
-    hwp_hpsys_rcc->DBGR &= ~HPSYS_RCC_DBGR_FORCE_HP;
-    HAL_RCC_HCPU_SetDeepWFIDiv(12, 0, 1);
+    pbl_modifyl(HPSYS_RCC_DBGR_FORCE_HP, 0U, HPSYS_RCC(DBGR));
+    pbl_modifyl(DEEPWFI_DIV_MASK, DEEPWFI_DIVS_DEFAULT, HPSYS_RCC(DWCFGR));
   }
 }
 
@@ -60,151 +68,129 @@ void soc_sf32lb_deep_wfi_audio_profile_acquire(void) {
 
 void soc_sf32lb_deep_wfi_audio_profile_release(void) {
   pbl_irq_lock();
-  PBL_ASSERTN(s_audio_profile_holders > 0);
+  PBL_ASSERTN(s_audio_profile_holders > 0U);
   --s_audio_profile_holders;
   prv_apply_deep_wfi_profile();
   pbl_irq_unlock();
 }
 
-static void prv_save_iser(void) {
-  uint32_t i;
-  for (i = 0; i < 16; i++) {
-    s_iser_bak[i] = NVIC->ISER[i];
-    NVIC->ICER[i] = 0xFFFFFFFF;
-    __DSB();
-    __ISB();
+// Leave AON as the only wakeup source, the other handlers run from flash
+static void prv_irqs_aon_only(void) {
+  for (pbl_irq_t irq = 0; irq < CONFIG_NUM_IRQS; irq++) {
+    if (pbl_irq_is_enabled(irq)) {
+      s_enabled[irq / 32] |= PBL_BIT(irq % 32);
+      pbl_irq_disable(irq);
+    } else {
+      s_enabled[irq / 32] &= ~PBL_BIT(irq % 32);
+    }
+  }
+
+  pbl_irq_enable(PBL_IRQN(AON));
+}
+
+// AON stays enabled: its handler clears the wakeup status, then disables it
+static void prv_irqs_restore(void) {
+  for (pbl_irq_t irq = 0; irq < CONFIG_NUM_IRQS; irq++) {
+    if ((s_enabled[irq / 32] & PBL_BIT(irq % 32)) != 0U) {
+      pbl_irq_enable(irq);
+    }
   }
 }
 
-static void prv_restore_iser(void) {
-  uint32_t i;
-  for (i = 0; i < 16; i++) {
-    __COMPILER_BARRIER();
-    NVIC->ISER[i] = s_iser_bak[i];
-    __COMPILER_BARRIER();
-  }
+// Inline, unlike pbl_modifyl(): the flash is down
+static PBL_ALWAYS_INLINE void prv_update(uint32_t clear, uint32_t set, uintptr_t addr) {
+  pbl_writel((pbl_readl(addr) & ~clear) | set, addr);
 }
 
 PBL_SECTION_RAM static void prv_enter_wfi(void) {
-  __DSB();
-  __WFI();
-  __ISB();
+  pbl_cpu_idle();
 }
 
 PBL_SECTION_RAM static void prv_enter_deepwfi(void) {
-  __DSB();
-  __ISB();
-
-  SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
-  __WFI();
-  SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+#ifdef CONFIG_RAM
+  pbl_ram_quiesce(EXTRAM);
+#endif
+  pbl_cpu_idle_deep();
 }
 
 // Runs with the flash powered down
 PBL_SECTION_RAM static void prv_deepsleep(void *arg) {
-  uint32_t dll1_freq = 0UL;
-  int clk_src;
+  pbl_idle_hooks_late_enter(SOC_SF32LB_IDLE_DEEPSLEEP);
 
-  NVIC_EnableIRQ(AON_IRQn);
+  prv_update(0U, HPSYS_AON_ANACR_PA_ISO, HPSYS_AON(ANACR));
+  prv_update(0U, HPSYS_AON_ANACR_VHP_ISO, HPSYS_AON(ANACR));
 
-  clk_src = HAL_RCC_HCPU_GetClockSrc(RCC_CLK_MOD_SYS);
-  if (clk_src == RCC_SYSCLK_DLL1) {
-    HAL_RCC_HCPU_ClockSelect(RCC_CLK_MOD_SYS, RCC_SYSCLK_HRC48);
-    dll1_freq = HAL_RCC_HCPU_GetDLL1Freq();
-    HAL_RCC_HCPU_DisableDLL1();
+  prv_update(HPSYS_AON_ISSR_HP_ACTIVE, 0U, HPSYS_AON(ISSR));
+  pbl_writel(PBL_FIELD_PREP(HPSYS_AON_PMR_MODE_MASK, HPSYS_AON_PMR_MODE_DEEP_SLEEP),
+             HPSYS_AON(PMR));
+
+  pbl_cpu_idle();
+  for (int i = 0; i < DEEPSLEEP_EXIT_NOPS; i++) {
+    __asm volatile("nop");
   }
 
-  HAL_HPAON_DISABLE_PAD();
-  HAL_HPAON_DISABLE_VHP();
+  prv_update(HPSYS_AON_ANACR_PA_ISO, 0U, HPSYS_AON(ANACR));
+  prv_update(HPSYS_AON_ANACR_VHP_ISO, 0U, HPSYS_AON(ANACR));
 
-  HAL_HPAON_CLEAR_HP_ACTIVE();
-  HAL_HPAON_SET_POWER_MODE(AON_PMR_DEEP_SLEEP);
+  prv_update(0U, HPSYS_AON_ISSR_HP_ACTIVE, HPSYS_AON(ISSR));
+  pbl_writel(0U, HPSYS_AON(PMR));
 
-  __WFI();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-
-  HAL_HPAON_ENABLE_PAD();
-  HAL_HPAON_ENABLE_VHP();
-
-  HAL_HPAON_SET_HP_ACTIVE();
-  HAL_HPAON_CLEAR_POWER_MODE();
-
-  // Wait for HXT48 to be ready
-  if (dll1_freq != 0UL) {
-    while (0 == (hwp_hpsys_aon->ACR & HPSYS_AON_ACR_HXT48_RDY)) {
-      __NOP();
-    }
+  while ((pbl_readl(HPSYS_AON(ACR)) & HPSYS_AON_ACR_HXT48_RDY) == 0U) {
   }
 
-  if (clk_src == RCC_SYSCLK_DLL1) {
-    HAL_RCC_HCPU_EnableDLL1(dll1_freq);
-    HAL_RCC_HCPU_ClockSelect(RCC_CLK_MOD_SYS, RCC_SYSCLK_DLL1);
-  }
+  pbl_idle_hooks_late_exit(SOC_SF32LB_IDLE_DEEPSLEEP);
 }
 
 PBL_SECTION_RAM static void prv_enter_deepsleep(void) {
-  prv_save_iser();
+  prv_irqs_aon_only();
+#ifdef CONFIG_RAM
+  pbl_ram_suspend(EXTRAM);
+#endif
   pbl_flash_power_down(FLASH, prv_deepsleep, nullptr);
-  prv_restore_iser();
+#ifdef CONFIG_RAM
+  pbl_ram_resume(EXTRAM);
+#endif
+  prv_irqs_restore();
 }
 
 const struct pbl_idle_state pbl_soc_idle_states[] = {
-  [IDLE_WFI] = {.name = "wfi", .min_ticks = 1, .exit_ticks = 0, .enter = prv_enter_wfi},
-  [IDLE_DEEPWFI] = {.name = "deepwfi", .min_ticks = 1, .exit_ticks = 0, .enter = prv_enter_deepwfi},
-  [IDLE_DEEPSLEEP] = {
+  [SOC_SF32LB_IDLE_WFI] = {.name = "wfi", .min_ticks = 1, .exit_ticks = 0, .enter = prv_enter_wfi},
+  [SOC_SF32LB_IDLE_DEEPWFI] =
+      {.name = "deepwfi", .min_ticks = 1, .exit_ticks = 0, .enter = prv_enter_deepwfi},
+  [SOC_SF32LB_IDLE_DEEPSLEEP] = {
     .name = "deepsleep",
-    .min_ticks = PBL_TICK_HZ / 20,
-    .exit_ticks = 4,
+    .min_ticks = PBL_US_TO_TICKS_CEIL(PBL_DT_IDLE_STATE_DEEPSLEEP_MIN_RESIDENCY_US),
+    .exit_ticks = PBL_US_TO_TICKS_CEIL(PBL_DT_IDLE_STATE_DEEPSLEEP_EXIT_LATENCY_US),
     .enter = prv_enter_deepsleep
   },
 };
-const size_t pbl_soc_num_idle_states = ARRAY_LENGTH(pbl_soc_idle_states);
-
-static_assert(IDLE_WFI == SOC_SF32LB_WFI - 1 && IDLE_DEEPSLEEP == SOC_SF32LB_DEEPSLEEP - 1,
-              "idle states follow the sleep levels");
-
-PBL_SECTION_RAM int pbl_soc_idle_state_limit(void) {
-  if (!idle_is_allowed()) {
-    return -1;
-  }
-
-  // The debug flag forces plain WFI (deep WFI and deep sleep disabled).
-  if (s_force_wfi) {
-    return IDLE_WFI;
-  }
-
-  return (int)soc_sf32lb_sleep_max_level() - 1;
-}
+const size_t pbl_soc_num_idle_states = PBL_ARRAY_SIZE(pbl_soc_idle_states);
 
 PBL_IRQ_DIRECT(AON, 0, PBL_IRQ_ZERO_LATENCY) {
   uint32_t status;
 
-  NVIC_DisableIRQ(AON_IRQn);
-  HAL_HPAON_CLEAR_POWER_MODE();
+  pbl_irq_disable(PBL_IRQN(AON));
+  pbl_writel(0U, HPSYS_AON(PMR));
 
-  status = HAL_HPAON_GET_WSR();
-  status &= ~HPSYS_AON_WSR_PIN_ALL;
-  HAL_HPAON_CLEAR_WSR(status);
+  status = pbl_readl(HPSYS_AON(WSR)) & ~HPSYS_AON_WSR_PIN_ALL;
+  pbl_writel(status | HPSYS_AON_WCR_AON, HPSYS_AON(WCR));
 }
 
 #ifdef CONFIG_SHELL
+static bool s_force_wfi;
+
 static int prv_cmd_wfi(const struct pbl_shell *sh, size_t argc, char **argv) {
-  if (argv[1][0] == '1') {
-    s_force_wfi = true;
-    pbl_shell_print(sh, "WFI forced ON (deep WFI and deep sleep disabled)");
-  } else {
-    s_force_wfi = false;
-    pbl_shell_print(sh, "WFI forced OFF (deep WFI and deep sleep allowed)");
+  bool force = argv[1][0] == '1';
+
+  if (force && !s_force_wfi) {
+    pbl_idle_state_block(SOC_SF32LB_IDLE_DEEPWFI);
+  } else if (!force && s_force_wfi) {
+    pbl_idle_state_release(SOC_SF32LB_IDLE_DEEPWFI);
   }
+  s_force_wfi = force;
+
+  pbl_shell_print(sh, "WFI forced %s (deep WFI and deep sleep %s)", force ? "ON" : "OFF",
+                  force ? "disabled" : "allowed");
   return 0;
 }
 

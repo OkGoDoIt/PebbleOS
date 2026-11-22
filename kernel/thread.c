@@ -60,6 +60,7 @@ int pbl_thread_create(struct pbl_thread *t, const struct pbl_thread_attr *attr) 
   strncpy(t->name, attr->name, sizeof(t->name) - 1);
   t->prio = attr->prio;
   t->privileged = attr->privileged;
+  t->work_pool = attr->work_pool;
   t->stack = (uint8_t *)attr->stack + guard_size;
   t->stack_size = attr->stack_size - guard_size;
   t->stack_guard_size = guard_size;
@@ -78,22 +79,25 @@ int pbl_thread_create(struct pbl_thread *t, const struct pbl_thread_attr *attr) 
   }
 
   arch_thread_init(t, attr->entry, attr->arg);
+  for (unsigned int i = 0; i < PBL_THREAD_MAX_MEM_REGIONS; i++) {
+    t->own_regions |= attr->regions[i] != nullptr;
+  }
   prv_regions_set(t, attr->regions);
 
-  pbl_irq_lock();
+  unsigned int key = arch_irq_lock();
   sched_thread_start(t);
-  pbl_irq_unlock();
+  arch_irq_unlock(key);
   return 0;
 }
 
 void pbl_thread_abort(struct pbl_thread *t) {
-  pbl_irq_lock();
+  unsigned int key = arch_irq_lock();
   bool self = (t == nullptr || t == pbl_cur);
   sched_thread_remove(self ? pbl_cur : t);
   if (!self) {
     arch_thread_aborted(t);
   }
-  pbl_irq_unlock();
+  arch_irq_unlock(key);
   if (self) {
     // The switch requested above takes over; this never returns.
     arch_thread_exit();
@@ -101,19 +105,19 @@ void pbl_thread_abort(struct pbl_thread *t) {
 }
 
 void pbl_thread_suspend(struct pbl_thread *t) {
-  pbl_irq_lock();
+  unsigned int key = arch_irq_lock();
   sched_thread_suspend(t ? t : pbl_cur);
-  pbl_irq_unlock();
+  arch_irq_unlock(key);
 }
 
 void pbl_thread_resume(struct pbl_thread *t) {
-  pbl_irq_lock();
+  unsigned int key = arch_irq_lock();
   sched_thread_resume(t);
-  pbl_irq_unlock();
+  arch_irq_unlock(key);
 }
 
 struct pbl_thread *pbl_thread_current(void) {
-  return pbl_cur;
+  return arch_cur_get();
 }
 
 struct pbl_thread *pbl_thread_idle(void) {
@@ -122,11 +126,11 @@ struct pbl_thread *pbl_thread_idle(void) {
 
 void pbl_thread_prio_set(struct pbl_thread *t, pbl_prio_t prio) {
   PBL_ASSERTN(prio <= PBL_PRIO_MAX);
-  pbl_irq_lock();
-  // Keep an inherited boost; only the base moves.
-  pbl_prio_t effective = t->prio > t->backend.base_prio ? (prio > t->prio ? prio : t->prio) : prio;
-  sched_prio_set(t, prio, effective);
-  pbl_irq_unlock();
+  unsigned int key = arch_irq_lock();
+  // Only the base moves: what the thread inherits stays.
+  t->backend.base_prio = prio;
+  sched_prio_set(t, prio, mutex_inherited_prio(t));
+  arch_irq_unlock(key);
 }
 
 pbl_prio_t pbl_thread_prio_get(const struct pbl_thread *t) {
@@ -134,17 +138,22 @@ pbl_prio_t pbl_thread_prio_get(const struct pbl_thread *t) {
 }
 
 enum pbl_thread_state pbl_thread_state(const struct pbl_thread *t) {
+  // Running threads stay on their ready list.
+  if (t == pbl_cur && t->backend.state == PBL_THREAD_READY) {
+    return PBL_THREAD_RUNNING;
+  }
   return (enum pbl_thread_state)t->backend.state;
 }
 
 void pbl_thread_regions_default_set(const struct pbl_mpu_region *const *regions) {
-  pbl_irq_lock();
+  unsigned int key = arch_irq_lock();
   for (unsigned int i = 0; i < PBL_THREAD_MAX_MEM_REGIONS; i++) {
     s_default_regions[i] = regions[i];
   }
   for (struct pbl_thread *t = pbl_all_threads; t != nullptr; t = t->backend.all_next) {
-    PBL_ASSERTN(t == pbl_cur || t == sched_idle_thread());
-    prv_regions_set(t, nullptr);
+    if (!t->own_regions) {
+      prv_regions_set(t, nullptr);
+    }
   }
-  pbl_irq_unlock();
+  arch_irq_unlock(key);
 }

@@ -4,6 +4,11 @@
 config RESOURCES_BOARD
     default "qemu_emery"
 
-# In a browser, the page is the other end of the emulator's serial port.
-config QEMU_SERIAL
-    default y
+config DISPLAY_SDL_WIDTH
+    default 200
+
+config DISPLAY_SDL_HEIGHT
+    default 228
+
+config POSIX_EMSCRIPTEN_FRAME
+    default "emery"

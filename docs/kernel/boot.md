@@ -12,12 +12,12 @@ Both continue in `kernel_init()`, which:
 2. programs the priority of every bound interrupt with `pbl_irq_init()`;
 3. runs the arch's early setup, enabling the fault exceptions on ARM;
 4. initializes the kernel heap;
-5. lets each log backend bring up its output (`pbl_log_early_init()`): the
-   console backend sets the board's console port, `CONSOLE_UART`, up for
-   polled transmission;
-6. prints the boot banner, with the version from `pbl/version.h`. Backends
-   that start later, like the flash one, get it replayed from the logging
-   boot buffer;
+5. with `CONFIG_CONSOLE`, sets the board's console port, `CONSOLE_UART`, up
+   for polled transmission and makes it the output of {doc}`print`
+   (`pbl_console_early_init()`);
+6. prints the boot banner with `pbl_print()`, with the version from
+   `pbl/version.h`. It only goes to the console: the firmware logs its
+   version, mode and slot from `main()`, which the flash log records;
 7. creates the main thread, whose stack and priority come from
    `CONFIG_KERNEL_MAIN_STACK_SIZE` and `CONFIG_KERNEL_MAIN_THREAD_PRIO`, and
    starts the scheduler, which runs `main()` on it.

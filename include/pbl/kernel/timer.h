@@ -16,7 +16,7 @@
  *
  * @code{.c}
  * static void prv_expired(struct pbl_timer *timer) {
- *   struct foo *foo = container_of(timer, struct foo, timer);
+ *   struct foo *foo = PBL_CONTAINER_OF(timer, struct foo, timer);
  *   ...
  * }
  *
@@ -34,9 +34,7 @@ typedef void (*pbl_timer_fn_t)(struct pbl_timer *timer);
 /** @brief Software timer. */
 struct pbl_timer {
   /** @cond INTERNAL_HIDDEN */
-  struct pbl_timer *next;
-  pbl_tick_t expires;
-  bool active;
+  struct pbl_timeout timeout;
   /** @endcond */
   /** Callback. */
   pbl_timer_fn_t fn;
@@ -46,6 +44,8 @@ struct pbl_timer {
  * @brief Static initializer for a timer.
  *
  * @param _fn Callback.
+ *
+ * @note rust/pebbleos builds the same object: change both together.
  */
 #define PBL_TIMER_INITIALIZER(_fn) {.fn = (_fn)}
 
@@ -79,5 +79,13 @@ void pbl_timer_stop(struct pbl_timer *timer);
  * @return True from pbl_timer_start() until it expires or is stopped.
  */
 bool pbl_timer_is_active(const struct pbl_timer *timer);
+
+/**
+ * @brief Get the time left on a timer.
+ *
+ * @param timer Timer.
+ * @return Ticks until it expires, 0 if it is not active.
+ */
+pbl_tick_t pbl_timer_remaining(const struct pbl_timer *timer);
 
 /** @} */

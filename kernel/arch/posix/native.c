@@ -78,11 +78,11 @@ void arch_idle(pbl_tick_t max_ticks) {
     pbl_posix_cpu_wait(IDLE_YIELD_US);
     return;
   }
-  timekeeping_idle(max_ticks);
+  idle_enter(max_ticks);
 }
 
 void arch_start(void) {
-  irq_reset();
+  posix_irq_reset();
   posix_run(pbl_cur);
   pthread_mutex_unlock(&posix_cpu);
   // The booting host thread is done: the kernel threads take it from here.
