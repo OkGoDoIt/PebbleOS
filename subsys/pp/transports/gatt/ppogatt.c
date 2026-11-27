@@ -151,6 +151,8 @@ typedef struct PPoGATTClient {
 
   struct pbl_delayed_work rx_ack_work; //! Ensures Acks for data are dispatched regularly
 
+  //! Also the slow Reset Request retry while stalled for the audio companion: the meta read is
+  //! long done by then, so the two never overlap.
   struct pbl_delayed_work meta_read_retry_work;
 
   //! Retries sending after the BT stack ran out of buffers
@@ -165,6 +167,11 @@ typedef struct PPoGATTClient {
 
   //! Tick count when this client was created, for measuring handshake duration
   uint64_t created_ticks;
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  //! Reset Requests re-sent from the audio stall since the session was last open.
+  uint16_t stalled_reset_retries;
+#endif
 } PPoGATTClient;
 
 // -------------------------------------------------------------------------------------------------
@@ -547,6 +554,10 @@ static uint16_t prv_get_max_payload_size(const PPoGATTClient *client) {
 // -------------------------------------------------------------------------------------------------
 
 static void prv_enter_awaiting_reset_complete(PPoGATTClient *client, bool self_initiated) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  // A reset is under way, so a pending stalled retry has nothing left to do.
+  pbl_delayed_work_cancel(&client->meta_read_retry_work);
+#endif
   if (client->state == StateConnectedOpen) {
     // Closing the session drops what is left in its send queue.
     pbl_pp_session_close(client->session);
@@ -582,6 +593,30 @@ static void prv_enter_awaiting_reset_complete(PPoGATTClient *client, bool self_i
 
 // -------------------------------------------------------------------------------------------------
 
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+static void prv_schedule_stalled_reset_retry(PPoGATTClient *client) {
+  if (client->stalled_reset_retries == 0) {
+    PBL_LOG_WRN("Reset request stalled, not disconnecting: audio companion streams on this link");
+  } else {
+    PBL_LOG_DBG("Stalled reset retry %u unanswered", client->stalled_reset_retries);
+  }
+  pbl_delayed_work_reschedule(&pbl_sys_workq_high, &client->meta_read_retry_work,
+                              PBL_MSEC(PPOGATT_STALLED_RESET_RETRY_MS));
+}
+
+//! One Reset Request: a write that can wake a suspended official app. A Reset Complete reopens
+//! the session as usual; another timeout lands back in prv_start_reset at the max.
+static void prv_retry_stalled_reset(PPoGATTClient *client) {
+  client->stalled_reset_retries++;
+  PBL_LOG_DBG("Stalled for audio: re-sending Reset Request (retry %u)",
+              client->stalled_reset_retries);
+  client->resets_counter = PPOGATT_RESET_COUNT_MAX - 1;
+  prv_enter_awaiting_reset_complete(client, true /* self_initiated */);
+}
+#else
+static void prv_schedule_stalled_reset_retry(PPoGATTClient *client) {}
+#endif
+
 //! Whether the audio companion streams to an authorized receiver over this client's link, which a
 //! disconnect would cut too.
 static bool prv_link_carries_audio_companion(const PPoGATTClient *client) {
@@ -606,11 +641,11 @@ static void prv_start_reset(PPoGATTClient *client) {
 
     if (prv_link_carries_audio_companion(client)) {
       // Stall as below, without counting a disconnect that did not happen. Nothing waits for an
-      // Ack while stalled, so stop the ack timer rather than tick every 2 s until the phone wakes.
+      // Ack while stalled, so stop the 2 s ack timer; a slow retry asks the phone again instead.
       client->state = StateConnectedClosedAwaitingResetCompleteSelfInitiatedResetStalled;
       client->out.ack_timeout_state = AckTimeoutState_Inactive;
       prv_update_ack_timer();
-      PBL_LOG_WRN("Reset request stalled, not disconnecting: audio companion streams on this link");
+      prv_schedule_stalled_reset_retry(client);
       return;
     }
 
@@ -670,6 +705,13 @@ static void prv_handle_reset_complete(PPoGATTClient *client, const PPoGATTPacket
   }
   pbl_pp_gatt_reset_disconnect_counter();
   client->resets_counter = 0;
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  pbl_delayed_work_cancel(&client->meta_read_retry_work);
+  if (client->stalled_reset_retries) {
+    PBL_LOG_INFO("PPoGATT reopened after %u stalled reset retries", client->stalled_reset_retries);
+    client->stalled_reset_retries = 0;
+  }
+#endif
 
   if (PBL_LIKELY(client->state == StateConnectedClosedAwaitingResetCompleteSelfInitiatedReset)) {
     client->out.reset_packet_to_send = (const PPoGATTPacketHeader){
@@ -891,7 +933,14 @@ static void prv_meta_read_retry_kernelmain_cb(void *data) {
   {
     // make sure we didn't disconnect in between
     if (prv_is_client_valid(client)) {
-      prv_retry_meta_read(client);
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+      if (client->state == StateConnectedClosedAwaitingResetCompleteSelfInitiatedResetStalled) {
+        prv_retry_stalled_reset(client);
+      } else
+#endif
+      {
+        prv_retry_meta_read(client);
+      }
     }
   }
   bt_unlock();

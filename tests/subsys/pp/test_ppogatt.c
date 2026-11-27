@@ -1243,10 +1243,11 @@ void test_ppogatt__max_resets_disconnects_without_audio_receiver(void) {
   cl_assert_equal_i(s_disconnect_call_count, 1);
   fake_gatt_client_op_assert_no_write();
 
-  // Already disconnecting: later timeouts neither reset nor disconnect again.
+  // Already disconnecting: later timeouts neither reset nor disconnect again, and nothing retries.
   prv_time_out_reset_complete();
   cl_assert_equal_i(s_disconnect_call_count, 1);
   fake_gatt_client_op_assert_no_write();
+  cl_assert(fake_work_get_next() == nullptr);
 }
 
 void test_ppogatt__max_resets_keeps_link_up_while_audio_receiver_streams(void) {
@@ -1273,16 +1274,72 @@ void test_ppogatt__max_resets_keeps_link_up_while_audio_receiver_streams(void) {
   fake_gatt_client_op_assert_no_write();
   cl_assert_equal_i(prv_wallclock_work_count(), 0);
 
-  // The phone comes back with a Reset Request and completes it: the session opens.
+  // The phone comes back with a Reset Request and completes it: the session opens, and the
+  // stalled client's own retry is no longer pending.
   prv_receive_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
   prv_assert_sent_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
   prv_receive_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
   cl_assert_equal_i(fake_comm_session_open_call_count(), 1);
   cl_assert_equal_i(s_disconnect_call_count, 0);
+  cl_assert(fake_work_get_next() == nullptr);
 #else
   // Without the audio companion the receiver is never consulted: upstream behaviour.
   cl_assert_equal_i(s_disconnect_call_count, 1);
+  cl_assert(fake_work_get_next() == nullptr);
 #endif
+}
+
+void test_ppogatt__stalled_for_audio_retries_reset_request_slowly(void) {
+  s_audio_receiver_authorized = true;
+  s_audio_receiver_subscribed = true;
+  prv_exhaust_resets();
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  // The watch asks again on its own, on a long interval, with one Reset Request each time.
+  for (int retry = 0; retry < 3; ++retry) {
+    struct pbl_delayed_work *next = fake_work_get_next();
+    cl_assert(next != nullptr);
+    cl_assert_equal_i(fake_work_timeout_ms(next), PPOGATT_STALLED_RESET_RETRY_MS);
+    fake_gatt_client_op_assert_no_write();
+    fake_work_fire(next);
+    prv_assert_sent_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+
+    // Unanswered: back to stalled, no disconnect, the ack timer off again.
+    prv_time_out_reset_complete();
+    fake_gatt_client_op_assert_no_write();
+    cl_assert_equal_i(s_disconnect_call_count, 0);
+    cl_assert_equal_i(prv_wallclock_work_count(), 0);
+  }
+
+  // A retry the phone answers reopens the session.
+  fake_work_fire(fake_work_get_next());
+  prv_assert_sent_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_receive_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_assert_sent_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  cl_assert_equal_i(fake_comm_session_open_call_count(), 1);
+  cl_assert(fake_work_get_next() == nullptr);
+  cl_assert_equal_i(s_disconnect_call_count, 0);
+#else
+  cl_assert(fake_work_get_next() == nullptr);
+#endif
+}
+
+void test_ppogatt__stalled_for_audio_falls_back_to_disconnect_once_audio_stops(void) {
+  s_audio_receiver_authorized = true;
+  s_audio_receiver_subscribed = true;
+  prv_exhaust_resets();
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  cl_assert_equal_i(s_disconnect_call_count, 0);
+  // The receiver goes away while Pebble Protocol is stalled; the next unanswered retry then
+  // takes upstream's path.
+  s_audio_receiver_subscribed = false;
+  fake_work_fire(fake_work_get_next());
+  prv_assert_sent_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_time_out_reset_complete();
+#endif
+  cl_assert_equal_i(s_disconnect_call_count, 1);
+  cl_assert(fake_work_get_next() == nullptr);
 }
 
 void test_ppogatt__max_resets_disconnects_when_audio_receiver_not_authorized(void) {
@@ -1290,6 +1347,7 @@ void test_ppogatt__max_resets_disconnects_when_audio_receiver_not_authorized(voi
   s_audio_receiver_subscribed = true;
   prv_exhaust_resets();
   cl_assert_equal_i(s_disconnect_call_count, 1);
+  cl_assert(fake_work_get_next() == nullptr);
 }
 
 void test_ppogatt__max_resets_disconnects_when_audio_receiver_on_other_link(void) {
@@ -1297,4 +1355,5 @@ void test_ppogatt__max_resets_disconnects_when_audio_receiver_on_other_link(void
   s_audio_receiver_authorized = true;
   prv_exhaust_resets();
   cl_assert_equal_i(s_disconnect_call_count, 1);
+  cl_assert(fake_work_get_next() == nullptr);
 }

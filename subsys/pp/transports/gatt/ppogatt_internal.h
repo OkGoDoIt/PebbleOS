@@ -28,6 +28,10 @@
 #define PPOGATT_RESET_COUNT_MAX (5)
 //! Number of maximum consecutive disconnects without getting a packet Ack'd
 #define PPOGATT_DISCONNECT_COUNT_MAX (2)
+
+//! While stalled for the audio companion's sake, how often to send the Reset Request again.
+#define PPOGATT_STALLED_RESET_RETRY_MS (60 * 1000)
+
 //! Maximum amount of time PPoGATT will wait before sending an Ack for received data
 #define PPOGATT_MAX_DATA_ACK_LATENCY_MS (200)
 
