@@ -3886,6 +3886,11 @@ bool audio_companion_is_enabled(void) {
   return enabled;
 }
 
+bool audio_companion_receiver_authorized(void) {
+  // No s_lock: PPoGATT asks with bt_lock held. Plain bool reads; the worst case is a stale answer.
+  return s_initialized && s_session.authorized && !s_receiver_presumed_gone;
+}
+
 bool audio_companion_keeps_bluetooth_enabled(RunLevel runlevel) {
   if (runlevel != RunLevel_Stationary) {
     return false;

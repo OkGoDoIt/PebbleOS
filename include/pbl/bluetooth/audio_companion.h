@@ -39,6 +39,21 @@ void pbl_bt_audio_companion_set_response_time(enum pbl_bt_response_time_state st
                                               uint16_t max_period_secs);
 
 /**
+ * @brief Whether a receiver is subscribed to the Data characteristic on @p conn_handle.
+ *
+ * Lock-free: safe to call with bt_lock held.
+ */
+bool pbl_bt_audio_companion_data_subscribed_on(uint16_t conn_handle);
+
+/**
+ * @brief Whether the bound receiver has authorized the current session and still answers.
+ *
+ * Implemented by the OS service. Lock-free snapshot, safe to call with bt_lock held (the service
+ * lock must never be taken under bt_lock); a change racing the call may be missed.
+ */
+bool audio_companion_receiver_authorized(void);
+
+/**
  * @name OS service callbacks
  * Called from the NimBLE host task; implementations hand off to the system task, except
  * audio_companion_fill_info(), which is synchronous.

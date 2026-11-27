@@ -7,6 +7,9 @@
 #include <inttypes.h>
 
 #include <pbl/analytics/analytics.h>
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+#include <pbl/bluetooth/audio_companion.h>
+#endif
 #include <pbl/bluetooth/gatt.h>
 #include <pbl/bluetooth/pebble_bt.h>
 #include <pbl/bluetooth/ppog_reversed.h>
@@ -579,9 +582,35 @@ static void prv_enter_awaiting_reset_complete(PPoGATTClient *client, bool self_i
 
 // -------------------------------------------------------------------------------------------------
 
+//! Whether the audio companion streams to an authorized receiver over this client's link, which a
+//! disconnect would cut too.
+static bool prv_link_carries_audio_companion(const PPoGATTClient *client) {
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  bt_lock();
+  const GAPLEConnection *connection = prv_get_connection(client);
+  const bool carries = connection != nullptr &&
+                       pbl_bt_audio_companion_data_subscribed_on(connection->conn_handle) &&
+                       audio_companion_receiver_authorized();
+  bt_unlock();
+  return carries;
+#else
+  return false;
+#endif
+}
+
 static void prv_start_reset(PPoGATTClient *client) {
   if (++client->resets_counter >= PPOGATT_RESET_COUNT_MAX) {
     if (client->disconnect_requested) {
+      return;
+    }
+
+    if (prv_link_carries_audio_companion(client)) {
+      // Stall as below, without counting a disconnect that did not happen. Nothing waits for an
+      // Ack while stalled, so stop the ack timer rather than tick every 2 s until the phone wakes.
+      client->state = StateConnectedClosedAwaitingResetCompleteSelfInitiatedResetStalled;
+      client->out.ack_timeout_state = AckTimeoutState_Inactive;
+      prv_update_ack_timer();
+      PBL_LOG_WRN("Reset request stalled, not disconnecting: audio companion streams on this link");
       return;
     }
 

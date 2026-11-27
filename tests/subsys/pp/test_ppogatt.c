@@ -30,8 +30,26 @@
 
 uint16_t s_mtu_size;
 
+static int s_disconnect_call_count;
+
 int pbl_bt_gap_le_disconnect(const struct pbl_bt_device_internal *peer_address) {
+  s_disconnect_call_count++;
   return 0;
+}
+
+//! Whether the audio companion has a live receiver on the link, and which link was asked about.
+//! Only builds with CONFIG_SERVICE_AUDIO_COMPANION consult these.
+static bool s_audio_receiver_authorized;
+static bool s_audio_receiver_subscribed;
+static uint16_t s_audio_queried_conn_handle;
+
+bool audio_companion_receiver_authorized(void) {
+  return s_audio_receiver_authorized;
+}
+
+bool pbl_bt_audio_companion_data_subscribed_on(uint16_t conn_handle) {
+  s_audio_queried_conn_handle = conn_handle;
+  return s_audio_receiver_subscribed;
 }
 
 uint16_t gap_le_connection_get_gatt_mtu(const struct pbl_bt_device_internal *device) {
@@ -46,9 +64,13 @@ GAPLEConnection *gap_le_connection_by_device(const struct pbl_bt_device_internal
   return nullptr;
 }
 
+//! nullptr unless a test needs the client to reach its connection (the max-resets path does).
+static GAPLEConnection *s_connection;
+static GAPLEConnection s_shared_connection = {.conn_handle = 7};
+
 GAPLEConnection *gatt_client_characteristic_get_connection(
     pbl_bt_characteristic_t characteristic_ref) {
-  return nullptr;
+  return s_connection;
 }
 
 // prv_write_packet resolves the data characteristic, then writes to it.
@@ -311,6 +333,12 @@ void test_ppogatt__initialize(void) {
   fake_gatt_client_op_init();
   fake_gatt_client_subscriptions_init();
   fake_comm_session_init();
+  s_disconnect_call_count = 0;
+  s_connection = nullptr;
+  s_audio_receiver_authorized = false;
+  s_audio_receiver_subscribed = false;
+  s_audio_queried_conn_handle = 0;
+  pbl_pp_gatt_reset_disconnect_counter();
   pbl_pp_gatt_create();
 }
 
@@ -1190,4 +1218,83 @@ void test_ppogatt__mtu_zero_due_to_service_rediscovery_while_resetting(void) {
 
 void test_ppogatt__unsubscribe_when_no_memory_for_comm_session(void) {
   // TODO
+}
+
+static void prv_time_out_reset_complete(void) {
+  for (int i = 0; i < PPOGATT_TIMEOUT_TICKS; ++i) {
+    fake_wallclock_work_advance(1, PPOGATT_TIMEOUT_TICK_INTERVAL_SECS);
+  }
+}
+
+//! The phone stops answering: every Reset Request times out until the last one allowed.
+static void prv_exhaust_resets(void) {
+  s_connection = &s_shared_connection;
+  prv_discover_and_read_meta_and_reset();
+  for (int reset = 2; reset < PPOGATT_RESET_COUNT_MAX; ++reset) {
+    prv_time_out_reset_complete();
+    prv_assert_sent_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  }
+  prv_time_out_reset_complete();
+}
+
+void test_ppogatt__max_resets_disconnects_without_audio_receiver(void) {
+  prv_exhaust_resets();
+
+  cl_assert_equal_i(s_disconnect_call_count, 1);
+  fake_gatt_client_op_assert_no_write();
+
+  // Already disconnecting: later timeouts neither reset nor disconnect again.
+  prv_time_out_reset_complete();
+  cl_assert_equal_i(s_disconnect_call_count, 1);
+  fake_gatt_client_op_assert_no_write();
+}
+
+void test_ppogatt__max_resets_keeps_link_up_while_audio_receiver_streams(void) {
+  s_audio_receiver_authorized = true;
+  s_audio_receiver_subscribed = true;
+  prv_exhaust_resets();
+
+#ifdef CONFIG_SERVICE_AUDIO_COMPANION
+  // The link is shared with the audio companion, so the client stalls instead:
+  cl_assert_equal_i(s_disconnect_call_count, 0);
+  cl_assert_equal_i(s_audio_queried_conn_handle, s_shared_connection.conn_handle);
+  fake_gatt_client_op_assert_no_write();
+  // Stalled: nothing is waiting for an Ack, so the ack timer is off and timeouts do nothing.
+  cl_assert_equal_i(prv_wallclock_work_count(), 0);
+  prv_time_out_reset_complete();
+  cl_assert_equal_i(s_disconnect_call_count, 0);
+  fake_gatt_client_op_assert_no_write();
+
+  // A Reset Request from the phone that then goes unanswered stalls the client again.
+  prv_receive_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_assert_sent_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_time_out_reset_complete();
+  cl_assert_equal_i(s_disconnect_call_count, 0);
+  fake_gatt_client_op_assert_no_write();
+  cl_assert_equal_i(prv_wallclock_work_count(), 0);
+
+  // The phone comes back with a Reset Request and completes it: the session opens.
+  prv_receive_reset_request(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_assert_sent_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  prv_receive_reset_complete(s_characteristics[0][PBL_PP_GATT_CHARACTERISTIC_DATA]);
+  cl_assert_equal_i(fake_comm_session_open_call_count(), 1);
+  cl_assert_equal_i(s_disconnect_call_count, 0);
+#else
+  // Without the audio companion the receiver is never consulted: upstream behaviour.
+  cl_assert_equal_i(s_disconnect_call_count, 1);
+#endif
+}
+
+void test_ppogatt__max_resets_disconnects_when_audio_receiver_not_authorized(void) {
+  // Subscribed but not authorized (e.g. awaiting on-watch consent) is not a stream to protect.
+  s_audio_receiver_subscribed = true;
+  prv_exhaust_resets();
+  cl_assert_equal_i(s_disconnect_call_count, 1);
+}
+
+void test_ppogatt__max_resets_disconnects_when_audio_receiver_on_other_link(void) {
+  // Authorized, but its subscription is on another connection than this PPoGATT client's.
+  s_audio_receiver_authorized = true;
+  prv_exhaust_resets();
+  cl_assert_equal_i(s_disconnect_call_count, 1);
 }

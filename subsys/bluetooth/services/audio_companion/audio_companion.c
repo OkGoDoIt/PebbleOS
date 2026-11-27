@@ -237,6 +237,11 @@ uint16_t pbl_bt_audio_companion_get_effective_mtu(void) {
   return ble_att_mtu(s_conn_handle);
 }
 
+bool pbl_bt_audio_companion_data_subscribed_on(uint16_t conn_handle) {
+  return s_data_subscribed && s_conn_handle == conn_handle &&
+         conn_handle != AUDIO_COMPANION_INVALID_CONN_HANDLE;
+}
+
 void pbl_bt_audio_companion_set_response_time(enum pbl_bt_response_time_state state,
                                               uint16_t max_period_secs) {
   if (s_conn_handle == AUDIO_COMPANION_INVALID_CONN_HANDLE) {

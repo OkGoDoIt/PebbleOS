@@ -90,6 +90,19 @@ pbl_clar_test(test_ppogatt_v1
   DEFINES USE_PPOGATT_VERSION=1
 )
 
+pbl_clar_test(test_ppogatt_audio_companion
+  SOURCE test_ppogatt.c
+  MODULES rand
+  SOURCES
+    pebble/services/clock/time.c
+    subsys/logging/hexdump.c
+    subsys/pp/transports/gatt/ppogatt.c
+    tests/fakes/fake_gatt_client_operations.c
+    tests/fakes/fake_gatt_client_subscriptions.c
+    tests/fakes/fake_session.c
+  DEFINES USE_PPOGATT_VERSION=1 CONFIG_SERVICE_AUDIO_COMPANION=1
+)
+
 pbl_clar_test(test_ppogatt_reversed
   MODULES rand
   SOURCES
